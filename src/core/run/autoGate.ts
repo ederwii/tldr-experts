@@ -39,6 +39,8 @@ import { BUILD_PHASE } from "./buildProgress.ts";
 import { storiesView } from "./runOutcome.ts";
 import { evaluateBoundary } from "./boundary.ts";
 import { loadWorkflowPreset, PresetError, type PlannedStage } from "./workflowPreset.ts";
+import { RunStore } from "./RunStore.ts";
+import { withWorkspaceLock, workspaceRootOfRunDir } from "../lock/workspaceLock.ts";
 import type { RunFile, RunStage } from "./RunFile.ts";
 
 /** The actor an auto-approved gate is recorded under, in `by:` and in the event. */
@@ -104,6 +106,55 @@ export function heldBy(verdict: AutoGateVerdict): readonly string[] {
 }
 
 /**
+ * The head of the note a REFUSED auto gate carries, and the separator between the
+ * ids that held it and the seven values behind them (gh #230).
+ *
+ * A separate shape from the approving note on purpose. `auto-gate: …` is what a
+ * gate that CLOSED is signed with, it is copied into the run tree by `approve` and
+ * it is asserted byte-for-byte in more than one place; a refusal is a different
+ * record — nobody signed anything — and reading the two as one string would make
+ * "was this gate closed by the machine" a question about prose.
+ *
+ * The ids come FIRST and before any measured sentence, because "which of the seven"
+ * is the question, and because a condition's own detail may contain any punctuation
+ * this file joins with (`stories` already contains `; `) — so the held-by list is
+ * the only part of this note a machine parses, and `heldByNote` is the one parser.
+ */
+export const AUTO_GATE_REFUSED_PREFIX = "auto-gate refused \u2014 held by: ";
+const HELD_SEPARATOR = " \u00b7 ";
+
+/**
+ * The note recorded on a gate the re-measure REFUSED: which conditions held it,
+ * then all seven with their values.
+ *
+ * All seven, not only the failures — the docstring at the top of this file is an
+ * argument about silence, and a note that dropped `budget=$0.30 of $6.00` would
+ * answer "was it the money" with nothing.
+ */
+export function refusalNote(verdict: AutoGateVerdict): string {
+  const held = heldBy(verdict);
+  if (held.length === 0) return "";
+  return `${AUTO_GATE_REFUSED_PREFIX}${held.join(", ")}${HELD_SEPARATOR}`
+    + verdict.conditions.map(render).join("; ");
+}
+
+/**
+ * The ids a recorded refusal note says held the gate — the reading half of
+ * `refusalNote`, and the ONE place a note is turned back into ids (§7).
+ *
+ * Empty for every other note: an approving `auto-gate: …` line, a person's words,
+ * and the `""` a gate nobody has measured carries. Empty means "this note does not
+ * name a refusal", never "the seven were checked and none of them held it".
+ */
+export function heldByNote(note: string): readonly string[] {
+  if (!note.startsWith(AUTO_GATE_REFUSED_PREFIX)) return [];
+  const rest = note.slice(AUTO_GATE_REFUSED_PREFIX.length);
+  const end = rest.indexOf(HELD_SEPARATOR);
+  const ids = (end === -1 ? rest : rest.slice(0, end)).split(", ").map((id) => id.trim());
+  return ids.filter((id) => id !== "");
+}
+
+/**
  * The same seven conditions, re-measured for a gate that is ALREADY pending (gh #203).
  *
  * `evaluateAutoGate` is handed everything by `tldrx next`, which has just run the
@@ -141,7 +192,7 @@ export async function reevaluateAutoGate(input: {
     runDir: input.runDir,
     stage: planned,
   });
-  return await evaluateAutoGate({
+  const verdict = await evaluateAutoGate({
     root: input.root,
     runDir: input.runDir,
     phaseId: phase.id,
@@ -150,6 +201,81 @@ export async function reevaluateAutoGate(input: {
     budget: input.budget,
     checks,
   });
+  if (!verdict.ok) recordRefusal(input.runDir, input.stageId, verdict);
+  return verdict;
+}
+
+/**
+ * Write a refusal down on the gate that is still pending (gh #230).
+ *
+ * This is the half of the note the file's own docstring promised and never
+ * delivered. A gate that CLOSES is signed with its seven values; a gate that
+ * refused wrote `note: ""` — so the one record built to answer "which of the seven
+ * stopped it" was empty in exactly the case it exists for. Measured 2026-09-10: a
+ * gate sat pending for ~40 minutes on an unattended `run auto`, `run status` and
+ * `run status --verbose` named no condition, and the reason (`claim-sources`, one
+ * unresolvable source) surfaced only when a person guessed at `tldrx approve` —
+ * a route nobody unattended is going to take.
+ *
+ * It lives HERE, beside the measurement, rather than in either caller: the poll
+ * (`runAuto`) and any future re-measure must not each decide what a refusal is
+ * worth recording, and the two could then disagree with the verdict they were
+ * handed.
+ *
+ * Deliberately quiet in three ways. It writes only a gate that is provably still
+ * `pending` — a gate a person has since approved or rejected keeps THEIR words.
+ * It writes only when the note would CHANGE, so a four-hour `--wait-gates` poll
+ * re-measuring every two seconds rewrites `run.yml` once per distinct verdict
+ * rather than seven thousand times. And it swallows its own errors: a verdict is
+ * a measurement, and a run tree that could not be written is not a reason to turn
+ * a refusal into an exception in a loop whose whole job is to keep waiting.
+ *
+ * **A COMPARE-AND-SET, not a check-then-act.** The read that decides `pending`,
+ * and the write, happen inside ONE hold of the workspace lock, over a `run.yml`
+ * read INSIDE that hold. The first version of this took the snapshot first and
+ * let `RunStore.save()` take the lock later — and `save()` writes the whole
+ * snapshot and never re-reads `run.yml` (it re-reads only budget.yml's ceilings).
+ * So a person's `approve` landing in that window was ERASED: the gate went back
+ * to `pending`, `by`/`at` back to null, their words gone, the stage back to
+ * `awaiting_gate`. Reproduced with two real processes (the child holds the lock
+ * across its approval, so the overlap is provable, not timed) — and the poll runs
+ * every two seconds precisely while a person is deciding, so that interleaving is
+ * the use case, not an edge. An audit record that destroys the evidence of a human
+ * decision is the dangerous direction (AGENTS.md §7); nothing here may write a
+ * gate it has not just read.
+ *
+ * The lock is re-entrant within a process, so `save()` taking it again inside is
+ * free; across processes it is exclusive, which is the half that matters.
+ */
+function recordRefusal(runDir: string, stageId: string, verdict: AutoGateVerdict): void {
+  const note = refusalNote(verdict);
+  if (note === "") return;
+  try {
+    withWorkspaceLock(workspaceRootOfRunDir(runDir), () => {
+      // Read INSIDE the lock. Anything read before it is a snapshot, and a
+      // snapshot is what erased a person's signature — see the docstring.
+      const store = RunStore.open(runDir);
+      const current = store.run.phases
+        .flatMap((phase) => phase.stages)
+        .find((stage) => stage.id === stageId);
+      if (current === undefined || current.gate.status !== "pending" || current.gate.note === note) return;
+      store.mutate((run) => ({
+        ...run,
+        phases: run.phases.map((phase) => ({
+          ...phase,
+          stages: phase.stages.map((stage) =>
+            stage.id === stageId && stage.gate.status === "pending"
+              ? { ...stage, gate: { ...stage.gate, note } }
+              : stage
+          ),
+        })),
+      }));
+      store.save();
+    });
+  } catch {
+    // See the docstring: a run tree that cannot be written is not a reason to
+    // stop measuring. The verdict still reaches the caller.
+  }
 }
 
 function render(condition: AutoGateCondition): string {

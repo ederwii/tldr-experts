@@ -25,6 +25,32 @@
   at 03-plan/plan …` — so the sentence that reaches a phone is what the loop tried, not a bare
   `5`.
 
+### Fixed
+
+- **An `auto` gate that REFUSES now writes the verdict down, so `run status` says which of the
+  seven conditions is holding it (#230).** The note has always been the designed answer to
+  "which of the seven stopped it" — and it was written only by a gate that CLOSED, so the one
+  record built for that question was `note: ""` in exactly the case it exists for. Measured
+  2026-09-10 on an unattended `run auto`: a gate sat pending ~40 minutes, `run status` and
+  `run status --verbose` named no condition, and the reason (`claim-sources`, one unresolvable
+  source) surfaced only when a person guessed at the `tldrx approve` the status line suggested
+  — the one route nobody unattended is going to take. Each re-measure that refuses now records
+  `auto-gate refused — held by: <ids> · <all seven with their values>` on the gate that is
+  still `pending`, and `run status` names the ids on the gate row and on the `waiting` line
+  (`--verbose` still quotes the whole note). All seven values, not just the failures: a note
+  that dropped `budget=$0.30 of $6.00` would answer "was it the money" with the same silence.
+  It writes only a `pending` gate — a gate a person has since signed keeps THEIR words — and
+  only when the note would change, so a four-hour `--wait-gates` poll writes `run.yml` once per
+  distinct verdict rather than thousands of times. That `pending` test and the write are a
+  **compare-and-set under the workspace lock**, over a `run.yml` read inside it: a check-then-act
+  over a snapshot taken a moment earlier erased a concurrent `approve` outright — `save()` writes
+  the whole snapshot and re-reads only `budget.yml`'s ceilings, so the gate fell back to
+  `pending`, `by`/`at` to null and the person's words were gone. Caught in pre-merge review and
+  reproduced with two real processes, which is now the test: the poll runs every two seconds
+  precisely while a person is deciding, so an audit record that destroys the evidence of a human
+  decision is not a theoretical interleaving. A gate carrying a refusal note is no longer
+  counted among the "signed gates carry a note" rows, because nobody closed it.
+
 ## 0.15.0 — 2026-09-10
 
 ### Added

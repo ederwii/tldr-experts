@@ -20,6 +20,7 @@ import {
 import { gatePolicyFor, type GatePolicy, type GatesPolicy } from "./gatePolicy.ts";
 import { describeGateSignature } from "./gateAuthority.ts";
 import { failureReason, waitingFor, type Waiting, type WaitingKind } from "./waiting.ts";
+import { heldByNote } from "./autoGate.ts";
 import {
   flatten, isFinished, isTerminal, recordedVersion,
   type AttendedBy, type RunFile, type RunGateAuthority, type RunGateExecutor, type RunPhase,
@@ -383,7 +384,11 @@ export function renderGates(rows: readonly GateRow[], verbose = false): readonly
   const auto = rows.filter((row) => row.policy === "auto").length;
   const agent = rows.filter((row) => row.policy === "agent").length;
   const human = rows.length - auto - agent;
-  const noted = rows.filter((row) => row.note !== null).length;
+  // SIGNED gates only (gh #230). A pending gate can now carry words too — the
+  // seven conditions a refused `auto` gate wrote on itself — and counting those
+  // here would have this line call a gate nobody closed "signed". The refusal is
+  // not hidden: it is named on the row, and `--verbose` quotes the whole note.
+  const noted = rows.filter((row) => isSigned(row) && row.note !== null).length;
   const lines = [
     `gates   ${String(human)} human, ${String(auto)} auto`
       + (agent === 0 ? "" : `, ${String(agent)} agent`),
@@ -424,8 +429,13 @@ const NOTE_MARK = "\u270e";
  */
 function gateTail(row: GateRow): string {
   const parts = [briefDuration(row.started_at, row.ended_at)];
-  if (row.note !== null) parts.push(NOTE_MARK);
+  if (isSigned(row) && row.note !== null) parts.push(NOTE_MARK);
   return parts.filter((part) => part !== "").join("  ");
+}
+
+/** A gate somebody — a person, the machine, an agent — actually closed. */
+function isSigned(row: GateRow): boolean {
+  return row.status === "approved" || row.status === "rejected";
 }
 
 /**
@@ -476,7 +486,12 @@ function describeGate(row: GateRow): string {
   if (row.status === "approved") return `approved by ${describeGateSignature(row)}`;
   if (row.status === "rejected") return `rejected by ${describeGateSignature(row)}`;
   if (row.status === "n-a") return `${row.type}: n-a`;
-  return `${row.type}: ${row.status}`;
+  // WHICH of the seven is holding an `auto` gate open (gh #230). Only ever present
+  // on a gate a re-measure refused and wrote down, so every other row — and every
+  // run.yml written before that note existed — renders the same bytes as before.
+  const held = heldByNote(row.note ?? "");
+  return `${row.type}: ${row.status}`
+    + (held.length === 0 ? "" : ` \u2014 held by ${held.join(", ")}`);
 }
 
 /**
