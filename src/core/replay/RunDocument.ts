@@ -309,6 +309,11 @@ export function toRunDocument(input: unknown, fallbackId: string): RunDocument |
     cursor: cursor === null
       ? null
       : { phase: str(cursor.phase), stage: str(cursor.stage), task: nullableStr(cursor.task) },
+    // run.yml's MIRROR, and it stays that way after #236. This projection is what
+    // the FILE says: `tldrx replay` is the run's narrative and must not quote a
+    // ceiling the document never carried. The dashboard, which needs the live
+    // figure, overrides it from budget.yml in `dashboard/model.ts` and falls back
+    // here only when budget.yml will not parse.
     ceiling_usd: num(budget?.ceiling_usd) ?? num(doc.budget_usd),
     spent_usd: num(budget?.spent_usd),
     created_with: recordedVersion(nullableStr(doc.created_with) ?? undefined),

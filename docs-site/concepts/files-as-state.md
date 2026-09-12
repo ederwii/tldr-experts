@@ -46,6 +46,12 @@ budget: {ceiling_usd: 5.00, spent_usd: 0.00, per_agent_max_usd: 1.80}
 gates_policy: {what: human, how: auto, plan: human, build: auto, watch: human}
 ```
 
+That `budget:` block is a **mirror**, and only `spent_usd` is live. `ceiling_usd` and
+`per_agent_max_usd` are the figures the run was created with: `tldrx budget raise` moves
+`budget.yml`, which is where the ceiling actually lives and what every screen and every
+refusal reads. The keys stay in `run.yml` because a `version: 1` format only grows — they
+are a record of how the run started, not a second copy to keep in step.
+
 The two version lines are which tldrx wrote the file — the one that created the run, and
 the one that saved it last. They are not `version: 1` further up, which numbers the file
 FORMAT. Behaviour moves between releases, so a run that cannot name one leaves you asking

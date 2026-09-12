@@ -5,7 +5,8 @@
  *
  * Half the line comes from Claude Code's statusLine payload (`model.display_name`,
  * `context_window.used_percentage`, `cost.total_cost_usd`) and half from the run
- * (`run`, `cursor`, phase progress, `budget.ceiling_usd`). Neither half is faked:
+ * (`run`, `cursor`, phase progress from run.yml; the ceiling from budget.yml since
+ * #236). Neither half is faked:
  * with no run, the caller falls back to the short line rather than printing zeros.
  */
 import { bar } from "../run/runStatus.ts";

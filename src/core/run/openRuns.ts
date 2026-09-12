@@ -29,7 +29,9 @@ export function openRunRow(store: RunStore): OpenRunRow {
     cursor: `${run.cursor.phase}/${run.cursor.stage}`,
     waiting: whatIsWaiting(run, store.runDir).kind,
     spentUsd: run.budget.spent_usd,
-    ceilingUsd: run.budget.ceiling_usd,
+    // budget.yml, not run.yml's mirror (#236) — this row sits beside the
+    // `run status` screen and must not quote a different ceiling from it.
+    ceilingUsd: store.budget.ceiling_usd,
   };
 }
 
