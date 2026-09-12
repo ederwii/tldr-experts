@@ -33,6 +33,16 @@ export interface FakeTool {
   readonly result?: string;
   /** Milliseconds between the tool_use and its result, for a stable duration. */
   readonly ms?: number;
+  /**
+   * The permission layer REFUSED this call — it never ran (gh #261).
+   *
+   * Emits the shape MEASURED off `claude` 2.1.270 on 2026-09-12: the result is
+   * `is_error: true` and the `user` line carries a sibling
+   * `tool_result_meta: [{ id, non_execution_kind: "user-rejected" }]`. Both
+   * signals, because the real CLI sends both and a fake that sent one would let
+   * a reader depending on the other pass a test it should fail.
+   */
+  readonly rejected?: boolean;
 }
 
 export interface FakeResult {
@@ -207,11 +217,24 @@ export function claudeOutput(argv: readonly string[], spec: FakeResult): string 
     clock += tool.ms ?? 1000;
     lines.push({
       type: "user",
-      message: { role: "user", content: [{ tool_use_id: id, type: "tool_result", content: tool.result ?? "ok" }] },
+      message: {
+        role: "user",
+        content: [{
+          tool_use_id: id,
+          type: "tool_result",
+          content: tool.result ?? "ok",
+          ...(tool.rejected === true ? { is_error: true } : {}),
+        }],
+      },
       parent_tool_use_id: null,
       session_id: spec.sessionId,
       timestamp: stamp(),
-      tool_use_result: { type: "text", content: tool.result ?? "ok" },
+      tool_use_result: tool.rejected === true
+        ? `Error: ${tool.result ?? "ok"}`
+        : { type: "text", content: tool.result ?? "ok" },
+      ...(tool.rejected === true
+        ? { tool_result_meta: [{ id, non_execution_kind: "user-rejected" }] }
+        : {}),
     });
   }
 

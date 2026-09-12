@@ -3351,8 +3351,28 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
 2. **One developer sub-agent**, cwd = that worktree, handed the story file, its epic's summary and the CONTENT of every
    path the story `touches` (≤24 files, ≤64 KB `[assumption]`, missing paths named as "this story creates it").
    `--allowedTools` is the file tools + TWO grants per command that repo declares — `Bash(<command>)` and
-   `Bash(<command> *)` — + `Bash(git add *)` + `Bash(git commit *)`: narrower than the default allowance, which is
-   every repo's commands, and wider by exactly the two verbs that make a commit. **Both forms, because the exact one
+   `Bash(<command> *)` — + `Bash(git add *)` + `Bash(git commit *)` + `Bash(git rm *)` + `Bash(git mv *)` +
+   `Bash(git restore *)`: narrower than the default allowance, which is every repo's commands, and wider by exactly
+   the git verbs that make a commit and move a path around. **Never a bare `rm`** (gh #261): a story that said
+   "delete an unused file" could not be done at all — `Write`/`Edit` can empty a file and nothing on the list could
+   unlink it or take it out of the index, so every `git rm` the developer tried came back "This command requires
+   approval", which in a headless `-p` run is a prompt nobody answers. The three verbs are git verbs for the reason
+   the 2026-08-29 audit gave: no permission-free shell. They act on the story's OWN index, they are undone by exactly
+   the `git checkout` that undoes an `Edit`, and the branch never leaves the machine. Measured against
+   `claude` 2.1.270, with `Bash(git rm *)` as the only grant: `git rm -r`, `git rm -rf` and `git rm -r -- .` all pass
+   the permission layer (a trailing `*` matches the whole argument tail, flags included), a path outside the repo is
+   refused by GIT and not by the rule ("the file is outside the repository boundary"), and `git -C <elsewhere> rm` is
+   refused by the permission layer because the command does not begin `git rm`. And **gh #215**, whether an `allow` rule
+   of this form reaches a COMMAND SUBSTITUTION in its arguments, is now measured too — `claude` **2.1.270**, `git rm -n`
+   as the instrument: under `Bash(git rm *)`, `git rm -n -- "$(echo MARKER.txt)"`, `git rm -n "$(echo MARKER.txt)"` and
+   `git rm -n -r "$(echo .)"` were ALL denied ("Contains shell syntax that cannot be statically analyzed"), while a
+   bare `git rm MARKER.txt` ran. **The nuance is the point: the layer refuses the SYNTAX of a substitution, not the
+   action** — in the same measurement the agent rewrote the command with the value already expanded and it ran. For
+   `git rm <path>` the expanded form is exactly what this grant hands out, so the direction is the safe one, but
+   nothing may be built on "substitutions are blocked": what is blocked is a spelling. All of that is HOST behaviour,
+   in the agent CLI's permission layer, and it can change without a line of tldrx moving — which is why the argument
+   that holds the grant up is the tree-scope one above and not the permission layer's manners.
+   **Both forms, because the exact one
    is exact** (gh #209): Claude Code's permission grammar says `Bash(npm run build)` "Doesn't match
    `npm run build --watch`", and a trailing `*` after a space also matches the bare command (`:*` is the same rule
    spelled differently) — so a developer granted only the exact string had every `npm run test -- <file>` denied with
@@ -3367,6 +3387,33 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    `260830-tenancy-identity-customers`: five spawns died on `Reached maximum budget (…)` and each was recorded as the
    story `blocked` — terminal in-run — so six of seven stories were reported as tried and failed when five of them had
    never been tried. A developer that RAN and produced work its DoD faulted is a different thing and still blocks.
+
+   **A developer REFUSED at the permission layer is a recorded reason, not a wasted attempt (gh #261).** A turn whose
+   tool call came back `This command requires approval` — the provider's own permission layer, before any hook, and in
+   `-p` mode an approval that never comes — is OK by every transport measure: it exits 0, returns an envelope and is
+   charged for. Before this, the framework could not see that: the tree was untouched, so the DoD was green on an
+   untouched tree, `commitIfDirty` found nothing dirty and returned HEAD, the story went to review with an empty diff,
+   and the reviewer's `changes` bought a SECOND attempt that hit the same wall — the developer's own sentence living
+   only in `.agent/build/<story>/result.raw.json`. Now the first such refusal blocks the story with
+   `` permission — `<command>` `` plus why (§7, absent-with-reason), which is one string reaching the story file, the
+   handoff's `## Unknowns` and `gate.requested`'s `blocked_reason`; `blocked` is terminal in-run, so the second attempt
+   is not spent — the same allowance would refuse the same command. Claude only: `codex exec` is bounded by
+   `--sandbox` rather than a per-tool allowance and nothing measured has shown this result on its stream, so nothing is
+   claimed about it (`permissionRefusal` returns null there rather than matching a shape nobody has seen).
+
+   **What the detector reads, and in which order.** FIRST a structural field, MEASURED on `claude` 2.1.270: a `user`
+   line whose call the permission layer refused carries a sibling
+   `tool_result_meta: [{ id, non_execution_kind: "user-rejected" }]` — present on both refusals measured that day
+   (the unlisted `git -C … rm`, and the `cd … && git rm` safety check whose sentence is completely different) and
+   ABSENT on every command that ran, including `git rm -- <path outside the repo>`, which the layer allowed and GIT
+   failed with `is_error: true`. So the field separates "the layer would not run it" from "it ran and failed", which no
+   sentence can. SECOND, as a fallback for a host that does not emit that field, the `requires approval` sentence —
+   and ONLY on a `Bash` call whose result is `is_error: true`. That fence is not decoration: pre-merge review measured
+   the unfenced version reading a plain `Read` of a file CONTAINING the phrase as a refusal, and this page is one of
+   the files that contains it. The dangerous direction here is the false POSITIVE — the block happens before the DoD
+   and before the commit, so a wrong reading discards work the developer really did and spends the attempt — so a
+   refusal carrying neither signal is a MISS this takes deliberately. The fallback depends on prose the HOST writes
+   and can change with no warning; the structural field is the one to trust.
 3. **The Definition of Done, re-run by the facilitator** in that worktree, through the same runner `dod-gate` uses. All
    commands must exit 0.
 

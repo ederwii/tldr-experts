@@ -11,7 +11,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import {
-  AgentStream, detectStreamFormat, resolveCodexResultDoc, resolveResultDoc, toolTarget, type AgentEvent,
+  AgentStream, detectStreamFormat, permissionRefusal, resolveCodexResultDoc, resolveResultDoc, toolTarget,
+  type AgentEvent,
 } from "../src/core/facilitator/agentEvents.ts";
 import { interpret } from "../src/core/facilitator/spawnAgent.ts";
 import { codexOutput } from "../src/core/facilitator/fakeTranscript.ts";
@@ -410,5 +411,145 @@ describe("prompt-cache accounting (wave N)", () => {
       cache_creation_input_tokens: 0,
       cache_read_input_tokens: 0,
     });
+  });
+});
+
+/**
+ * `permissionRefusal` — the detector that decides whether a story blocks and an
+ * attempt is NOT spent (gh #261).
+ *
+ * Its dangerous direction is the false POSITIVE, not the miss: `buildHalf` cuts
+ * before the DoD and before the commit, so a wrong "refused" throws away work a
+ * developer really did, with no diff and the attempt gone. Pre-merge review found
+ * exactly that — the first version matched the sentence anywhere in any
+ * `tool_result`, so a plain `Read` of a file that CONTAINS the phrase read as a
+ * refusal. The phrase is in this repo's own `docs/spec.md`, `CHANGELOG.md` and
+ * two docs-site guides, so "a developer greps the docs" is the ordinary case.
+ *
+ * Every shape below is measured, `claude` 2.1.270, 2026-09-12, from the probes
+ * that also measured the `Bash(git rm *)` grant.
+ */
+describe("permissionRefusal (gh #261)", () => {
+  const PHRASE = "This command requires approval";
+
+  function transcript(
+    toolUse: Record<string, unknown>,
+    result: Record<string, unknown>,
+    extra: Record<string, unknown> = {},
+  ): string {
+    return [
+      JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [toolUse] },
+        timestamp: "2026-09-12T22:20:53.000Z",
+      }),
+      JSON.stringify({
+        type: "user",
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", ...result }] },
+        timestamp: "2026-09-12T22:20:54.000Z",
+        ...extra,
+      }),
+    ].join("\n");
+  }
+
+  /**
+   * MEASURED: `git -C <elsewhere> rm -- o.txt` under `Bash(git rm *)` as the only
+   * grant. Both signals are on it — the structural `non_execution_kind` and the
+   * sentence — so it is matched whichever path the reader takes.
+   */
+  test("a real Bash refusal names the command it asked for", () => {
+    const text = transcript(
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "git rm -- unused.txt" } },
+      { content: PHRASE, is_error: true },
+      { tool_result_meta: [{ id: "t1", non_execution_kind: "user-rejected" }] },
+    );
+    expect(permissionRefusal(text)).toBe("git rm -- unused.txt");
+  });
+
+  /**
+   * The false positive, and the reason this describe exists. A `Read` that
+   * SUCCEEDS and whose content merely contains the sentence is not a refusal, and
+   * must not cost a story its attempt.
+   */
+  test("a successful Read of a file that CONTAINS the sentence is not a refusal", () => {
+    const text = transcript(
+      { type: "tool_use", id: "t1", name: "Read", input: { file_path: "docs/spec.md" } },
+      { content: `…every \`npm run test -- <file>\` denied with "${PHRASE} to run" and never ran…` },
+    );
+    expect(permissionRefusal(text)).toBeNull();
+  });
+
+  /**
+   * The other half of the same guard, and realistic precisely because of what
+   * this branch added to the docs: a Bash command that RAN, exit 0, and printed
+   * the sentence because it grepped it out of a file.
+   */
+  test("a Bash command that RAN and printed the sentence is not a refusal", () => {
+    const text = transcript(
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "grep -rn 'requires approval' docs/" } },
+      { content: `docs/spec.md:3338:   "${PHRASE} to run" and never ran its own Definition of Done.`, is_error: false },
+    );
+    expect(permissionRefusal(text)).toBeNull();
+  });
+
+  /**
+   * The `Bash` half of the fence on its own. This transcript is CONSTRUCTED, not
+   * measured — a non-`Bash` result that both errors and repeats the sentence is a
+   * shape nobody has recorded — and it is here because the condition it pins is
+   * real: the permission layer refuses COMMANDS, the only door this framework
+   * grants commands through is `Bash`, and a hook `deny` on a file tool is a
+   * different thing the issue names explicitly. Without it, dropping
+   * `call?.name === "Bash"` passes every other case in this file.
+   */
+  test("a NON-Bash tool whose result errored and repeats the sentence is still not a refusal", () => {
+    const text = transcript(
+      { type: "tool_use", id: "t1", name: "Edit", input: { file_path: "docs/spec.md" } },
+      { content: `a hook refused this edit: it quotes "${PHRASE} to run" from the spec`, is_error: true },
+    );
+    expect(permissionRefusal(text)).toBeNull();
+  });
+
+  /**
+   * The STRUCTURAL signal on its own, without the sentence. MEASURED: the
+   * `cd <elsewhere> && git rm` safety check refuses with a completely different
+   * paragraph and the same `non_execution_kind: "user-rejected"`.
+   */
+  test("the structural marker is enough — the host's prose is the fallback, not the test", () => {
+    const text = transcript(
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "cd /elsewhere && git rm -- o.txt" } },
+      {
+        content: "This command changes directory before running git, which can execute untrusted "
+          + "hooks from the target directory. Approve only if you trust it.",
+        is_error: true,
+      },
+      { tool_result_meta: [{ id: "t1", non_execution_kind: "user-rejected" }] },
+    );
+    expect(permissionRefusal(text)).toBe("cd /elsewhere && git rm -- o.txt");
+  });
+
+  /**
+   * MEASURED: `git rm -- <path outside the repo>` was ALLOWED by the rule and
+   * failed in git. `is_error: true`, no marker, no sentence — a command that ran
+   * and failed, which is the DoD's business and never this detector's.
+   */
+  test("a command the layer allowed and GIT refused is not a permission refusal", () => {
+    const text = transcript(
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "git rm -- /elsewhere/o.txt" } },
+      { content: "Command completed with an error: the file is outside the repository boundary.", is_error: true },
+    );
+    expect(permissionRefusal(text)).toBeNull();
+  });
+
+  test("Codex is not guessed at: the same bytes report nothing", () => {
+    const text = transcript(
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "git rm -- unused.txt" } },
+      { content: PHRASE, is_error: true },
+      { tool_result_meta: [{ id: "t1", non_execution_kind: "user-rejected" }] },
+    );
+    expect(permissionRefusal(text, "codex")).toBeNull();
+  });
+
+  test("the real recorded transcript carries no refusal", () => {
+    expect(permissionRefusal(TRANSCRIPT)).toBeNull();
   });
 });

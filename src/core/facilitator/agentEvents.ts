@@ -401,6 +401,142 @@ export function toolTarget(name: string, input: Record<string, unknown> | null):
   return null;
 }
 
+/**
+ * What the agent CLI's own permission layer says when a call is not on the
+ * allowance and nobody is there to approve it (gh #209, gh #261).
+ *
+ * MEASURED twice, in two different workspaces and two different years of the
+ * defect: "This command requires approval to run" (#209, a developer granted
+ * only the exact `Bash(npm run test)` form) and "This command requires
+ * approval" (#261, a developer asking for `git rm`). The SUBSTRING is what is
+ * matched, because those two readings differ in their tail and agreeing on a
+ * whole sentence would be a guess about a string this repo does not own.
+ *
+ * It is NOT a hook `deny` — a hook refusal is this framework's own doing and
+ * already lands in the story's record. This one is the provider's, it happens
+ * before any hook, and in `-p` mode the approval it waits for never comes.
+ */
+export const PERMISSION_REFUSAL_MARK = "requires approval";
+
+/**
+ * The STRUCTURAL half, and the one that is actually load-bearing.
+ *
+ * MEASURED, `claude` 2.1.270, 2026-09-12, on the probes that measured the
+ * `Bash(git rm *)` grant: a `user` line whose tool call the permission layer
+ * refused carries a sibling
+ * `tool_result_meta: [{ id, non_execution_kind: "user-rejected" }]`. It was
+ * present on BOTH refusals — the unlisted `git -C … rm` ("This command requires
+ * approval") and the `cd … && git rm` safety check, whose sentence is entirely
+ * different — and ABSENT (`null`) on all three commands that ran, including
+ * `git rm -- <path outside the repo>`, which the layer allowed and GIT refused
+ * with `is_error: true`. So this field separates "the layer would not run it"
+ * from "it ran and failed", which the sentence alone cannot do.
+ */
+const NON_EXECUTION_REJECTED = "user-rejected";
+
+/**
+ * The FIRST command a turn was refused approval for, or null.
+ *
+ * Why here: this file is the one that knows the `stream-json` shapes, and the
+ * command lives on the `tool_use` while the refusal lives on the matching
+ * `tool_result` — pairing them is the same `tool_use_id` join `AgentStream`
+ * already does, off the same `parseLine`/`obj`/`toolTarget` helpers, so there is
+ * no second opinion here about what a tool call looks like.
+ *
+ * TWO signals, in this order, and the ordering is the fix for a real defect that
+ * pre-merge review caught. FIRST the structural `non_execution_kind:
+ * "user-rejected"` above, which is the host telling us in a field rather than in
+ * a paragraph. SECOND, as a FALLBACK for a host that does not emit that field,
+ * the `requires approval` sentence — and only when the call was a `Bash` one AND
+ * the result is `is_error: true`.
+ *
+ * Why the fallback is fenced that way: the first version of this function
+ * matched the sentence anywhere in any `tool_result`, so a plain `Read` of a
+ * file CONTAINING the phrase read as a refusal — and this repo's own
+ * `docs/spec.md`, `CHANGELOG.md` and two docs-site guides contain it, so
+ * "a developer greps the docs" was enough. The direction that costs is the false
+ * POSITIVE, not the miss: the caller blocks the story BEFORE the DoD and before
+ * the commit, so a wrong reading throws away work the developer really did, with
+ * no diff and the attempt spent. Both measured refusals are `Bash` and
+ * `is_error: true`, so the fence loses no coverage.
+ *
+ * **The fallback depends on prose the HOST writes and can change without
+ * warning** — that is stated rather than papered over. The structural field is
+ * the one to trust, the sentence is a net under it, and a refusal that has
+ * neither is a miss this function will take over a false positive.
+ *
+ * Claude only. `[inferred]` for Codex: `codex exec` is run under `--sandbox`
+ * rather than a per-tool allowance, its `command_execution` items carry an exit
+ * code and no approval result, and nothing measured has shown either signal on a
+ * Codex stream — so rather than match a shape nobody has seen, this returns null
+ * and says so.
+ */
+export function permissionRefusal(
+  stdout: string,
+  provider: "claude" | "codex" = "claude",
+): string | null {
+  if (provider === "codex") return null;
+  // Per `tool_use` id: which tool it was, and what it asked for.
+  const calls = new Map<string, { name: string; target: string }>();
+  for (const line of stdout.split("\n")) {
+    const doc = parseLine(line);
+    if (doc === null) continue;
+    if (doc.type === "assistant") {
+      const blocks = Array.isArray(obj(doc.message)?.content) ? (obj(doc.message)?.content as unknown[]) : [];
+      for (const raw of blocks) {
+        const block = obj(raw);
+        if (block === null || block.type !== "tool_use") continue;
+        const id = str(block.id);
+        const name = str(block.name) ?? "tool";
+        if (id === null) continue;
+        calls.set(id, { name, target: toolTarget(name, obj(block.input)) ?? name });
+      }
+      continue;
+    }
+    if (doc.type !== "user") continue;
+    const rejected = rejectedIds(doc.tool_result_meta);
+    const blocks = Array.isArray(obj(doc.message)?.content) ? (obj(doc.message)?.content as unknown[]) : [];
+    for (const raw of blocks) {
+      const block = obj(raw);
+      if (block === null || block.type !== "tool_result") continue;
+      const id = str(block.tool_use_id);
+      const call = id === null ? undefined : calls.get(id);
+      const structural = id !== null && rejected.has(id);
+      // The fallback, fenced: a `Bash` call, an errored result, and the sentence.
+      // A successful call, or any other tool, is never a refusal however its
+      // output reads.
+      const byPhrase = call?.name === "Bash"
+        && block.is_error === true
+        && resultText(block.content).toLowerCase().includes(PERMISSION_REFUSAL_MARK);
+      if (!structural && !byPhrase) continue;
+      // The command it ASKED for. A refusal whose `tool_use` never arrived names
+      // no command, and this says so rather than inventing one (§7).
+      return call?.target ?? "a command this transcript does not name";
+    }
+  }
+  return null;
+}
+
+/** The `tool_use` ids a `user` line's `tool_result_meta` marks as never executed. */
+function rejectedIds(meta: unknown): ReadonlySet<string> {
+  const ids = new Set<string>();
+  if (!Array.isArray(meta)) return ids;
+  for (const raw of meta) {
+    const row = obj(raw);
+    if (row === null || row.non_execution_kind !== NON_EXECUTION_REJECTED) continue;
+    const id = str(row.id);
+    if (id !== null) ids.add(id);
+  }
+  return ids;
+}
+
+/** A `tool_result.content`: a string, or the blocks the API wraps one in. */
+function resultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((raw) => str(obj(raw)?.text) ?? "").join("\n");
+}
+
 function parseLine(line: string): Record<string, unknown> | null {
   const trimmed = line.trim();
   if (trimmed === "" || !trimmed.startsWith("{")) return null;

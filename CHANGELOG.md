@@ -132,6 +132,50 @@
 
 ### Fixed
 
+- **The spawned developer can delete a file, and a permission refusal is now a recorded reason
+  instead of two burned attempts (#261).** Measured 2026-09-12 on one workspace at 0.16.1: story
+  S7, "delete an unused file", was undoable. The developer's allowance carried no verb that
+  removes a path — `Write`/`Edit` can empty a file, nothing could unlink it or take it out of
+  the index — so every `git rm` and `git mv` it tried came back "This command requires
+  approval", which in a headless `-p` run is a prompt nobody is there to answer. Worse was what
+  the framework did with that: a refused turn exits 0 and returns an envelope, so the DoD ran
+  green on an untouched tree, the empty commit went to review, the reviewer faulted a diff that
+  was never written, and the SECOND attempt bought the same wall — the developer's own sentence
+  living only in `result.raw.json`, in no event, no story file and no handoff. Two halves, and
+  the second is the one that generalises. The allowance grows the file-lifecycle git verbs —
+  `Bash(git rm *)`, `Bash(git mv *)`, `Bash(git restore *)`, the space form, never a bare `rm`
+  — because they are index operations on the story's OWN tree, undone by exactly the
+  `git checkout` that undoes an `Edit`, on a branch that never leaves the machine (`git push`
+  stays asserted absent); the 2026-08-29 audit's line — no permission-free shell, only git verbs
+  — is the reason the three are git verbs and is unchanged. And a tool call refused for approval
+  now BLOCKS the story at once with `` permission — `<command>` `` and why, one string reaching
+  the story file, the handoff's `## Unknowns` and `gate.requested`'s `blocked_reason`, so the
+  next verb that is missing costs one attempt and says so instead of two and nothing. What the detector
+  reads is a structural field first — `tool_result_meta[].non_execution_kind: "user-rejected"`, measured
+  on `claude` 2.1.270, present on both refusals measured and absent on every command that ran, including
+  one the layer allowed and git itself failed — and the `requires approval` sentence only as a fallback,
+  and only on a `Bash` call whose result errored. That fence exists because pre-merge review measured the
+  unfenced version reading a plain `Read` of a file CONTAINING the phrase as a refusal: this CHANGELOG is
+  one of the files that contains it, and the block happens before the DoD and the commit, so a false
+  positive would discard real work and spend the attempt. A refusal carrying neither signal is a miss
+  taken on purpose, and the sentence half depends on prose the host writes and can change without notice. What the
+  new grant covers, measured against `claude` 2.1.270 with `Bash(git rm *)` as the only rule:
+  `git rm -r`, `git rm -rf` and `git rm -r -- .` all pass (a trailing `*` matches the whole
+  argument tail, flags included); a path outside the repo is refused by GIT, not by the rule;
+  `git -C <elsewhere> rm` is refused by the rule, since the command does not begin `git rm`.
+  The open question about the same grammar, **#215** — does an `allow` rule of the
+  `Bash(<cmd> *)` form reach a command substitution in its arguments? — was measured alongside
+  this, `claude` 2.1.270, with `git rm -n` as a non-destructive instrument: under
+  `Bash(git rm *)`, `git rm -n -- "$(echo MARKER.txt)"`, `git rm -n "$(echo MARKER.txt)"` and
+  `git rm -n -r "$(echo .)"` were **all denied** ("Contains shell syntax that cannot be
+  statically analyzed"), while a bare `git rm MARKER.txt` ran. **The nuance matters more than
+  the result: the layer refuses the SYNTAX of a substitution, not the action** — in the same
+  measurement the agent rewrote the command with the value already expanded, and then it ran.
+  For `git rm <path>` that expanded form is exactly what this grant hands out, so the direction
+  is the safe one; nobody should build a guarantee on "substitutions are blocked", because what
+  is blocked is a spelling. And all of it is HOST behaviour, in the agent CLI's permission
+  layer, which can change without a line of tldrx moving — which is why the argument that holds
+  this grant up is the tree-scope one and not the permission layer's manners.
 - **`run.yml` can finally explain its own `cost_usd`, and a Build turn stopped losing its
   accounting entirely (#222).** A field audit across three workspaces measured a row reading
   `input_tokens: 84, output_tokens: 37150, cost_usd: 1.98` for a 124 KB prompt — while the

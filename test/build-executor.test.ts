@@ -66,7 +66,7 @@ const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
   "FAKE_BUILD_WRITE", "FAKE_BUILD_VERDICTS", "FAKE_BUILD_COST", "FAKE_BUILD_STATE",
   "FAKE_BUILD_ARGV_LOG", "FAKE_BUILD_PROMPT_DIR", "FAKE_BUILD_IS_ERROR",
-  "FAKE_BUILD_FAIL", "FAKE_BUILD_FAIL_REASON",
+  "FAKE_BUILD_FAIL", "FAKE_BUILD_FAIL_REASON", "FAKE_BUILD_DENIED", "FAKE_BUILD_GIT_RM",
 ] as const;
 
 let open: BuildWorkspace[] = [];
@@ -172,9 +172,28 @@ describe("the executor registry", () => {
     expect(developerTools(["npm run test"])).toEqual([
       "Read", "Write", "Edit", "Glob", "Grep",
       "Bash(npm run test)", "Bash(npm run test *)", "Bash(git add *)", "Bash(git commit *)",
+      "Bash(git rm *)", "Bash(git mv *)", "Bash(git restore *)",
     ]);
     expect(developerTools([]).some((tool: string) => tool.startsWith("Bash(git push"))).toBe(false);
     expect(REVIEWER_TOOLS).toEqual(["Read", "Grep", "Glob", "Bash(git diff *)"]);
+  });
+
+  /**
+   * gh #261. The file-lifecycle verbs are git verbs and ONLY git verbs: a story
+   * that says "delete an unused file" could not be done at all, because nothing
+   * in the list removes a path and a headless developer has nobody at the prompt
+   * to approve one. What it must never get is a bare `rm` — the 2026-08-29
+   * audit's line holds (no permission-free shell), and this is where it is
+   * mechanical rather than a paragraph.
+   */
+  test("the developer may remove and rename paths in its OWN tree — with git, never with `rm`", () => {
+    expect(developerTools([])).toContain("Bash(git rm *)");
+    expect(developerTools([])).toContain("Bash(git mv *)");
+    expect(developerTools([])).toContain("Bash(git restore *)");
+    // Not a shell that unlinks: `Bash(rm *)` and `Bash(rm -rf *)` alike.
+    expect(developerTools(["npm run test"]).some((tool: string) => tool.startsWith("Bash(rm"))).toBe(false);
+    // And still not a verb that leaves the machine.
+    expect(developerTools([]).some((tool: string) => tool.startsWith("Bash(git push"))).toBe(false);
   });
 });
 
@@ -3624,4 +3643,75 @@ describe("the carried-findings leaf, and what every surface gets from it (#171, 
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+/**
+ * gh #261 — a story that says "delete an unused file".
+ *
+ * Two halves, and only the second is a proof. The developer's allowance grew the
+ * file-lifecycle git verbs, which the SHAPE test above carries the RED for; here
+ * the end-to-end case is a GUARD, because this fake runs its own tool calls and
+ * can never be shown a permission prompt — it passed before the grant existed
+ * too. The proof in this file is the refusal: a turn the environment already
+ * decided is a RECORDED REASON and not a second attempt.
+ */
+describe("a file the developer must remove (gh #261)", () => {
+  const UNUSED = "unused.txt";
+  const ONE: BuildWorkspaceOptions = {
+    stories: [{ id: "S1", epic: "E1", title: "Delete an unused file", touches: [UNUSED] }],
+    epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+    waves: [["S1"]],
+    repoFiles: { [UNUSED]: "nothing imports this\n" },
+  };
+
+  function developerSpawns(ws: BuildWorkspace): number {
+    return events(ws).filter((e) => e.type === "agent.spawned" && e.payload.role === "developer").length;
+  }
+
+  /**
+   * GUARD, not a proof (see the describe header). What it does hold shut is the
+   * other direction: `git rm` has to survive the commit step, the merge and the
+   * review, so the path is gone from the epic's TREE and not merely from a
+   * worktree nobody read.
+   */
+  test("guard: a developer that runs `git rm --` lands a story whose commit no longer has the path", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_GIT_RM = JSON.stringify({ S1: UNUSED });
+
+    await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: done");
+    // The TREE, not the working copy: `git ls-tree` on the epic tip after the merge.
+    expect(git(ws, ["ls-tree", "--name-only", "epic/e1"]).split("\n")).not.toContain(UNUSED);
+    expect(git(ws, ["ls-tree", "--name-only", "epic/e1"]).split("\n")).toContain("README.md");
+  }, 60_000);
+
+  /**
+   * The dangerous direction. A developer refused at the permission layer returns
+   * an ordinary envelope, so before this the story went to review with an empty
+   * diff, the reviewer asked for changes, and the SECOND attempt bought the same
+   * refusal. The sentence lived in `result.raw.json` and nowhere a human looks.
+   */
+  test("a tool call refused for approval blocks the story with `permission — <command>`, after ONE attempt", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_DENIED = JSON.stringify({ S1: `git rm -- ${UNUSED}` });
+
+    const outcome = await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+    // The reason, on the story file and in the handoff's `## Unknowns` — the two
+    // surfaces a human actually reads, plus the gate payload below.
+    const handoff = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    expect(handoff).toContain("permission — ");
+    expect(handoff).toContain(`git rm -- ${UNUSED}`);
+    const gate = events(ws).find((e) => e.type === "gate.requested");
+    expect(String(gate?.payload.blocked_reason ?? "")).toContain("permission — ");
+    expect(String(gate?.payload.blocked_reason ?? "")).toContain(`git rm -- ${UNUSED}`);
+    // The whole point: the same list would refuse the same command, so the
+    // second attempt is not spent. ONE developer spawn, not two.
+    expect(developerSpawns(ws)).toBe(1);
+    // And nothing was merged on the strength of an empty diff.
+    expect(outcome.code).toBe(4);
+    expect(git(ws, ["ls-tree", "--name-only", "epic/e1"]).split("\n")).toContain(UNUSED);
+  }, 60_000);
 });

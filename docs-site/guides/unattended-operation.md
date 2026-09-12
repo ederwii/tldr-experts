@@ -547,6 +547,14 @@ once, at entry, before any turn is paid for.
 declared command is now granted both exactly and with trailing arguments, so a developer can
 run `npm run test -- one/file.test.ts` while it works instead of only the bare command.
 
+**A story asked to delete or rename a file.** The developer may do that: its allowance carries
+`git rm`, `git mv` and `git restore` alongside `git add` and `git commit` (gh #261) — git verbs
+on the story's own index, undone by the same `git checkout` that undoes an edit, on a branch
+nothing pushes. It never gets a bare `rm`. And if some OTHER command it needs is off the list,
+the run no longer burns both attempts finding that out twice: the first refusal blocks the story
+with `permission — <command>`, on the story file, in the handoff's `## Unknowns` and on the gate,
+because the same allowance would refuse the same command on the second try.
+
 **The notifier is never called.** Three usual causes, in the order they cost the least to
 check. The `events:` list does not name the kind you were expecting — remove the key
 entirely to subscribe to everything. The command is not executable, or is not on the path
