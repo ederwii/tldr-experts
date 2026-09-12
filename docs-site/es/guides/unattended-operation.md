@@ -567,6 +567,15 @@ comando declarado ahora se concede tanto exacto como con argumentos al final, as
 developer puede correr `npm run test -- un/archivo.test.ts` mientras trabaja, y no sólo el
 comando pelado.
 
+**Una historia pide borrar o renombrar un archivo.** El developer puede hacerlo: su allowance
+trae `git rm`, `git mv` y `git restore` junto a `git add` y `git commit` (gh #261) — verbos de
+git sobre el índice del propio árbol de la historia, deshechos por el mismo `git checkout` que
+deshace una edición, en una rama que nadie pushea. Nunca recibe un `rm` pelado. Y si algún OTRO
+comando que necesita queda fuera de la lista, el run ya no quema los dos intentos para
+enterarse dos veces: el primer rechazo bloquea la historia con `permission — <comando>`, en el
+archivo de la historia, en `## Unknowns` del handoff y en el gate, porque la misma lista va a
+rechazar el mismo comando en el segundo intento.
+
 **El notificador nunca se llama.** Tres causas habituales, en el orden que cuesta menos
 revisar. La lista `events:` no nombra el tipo que esperabas: quita la clave por completo para
 suscribirte a todo. El comando no es ejecutable, o no está en la ruta desde la que el run lo

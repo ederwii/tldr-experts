@@ -25,8 +25,10 @@
  * elapsed milliseconds, which is the one thing a Linux CI box will not reproduce.
  */
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { claudeOutput } from "../fakeStream.ts";
+import type { FakeTool } from "../fakeStream.ts";
 
 const argv = process.argv.slice(2);
 const argvLog = process.env.FAKE_BUILD_ARGV_LOG;
@@ -65,8 +67,36 @@ if (promptDir !== undefined && promptDir !== "") {
 const cost = Number(process.env.FAKE_BUILD_COST ?? "0.10");
 const failing = shouldFail();
 const written: string[] = [];
+const extraTools: FakeTool[] = [];
 
-if (role === "developer" && !failing) {
+/**
+ * gh #261 — the two shapes a file-lifecycle verb produces for a developer.
+ *
+ * `FAKE_BUILD_GIT_RM` = `{"S1": "unused.txt"}` — the developer REMOVES a tracked
+ * path with `git rm --` in its own worktree and reports the Bash call it made.
+ * That is the grant working, and it is a GUARD only: this fake runs its own tool
+ * calls, so it can never be told "requires approval" and it passed before the
+ * grant existed too.
+ *
+ * `FAKE_BUILD_DENIED` = `{"S1": "git rm -- unused.txt"}` — the developer ASKS and
+ * is refused. The `tool_result` is the real CLI's own sentence, measured twice
+ * (gh #209, and again in #261's workspace), and the turn is NOT an error: it
+ * returns a perfectly ordinary envelope having changed nothing, which is exactly
+ * why the framework could not see that the turn was impossible.
+ */
+const deniedCommand = perStory("FAKE_BUILD_DENIED");
+const gitRmPath = perStory("FAKE_BUILD_GIT_RM");
+
+if (role === "developer" && !failing && deniedCommand !== null) {
+  extraTools.push({
+    name: "Bash",
+    input: { command: deniedCommand },
+    result: "This command requires approval to run",
+  });
+} else if (role === "developer" && !failing && gitRmPath !== null) {
+  execFileSync("git", ["rm", "--", gitRmPath], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+  extraTools.push({ name: "Bash", input: { command: `git rm -- ${gitRmPath}` }, result: "rm '" + gitRmPath + "'" });
+} else if (role === "developer" && !failing) {
   const plan = JSON.parse(process.env.FAKE_BUILD_WRITE ?? "{}") as Record<string, Record<string, string>>;
   const attempt = attemptCount(`dev:${storyId}`);
   const files = plan[`${storyId}#${String(attempt)}`] ?? plan[storyId] ?? {
@@ -112,7 +142,10 @@ process.stdout.write(claudeOutput(argv, {
   usage: { input_tokens: 100, output_tokens: 10 },
   structured,
   errors: failing ? [failureReason(argv)] : [],
-  tools: written.map((rel) => ({ name: "Write", input: { file_path: rel }, result: "File written" })),
+  tools: [
+    ...written.map((rel) => ({ name: "Write", input: { file_path: rel }, result: "File written" })),
+    ...extraTools,
+  ],
 }));
 process.exit(failing ? 1 : 0);
 
@@ -144,6 +177,14 @@ function shouldFail(): boolean {
     if (wantStory !== "" && wantStory !== storyId) return false;
     return attempt === "" || Number(attempt) === nth;
   });
+}
+
+/** A `{"S1": "<value>"}` env map, read for THIS story. Null when it says nothing. */
+function perStory(key: string): string | null {
+  const raw = process.env[key];
+  if (raw === undefined || raw === "") return null;
+  const map = JSON.parse(raw) as Record<string, string>;
+  return map[storyId] ?? null;
 }
 
 /** The real CLI's words for the failure this fake is standing in for. */

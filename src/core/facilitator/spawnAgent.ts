@@ -29,7 +29,9 @@ import { join } from "node:path";
 import { assertNoAttendedSpawn } from "./attended.ts";
 import { emitAgentEvent } from "../ui/bus.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
-import { AgentStream, resolveCodexResultDoc, resolveResultDoc, type AgentEvent } from "./agentEvents.ts";
+import {
+  AgentStream, permissionRefusal, resolveCodexResultDoc, resolveResultDoc, type AgentEvent,
+} from "./agentEvents.ts";
 import { isReadTool, readCapError, STOPPED_BY_MAX_READS } from "./readCap.ts";
 import { subagentEnv } from "./subagent.ts";
 import { ENVELOPE_SCHEMA, toEnvelope, toUsage, type AgentEnvelope, type AgentUsage, type ClaudeResultJson } from "./envelope.ts";
@@ -194,6 +196,16 @@ export interface AgentOutcome {
   readonly error: string | null;
   /** Raw stdout, persisted to `.agent/<stage>/result.raw.json` for the audit trail. */
   readonly raw: string;
+  /**
+   * The first command this turn was REFUSED APPROVAL for, or null (gh #261).
+   *
+   * Not an error and not a failure: a turn that hit the permission wall finishes
+   * normally, returns an envelope, and reports a cost. What it did not do is the
+   * work — and in `-p` mode nobody was ever going to approve it, so the caller
+   * that spends attempts needs to be able to SEE this rather than infer it from
+   * an empty diff. `null` on every ordinary turn.
+   */
+  readonly permissionRefusal: string | null;
   /** Completed `Read`/`Glob`/`Grep` calls seen on the stream. */
   readonly reads: number;
   /** `"max_reads"` when the read cap stopped this run, else null. */
@@ -527,6 +539,7 @@ export function interpret(
     structured: doc?.structured_output ?? null, result,
     error: ok ? null : describe(exitCode, doc, stderr, timedOut, stdout, provider),
     raw: stdout,
+    permissionRefusal: permissionRefusal(stdout, provider),
     reads: 0,
     stoppedBy: null,
     // Not measurable from here — see `AgentOutcome.durationMs`. `spawnAgent`

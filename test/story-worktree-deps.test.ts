@@ -325,6 +325,9 @@ describe("a declared command may be run WITH ARGUMENTS", () => {
       "Read", "Write", "Edit", "Glob", "Grep",
       "Bash(npm run test)", "Bash(npm run test *)",
       "Bash(git add *)", "Bash(git commit *)",
+      // The file-lifecycle verbs (#261) — git verbs on the story's own index,
+      // never a bare `rm`.
+      "Bash(git rm *)", "Bash(git mv *)", "Bash(git restore *)",
     ]);
     expect(allowedTools(["npm run test"])).toEqual([
       "Read", "Write", "Edit", "Glob", "Grep",

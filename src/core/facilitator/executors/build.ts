@@ -1216,6 +1216,20 @@ class BuildSession {
     }
     const spent = developer.cost;
 
+    // (d½) gh #261: the turn asked for something this run's permission layer
+    // refused, and in headless mode there is nobody to approve it. BLOCK, with
+    // the command named — do not let the story walk on to a DoD that is green on
+    // an untouched tree, an empty commit and a reviewer who faults a diff that
+    // was never written. `blocked` is where the attempt stops (`driveStory`
+    // returns on any status that is not `review`), which is the point: the same
+    // allowance would refuse the same command on attempt 2.
+    if (developer.refused !== null) {
+      return {
+        story, cost: spent, dod: [], commit: null,
+        failure: permissionBlockReason(developer.refused), developerError: null, before,
+      };
+    }
+
     // (e) the Definition of Done, re-run in the story's own worktree.
     //
     // An EMPTY dod is the one case the two kinds of plan answer differently: a
@@ -1891,7 +1905,9 @@ class BuildSession {
    * The two are separate on purpose: an errored spawn still costs money, and the
    * money is the operator's clue about why it errored.
    */
-  private async spawnDeveloper(story: StoryContext): Promise<{ cost: number; error: string | null }> {
+  private async spawnDeveloper(
+    story: StoryContext,
+  ): Promise<{ cost: number; error: string | null; refused: string | null }> {
     const cap = developerCap(this.capParts, story.planned.story.id, story.attempt);
     const commands = this.repoCommands(story.planned.story.repo);
     this.ctx.emit("agent.spawned", {
@@ -1937,7 +1953,14 @@ class BuildSession {
       // Every task row of a parallel build otherwise shares one `started_at`.
       durationMs: agent.durationMs,
     });
-    if (agent.ok) return { cost: round2(agent.costUsd), error: null };
+    // A turn refused at the permission layer is OK by every transport measure —
+    // it exited 0, returned an envelope and was charged for — and it did none of
+    // the work it was asked for (#261). Reported beside the cost so the caller
+    // that owns attempts can stop, rather than reading an empty diff as a
+    // developer that simply chose to change nothing.
+    if (agent.ok) {
+      return { cost: round2(agent.costUsd), error: null, refused: agent.permissionRefusal };
+    }
 
     // The developer IS a check, and this is the one outcome it can have that
     // nothing downstream may read as work. `status: "error"` and the error as
@@ -1954,7 +1977,7 @@ class BuildSession {
       attempt: story.attempt,
       detail: error,
     });
-    return { cost: round2(agent.costUsd), error };
+    return { cost: round2(agent.costUsd), error, refused: null };
   }
 
   /** (e) the story's ```dod block, in the worktree, via the gate's own runner. */
@@ -3562,8 +3585,47 @@ class BuildSession {
 
 /**
  * What a story's developer may do: the file tools, exactly the commands its OWN
- * repo declares in `workspace.yml`, and the two git verbs that make a commit.
- * Not `git push`, not `git merge`, not another repo's commands.
+ * repo declares in `workspace.yml`, and the git verbs that make a commit and
+ * move a path around. Not `git push`, not `git merge`, not another repo's
+ * commands, and never a bare `rm`.
+ *
+ * ## Why the file-lifecycle verbs are here (gh #261)
+ *
+ * A story that said "delete an unused file" could not be done AT ALL: nothing on
+ * this list removes or renames a path — `Write`/`Edit` can empty a file, nothing
+ * could unlink it or take it out of the index — and every `git rm`/`git mv` the
+ * developer tried came back "This command requires approval", which in a
+ * headless `-p` run is a prompt nobody will ever answer.
+ *
+ * The 2026-08-29 audit's line is UNCHANGED by this and is the reason the three
+ * verbs are git verbs: no permission-free shell, only operations on the story's
+ * own index. `git rm`, `git mv` and `git restore` act on the story's own
+ * worktree, they are undone by exactly the `git checkout` that undoes an `Edit`,
+ * and the branch never leaves the machine — `Bash(git push …)` is asserted
+ * absent (`test/build-executor.test.ts`). `Bash(rm *)` would be none of those
+ * things, and is refused by that same test.
+ *
+ * **gh #215, and the nuance is the whole of it.** Does an `allow` rule of the
+ * `Bash(<cmd> *)` form reach a COMMAND SUBSTITUTION in its arguments? MEASURED
+ * against `claude` **2.1.270**, with `git rm -n` as the instrument (see #215's
+ * comment): under `Bash(git rm *)`, `git rm -n -- "$(echo MARKER.txt)"`,
+ * `git rm -n "$(echo MARKER.txt)"` and `git rm -n -r "$(echo .)"` were ALL
+ * denied — "Contains shell syntax that cannot be statically analyzed" — while a
+ * bare `git rm MARKER.txt` ran.
+ *
+ * What that does and does not mean: the layer refuses the SYNTAX of a
+ * substitution, **not the action**. In the same measurement the agent simply
+ * rewrote the command with the value already expanded, and then it ran. For
+ * `git rm <path>` that expanded form is exactly the scope this grant hands out,
+ * so the direction is the safe one — but nobody may build a guarantee on top of
+ * "substitutions are blocked", because what is blocked is a spelling.
+ *
+ * And it is HOST behaviour, not this repo's: it lives in the agent CLI's
+ * permission layer and can change under us without a line of tldrx moving. The
+ * argument that actually holds this grant up is the one above and is unchanged —
+ * `git rm`/`git mv` are index operations on the story's own tree, undone by the
+ * same `git checkout` that undoes an `Edit`, on a branch that never leaves the
+ * machine.
  *
  * `Skill` joins the list only when `options.skills` says this repo HAS one — the caller
  * asks `skillsFor(...)` rather than this function guessing. `[unverified]` whether the
@@ -3584,7 +3646,28 @@ export function developerTools(
     ...repoCommands.flatMap((command) => bashGrantsFor(command)),
     "Bash(git add *)",
     "Bash(git commit *)",
+    // The file-lifecycle verbs (#261). Space form, not `:*` — one spelling per
+    // grammar, the same one `bashGrantsFor` writes.
+    "Bash(git rm *)",
+    "Bash(git mv *)",
+    "Bash(git restore *)",
   ];
+}
+
+/**
+ * Why a story stopped when the environment, not the work, decided it (#261).
+ *
+ * `permission — <command>` reads as a CAUSE and not as a verdict on the diff,
+ * which is the distinction a person triaging a parked run needs first. The tail
+ * is the absent-with-reason half (§7): it says what is missing (an approver),
+ * why re-running cannot supply it, and therefore why no second attempt was
+ * bought. One implementation, so the block reason, the story file, the handoff's
+ * `## Unknowns` and `gate.requested`'s `blocked_reason` cannot drift.
+ */
+export function permissionBlockReason(command: string): string {
+  return `permission — \`${command}\` was refused for approval by the agent's own permission layer, `
+    + "and a headless turn has nobody to approve it: the same allowance would refuse it again, "
+    + "so this attempt was not repeated";
 }
 
 /** The reviewer reads and nothing else. */

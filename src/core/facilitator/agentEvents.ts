@@ -401,6 +401,82 @@ export function toolTarget(name: string, input: Record<string, unknown> | null):
   return null;
 }
 
+/**
+ * What the agent CLI's own permission layer says when a call is not on the
+ * allowance and nobody is there to approve it (gh #209, gh #261).
+ *
+ * MEASURED twice, in two different workspaces and two different years of the
+ * defect: "This command requires approval to run" (#209, a developer granted
+ * only the exact `Bash(npm run test)` form) and "This command requires
+ * approval" (#261, a developer asking for `git rm`). The SUBSTRING is what is
+ * matched, because those two readings differ in their tail and agreeing on a
+ * whole sentence would be a guess about a string this repo does not own.
+ *
+ * It is NOT a hook `deny` — a hook refusal is this framework's own doing and
+ * already lands in the story's record. This one is the provider's, it happens
+ * before any hook, and in `-p` mode the approval it waits for never comes.
+ */
+export const PERMISSION_REFUSAL_MARK = "requires approval";
+
+/**
+ * The FIRST command a turn was refused approval for, or null.
+ *
+ * Why here: this file is the one that knows the `stream-json` shapes, and the
+ * command lives on the `tool_use` while the refusal lives on the matching
+ * `tool_result` — pairing them is the same `tool_use_id` join `AgentStream`
+ * already does, off the same `parseLine`/`obj`/`toolTarget` helpers, so there is
+ * no second opinion here about what a tool call looks like.
+ *
+ * Claude only. `[inferred]` for Codex: `codex exec` is run under `--sandbox`
+ * rather than a per-tool allowance, its `command_execution` items carry an exit
+ * code and no approval result, and nothing measured has shown this sentence on a
+ * Codex stream — so rather than match a shape nobody has seen, this returns null
+ * and says so.
+ */
+export function permissionRefusal(
+  stdout: string,
+  provider: "claude" | "codex" = "claude",
+): string | null {
+  if (provider === "codex") return null;
+  const commands = new Map<string, string>();
+  for (const line of stdout.split("\n")) {
+    const doc = parseLine(line);
+    if (doc === null) continue;
+    if (doc.type === "assistant") {
+      const blocks = Array.isArray(obj(doc.message)?.content) ? (obj(doc.message)?.content as unknown[]) : [];
+      for (const raw of blocks) {
+        const block = obj(raw);
+        if (block === null || block.type !== "tool_use") continue;
+        const id = str(block.id);
+        const name = str(block.name) ?? "tool";
+        if (id === null) continue;
+        commands.set(id, toolTarget(name, obj(block.input)) ?? name);
+      }
+      continue;
+    }
+    if (doc.type !== "user") continue;
+    const blocks = Array.isArray(obj(doc.message)?.content) ? (obj(doc.message)?.content as unknown[]) : [];
+    for (const raw of blocks) {
+      const block = obj(raw);
+      if (block === null || block.type !== "tool_result") continue;
+      if (!resultText(block.content).toLowerCase().includes(PERMISSION_REFUSAL_MARK)) continue;
+      const id = str(block.tool_use_id);
+      // The command it ASKED for. A refusal whose `tool_use` never arrived names
+      // no command, and this says so rather than inventing one (§7).
+      const asked = id === null ? undefined : commands.get(id);
+      return asked ?? "a command this transcript does not name";
+    }
+  }
+  return null;
+}
+
+/** A `tool_result.content`: a string, or the blocks the API wraps one in. */
+function resultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((raw) => str(obj(raw)?.text) ?? "").join("\n");
+}
+
 function parseLine(line: string): Record<string, unknown> | null {
   const trimmed = line.trim();
   if (trimmed === "" || !trimmed.startsWith("{")) return null;
