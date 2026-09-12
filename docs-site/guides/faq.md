@@ -34,9 +34,17 @@ JSON on stdin. `tldrx install --claude --uninstall` removes exactly what it wrot
 
 ## Will it commit? Will it push?
 
-Build commits — on a branch of its own, per story, merged into an epic branch. **It never
-pushes.** The epic branch waits for you, and the final merge is yours. `tldrx ship` opens
-a PR from it when you want one.
+Build commits — on a branch of its own, per story, merged into an epic branch. **By default
+it never pushes.** The epic branch waits for you, and the final merge is yours. `tldrx ship`
+opens a PR from it when you want one.
+
+You can take that decision once, when you open the run: `tldrx run new … --ship pr` lets the
+run publish its epic branch and open the PR the moment the last gate is signed, and
+`--ship merge` also arms GitHub's auto-merge so your repo's own checks decide — a PR that
+reports no check at all is left open, never merged over silence. Absent the flag, nothing
+changes. Every gate is still signed by whoever `--gates` says: a run that finishes with a PR
+and no person in the loop is `--gates none --ship merge`, chosen on purpose, and `run.yml`
+records both.
 
 ## What does a run actually cost?
 

@@ -45,7 +45,7 @@ import { estimateNextStage, renderEstimate, EstimateError } from "../../core/bud
 const HINT_FILE_COUNT = 10;
 
 const VALUE_FLAGS = [
-  "title", "scope", "budget", "repos", "from", "seed", "gates", "run", "root",
+  "title", "scope", "budget", "repos", "from", "seed", "gates", "ship", "run", "root",
   "max-usd", "until", "model", "effort", "ui", "note", "parallel", "attended-by",
   "notify-every", "wait-answers", "wait-gates", "prompt-max-bytes", "max-reads",
   "retry-failed",
@@ -95,7 +95,7 @@ export const runCommand: Command = {
   summary: "Create, inspect or auto-run a piece of work",
   usage: "tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b]\n" +
     "                  [--from <aidlc-intent-dir> | --seed <file|dir> ...] [--gates <a,b|a:agent|all|none>]\n" +
-    "                  [--attended-by host] [--root <path>]\n" +
+    "                  [--ship <push|pr|merge>] [--attended-by host] [--root <path>]\n" +
     "       tldrx run attend <host|--none> [<run>] [--run <id>] [--root <path>]\n" +
     "       tldrx run status [<run>] [--json] [--verbose] [--run <id>] [--root <path>]\n" +
     "       tldrx run estimate [<run>] [--json] [--run <id>] [--root <path>]\n" +
@@ -158,6 +158,7 @@ function runNew(argv: readonly string[]): number {
       from: stringFlag(args, "from"),
       seed: seeds.length === 0 ? undefined : seeds.length === 1 ? seeds[0] : seeds,
       gates: stringFlag(args, "gates"),
+      ship: stringFlag(args, "ship"),
       attendedBy: attendedByFlag(args),
       actor: currentActor(),
       now: new Date(),

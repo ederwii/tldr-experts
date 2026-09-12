@@ -203,6 +203,15 @@ frase queda en `run.yml` como `outcome:`, en `tldrx run status`, en el tablero y
 del PR de `tldrx ship` — y `tldrx ship` rechaza un run así en vez de abrir un PR cuya sección
 "What shipped" está vacía.
 
+**Y un run puede terminar en el PR mismo.** Ábrelo con `--ship merge` (o `pr`, o `push`) y en
+cuanto `run auto` ve el run en `done` corre `tldrx ship` por ti: la rama de la épica se
+publica, el PR se abre con el cuerpo de arriba, y con `merge` se arma el auto-merge de GitHub
+para que decidan los checks del propio repo — un PR que no reporta ningún check se queda
+abierto, y `run.finished` entonces dice `merge: absent — no checks to wait on` junto a la
+`pr_url`. Sin el flag, el loop termina donde siempre. Las compuertas no cambian por esto: un
+run que va de `run new` a un PR mergeado sin nadie en medio es `--gates none --ship merge`,
+dicho completo, y `run.yml` guarda las dos decisiones.
+
 ### `status` — el latido
 
 ```json

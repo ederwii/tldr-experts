@@ -19,6 +19,7 @@ import {
   EVIDENCE_ROLES, EVIDENCE_VERDICTS, type EvidenceRole, type EvidenceVerdict,
 } from "../text/evidence.ts";
 import { DURATION_BASES, type DurationBasis } from "./duration.ts";
+import { AUTO_MERGE_POLICIES, type ShipPolicy } from "./shipPolicy.ts";
 
 /** One enum, all three levels (spec §2.2). */
 export const STAGE_STATUSES = [
@@ -465,6 +466,45 @@ export interface RunBuild {
 }
 
 /**
+ * `ship:` on `run.yml` (spec §2.2, gh #253) — ADDITIVE and optional.
+ *
+ * The DECISION half is `ShipPolicy`, frozen at `run new --ship` the way
+ * `gates_policy` is: what the run may do to its epic branch once every gate is
+ * signed. The RECORD half is written once, by `tldrx ship` — from `run auto` when
+ * the run closes under it, or typed by a person — and says what was actually done:
+ * the PR URLs `gh` printed, what became of the merge, and when. `shipped_at` is
+ * the idempotence key (`shipPolicy.ts`, `shipWanted`).
+ *
+ * Absent on every run.yml written before this key existed, and on every run
+ * opened without `--ship`: nothing is pushed, nothing is opened, and `tldrx ship`
+ * refuses an unpushed branch exactly as it always did. `version: 1` grows (§7).
+ */
+export interface RunShip extends ShipPolicy {
+  /** One URL per repo the PR was opened in, in the run's repo order. `[]` under `pr: false`. */
+  readonly pr_urls?: readonly string[];
+  /**
+   * What became of the merge: `queued` (`gh pr merge --auto` accepted), `never`
+   * (the policy), `absent — no checks to wait on` (§7: the merge was NOT armed,
+   * and this is why), or `failed — <gh's first line>`. Free text on purpose — the
+   * failure case carries a sentence — so a reader compares against the exported
+   * constants rather than an enum this file would have to grow for every reason.
+   */
+  readonly merge?: string;
+  /**
+   * Repo name → that repo's merge state, in the same words as `merge` — the
+   * per-repo truth `merge` summarises (one sentence when every repo agrees,
+   * `repo: state; …` otherwise). It exists because a re-run has to know WHICH
+   * repo still owes a merge: `tldrx ship` typed again after a partial failure
+   * arms a repo recorded `failed — …`, leaves one recorded `queued` alone, and
+   * writes the union — so a recorded failure is never erased by the command that
+   * was supposed to fix it (review of 1fdc250, §7).
+   */
+  readonly merges?: Readonly<Record<string, string>>;
+  /** When the record was LAST written. Present ⇒ `run auto` ships nothing again; `tldrx ship` typed again is the recovery. */
+  readonly shipped_at?: string;
+}
+
+/**
  * How much of what the run set out to build actually landed.
  *
  * `n/a` is the fourth and it is not a failure: a docs-scope run has no Build
@@ -608,6 +648,12 @@ export interface RunFile {
    * PATH finished — and nothing anywhere said the path had delivered nothing.
    */
   readonly outcome?: RunOutcome;
+  /**
+   * How far past the last gate the framework may carry the epic, and what it did
+   * (gh #253). ADDITIVE and optional: absent — every run.yml written before this
+   * key, and every run opened without `--ship` — means push nothing, open nothing.
+   */
+  readonly ship?: RunShip;
   readonly phases: readonly RunPhase[];
 }
 
@@ -806,6 +852,37 @@ export function validateRunFile(input: unknown): ValidationResult {
   // can compare against `tldrx --version`, and a file may not carry one of those.
   for (const key of ["created_with", "last_written_by"] as const) {
     if (doc[key] !== undefined) requireString(doc[key], key, issues);
+  }
+
+  // Optional, additive (#253): absent means push nothing, open nothing. Present,
+  // the three policy keys are REQUIRED — a block with `push: true` and no `pr`
+  // would have to be read as some default, and a default that publishes is the
+  // one guess this key exists to forbid. The record keys are optional: absent
+  // until `tldrx ship` writes them, and checked only when there.
+  if (doc.ship !== undefined) {
+    if (isRecord(doc.ship)) {
+      requireKeys(doc.ship, ["push", "pr", "auto_merge"], "ship", issues);
+      for (const key of ["push", "pr"] as const) {
+        if (doc.ship[key] !== undefined && typeof doc.ship[key] !== "boolean") {
+          issues.push({ path: `ship.${key}`, message: `expected a boolean, got ${typeof doc.ship[key]}` });
+        }
+      }
+      requireEnum(doc.ship.auto_merge, AUTO_MERGE_POLICIES, "ship.auto_merge", issues);
+      if (requireArray(doc.ship.pr_urls, "ship.pr_urls", issues)) {
+        (doc.ship.pr_urls as unknown[]).forEach((url, i) => requireString(url, `ship.pr_urls[${i}]`, issues));
+      }
+      requireString(doc.ship.merge, "ship.merge", issues);
+      if (doc.ship.merges !== undefined) {
+        if (isRecord(doc.ship.merges)) {
+          for (const [name, state] of Object.entries(doc.ship.merges)) requireString(state, `ship.merges.${name}`, issues);
+        } else {
+          issues.push({ path: "ship.merges", message: "expected a mapping of repo name to merge state" });
+        }
+      }
+      requireString(doc.ship.shipped_at, "ship.shipped_at", issues);
+    } else {
+      issues.push({ path: "ship", message: "expected a mapping" });
+    }
   }
 
   // Optional, additive: absent means "clean up at run close". Present it must be

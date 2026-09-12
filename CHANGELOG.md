@@ -2,6 +2,41 @@
 
 ## 0.18.0 — unreleased
 
+### Added
+
+- **A run can now end in a pull request toward main, on purpose (#253).** Measured on two
+  workspaces on 0.16.1: $89.82 over 28 h and $26.38 over 5.6 h, and neither run could end in a
+  PR whatever it spent — every preset ends at `watch`, and `tldrx ship` refused to push the
+  branch it opens the PR for, citing a spec sentence that is not in the spec (what
+  `docs/spec.md` actually says is that the BUILD phase has no push wrapper). The last mile —
+  the only one the owner's sentence names, *"desde que le doy el run, hasta que me entrega un
+  PR hacia main"* — was a person typing `git push -u origin epic/<slug>`, then `tldrx ship`,
+  then watching the checks. It is now a decision taken once, at `tldrx run new --ship
+  <push|pr|merge>`, and frozen into `run.yml` as an additive `ship: {push, pr, auto_merge}`
+  block the way `gates_policy` is: not a sixth phase, because shipping has none of a phase's
+  properties — it spends nothing, produces a URL, and is gated by what every earlier gate
+  already signed. When `run auto` sees the run close it runs the same `tldrx ship` a person
+  would type: the epic is pushed through the ONE push wrapper in the codebase (in
+  `core/build/git.ts`, beside Build's git seam, with `core/run/ship.ts` pinned as its single
+  caller — the Build phase itself still has none), the PR opens with the body it always had,
+  and under `merge` the PR is armed with `gh pr merge --auto --merge` so the remote's own
+  checks decide. A PR that reports NO check is left open and the record says `merge: absent —
+  no checks to wait on` (§7), because GitHub's auto-merge over nothing to wait on is a merge
+  now, not a merge when green — the mutation that drops that guard reddens exactly one test.
+  `run.yml` gets one record (`pr_urls`, `merge`, per-repo `merges`, `shipped_at`) beside the
+  policy, so a loop re-run on a closed run ships nothing twice — while `tldrx ship` typed again
+  is the recovery after a partial failure: it re-arms the repo whose merge failed, leaves a
+  queued one alone, and never erases a recorded failure (pre-merge review caught the first
+  version overwriting it with an empty string and exit 0) — and `run.finished` carries `pr_url`
+  and `merge`.
+  A ship that is refused is the loop's exit 2 — it was asked for a PR and did not deliver one.
+  Absent the flag every run means what it meant: nothing pushed, nothing opened, the refusal
+  that names the `git push` command unchanged byte for byte. Every gate is still signed by
+  whoever `--gates` says, so an unattended ship is a deliberate `--gates none --ship merge`
+  and `run.yml` records both. Found on the way: `run.yml` is emitted key by key, so the
+  block was dropped by the first save until the emitter learned it — pinned by a round-trip
+  test.
+
 ### Fixed
 
 - **`run.yml` can finally explain its own `cost_usd`, and a Build turn stopped losing its

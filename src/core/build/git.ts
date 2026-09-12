@@ -10,8 +10,13 @@
  *     argument — it is a write into somebody else's repo. `repoDirOf` is the only
  *     way a cwd is produced, and it refuses anything the workspace does not name.
  *
- * `git push` has no wrapper here on purpose (spec §5, Build executor): the phase
- * ends at a human gate, and nothing it runs may publish a branch.
+ * The Build PHASE has no push (spec §5, "Resolve and cut": "there is deliberately
+ * no `push` wrapper anywhere in the phase"). The one push wrapper in the codebase,
+ * `pushBranch` below, is NOT the phase's: it takes the caller's own transport
+ * rather than the runtime seam, so nothing in Build can reach it by accident, and
+ * `test/ship-policy.test.ts` pins its single caller as `core/run/ship.ts`
+ * (gh #253). Publishing a branch stays a decision — one the run's `ship:` block
+ * records, or a person makes at the keyboard — never a side effect of building.
  */
 import { existsSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -41,6 +46,45 @@ export async function git(args: readonly string[], cwd: string, timeoutMs = GIT_
     stderr: outcome.stderr,
     timedOut: outcome.timedOut,
   };
+}
+
+/** What `pushBranch` needs of a transport: `ship`'s `ShipTransport`, structurally. */
+export interface PushRunner {
+  run(cmd: string, args: readonly string[], cwd: string): Promise<{
+    readonly exitCode: number;
+    readonly stdout: string;
+    readonly stderr: string;
+  }>;
+}
+
+export interface PushOutcome {
+  readonly ok: boolean;
+  /** git's first non-empty line, stderr first — what a refusal quotes. */
+  readonly detail: string;
+}
+
+/**
+ * `git push -u <remote> <branch>` — the ONE spelling of a push in `src/` (gh #253).
+ *
+ * Deliberately plain: no `--force`, no `--force-with-lease`, no refspec beyond the
+ * branch's own name. A push the remote rejects (a non-fast-forward, a protected
+ * ref, a missing credential) is returned as `ok: false` with git's own sentence,
+ * and the caller refuses with it. The wrapper decides nothing about WHETHER to
+ * push; that is `run.yml`'s `ship.push`, read by its single caller.
+ *
+ * It takes a `PushRunner` rather than calling `runtime.spawn` like `git()` above
+ * for the reason `ship.ts` gives for its transport: a test must be able to
+ * assert the argv of a command it must never run. The transport is the seam.
+ */
+export async function pushBranch(
+  runner: PushRunner,
+  cwd: string,
+  remote: string,
+  branch: string,
+): Promise<PushOutcome> {
+  const out = await runner.run("git", ["push", "-u", remote, branch], cwd);
+  const detail = firstLine(out.stderr) || firstLine(out.stdout);
+  return { ok: out.exitCode === 0, detail };
 }
 
 /**

@@ -196,6 +196,15 @@ same sentence is on `run.yml` as `outcome:`, in `tldrx run status`, on the dashb
 `tldrx ship` PR body — and `tldrx ship` refuses such a run outright rather than opening a PR
 whose "What shipped" section is empty.
 
+**And a run can end in the PR itself.** Open it with `--ship merge` (or `pr`, or `push`) and
+the moment `run auto` sees the run read `done` it runs `tldrx ship` for you: the epic branch is
+pushed, the PR opens with the body above, and under `merge` GitHub's auto-merge is armed so the
+repo's own checks decide — a PR that reports no check at all is left open, and `run.finished`
+then reads `merge: absent — no checks to wait on` beside the `pr_url`. Absent the flag, the
+loop ends where it always did. The gates are unchanged by it: a run that goes from `run new` to
+a merged PR with nobody in the loop is `--gates none --ship merge`, said in full, and
+`run.yml` carries both decisions.
+
 ### `status` — the heartbeat
 
 ```json

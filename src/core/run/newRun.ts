@@ -42,6 +42,7 @@ import { collectSeeds, type SeedSet } from "../seed/collectSeed.ts";
 import { allSeedHeadings, seedClaims } from "../seed/seedClaims.ts";
 import { renderSeedHandoff, renderSeedIndex, SEED_INDEX } from "../seed/renderSeed.ts";
 import { findDuplicate } from "../facts/findDuplicate.ts";
+import { parseShipFlag, ShipPolicyError, type ShipPolicy } from "./shipPolicy.ts";
 import { renderHandoff, renderProse, renderQuestions, targetOf } from "../distill/renderDistill.ts";
 import { emitBudgetYaml, emitRunYaml } from "./emitRunYaml.ts";
 import { GatePolicyError, parseGatesFlag, resolveGatesPolicy, type GatesPolicy } from "./gatePolicy.ts";
@@ -85,6 +86,14 @@ export interface NewRunOptions {
    * statement, not a patch.
    */
   readonly gates?: string;
+  /**
+   * `--ship <push|pr|merge>` — how far past the last gate the framework may carry
+   * the epic (gh #253). Frozen into `run.yml`'s `ship:` block the way `gates_policy`
+   * is, because "this run may publish its branch" is a statement about the piece
+   * of work, taken once, by the person who opened it. Absent ⇒ no block, and the
+   * run means what every run before the key meant: push nothing, open nothing.
+   */
+  readonly ship?: string;
   /**
    * `--attended-by host` — open the run with a host session driving it (§2.2).
    *
@@ -175,6 +184,13 @@ function createRunLocked(options: NewRunOptions): NewRunOutcome {
     if (error instanceof GatePolicyError) throw new NewRunError(error.message);
     throw error;
   }
+  let shipPolicy: ShipPolicy | null = null;
+  try {
+    shipPolicy = options.ship === undefined ? null : parseShipFlag(options.ship);
+  } catch (error) {
+    if (error instanceof ShipPolicyError) throw new NewRunError(error.message);
+    throw error;
+  }
   const workspace = loadWorkspace(options.root);
   const repos = resolveRepos(options.repos, workspace.repos);
   const at = rfc3339(options.now);
@@ -225,6 +241,9 @@ function createRunLocked(options: NewRunOptions): NewRunOutcome {
     // `run new` wrote before this existed.
     ...(options.attendedBy === undefined ? {} : { attended_by: options.attendedBy }),
     gates_policy: gatesPolicy,
+    // Spread for the reason `attended_by` is: a run opened without `--ship` carries
+    // no key at all, and its run.yml is byte-identical to the one written before.
+    ...(shipPolicy === null ? {} : { ship: shipPolicy }),
     phases,
   };
   const run: RunFile = { ...seed, status: deriveRunStatus(seed) };

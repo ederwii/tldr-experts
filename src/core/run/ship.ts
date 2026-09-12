@@ -54,16 +54,25 @@
  *   and listed. So the fix for a partial failure is `tldrx ship` again, and nothing
  *   else.
  *
- * **It never pushes.** `core/build/git.ts` has no `git push` wrapper on purpose —
- * spec §5, "the phase ends at a human gate, and nothing it runs may publish a
- * branch" — and this verb keeps that rule rather than being the exception to it.
- * A branch the remote has not seen is a REFUSAL naming the exact `git push`
- * command, because publishing a branch is a decision, and a decision belongs to
- * the person, not to the tool that noticed it was needed.
+ * **It pushes only when the run says so (gh #253).** Publishing a branch is a
+ * decision, and the decision belongs to the person — so by default a branch the
+ * remote has not seen is a REFUSAL naming the exact `git push` command. The
+ * person may take that decision ONCE, at `run new --ship <push|pr|merge>`: then
+ * `run.yml` carries a `ship:` block (`shipPolicy.ts`), the branch is pushed
+ * through the one wrapper in `core/build/git.ts` — whose single caller this verb
+ * is — and, under `auto_merge: checks`, the PR is armed with `gh pr merge --auto`
+ * so the remote's own checks decide. A PR that reports NO check is not armed:
+ * an auto-merge with nothing to wait on merges at once, and the record says
+ * `absent — no checks to wait on` (§7) rather than merging over silence. The
+ * Build phase itself still has no push (spec §5, "Resolve and cut").
  *
- * **It never writes to the run.** No event, no gate, no cursor, no money. `tldrx
- * ship` is a read of the run and a write to GitHub; a run whose PR was opened is
- * not in a different state from one whose PR was not.
+ * **It writes to the run ONLY the record of that decision.** No event, no gate,
+ * no cursor, no money. A run with no `ship:` block is read and never written —
+ * a run whose PR was opened by hand is not in a different state from one whose
+ * PR was not. A run WITH the block gets its record — `pr_urls`, `merge`,
+ * `shipped_at` — written once, beside the policy it was opened with, so `run
+ * auto` re-run on a closed run ships nothing twice and `run.finished` can carry
+ * the URL.
  *
  * **It does not mirror tickets.** The issue asks for that in the same breath, and
  * `tldrx tickets sync` already is that verb — it reads `process.yml`'s
@@ -100,6 +109,9 @@ import type { PlanStatus } from "../schemas/planCommon.ts";
 // three numbers itself; `EXIT_GATE_REFUSED` is the same 2 every other gate
 // refusal in the CLI exits with, and one spelling is what keeps it that way.
 import { EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../../cli/exitCodes.ts";
+import { pushBranch } from "../build/git.ts";
+import { MERGE_QUEUED, NO_CHECKS_TO_WAIT_ON } from "./shipPolicy.ts";
+import type { RunShip } from "./RunFile.ts";
 import {
   deliveredPhrase, deriveRunOutcome, describeRunOutcome, storiesView,
 } from "./runOutcome.ts";
@@ -143,12 +155,30 @@ export interface ShipOptions {
   readonly actor: string;
   readonly at: string;
   readonly transport: ShipTransport;
+  /**
+   * Under `auto_merge: checks`: how long to wait for the PR to report its first
+   * check before deciding there is none. Default `SHIP_CHECKS_GRACE_MS`; tests
+   * pass `0` and answer the probe on the first ask.
+   */
+  readonly checksGraceMs?: number;
 }
 
 export interface ShipOutcome {
   readonly code: number;
   readonly lines: readonly string[];
+  /** The `ship:` record written to run.yml — present only on a run with a policy, and never on `--dry-run`. */
+  readonly ship?: RunShip;
 }
+
+/**
+ * A just-opened PR reports no check for the first seconds of its life: the
+ * workflow runs register after the `pull_request` event lands. Ninety seconds is
+ * past what a queued Actions run needs to APPEAR (it need not finish), so a probe
+ * that still sees nothing after that is looking at a repo with no checks, not at
+ * a slow one. Polled every `SHIP_CHECKS_POLL_MS`.
+ */
+export const SHIP_CHECKS_GRACE_MS = 90_000;
+export const SHIP_CHECKS_POLL_MS = 10_000;
 
 export async function shipRun(options: ShipOptions): Promise<ShipOutcome> {
   const resolution = RunStore.resolve(options.root, options.runId);
@@ -259,25 +289,71 @@ async function shipTo(
   body: ShipBody,
   stories: readonly ShipStory[],
 ): Promise<ShipOutcome> {
-  const gh = await options.transport.run(GH_BIN, ["--version"], options.root);
-  if (gh.exitCode !== 0) {
-    return refuse([
-      "`gh` is not usable here, and it is what opens the PR",
-      `  \`${GH_BIN} --version\` exited ${String(gh.exitCode)}${firstLine(gh.stderr) === "" ? "" : `: ${firstLine(gh.stderr)}`}`,
-      "  install it (`brew install gh`, or https://cli.github.com) and `gh auth login`, then try again.",
-      "  Nothing was created and nothing was pushed.",
-    ]);
+  // The run's own decision, read once (gh #253). Null is every run opened without
+  // `--ship`, and every path below then does exactly what it did before the key.
+  const policy = store.run.ship ?? null;
+  const pushOnly = policy !== null && policy.push && !policy.pr;
+
+  // `gh` is what opens the PR; a push-only ship needs git alone and must not be
+  // refused for a tool it will not use.
+  if (!pushOnly) {
+    const gh = await options.transport.run(GH_BIN, ["--version"], options.root);
+    if (gh.exitCode !== 0) {
+      return refuse([
+        "`gh` is not usable here, and it is what opens the PR",
+        `  \`${GH_BIN} --version\` exited ${String(gh.exitCode)}${firstLine(gh.stderr) === "" ? "" : `: ${firstLine(gh.stderr)}`}`,
+        "  install it (`brew install gh`, or https://cli.github.com) and `gh auth login`, then try again.",
+        "  Nothing was created and nothing was pushed.",
+      ]);
+    }
   }
 
   const repos = await findRepos(options, store, branch);
   if ("code" in repos) return repos;
 
   const excuses = settledTouches(stories);
+  if (pushOnly) return await pushOnlyTo(options, store, branch, repos, excuses, policy);
   const only = repos[0];
   if (repos.length === 1 && only !== undefined) {
-    return await shipOne(options, store, branch, only, body, excuses);
+    return await shipOne(options, store, branch, only, body, excuses, policy);
   }
-  return await shipMany(options, store, branch, repos, body, excuses);
+  return await shipMany(options, store, branch, repos, body, excuses, policy);
+}
+
+/**
+ * `--ship push`: publish the branch in every repo that has it, open nothing.
+ *
+ * The same `prepareRepo` the PR path runs — remote, push, state refusal — so a
+ * branch carrying tldrx's own state is refused here too: the PR it will be opened
+ * from by hand would merge those paths just the same. Exit 2 if any repo refused,
+ * naming both sides, like `shipMany`.
+ */
+async function pushOnlyTo(
+  options: ShipOptions,
+  store: RunStore,
+  branch: string,
+  repos: readonly ShipRepo[],
+  excuses: readonly StateExcuse[],
+  policy: RunShip,
+): Promise<ShipOutcome> {
+  const lines: string[] = [];
+  let failed = 0;
+  for (const repo of repos) {
+    const prepared = await prepareRepo(options, repo, branch, excuses, policy);
+    if (!prepared.ok) {
+      failed += 1;
+      lines.push(`\`${repo.name}\` FAILED: ${prepared.lines[0] ?? ""}`, ...prepared.lines.slice(1));
+      continue;
+    }
+    lines.push(options.dryRun === true
+      ? `would push \`${branch}\` to \`${prepared.remote}\` (${repo.name}) — --dry-run: nothing was pushed.`
+      : `pushed \`${branch}\` to \`${prepared.remote}\` (${repo.name})`);
+  }
+  lines.push(`  ship.pr is false: no PR was opened. \`tldrx ship --run ${store.runId}\` opens one by hand.`);
+  const code = failed === 0 ? EXIT_OK : EXIT_GATE_REFUSED;
+  if (options.dryRun === true || failed > 0) return { code, lines };
+  const record = writeShipRecord(store, policy, [], {}, options.at);
+  return { code, lines, ship: record };
 }
 
 /**
@@ -295,8 +371,9 @@ async function shipOne(
   repo: ShipRepo,
   body: ShipBody,
   excuses: readonly StateExcuse[],
+  policy: RunShip | null,
 ): Promise<ShipOutcome> {
-  const prepared = await prepareRepo(options, repo, branch, excuses);
+  const prepared = await prepareRepo(options, repo, branch, excuses, policy);
   if (!prepared.ok) return refuse(prepared.lines);
   const base = prepared.base;
 
@@ -316,6 +393,26 @@ async function shipOne(
     };
   }
 
+  // Under a policy, ONE repo is asked about an open PR the way several always were
+  // (review of 1fdc250): a second `tldrx ship` is the documented recovery after a
+  // merge that failed to arm, and letting `gh pr create` refuse it would make the
+  // recovery impossible on exactly the run that needs it. Without a policy the
+  // probe still never runs, and the one-repo path stays byte-identical.
+  const existing = policy === null ? null : await openPrFor(options, repo, branch);
+  if (existing !== null && policy !== null) {
+    const merge = await armOrKeep(options, repo, existing, policy, previousMerges(store));
+    const record = writeShipRecord(store, policy, [existing], { [repo.name]: merge }, options.at);
+    return {
+      code: merge.startsWith("failed") ? EXIT_GATE_REFUSED : EXIT_OK,
+      lines: [
+        `a PR for ${store.runId} from \`${branch}\` into \`${base}\` is already open (${repo.name}) — nothing opened twice`,
+        `  ${existing}`,
+        ...policyLines(prepared, branch, merge),
+      ],
+      ship: record,
+    };
+  }
+
   const created = await options.transport.run(GH_BIN, args, repo.dir);
   if (created.exitCode !== 0) {
     return refuse([
@@ -326,16 +423,155 @@ async function shipOne(
   }
 
   const url = lastUrl(created.stdout) ?? lastUrl(created.stderr);
+  const lines = [
+    `opened a PR for ${store.runId} from \`${branch}\` into \`${base}\` (${repo.name})`,
+    `  ${url ?? "gh printed no URL — check `gh pr list`"}`,
+    `  body: ${bodyRecipe(body)}`,
+    `  next: \`tldrx tickets sync --run ${store.runId}\` mirrors the plan's epics and stories, `
+      + "if this workspace configures a ticket tool.",
+  ];
+  // Without a policy the four lines above are the whole output, byte for byte
+  // (`test/ship-multi-repo.test.ts` asserts them) and nothing is written.
+  if (policy === null) return { code: EXIT_OK, lines };
+
+  const merge = await armMerge(options, repo, url, policy);
+  const record = writeShipRecord(store, policy, url === null ? [] : [url], { [repo.name]: merge }, options.at);
   return {
-    code: EXIT_OK,
-    lines: [
-      `opened a PR for ${store.runId} from \`${branch}\` into \`${base}\` (${repo.name})`,
-      `  ${url ?? "gh printed no URL — check `gh pr list`"}`,
-      `  body: ${bodyRecipe(body)}`,
-      `  next: \`tldrx tickets sync --run ${store.runId}\` mirrors the plan's epics and stories, `
-        + "if this workspace configures a ticket tool.",
-    ],
+    code: merge.startsWith("failed") ? EXIT_GATE_REFUSED : EXIT_OK,
+    lines: [...lines, ...policyLines(prepared, branch, merge)],
+    ship: record,
   };
+}
+
+/** What the policy did in ONE repo, said on the ship's own output — only ever under a policy. */
+function policyLines(prepared: Prepared, branch: string, merge: string): readonly string[] {
+  return [
+    ...(prepared.pushed ? [`  pushed: \`${branch}\` → \`${prepared.remote}\``] : []),
+    `  merge: ${describeMerge(merge)}`,
+  ];
+}
+
+function describeMerge(merge: string): string {
+  if (merge === MERGE_QUEUED) return `${MERGE_QUEUED} — \`gh pr merge --auto --merge\`; GitHub merges when its checks pass`;
+  if (merge === NO_CHECKS_TO_WAIT_ON) return `${NO_CHECKS_TO_WAIT_ON} — the PR stays open for a person`;
+  if (merge === "never") return "never (ship.auto_merge)";
+  return merge;
+}
+
+/**
+ * `auto_merge: checks`: arm `gh pr merge --auto`, but only over a PR that has
+ * reported at least one check (gh #253).
+ *
+ * The distinction the probe exists for: GitHub's auto-merge merges the moment the
+ * PR's REQUIREMENTS are met, and a repo with no check has none — so arming it
+ * there is not "merge when green", it is "merge now". The probe is `gh pr view
+ * --json statusCheckRollup`, polled for `checksGraceMs` because a fresh PR reports
+ * nothing for its first seconds; an empty rollup after the grace is the absence,
+ * and it is recorded as one (§7). A `gh` that fails or answers something that is
+ * not the JSON it was asked for is "I could not tell", which for a merge has to
+ * behave like "there is nothing to wait on": nothing is armed, and the sentence
+ * says which of the two it was.
+ */
+async function armMerge(
+  options: ShipOptions,
+  repo: ShipRepo,
+  url: string | null,
+  policy: RunShip,
+): Promise<string> {
+  if (policy.auto_merge !== "checks") return "never";
+  if (url === null) return "failed — gh printed no PR URL to merge";
+  const checks = await checksReported(options, repo, url);
+  if (checks.kind === "unreadable") return `failed — could not read the PR's checks: ${checks.detail}`;
+  if (checks.count === 0) return NO_CHECKS_TO_WAIT_ON;
+  const armed = await options.transport.run(GH_BIN, ["pr", "merge", url, "--auto", "--merge"], repo.dir);
+  if (armed.exitCode !== 0) {
+    return `failed — \`gh pr merge --auto\` exited ${String(armed.exitCode)}`
+      + `${firstLine(armed.stderr) === "" ? "" : `: ${firstLine(armed.stderr)}`}`;
+  }
+  return MERGE_QUEUED;
+}
+
+/**
+ * The re-run rule (review of 1fdc250): a repo whose record already says `queued`
+ * is left alone — `gh pr merge --auto` on a PR already in auto-merge is at best a
+ * no-op and at worst a second decision — and every other state, `failed — …`
+ * above all, is armed again. Per repo, off `ship.merges`; `merge` alone cannot
+ * say which repo still owes one.
+ */
+async function armOrKeep(
+  options: ShipOptions,
+  repo: ShipRepo,
+  url: string,
+  policy: RunShip,
+  previous: Readonly<Record<string, string>>,
+): Promise<string> {
+  if (policy.auto_merge === "checks" && previous[repo.name] === MERGE_QUEUED) return MERGE_QUEUED;
+  return await armMerge(options, repo, url, policy);
+}
+
+function previousMerges(store: RunStore): Readonly<Record<string, string>> {
+  return store.run.ship?.merges ?? {};
+}
+
+type ChecksProbe =
+  | { readonly kind: "counted"; readonly count: number }
+  | { readonly kind: "unreadable"; readonly detail: string };
+
+async function checksReported(options: ShipOptions, repo: ShipRepo, url: string): Promise<ChecksProbe> {
+  const grace = options.checksGraceMs ?? SHIP_CHECKS_GRACE_MS;
+  const started = Date.now();
+  for (;;) {
+    const seen = await options.transport.run(GH_BIN, ["pr", "view", url, "--json", "statusCheckRollup"], repo.dir);
+    if (seen.exitCode !== 0) {
+      return { kind: "unreadable", detail: firstLine(seen.stderr) || `gh exited ${String(seen.exitCode)}` };
+    }
+    let doc: unknown;
+    try {
+      doc = JSON.parse(seen.stdout);
+    } catch {
+      return { kind: "unreadable", detail: "`gh pr view --json statusCheckRollup` printed something that is not JSON" };
+    }
+    const rollup = (doc as { statusCheckRollup?: unknown } | null)?.statusCheckRollup;
+    const count = Array.isArray(rollup) ? rollup.length : 0;
+    if (count > 0 || Date.now() - started >= grace) return { kind: "counted", count };
+    await new Promise((resolve) => setTimeout(resolve, Math.min(SHIP_CHECKS_POLL_MS, grace)));
+  }
+}
+
+/**
+ * The record, beside the policy (gh #253). `RunStore.save` is the same path every
+ * other run.yml write takes — validated, under the lock, atomic.
+ *
+ * Per repo, and as a UNION over what the record already says (review of
+ * 1fdc250): a re-run that touched only the repo that owed a merge must not lose
+ * the repo that did not, and a repo whose arm failed again keeps the failure it
+ * has now — never an empty `merge`, never a `queued` nobody measured. `merge` is
+ * the one-line summary of `merges`: the one state when every repo agrees,
+ * `repo: state; …` otherwise, `never` when there is no repo to say anything.
+ */
+function writeShipRecord(
+  store: RunStore,
+  policy: RunShip,
+  prUrls: readonly string[],
+  merges: Readonly<Record<string, string>>,
+  at: string,
+): RunShip {
+  const all = { ...previousMerges(store), ...merges };
+  const distinct = [...new Set(Object.values(all))];
+  const merge = distinct.length === 0
+    ? "never"
+    : distinct.length === 1
+      ? distinct[0] ?? "never"
+      : Object.entries(all).map(([name, state]) => `${name}: ${state}`).join("; ");
+  const record: RunShip = {
+    push: policy.push, pr: policy.pr, auto_merge: policy.auto_merge,
+    pr_urls: [...prUrls], merge,
+    ...(Object.keys(all).length === 0 ? {} : { merges: all }),
+    shipped_at: at,
+  };
+  store.mutate((run) => ({ ...run, ship: record }));
+  store.save();
+  return record;
 }
 
 /** What happened in ONE repo. The list of these is the output (issue #66). */
@@ -348,6 +584,8 @@ interface RepoOutcome {
   readonly base?: string;
   /** A failure's own sentences — the same ones one repo would have been refused with. */
   readonly detail?: readonly string[];
+  /** Under a policy: what `armMerge` did in this repo. Absent without one. */
+  readonly merge?: string;
 }
 
 /**
@@ -365,10 +603,11 @@ async function shipMany(
   repos: readonly ShipRepo[],
   body: ShipBody,
   excuses: readonly StateExcuse[],
+  policy: RunShip | null,
 ): Promise<ShipOutcome> {
   const results: RepoOutcome[] = [];
   for (const repo of repos) {
-    const prepared = await prepareRepo(options, repo, branch, excuses);
+    const prepared = await prepareRepo(options, repo, branch, excuses, policy);
     if (!prepared.ok) {
       results.push({ repo, kind: "failed", detail: prepared.lines });
       continue;
@@ -388,7 +627,12 @@ async function shipMany(
     // would make re-running after a partial failure look worse than the first try.
     const already = await openPrFor(options, repo, branch);
     if (already !== null) {
-      results.push({ repo, kind: "existing", url: already, base: prepared.base });
+      // An open PR is not a finished one (review of 1fdc250): under a policy it
+      // still owes its merge unless the record says it is queued.
+      results.push({
+        repo, kind: "existing", url: already, base: prepared.base,
+        ...(policy === null ? {} : { merge: await armOrKeep(options, repo, already, policy, previousMerges(store)) }),
+      });
       continue;
     }
 
@@ -406,14 +650,30 @@ async function shipMany(
       });
       continue;
     }
+    const url = lastUrl(created.stdout) ?? lastUrl(created.stderr) ?? undefined;
     results.push({
       repo,
       kind: "opened",
       base: prepared.base,
-      url: lastUrl(created.stdout) ?? lastUrl(created.stderr) ?? undefined,
+      url,
+      ...(policy === null ? {} : { merge: await armMerge(options, repo, url ?? null, policy) }),
     });
   }
-  return renderMany(store, branch, body, results, options.dryRun === true);
+  const rendered = renderMany(store, branch, body, results, options.dryRun === true);
+  if (policy === null || options.dryRun === true) return rendered;
+
+  // One record for the run: every URL that stands, and the merge state per repo —
+  // `writeShipRecord` unions it over the previous record and summarises it.
+  const standing = results.filter((r) => r.kind === "opened" || r.kind === "existing");
+  const urls = standing.flatMap((r) => (r.url === undefined ? [] : [r.url]));
+  const merges = Object.fromEntries(results.flatMap((r) => (r.merge === undefined ? [] : [[r.repo.name, r.merge]])));
+  const record = writeShipRecord(store, policy, urls, merges, options.at);
+  const mergeFailed = results.some((r) => r.merge !== undefined && r.merge.startsWith("failed"));
+  return {
+    code: mergeFailed ? EXIT_GATE_REFUSED : rendered.code,
+    lines: [...rendered.lines, ...results.flatMap((r) => (r.merge === undefined ? [] : [`  ${r.repo.name}  merge: ${describeMerge(r.merge)}`]))],
+    ship: record,
+  };
 }
 
 /**
@@ -512,6 +772,8 @@ interface Prepared {
   readonly ok: true;
   readonly remote: string;
   readonly base: string;
+  /** `true` when this call pushed the branch — only ever under `ship.push`. */
+  readonly pushed: boolean;
 }
 
 /**
@@ -527,6 +789,7 @@ async function prepareRepo(
   repo: ShipRepo,
   branch: string,
   excuses: readonly StateExcuse[],
+  policy: RunShip | null,
 ): Promise<Prepared | { readonly ok: false; readonly lines: readonly string[] }> {
   const remotes = await listRemotes(options.transport, repo.dir);
   const remote = remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : null;
@@ -545,8 +808,32 @@ async function prepareRepo(
     };
   }
 
-  // The branch must ALREADY be on the remote. tldrx does not publish branches.
-  const onRemote = await options.transport.run("git", ["ls-remote", "--heads", remote, branch], repo.dir);
+  // Under `ship.push` the branch is published HERE, through the one wrapper, and
+  // always — a push of a branch the remote already has at this tip is a no-op,
+  // and one it has at an older tip is exactly the update a ship means. Plain,
+  // never forced: a rejection is git's sentence, quoted, and no PR is opened.
+  let pushed = false;
+  if (policy?.push === true && options.dryRun !== true) {
+    const push = await pushBranch(options.transport, repo.dir, remote, branch);
+    if (!push.ok) {
+      return {
+        ok: false,
+        lines: [
+          `\`git push -u ${remote} ${branch}\` was refused in \`${repo.name}\`, so no PR was opened`,
+          ...(push.detail === "" ? [] : [`  ${push.detail}`]),
+          "  (ship.push is true on this run; the push is plain, never forced — resolve it and run `tldrx ship` again.)",
+        ],
+      };
+    }
+    pushed = true;
+  }
+
+  // Otherwise the branch must ALREADY be on the remote: without `ship.push`, tldrx
+  // does not publish branches. A `--dry-run` under the policy skips the check for
+  // the push it did not make.
+  const onRemote = policy?.push === true && options.dryRun === true
+    ? { exitCode: 0, stdout: "(would push)" }
+    : await options.transport.run("git", ["ls-remote", "--heads", remote, branch], repo.dir);
   if (onRemote.exitCode !== 0 || onRemote.stdout.trim() === "") {
     return {
       ok: false,
@@ -554,7 +841,7 @@ async function prepareRepo(
         `\`${branch}\` is not on \`${remote}\`, and tldrx does not publish branches`,
         `  push it yourself, then run this again:`,
         `    git -C ${repo.dir} push -u ${remote} ${branch}`,
-        "  (spec §5: nothing the framework runs may publish a branch — that decision is yours.)",
+        "  (publishing a branch is a decision, and this run did not record one — `tldrx run new --ship pr` does.)",
       ],
     };
   }
@@ -591,7 +878,7 @@ async function prepareRepo(
       ],
     };
   }
-  return { ok: true, remote, base };
+  return { ok: true, remote, base, pushed };
 }
 
 /**
