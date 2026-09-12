@@ -54,10 +54,21 @@
   `budget.ceiling_usd` and `per_agent_max_usd` are documented for what they always were: the
   figures the run was CREATED with. That is not a `version: 1` meaning change — the keys are
   required and still written, they held the creation ceiling before this change too, and what
-  moved is only that nothing reads them as the current one. Two readers deliberately stay on the
-  mirror: `tldrx replay` narrates the document a run.yml IS, and the statusline's tolerant
-  fallback runs only when run.yml fails validation, where a second tolerant parser for budget.yml
-  would be a worse trade than a figure marked degraded.
+  moved is only that nothing reads them as the current one. The corollary is the part worth
+  writing down, because the first cut of this change got it wrong and a pre-merge review caught
+  it: run.yml's budget block is **half live**. `spent_usd` is re-derived by `rollUp` on every
+  save; `ceiling_usd` beside it is frozen. Printing the two as one sentence therefore reproduces
+  the same defect somewhere else, which is precisely what `tldrx replay` did — measured through
+  the CLI on a run raised $10 → $30 with $12 spent: `Status: **pending** · $12.00 spent of $10.00
+  ceiling`, no corruption and no concurrency needed, just a raise. "A replay narrates the
+  document" does not rescue it when the document itself is mixed. So the ceiling is resolved once
+  in `replay/loadRun.ts`, the single place both files are in hand, and `tldrx replay` and the
+  dashboard share that derivation. Swept for the same class: the only other frozen keys in
+  run.yml are `budget.per_agent_max_usd`, which no reader anywhere displays, and `created_with`,
+  which is frozen on purpose and paired with `last_written_by` to show exactly that difference.
+  One reader stays on the mirror by design: the statusline's tolerant fallback, which runs only
+  when run.yml fails validation, where a second tolerant parser for budget.yml would be a worse
+  trade than a figure on an already-degraded screen.
 
 ## 0.16.1 — 2026-09-12
 

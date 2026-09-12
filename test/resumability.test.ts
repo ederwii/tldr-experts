@@ -403,6 +403,71 @@ describe("budget.yml ceilings survive a concurrent raise", () => {
     }
   });
 
+  /**
+   * gh #236, the half the first pass got WRONG and a pre-merge review caught.
+   *
+   * `tldrx replay` was left reading run.yml's mirror on the argument that a
+   * replay narrates the DOCUMENT. That argument is refuted by the file itself:
+   * run.yml's budget block is half live and half frozen — `spent_usd` is
+   * re-derived by `rollUp` on every single save, `ceiling_usd` is the creation
+   * value — so pairing them in one sentence reproduces #236's exact symptom in a
+   * second command. Measured through the real CLI on a run raised $10 → $30 with
+   * $12 spent: `Status: **pending** · $12.00 spent of $10.00 ceiling`, with
+   * `budget: {ceiling_usd: 10.00, spent_usd: 12.00, …}` on disk to prove the mix
+   * is INSIDE one block. The ceiling is resolved from budget.yml in `loadRun.ts`,
+   * where both files are already in hand, so replay and the dashboard share one
+   * derivation.
+   */
+  test("`tldrx replay` never narrates more spent than ceiling after a raise (#236)", () => {
+    const ws = makeRunWorkspace();
+    try {
+      const runId = createRun({
+        root: ws.root, slug: "replay", scope: "feature", actor: "alan",
+        now: new Date("2026-08-29T09:00:00Z"),
+      }).runId;
+
+      const raiser = RunStore.find(ws.root, runId)!;
+      const created = raiser.run.budget.ceiling_usd;
+      raiser.mutateBudget((b) => ({ ...b, ceiling_usd: created + 100 }));
+      raiser.save();
+
+      // Spend PAST the creation ceiling. Nothing here is torn or concurrent: one
+      // raise, one ordinary save, which is why this reaches every raised run.
+      const spender = RunStore.find(ws.root, runId)!;
+      const spend = created + 20;
+      spender.mutate((run) => ({
+        ...run,
+        phases: run.phases.map((phase, pi) => pi !== 0 ? phase : ({
+          ...phase,
+          stages: phase.stages.map((stage, si) => si !== 0 ? stage : ({
+            ...stage,
+            tasks: [...stage.tasks, {
+              id: "t1", status: "done" as const, expert: "product", model: "sonnet",
+              cost_usd: spend, error: null, session_id: null,
+              started_at: null, ended_at: null, outputs: [],
+            }],
+          })),
+        })),
+      }));
+      spender.save();
+
+      // The mirror is exactly the half-live block the argument missed.
+      const onDisk = RunStore.find(ws.root, runId)!.run.budget;
+      expect(onDisk.ceiling_usd).toBe(created);
+      expect(onDisk.spent_usd).toBe(spend);
+
+      const loaded = loadRun(ws.root, runId)!;
+      expect(loaded.run.ceiling_usd).toBe(created + 100);
+      const status = renderReplay(loaded).split("\n").find((l) => l.startsWith("Status:")) ?? "";
+      const figures = /\$([0-9.]+) spent of \$([0-9.]+) ceiling/.exec(status);
+      expect(figures).not.toBeNull();
+      expect(Number(figures![1])).toBeLessThanOrEqual(Number(figures![2]));
+      expect(Number(figures![2])).toBeCloseTo(created + 100, 2);
+    } finally {
+      ws.dispose();
+    }
+  });
+
   test("a save leaves no temp file in the run dir", () => {
     const ws = makeRunWorkspace();
     try {

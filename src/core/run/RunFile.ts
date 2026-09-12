@@ -346,7 +346,12 @@ export interface RunCursor {
  * changed in #236 is not their meaning — they were always the creation figures —
  * but that nothing reads them as if they were the current ones.
  *
- * `spent_usd` is the exception and IS re-derived on every save.
+ * `spent_usd` is the exception and IS re-derived on every save. So this block is
+ * HALF LIVE, and that is the trap: printing `spent_usd` and `ceiling_usd` from it
+ * as one sentence pairs two different moments, and produces `$12.00 spent of
+ * $10.00 ceiling` on any run whose ceiling was raised. A pre-merge review caught
+ * exactly that in `tldrx replay` while #236 was being fixed. Read the ceiling from
+ * budget.yml; for a read-only view, `replay/loadRun.ts` has already done it.
  */
 export interface RunBudgetMirror {
   readonly ceiling_usd: number;

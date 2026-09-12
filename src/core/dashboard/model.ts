@@ -1231,14 +1231,13 @@ export function toRunModel(
     updatedAt: doc.updated_at,
     cursor: doc.cursor === null ? null : `${doc.cursor.phase} / ${doc.cursor.stage}`,
     spentUsd: doc.spent_usd,
-    // budget.yml when it parses, the run.yml mirror only when it does not (#236).
-    // This page renders BOTH — the headline `of $X` (`render.ts`) and the budget
-    // panel's `ceiling` row (`toBudgetModel`) — and until #236 they came from
-    // different files, so one page could contradict itself after a `budget raise`
-    // that a long-lived run's save then reverted in the mirror. The fallback is
-    // not a synonym: a budget.yml that does not parse leaves the mirror as the
-    // only figure on disk, and showing the creation ceiling beats showing none.
-    ceilingUsd: loaded.budget?.ceiling_usd ?? doc.ceiling_usd,
+    // budget.yml's, already resolved by `loadRun.ts` — NOT the run.yml mirror
+    // (#236). This page renders the headline `of $X` (`render.ts`) beside the
+    // budget panel's own `ceiling` row (`toBudgetModel`), and until #236 those
+    // came from two files and could contradict each other on one page. Resolving
+    // it again here would be a second copy of the same derivation (§7); the
+    // fallback to the mirror when budget.yml will not parse lives there too.
+    ceilingUsd: doc.ceiling_usd,
     attendedBy: doc.attended_by,
     unmeteredTasks,
     // `doc.spent_usd` is null only when the budget block could not be read; a
