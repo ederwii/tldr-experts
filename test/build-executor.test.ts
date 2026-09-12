@@ -738,6 +738,71 @@ describe("a spawned reviewer's task row carries its token split (#173)", () => {
 });
 
 /**
+ * gh #222, second half. `recordExecutorTasks` emitted `agent.result` for EVERY
+ * Build and Watch turn and put NO `usage` on it at all — measured against the
+ * frozen golden: `grep -c usage` over the four `*-events.txt` returned 0, 0, 0,
+ * 0 with ten `agent.result` lines among them. The single-agent path
+ * (`runNext.ts`, stage spawn) and the gate signer have carried the four
+ * counters since they were parsed; the executor path threw them away one
+ * function after reading them. Everything downstream that prices a turn from
+ * the EVENT (`budget/costView.ts`'s `toAttempt`, `run estimate`) therefore read
+ * `{0, 0, 0, 0}` for every turn of a Build.
+ */
+describe("an executor turn's agent.result carries the provider's usage (#222)", () => {
+  test("a spawned Build turn records what it read, cache counters included", async () => {
+    const ws = workspace(ONE_STORY);
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(4);
+
+    const results = events(ws).filter((e) => e.type === "agent.result");
+    const developer = results.find((e) => e.payload.session_id === "fake-developer-S1");
+    expect(developer, "the developer turn appended an agent.result").toBeDefined();
+
+    const usage = developer?.payload.usage as Record<string, number> | undefined;
+    expect(usage, "the executor path emits a usage block, like the stage-spawn path").toBeDefined();
+    // The fake's own `usage` (test/fixtures/build/fakeClaude.ts) is the
+    // behaviour this is compared against — the row's split, which the same
+    // outcome produced, not a constant typed twice.
+    const rows = RunStore.open(ws.runDir).run.phases.flatMap((p) => p.stages).flatMap((s) => s.tasks);
+    const row = rows.find((r) => r.session_id === "fake-developer-S1");
+    expect(usage?.input_tokens).toBe(row?.input_tokens as number);
+    expect(usage?.output_tokens).toBe(row?.output_tokens as number);
+    // All four keys, in the one spelling `envelope.ts`'s `usagePayload` gives
+    // every emitter — a turn that read nothing from the cache says `0` HERE,
+    // where the block is the provider's frame verbatim, and says nothing at all
+    // on the row, where a `0` would be a number nobody measured.
+    expect(Object.keys(usage ?? {}).sort()).toEqual([
+      "cache_creation_input_tokens", "cache_read_input_tokens", "input_tokens", "output_tokens",
+    ]);
+    expect(row?.cache_read_input_tokens).toBeUndefined();
+  });
+
+  /**
+   * A GUARD, not a proof — it passes before the fix as well as after. It is the
+   * other half of the rule: a HOST turn is one nothing here watched, so there is
+   * no usage to carry and the block is ABSENT rather than four zeros (§7).
+   */
+  test("a HOST turn carries no usage block — nothing here watched it", async () => {
+    const ws = workspace(ONE_STORY);
+    expect((await next(ws, { mode: "prepare" })).code).toBe(0);
+    writeFileSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`, "s1.txt"), "S1 in-session\n", "utf8");
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "result.json"),
+      JSON.stringify({ outputs: ["s1.txt"], questions_asked: [], notes: "" }),
+      "utf8",
+    );
+    await next(ws, { mode: "commit" });
+
+    const hosted = events(ws)
+      .filter((e) => e.type === "agent.result")
+      .find((e) => e.payload.session_id === null);
+    expect(hosted, "the in-session developer turn appended an agent.result").toBeDefined();
+    expect(hosted?.payload.usage).toBeUndefined();
+  });
+});
+
+/**
  * gh #234 — every task row of a Build claimed the STAGE's first expert, so the
  * reviewer's turn was filed under `developer`.
  *
@@ -2710,7 +2775,7 @@ describe("the handoff's Cost line marks an unmetered phase as a lower bound (#13
    * A turn that declared only a PROVIDER split is no longer counted silent, and
    * the split does not leak into the separate "host declared N tokens" figure
    * the `absent` sentence quotes (#159) — exactly the shape every Codex Build
-   * turn has: unmetered, no host `tokens`, a full `inputTokens`/`outputTokens`.
+   * turn has: unmetered, no host `tokens`, a full provider `usage`.
    */
   test("a provider split is declared, and it never inflates the host-declared figure (#159)", () => {
     const ws = workspace(HOSTED);
@@ -2722,7 +2787,7 @@ describe("the handoff's Cost line marks an unmetered phase as a lower bound (#13
     // carried dollars — but nothing here was ever HOST-declared.
     const splitOnly = {
       key: "S1", model: "sonnet", costUsd: 1, sessionId: null, error: null, outputs: [],
-      inputTokens: 200, outputTokens: 20,
+      usage: { input_tokens: 200, output_tokens: 20 },
     };
     const result = phaseCostToDate(ws.runDir, "04-build", "build", 1, [silent, splitOnly]);
     expect(result.note).toBe(spendReason("absent", 2, 1, 1, 0, "stage"));
@@ -2732,7 +2797,7 @@ describe("the handoff's Cost line marks an unmetered phase as a lower bound (#13
     // not silent — the shape every Codex Build turn has.
     const unmeteredSplit = {
       key: "S1", model: "sonnet", costUsd: 0, sessionId: null, error: null, outputs: [],
-      metered: false, inputTokens: 200, outputTokens: 20,
+      metered: false, usage: { input_tokens: 200, output_tokens: 20 },
     };
     const onlySplit = phaseCostToDate(ws.runDir, "04-build", "build", 0, [unmeteredSplit]);
     expect(onlySplit.note).toBe(spendReason("declared", 1, 1, 0, 0, "stage"));

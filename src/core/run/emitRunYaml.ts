@@ -106,6 +106,13 @@ function task(t: RunTask, indent: string): string {
   // to what they were.
   const inTokens = t.input_tokens === undefined ? "" : `, input_tokens: ${String(t.input_tokens)}`;
   const outTokens = t.output_tokens === undefined ? "" : `, output_tokens: ${String(t.output_tokens)}`;
+  // The same rule, one counter at a time (#222): a cache write and a cache read
+  // are separate quantities at separate prices, so neither waits on the other
+  // and neither is ever written as a zero nobody measured.
+  const cacheWrite = t.cache_creation_input_tokens === undefined
+    ? "" : `, cache_creation_input_tokens: ${String(t.cache_creation_input_tokens)}`;
+  const cacheRead = t.cache_read_input_tokens === undefined
+    ? "" : `, cache_read_input_tokens: ${String(t.cache_read_input_tokens)}`;
   // The turn's own role, next to the stage's expert it is so easily confused
   // with (#234). Written only when an executor recorded one, so a row from
   // before the key existed — and any turn nothing could attribute — round-trips
@@ -113,7 +120,8 @@ function task(t: RunTask, indent: string): string {
   const role = t.role === undefined ? "" : `, role: ${yamlScalar(t.role)}`;
   return [
     `${indent} - {id: ${yamlScalar(t.id)}, status: ${yamlScalar(t.status)}, expert: ${yamlScalar(t.expert)}${role}, ` +
-      `model: ${yamlScalar(t.model)}, cost_usd: ${cost}${metered}${tokens}${inTokens}${outTokens},`,
+      `model: ${yamlScalar(t.model)}, cost_usd: ${cost}${metered}${tokens}${inTokens}${outTokens}` +
+      `${cacheWrite}${cacheRead},`,
     `${inner}error: ${yamlScalar(t.error)}, session_id: ${yamlScalar(t.session_id)},`,
     `${inner}started_at: ${yamlScalar(t.started_at)}, ended_at: ${yamlScalar(t.ended_at)},`,
     // Written only when a limit stopped the attempt: every existing run.yml stays

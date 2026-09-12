@@ -524,6 +524,51 @@ describe("capPayload learns `outputs` (#248)", () => {
   });
 });
 
+/**
+ * gh #222 put a `usage` block on every executor `agent.result`, and the question
+ * this answers is whether `capPayload` has to learn a THIRD field name.
+ *
+ * It does not, and the reason is arithmetic rather than taste: `usage` is
+ * FIXED-ARITY — four finite counters, one spelling (`envelope.ts`'s
+ * `usagePayload`) — where `detail` is unbounded prose and `outputs` is an
+ * unbounded list. A field that cannot grow cannot be the reason a payload is
+ * oversized, so there is nothing for a branch to drop. What matters instead is
+ * the opposite property, and it is the one #248 was filed about: when a payload
+ * IS over the cap, the accounting has to be what survives the drop.
+ */
+describe("the usage block is bounded, so the cap has nothing to learn (#222)", () => {
+  /** Twelve-digit counters — far past anything a provider has reported. */
+  const HUGE_USAGE = {
+    input_tokens: 999_999_999_999, output_tokens: 999_999_999_999,
+    cache_creation_input_tokens: 999_999_999_999, cache_read_input_tokens: 999_999_999_999,
+  };
+
+  test("even at absurd counter widths it is a rounding error against the cap", () => {
+    // Measured, not asserted: the block's own bytes, at counters no real turn
+    // will reach. 148 of 4096 — under 4% of the cap.
+    const block = bytes({ usage: HUGE_USAGE }) - bytes({});
+    expect(block).toBeLessThan(MAX_PAYLOAD_BYTES / 20);
+  });
+
+  test("an oversized turn drops its path list and KEEPS its accounting", () => {
+    const outputs = Array.from({ length: 200 }, (_, i) => `src/generated/file-${String(i)}.ts`);
+    const payload = {
+      phase: "04-build", task: "t2", key: "S2", outputs,
+      tldrx_version: "0.17.0", usage: HUGE_USAGE,
+    };
+    expect(bytes(payload)).toBeGreaterThan(MAX_PAYLOAD_BYTES);
+
+    const capped = capPayload(payload, () => "omitted text saved at 04-build/log/overflow/x.txt");
+
+    expect(capped.outputs).toBeUndefined();
+    expect(capped.outputs_omitted).toBe(200);
+    // The whole point of #248 was that an oversized event must not take the
+    // invocation's accounting with it. The four counters are still there.
+    expect(capped.usage).toEqual(HUGE_USAGE);
+    expect(bytes(capped)).toBeLessThanOrEqual(MAX_PAYLOAD_BYTES);
+  });
+});
+
 describe("#248 half 1 — a huge `outputs` never kills the money path", () => {
   test("the task row, its cost and the epic merge all land; the list is beside the event", async () => {
     const ws = workspace(WIDE_STORY);
@@ -547,6 +592,11 @@ describe("#248 half 1 — a huge `outputs` never kills the money path", () => {
     expect(result?.payload.outputs).toBeUndefined();
     expect(result?.payload.outputs_omitted).toBe(MANY_FILES_COUNT);
     expect(bytes(result?.payload as Record<string, unknown>)).toBeLessThanOrEqual(MAX_PAYLOAD_BYTES);
+    // …and the accounting the event now carries (#222) came through the drop.
+    expect(result?.payload.usage).toEqual({
+      input_tokens: 100, output_tokens: 10,
+      cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+    });
 
     // The full list is beside the event, relative and real.
     const relPath = savedPathIn(String(result?.payload.outputs_omitted_reason));

@@ -36,6 +36,21 @@ export interface TokenBearing {
   readonly tokens?: number | null;
   readonly input_tokens?: number | null;
   readonly output_tokens?: number | null;
+  /**
+   * On the row since gh #222, and READ BY NOTHING HERE — deliberately.
+   *
+   * They are named in this interface so the exclusion is a decision on the
+   * record rather than a field somebody has not noticed yet. A cache read is
+   * billed at 0.1x an input token and a cache write at 1.25x, so adding
+   * 4,911,750 cache reads to an `input_tokens: 84` would produce a total in no
+   * currency at all — and this function's one output is a `number | null` with
+   * no unit label attached, which is exactly the kind of figure that must not be
+   * made to mean two things. Cache counters are RECORDED on the row and priced
+   * where prices live (`budget/costView.ts`, off the event, with the cache
+   * multipliers); they are not part of what a turn DECLARED.
+   */
+  readonly cache_creation_input_tokens?: number | null;
+  readonly cache_read_input_tokens?: number | null;
 }
 
 export function turnTokens(task: TokenBearing): number | null {

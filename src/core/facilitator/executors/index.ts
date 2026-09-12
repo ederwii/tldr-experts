@@ -27,6 +27,7 @@ import type { GateType } from "../../run/RunFile.ts";
 import type { BranchModelKind } from "../../plan/branchModel.ts";
 import type { EventType } from "../../events/Event.ts";
 import type { EffortLevel } from "../../schemas/stage.ts";
+import type { AgentUsage } from "../envelope.ts";
 import { watchExecutor } from "./watch.ts";
 import { buildExecutor } from "./build.ts";
 
@@ -65,12 +66,18 @@ export interface ExecutorTask {
   /** `--tokens`-style declaration for an unmetered turn, when the host gave one. */
   readonly tokens?: number;
   /**
-   * The provider's measured token split for this turn, when the executor spawned
-   * one and read its `AgentOutcome.usage`. Absent for a HOST turn — nothing here
-   * watched it — and absent is "not recorded", never zero.
+   * The provider's own accounting for this turn, VERBATIM, when the executor
+   * spawned one and read its `AgentOutcome.usage`. Absent for a HOST turn —
+   * nothing here watched it — and absent is "not recorded", never zeros.
+   *
+   * All FOUR counters, as one value, since gh #222: this used to be
+   * `inputTokens`/`outputTokens` and the two cache counters were dropped at this
+   * seam, so a run.yml row read `input_tokens: 84` for a turn the provider had
+   * just billed 4,911,750 cache reads for. Carrying `AgentUsage` whole is also
+   * what keeps `runNext`'s row and its `agent.result` derived from ONE value
+   * rather than from a hand-copied subset that can lose a field again.
    */
-  readonly inputTokens?: number;
-  readonly outputTokens?: number;
+  readonly usage?: AgentUsage;
   /**
    * The sub-agent's own wall clock in milliseconds, when this executor SPAWNED
    * one and read `AgentOutcome.durationMs` (#184).
