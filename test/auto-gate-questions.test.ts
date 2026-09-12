@@ -177,13 +177,22 @@ function order(ws: Made): readonly string[] {
  * same bytes that verb leaves behind (`status: answered` plus the footer), and it is
  * what the gate's `questions` condition reads.
  */
-async function answerWhenWaiting(ws: Made): Promise<void> {
+async function answerWhenWaiting(ws: Made, options: { alsoSpoilTheHandoff?: boolean } = {}): Promise<void> {
   for (let i = 0; i < 800; i++) {
     const parked = delivered(ws).some(
       (payload) => payload.kind === "status"
         && (payload.detail as { waiting_on_gate?: unknown }).waiting_on_gate !== undefined,
     );
     if (parked) {
+      // In the SAME breath as the answers (gh #247): a second condition that was holding
+      // nothing when the gate fired — `held_by` was exactly `["questions"]`, which is what
+      // made the notification deferrable — and is failing by the time the deferral is
+      // released. It is the only way to reach the release path with something still
+      // holding the gate, because a second condition present at fire time is never
+      // deferred at all (case (c) above).
+      if (options.alsoSpoilTheHandoff === true) {
+        writeFileSync(join(ws.runDir, "01-what", "handoff.md"), unverifiableHandoff(), "utf8");
+      }
       writeFileSync(join(ws.runDir, "01-what", "questions.md"), ANSWERED, "utf8");
       return;
     }
@@ -465,5 +474,36 @@ describe("the deferred gate notification is released by conditions, not by statu
     expect(String(payload.summary)).not.toContain("questions=");
     expect(detail.held_by).toBeUndefined();
     expect(events(ws).some((e) => e.type === "gate.approved" && e.stage === "alpha")).toBe(false);
+  });
+
+  test("a SECOND condition, failing only by the time the answers land, IS notified — and with the current words", async () => {
+    const ws = workspace({ gates: { alpha: "auto", beta: "auto" }, questions: QUESTIONS });
+    // The gate fires held by `["questions"]` alone, so its notification is deferred; the
+    // handoff goes unverifiable in the same breath as the answers. With `--wait-gates` on
+    // — the very flag whose presence silences the case above — the release must still
+    // speak, because the loop will NOT be signing this one.
+    const answering = answerWhenWaiting(ws, { alsoSpoilTheHandoff: true });
+
+    const outcome = await auto(ws, { waitAnswersMs: 20_000, waitGatesMs: 3_000, notifyEveryMs: 40 });
+    await answering;
+    expect(outcome.code).toBe(4);
+
+    // The gate WAS deferrable: the event's own held_by named nothing but the questions.
+    expect(gateRequested(ws)?.payload.held_by).toEqual(["questions"]);
+    // And the deferred notification went out. This is the direction that fails SILENTLY —
+    // no error, no log, just a parked run nobody was told about — so it is pinned here.
+    const sent = delivered(ws).filter((p) => p.kind === "gate.requested");
+    expect(sent.length).toBe(1);
+    const detail = sent[0]?.detail as { held_by?: readonly string[] };
+    // Asserted on the condition ID `render` emits (`<id>=<detail>`), not on an English
+    // word that innocent prose could supply (§8): the words are the CURRENT measurement's,
+    // never the `questions=` reading the event was frozen with.
+    expect(detail.held_by?.length).toBe(1);
+    expect(String(detail.held_by?.[0])).toStartWith("claim-sources=");
+    expect(String(sent[0]?.summary)).toContain("claim-sources=");
+    expect(String(sent[0]?.summary)).not.toContain("questions=");
+    // Nothing signed it, and nothing could: the loop waited and gave up.
+    expect(events(ws).some((e) => e.type === "gate.approved" && e.stage === "alpha")).toBe(false);
+    expect(delivered(ws).some((p) => p.kind === "gate.timeout")).toBe(true);
   });
 });
