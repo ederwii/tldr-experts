@@ -23,8 +23,12 @@
   checks decide. A PR that reports NO check is left open and the record says `merge: absent —
   no checks to wait on` (§7), because GitHub's auto-merge over nothing to wait on is a merge
   now, not a merge when green — the mutation that drops that guard reddens exactly one test.
-  `run.yml` gets one record (`pr_urls`, `merge`, `shipped_at`) beside the policy, so a loop
-  re-run on a closed run ships nothing twice, and `run.finished` carries `pr_url` and `merge`.
+  `run.yml` gets one record (`pr_urls`, `merge`, per-repo `merges`, `shipped_at`) beside the
+  policy, so a loop re-run on a closed run ships nothing twice — while `tldrx ship` typed again
+  is the recovery after a partial failure: it re-arms the repo whose merge failed, leaves a
+  queued one alone, and never erases a recorded failure (pre-merge review caught the first
+  version overwriting it with an empty string and exit 0) — and `run.finished` carries `pr_url`
+  and `merge`.
   A ship that is refused is the loop's exit 2 — it was asked for a PR and did not deliver one.
   Absent the flag every run means what it meant: nothing pushed, nothing opened, the refusal
   that names the `git push` command unchanged byte for byte. Every gate is still signed by

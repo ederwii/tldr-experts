@@ -257,6 +257,9 @@ export function emitRunYaml(run: RunFile): string {
     const parts = [`push: ${String(s.push)}`, `pr: ${String(s.pr)}`, `auto_merge: ${yamlScalar(s.auto_merge)}`];
     if (s.pr_urls !== undefined) parts.push(`pr_urls: ${inlineList(s.pr_urls)}`);
     if (s.merge !== undefined) parts.push(`merge: ${yamlScalar(s.merge)}`);
+    if (s.merges !== undefined && Object.keys(s.merges).length > 0) {
+      parts.push(`merges: {${Object.entries(s.merges).map(([name, state]) => `${name}: ${yamlScalar(state)}`).join(", ")}}`);
+    }
     if (s.shipped_at !== undefined) parts.push(`shipped_at: ${yamlScalar(s.shipped_at)}`);
     lines.push(`ship: {${parts.join(", ")}}`);
   }

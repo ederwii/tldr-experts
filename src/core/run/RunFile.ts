@@ -474,7 +474,17 @@ export interface RunShip extends ShipPolicy {
    * constants rather than an enum this file would have to grow for every reason.
    */
   readonly merge?: string;
-  /** When the record was written. Present ⇒ shipped once; `shipWanted` is false. */
+  /**
+   * Repo name → that repo's merge state, in the same words as `merge` — the
+   * per-repo truth `merge` summarises (one sentence when every repo agrees,
+   * `repo: state; …` otherwise). It exists because a re-run has to know WHICH
+   * repo still owes a merge: `tldrx ship` typed again after a partial failure
+   * arms a repo recorded `failed — …`, leaves one recorded `queued` alone, and
+   * writes the union — so a recorded failure is never erased by the command that
+   * was supposed to fix it (review of 1fdc250, §7).
+   */
+  readonly merges?: Readonly<Record<string, string>>;
+  /** When the record was LAST written. Present ⇒ `run auto` ships nothing again; `tldrx ship` typed again is the recovery. */
   readonly shipped_at?: string;
 }
 
@@ -846,6 +856,13 @@ export function validateRunFile(input: unknown): ValidationResult {
         (doc.ship.pr_urls as unknown[]).forEach((url, i) => requireString(url, `ship.pr_urls[${i}]`, issues));
       }
       requireString(doc.ship.merge, "ship.merge", issues);
+      if (doc.ship.merges !== undefined) {
+        if (isRecord(doc.ship.merges)) {
+          for (const [name, state] of Object.entries(doc.ship.merges)) requireString(state, `ship.merges.${name}`, issues);
+        } else {
+          issues.push({ path: "ship.merges", message: "expected a mapping of repo name to merge state" });
+        }
+      }
       requireString(doc.ship.shipped_at, "ship.shipped_at", issues);
     } else {
       issues.push({ path: "ship", message: "expected a mapping" });

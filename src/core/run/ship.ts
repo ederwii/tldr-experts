@@ -352,7 +352,7 @@ async function pushOnlyTo(
   lines.push(`  ship.pr is false: no PR was opened. \`tldrx ship --run ${store.runId}\` opens one by hand.`);
   const code = failed === 0 ? EXIT_OK : EXIT_GATE_REFUSED;
   if (options.dryRun === true || failed > 0) return { code, lines };
-  const record = writeShipRecord(store, policy, [], "never", options.at);
+  const record = writeShipRecord(store, policy, [], {}, options.at);
   return { code, lines, ship: record };
 }
 
@@ -393,6 +393,26 @@ async function shipOne(
     };
   }
 
+  // Under a policy, ONE repo is asked about an open PR the way several always were
+  // (review of 1fdc250): a second `tldrx ship` is the documented recovery after a
+  // merge that failed to arm, and letting `gh pr create` refuse it would make the
+  // recovery impossible on exactly the run that needs it. Without a policy the
+  // probe still never runs, and the one-repo path stays byte-identical.
+  const existing = policy === null ? null : await openPrFor(options, repo, branch);
+  if (existing !== null && policy !== null) {
+    const merge = await armOrKeep(options, repo, existing, policy, previousMerges(store));
+    const record = writeShipRecord(store, policy, [existing], { [repo.name]: merge }, options.at);
+    return {
+      code: merge.startsWith("failed") ? EXIT_GATE_REFUSED : EXIT_OK,
+      lines: [
+        `a PR for ${store.runId} from \`${branch}\` into \`${base}\` is already open (${repo.name}) — nothing opened twice`,
+        `  ${existing}`,
+        ...policyLines(prepared, branch, merge),
+      ],
+      ship: record,
+    };
+  }
+
   const created = await options.transport.run(GH_BIN, args, repo.dir);
   if (created.exitCode !== 0) {
     return refuse([
@@ -415,7 +435,7 @@ async function shipOne(
   if (policy === null) return { code: EXIT_OK, lines };
 
   const merge = await armMerge(options, repo, url, policy);
-  const record = writeShipRecord(store, policy, url === null ? [] : [url], merge, options.at);
+  const record = writeShipRecord(store, policy, url === null ? [] : [url], { [repo.name]: merge }, options.at);
   return {
     code: merge.startsWith("failed") ? EXIT_GATE_REFUSED : EXIT_OK,
     lines: [...lines, ...policyLines(prepared, branch, merge)],
@@ -471,6 +491,28 @@ async function armMerge(
   return MERGE_QUEUED;
 }
 
+/**
+ * The re-run rule (review of 1fdc250): a repo whose record already says `queued`
+ * is left alone — `gh pr merge --auto` on a PR already in auto-merge is at best a
+ * no-op and at worst a second decision — and every other state, `failed — …`
+ * above all, is armed again. Per repo, off `ship.merges`; `merge` alone cannot
+ * say which repo still owes one.
+ */
+async function armOrKeep(
+  options: ShipOptions,
+  repo: ShipRepo,
+  url: string,
+  policy: RunShip,
+  previous: Readonly<Record<string, string>>,
+): Promise<string> {
+  if (policy.auto_merge === "checks" && previous[repo.name] === MERGE_QUEUED) return MERGE_QUEUED;
+  return await armMerge(options, repo, url, policy);
+}
+
+function previousMerges(store: RunStore): Readonly<Record<string, string>> {
+  return store.run.ship?.merges ?? {};
+}
+
 type ChecksProbe =
   | { readonly kind: "counted"; readonly count: number }
   | { readonly kind: "unreadable"; readonly detail: string };
@@ -497,19 +539,35 @@ async function checksReported(options: ShipOptions, repo: ShipRepo, url: string)
 }
 
 /**
- * The record, beside the policy, written ONCE (gh #253). `RunStore.save` is the
- * same path every other run.yml write takes — validated, under the lock, atomic.
+ * The record, beside the policy (gh #253). `RunStore.save` is the same path every
+ * other run.yml write takes — validated, under the lock, atomic.
+ *
+ * Per repo, and as a UNION over what the record already says (review of
+ * 1fdc250): a re-run that touched only the repo that owed a merge must not lose
+ * the repo that did not, and a repo whose arm failed again keeps the failure it
+ * has now — never an empty `merge`, never a `queued` nobody measured. `merge` is
+ * the one-line summary of `merges`: the one state when every repo agrees,
+ * `repo: state; …` otherwise, `never` when there is no repo to say anything.
  */
 function writeShipRecord(
   store: RunStore,
   policy: RunShip,
   prUrls: readonly string[],
-  merge: string,
+  merges: Readonly<Record<string, string>>,
   at: string,
 ): RunShip {
+  const all = { ...previousMerges(store), ...merges };
+  const distinct = [...new Set(Object.values(all))];
+  const merge = distinct.length === 0
+    ? "never"
+    : distinct.length === 1
+      ? distinct[0] ?? "never"
+      : Object.entries(all).map(([name, state]) => `${name}: ${state}`).join("; ");
   const record: RunShip = {
     push: policy.push, pr: policy.pr, auto_merge: policy.auto_merge,
-    pr_urls: [...prUrls], merge, shipped_at: at,
+    pr_urls: [...prUrls], merge,
+    ...(Object.keys(all).length === 0 ? {} : { merges: all }),
+    shipped_at: at,
   };
   store.mutate((run) => ({ ...run, ship: record }));
   store.save();
@@ -569,7 +627,12 @@ async function shipMany(
     // would make re-running after a partial failure look worse than the first try.
     const already = await openPrFor(options, repo, branch);
     if (already !== null) {
-      results.push({ repo, kind: "existing", url: already, base: prepared.base });
+      // An open PR is not a finished one (review of 1fdc250): under a policy it
+      // still owes its merge unless the record says it is queued.
+      results.push({
+        repo, kind: "existing", url: already, base: prepared.base,
+        ...(policy === null ? {} : { merge: await armOrKeep(options, repo, already, policy, previousMerges(store)) }),
+      });
       continue;
     }
 
@@ -599,14 +662,12 @@ async function shipMany(
   const rendered = renderMany(store, branch, body, results, options.dryRun === true);
   if (policy === null || options.dryRun === true) return rendered;
 
-  // One record for the run: every URL that stands, and the merge per repo unless
-  // every repo says the same thing — then that one sentence, unqualified.
+  // One record for the run: every URL that stands, and the merge state per repo —
+  // `writeShipRecord` unions it over the previous record and summarises it.
   const standing = results.filter((r) => r.kind === "opened" || r.kind === "existing");
   const urls = standing.flatMap((r) => (r.url === undefined ? [] : [r.url]));
-  const merges = results.flatMap((r) => (r.merge === undefined ? [] : [`${r.repo.name}: ${r.merge}`]));
-  const distinct = new Set(results.flatMap((r) => (r.merge === undefined ? [] : [r.merge])));
-  const merge = distinct.size === 1 ? [...distinct][0] ?? "never" : merges.join("; ");
-  const record = writeShipRecord(store, policy, urls, merge, options.at);
+  const merges = Object.fromEntries(results.flatMap((r) => (r.merge === undefined ? [] : [[r.repo.name, r.merge]])));
+  const record = writeShipRecord(store, policy, urls, merges, options.at);
   const mergeFailed = results.some((r) => r.merge !== undefined && r.merge.startsWith("failed"));
   return {
     code: mergeFailed ? EXIT_GATE_REFUSED : rendered.code,

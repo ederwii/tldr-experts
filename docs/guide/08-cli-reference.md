@@ -1347,8 +1347,10 @@ then this verb pushes the epic first — through the one push wrapper in the cod
 phase itself still having none (spec §5) — and under `merge` arms `gh pr merge --auto --merge`
 after the PR opens, unless the PR reports no check at all, in which case it is left open and
 `run.yml` says `merge: absent — no checks to wait on`. On such a run it writes ONE `run.yml`
-record (`pr_urls`, `merge`, `shipped_at`) and a second ship is skipped; a run without the
-block is never written. The body is
+record (`pr_urls`, `merge`, `merges`, `shipped_at`); `run auto` skips a run already carrying
+`shipped_at`, and typing `tldrx ship` again is the recovery after a partial failure — a repo whose
+merge is recorded `failed` is armed again, one recorded `queued` is left alone, and a recorded
+failure is never erased. A run without the block is never written. The body is
 WRITTEN for a PR (#167): what shipped and what did not, from the handoff's own done/not-done
 split; the reviewer findings still open, read from the run's fix lists; and the LAST phase
 handoff the run has on disk — `04-build/handoff.md` on a run that built something — verbatim
@@ -1393,8 +1395,9 @@ fix cannot revert the `workspace.yml` edit the settled story was written to make
 staged body file where it named it, on purpose — the printed line has to stay runnable, and a
 `--body-file` pointing at a directory that has been cleaned up is not a command. That is one
 temporary directory per dry run, and nothing reads it again; the real create writes the same file
-and removes it in a `finally`, refusals included. It is read-only about the run either way: no
-event, no gate, no cursor. To mirror the plan's epics and stories to a ticket tool,
+and removes it in a `finally`, refusals included. It moves no gate and no cursor and appends no
+event either way; on a run with no `ship:` block it never writes to the run at all, and on a run
+with one it writes exactly that block's record. To mirror the plan's epics and stories to a ticket tool,
 `tldrx tickets sync` is the verb that does that, and it stays separate. It refuses cleanly, in
 a sentence, when there is no epic branch, no handoff, no remote, no `gh` on PATH, or when
 several epic branches leave the choice open.

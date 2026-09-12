@@ -51,6 +51,7 @@ import {
 } from "./fixtures/facilitator/workspace.ts";
 import { deliveredTo, writeNotifier, workspaceYamlWithNotify } from "./fixtures/facilitator/notifier.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+import { HELP_ENTRIES } from "../src/cli/helpText.ts";
 
 setDefaultTimeout(spawnTestTimeout(90_000));
 
@@ -134,17 +135,51 @@ interface Call { readonly cmd: string; readonly args: readonly string[]; readonl
 
 type Answer = { exitCode?: number; stdout?: string; stderr?: string };
 
-/** Records every call; answers from a table keyed `<cmd> <arg0> <arg1>`, then `<cmd>`. */
+/**
+ * Records every call; answers from a table keyed `<cmd> <arg0> <arg1>@<repo>` first
+ * (the cwd's last segment — the same keying `test/ship-multi-repo.test.ts` uses,
+ * so one repo can fail while another succeeds), then `<cmd> <arg0> <arg1>`, then `<cmd>`.
+ */
 function fakeTransport(answers: Readonly<Record<string, Answer>> = {}): ShipTransport & { calls: Call[] } {
   const calls: Call[] = [];
   return {
     calls,
     async run(cmd, args, cwd) {
       calls.push({ cmd, args: [...args], cwd });
-      const answer = answers[`${cmd} ${args.slice(0, 2).join(" ")}`] ?? answers[cmd];
+      const key = `${cmd} ${args.slice(0, 2).join(" ")}`;
+      const repo = cwd.split("/").at(-1) ?? "";
+      const answer = answers[`${key}@${repo}`] ?? answers[key] ?? answers[cmd];
       return { exitCode: answer?.exitCode ?? 0, stdout: answer?.stdout ?? "", stderr: answer?.stderr ?? "" };
     },
   };
+}
+
+/**
+ * A SECOND product repo in the same workspace, declared in `workspace.yml` and on
+ * the run — the shape a chained multi-repo run has (`test/ship-multi-repo.test.ts`
+ * builds it the same way), with the epic branch already cut in it.
+ */
+function addRepo(ws: BuildWorkspace, name: string): string {
+  const dir = join(ws.root, name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "README.md"), `# ${name}\n`, "utf8");
+  git(dir, ["init", "-q", "-b", "main"]);
+  git(dir, ["config", "user.email", "fixture@example.com"]);
+  git(dir, ["config", "user.name", "tldrx fixture"]);
+  git(dir, ["config", "commit.gpgsign", "false"]);
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-q", "-m", "chore: fixture repo"]);
+  git(dir, ["branch", "epic/e1"]);
+  const path = join(ws.root, ".tldrx", "workspace.yml");
+  writeFileSync(path, `${readFileSync(path, "utf8").trimEnd()}\n`
+    + `  - name: ${name}\n    path: ${name}\n    default_branch: main\n    stack: [typescript]\n`
+    + "    package_manager: npm\n"
+    + '    commands: {build: null, test: "npm run test", lint: null, typecheck: null, run: null}\n'
+    + "    ci: []\n    confidence: high\n", "utf8");
+  const store = RunStore.open(ws.runDir);
+  store.mutate((run) => ({ ...run, repos: [...run.repos, name] }));
+  store.save();
+  return dir;
 }
 
 const PR_URL = "https://github.com/ederwii/app/pull/9";
@@ -360,11 +395,116 @@ describe("`tldrx ship` under `ship: {push, pr, auto_merge: checks}`", () => {
     expect(RunStore.open(ws.runDir).run.ship).toBeUndefined();
   });
 
+  // Reviewer finding on 1fdc250 (CONFIRMED): the merge was armed for `opened` repos
+  // only. A transient failure in repo A beside a success in B recorded
+  // `app: failed…; api: queued` and exit 2; the documented recovery — run `tldrx
+  // ship` again — then saw both PRs as `existing`, armed neither, overwrote the
+  // record's `merge` with "" and exited 0. A recorded failure erased by the
+  // command that was supposed to fix it is §7's dangerous direction exactly.
+  describe("re-running after a merge that failed in one repo (review of 1fdc250)", () => {
+    const URL_APP = "https://github.com/ederwii/app/pull/7";
+    const URL_API = "https://github.com/ederwii/api/pull/3";
+
+    function twoRepos(): BuildWorkspace {
+      const ws = shippable({ push: true, pr: true, auto_merge: "checks" });
+      addRepo(ws, "api");
+      return ws;
+    }
+    const firstAnswers = (): Record<string, Answer> => ({
+      ...answersWithChecks(),
+      "gh pr create@app": { stdout: URL_APP },
+      "gh pr create@api": { stdout: URL_API },
+      "gh pr merge@app": { exitCode: 1, stderr: "GraphQL: something went wrong (transient)" },
+    });
+    const secondAnswers = (appMerge: Answer): Record<string, Answer> => ({
+      ...answersWithChecks(),
+      "gh pr list@app": { stdout: JSON.stringify([{ url: URL_APP }]) },
+      "gh pr list@api": { stdout: JSON.stringify([{ url: URL_API }]) },
+      "gh pr merge@app": appMerge,
+    });
+    const merges = (calls: readonly Call[]): readonly Call[] =>
+      calls.filter((c) => c.cmd === "gh" && c.args[0] === "pr" && c.args[1] === "merge");
+
+    test("the first ship records the failure per repo and exits 2", async () => {
+      const ws = twoRepos();
+      const out = await ship(ws, fakeTransport(firstAnswers()));
+      expect(out.code).toBe(EXIT_GATE_REFUSED);
+      const record = RunStore.open(ws.runDir).run.ship;
+      expect(record?.pr_urls).toEqual([URL_APP, URL_API]);
+      expect(record?.merges?.api).toBe(MERGE_QUEUED);
+      expect(record?.merges?.app).toMatch(/^failed — /);
+      expect(record?.merge).toContain("transient");
+    });
+
+    test("the second ship arms the repo that failed, leaves the queued one alone, and the record shows both", async () => {
+      const ws = twoRepos();
+      await ship(ws, fakeTransport(firstAnswers()));
+
+      const again = fakeTransport(secondAnswers({ exitCode: 0 }));
+      const out = await ship(ws, again);
+
+      expect(out.code).toBe(EXIT_OK);
+      const armed = merges(again.calls);
+      expect(armed.map((c) => c.args[2])).toEqual([URL_APP]);
+      expect(armed[0]?.cwd).toBe(ws.repoDir);
+      expect(again.calls.some((c) => c.cmd === "gh" && c.args[1] === "create")).toBe(false);
+      const record = RunStore.open(ws.runDir).run.ship;
+      expect(record?.merges).toEqual({ app: MERGE_QUEUED, api: MERGE_QUEUED });
+      expect(record?.merge).toBe(MERGE_QUEUED);
+      expect(record?.pr_urls).toEqual([URL_APP, URL_API]);
+    });
+
+    test("a second ship in which the arm STILL fails keeps the failure on record and exits 2 — never an empty merge", async () => {
+      const ws = twoRepos();
+      await ship(ws, fakeTransport(firstAnswers()));
+
+      const out = await ship(ws, fakeTransport(secondAnswers({ exitCode: 1, stderr: "GraphQL: still broken" })));
+
+      expect(out.code).toBe(EXIT_GATE_REFUSED);
+      const record = RunStore.open(ws.runDir).run.ship;
+      expect(record?.merges?.app).toContain("still broken");
+      expect(record?.merges?.api).toBe(MERGE_QUEUED);
+      expect(record?.merge).not.toBe("");
+      expect(record?.merge).toContain("still broken");
+    });
+
+    test("ONE repo: a PR already open is re-armed on the next ship rather than refused by `gh pr create`", async () => {
+      const ws = shippable({ push: true, pr: true, auto_merge: "checks" });
+      const first = fakeTransport({ ...answersWithChecks(), "gh pr merge": { exitCode: 1, stderr: "GraphQL: transient" } });
+      const out1 = await ship(ws, first);
+      expect(out1.code).toBe(EXIT_GATE_REFUSED);
+      expect(RunStore.open(ws.runDir).run.ship?.merges?.app).toMatch(/^failed — /);
+
+      const second = fakeTransport({ ...answersWithChecks(), "gh pr list": { stdout: JSON.stringify([{ url: PR_URL }]) } });
+      const out2 = await ship(ws, second);
+
+      expect(out2.code).toBe(EXIT_OK);
+      expect(second.calls.some((c) => c.cmd === "gh" && c.args[1] === "create")).toBe(false);
+      expect(merges(second.calls).map((c) => c.args[2])).toEqual([PR_URL]);
+      expect(RunStore.open(ws.runDir).run.ship?.merges).toEqual({ app: MERGE_QUEUED });
+      expect(out2.lines.join("\n")).toContain(PR_URL);
+    });
+  });
+
   test("a run already shipped is not shipped twice", async () => {
     const ws = shippable({
       push: true, pr: true, auto_merge: "checks", pr_urls: [PR_URL], merge: MERGE_QUEUED, shipped_at: "2026-09-12T09:00:00Z",
     });
     expect(shipWanted(RunStore.open(ws.runDir).run)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (b2) The help text says what the verb now does to the run (review of 1fdc250)
+// ---------------------------------------------------------------------------
+
+describe("`tldrx ship --help` is truthful about run.yml", () => {
+  test("it no longer claims to be read-only about the run, and names the record it writes", () => {
+    const entry = HELP_ENTRIES.find((command) => command.name === "ship");
+    const notes = (entry?.notes ?? []).join("\n");
+    expect(notes).not.toContain("read-only about the run");
+    expect(notes).toContain("`shipped_at`");
+    expect(notes).toContain("never writes to the run");
   });
 });
 
