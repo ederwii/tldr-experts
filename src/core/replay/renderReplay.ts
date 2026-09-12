@@ -253,6 +253,12 @@ function bullet(item: NumberedEvent, trail: Map<string, ReviewerProvenance | nul
     case "gate.policy_changed":
       return `${prefix}gate policy \`${text(payload.from) || "?"}\` \u2192 \`${text(payload.to) || "?"}\``
         + ` by ${actor}${note(payload.note)}`;
+    // The same kind of line for the same kind of act (#251): who may ANSWER this
+    // stage's questions changed, and every auto-answered question after it reads
+    // differently for it.
+    case "questions.policy_changed":
+      return `${prefix}questions policy \`${text(payload.from) || "?"}\` \u2192 \`${text(payload.to) || "?"}\``
+        + ` by ${actor}${note(payload.note)}`;
     case "operator_note":
       return `${prefix}NOTE by ${actor}: ${text(payload.note) || "(empty)"}`;
     case "check.failed": return `${prefix}check failed: ${checkName(payload)}${note(payload.detail)}`;

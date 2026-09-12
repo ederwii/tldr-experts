@@ -347,7 +347,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "run",
-    subcommands: ["new", "attend", "status", "estimate", "gates", "auto", "unlock", "cancel"],
+    subcommands: ["new", "attend", "status", "estimate", "gates", "questions", "auto", "unlock", "cancel"],
     description: "Create a piece of work, look at one, drive one to its next human gate, hand it to a host session or back, or get a stuck one moving again.",
     args: [
       { name: "<slug>", meaning: "run new: the short name. The id becomes <yymmdd>-<slug>." },
@@ -356,7 +356,7 @@ const ENTRIES: readonly CommandHelp[] = [
         meaning: "run attend / run status / run estimate / run auto / run unlock / run cancel: a run id. Omit it and the one open run is used.",
       },
       { name: "<host|--none>", meaning: "run attend: which way to flip it. `host` hands the run to a host session and the framework will not spawn on it again; `--none` hands it back." },
-      { name: "<stage>:<policy>", meaning: "run gates set: which stage's gate, and who may close it from now on. Qualified always \u2014 a bare stage id is refused, because a signature must not rest on a default." },
+      { name: "<stage>:<policy>", meaning: "run gates set: which stage's gate, and who may close it from now on. run questions set: which stage's questions, and who answers them from now on (`human` | `recommended`). Qualified always \u2014 a bare stage id is refused, because a signature must not rest on a default." },
     ],
     flags: [
       { name: "title", arg: "<t>", meaning: "Human title for the run. Default: the slug.", sub: "new" },
@@ -382,6 +382,12 @@ const ENTRIES: readonly CommandHelp[] = [
         arg: "<push|pr|merge>",
         meaning: "How far past the LAST gate the framework may carry the epic branch, frozen into run.yml as `ship:` (#253). `push` publishes `epic/<slug>` to origin; `pr` also opens the pull request `tldrx ship` opens; `merge` also arms `gh pr merge --auto --merge`, so the remote\u0027s own checks decide \u2014 and a PR that reports NO check is left open with `merge: absent \u2014 no checks to wait on`, never merged over silence. It runs when `run auto` sees the run close, or when a person types `tldrx ship`. Absent (the default) nothing is pushed and nothing is opened, exactly as before. Every gate is still signed by whoever `--gates` says: an unattended ship is `--gates none --ship merge`, on purpose, and run.yml records both.",
         values: ["push", "pr", "merge"],
+        sub: "new",
+      },
+      {
+        name: "questions",
+        arg: "<a,b|a:recommended|all|none>",
+        meaning: "Which stages a PERSON answers the open questions of; on every other stage `run auto` may take a question's own `Recommended:` option itself. Same grammar as --gates: a bare entry is `human`, `all` is every stage human (the default, and what every run before this flag got), `none` is every stage `recommended`. Under `recommended` the loop answers ONLY a question whose block carries a `Recommended: <letter> \u2014 <why>` line naming one of its own options, through the same path `tldrx answer` uses, recording the fact as `decided_by: agent-default` with the options not taken beside it, and tells the owner through `question.auto_answered`. A question with no recommendation, or tagged `irreversible: true` / `money: true` in its metadata, still stops the loop for a person. Frozen into run.yml as `questions_policy`, beside `gates_policy`; `run questions set` moves it afterwards.",
         sub: "new",
       },
       {
@@ -415,6 +421,13 @@ const ENTRIES: readonly CommandHelp[] = [
         sub: "gates",
       },
       { ...runFlag(), sub: "gates" },
+      {
+        name: "note",
+        arg: "<text>",
+        meaning: "Why this stage's questions may now be answered that way. Required — a questions policy that changed for no recorded reason is the one mutation nobody would find later. It is recorded on the questions.policy_changed event.",
+        sub: "questions",
+      },
+      { ...runFlag(), sub: "questions" },
       { ...runFlag(), sub: "auto" },
       maxUsd("auto"),
       { name: "until", arg: "<stage>", meaning: "Stop the loop before this stage rather than at the first human gate.", sub: "auto" },
@@ -458,7 +471,7 @@ const ENTRIES: readonly CommandHelp[] = [
       {
         name: "wait-answers",
         arg: "<duration>",
-        meaning: "Instead of exiting 4 the moment a stage parks on an open question, poll the run\u0027s question files for this long and resume if somebody answers. A lapsed wait exits 4 with the same lines it always did, after one `question.timeout` notification. Nothing is spent while it waits, and the loop never answers its own question \u2014 the answer is an ordinary `tldrx answer` run by a person.",
+        meaning: "Instead of exiting 4 the moment a stage parks on an open question, poll the run\u0027s question files for this long and resume if somebody answers. A lapsed wait exits 4 with the same lines it always did, after one `question.timeout` notification. Nothing is spent while it waits. Under the default `questions_policy` (`human`) the loop never answers its own question \u2014 the answer is an ordinary `tldrx answer` run by a person; under `recommended` (`run new --questions`, `run questions set`) the loop has ALREADY taken every question that carried its own `Recommended:` line before this wait begins, recorded as `decided_by: agent-default` and told through `question.auto_answered`, so what is waited on here is a question with no recommendation, or one pinned to a person with `irreversible:` / `money:`.",
         sub: "auto",
       },
       model("auto"),
@@ -497,6 +510,8 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx run estimate",
       'tldrx run gates set plan:agent --note "this run predates the agent policy; the pilot signs with evidence"',
       'tldrx run gates set build:human --note "the owner wants to read every merge from here"',
+      "tldrx run new checkout-v2 --gates none --questions plan",
+      'tldrx run questions set what:recommended --note "nine of ten stops were over a pick already on disk"',
       "tldrx run auto --max-usd 15 --until build",
       "tldrx run auto --parallel 3",
       "tldrx run auto --prompt-max-bytes 500000 --max-reads 300",
@@ -517,6 +532,7 @@ const ENTRIES: readonly CommandHelp[] = [
       "`run status` with several runs open LISTS them and exits 0 — it is the screen you read to find the id every other command wants.",
       "`run estimate` is the one command here that GUESSES, and it says so in its own output. The input half is measured — the next stage's prompt, assembled by the same code `next` uses and weighed by the same context ledger. The output half is the median output tokens of past attempts at that stage id, and with no history it prints no estimate rather than inventing one. For what was actually spent, use `tldrx cost`.",
       "`run gates set` is the ONLY sanctioned way to move `gates_policy` after `run new` froze it. It is human-signed like `story reopen`: one stage per invocation, the policy named outright, a required --note, and one `gate.policy_changed` event carrying actor, moment, note and the old\u2192new value. It changes who may CLOSE a gate from then on; gates already signed are untouched, and a no-op is refused rather than recorded.",
+      "`run auto` under `questions_policy: recommended` ANSWERS a question itself \u2014 and only then. Measured 2026-09-12 across two headless runs: 10 owner questions, 9 carrying a `Recommended:` line the asking agent had written, every one a park on a pick already on disk. With the cursor stage on `recommended` (`run new --questions`, or `run questions set`), the moment a stage parks the loop takes each blocking question whose block names one of its own options on a `Recommended:` line, through the SAME write `tldrx answer` performs: the slot is filled with the option, the footer and the `question.answered` + `fact.added` events are the ones a person's answer writes, and the fact carries `decided_by: agent-default` (a third value \u2014 never `owner`), `alternatives` (the options not taken) and `recommended_why` (the line's own reason). One `question.auto_answered` per answer goes to the notify hook with the pick, the alternatives and the `--supersede` line that reverses it; no `question.raised` is sent for a question the loop answered. It never invents a pick: no `Recommended:` line, a letter naming no option, or a block tagged `irreversible: true` / `money: true` is escalated exactly as under `human`. `run questions set` mirrors `run gates set` \u2014 one stage, qualified, a required --note, one `questions.policy_changed` event, a no-op refused.",
       "`run unlock` drops a .lock nobody is behind and puts the stage it stranded back to ready. It spends nothing and touches no stage output.",
       "`run cancel` closes a run for good: cancelled is terminal, so `tldrx status` and every id-less command stop seeing it. Nothing is deleted — the stages, outputs, events and money spent stay on disk and `tldrx replay <id>` still reads them.",
     ],

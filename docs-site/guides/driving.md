@@ -103,8 +103,12 @@ gate is even about: `holding` says whether it is held by open questions, by unfi
 by nothing mechanical, and a gate that can name what has to change carries the `--and-continue`
 line ready to fire. Both exit `4` unchanged
 when the wait lapses. Nothing is spent while either waits, and the loop closes nothing of its
-own — it never answers its own question and it never signs its own gate, an `agent` policy
-included.
+own — it never signs its own gate, an `agent` policy included, and under the default
+`questions_policy` it never answers its own question. The one exception is opt-in and recorded:
+`run new --questions <stage:recommended,…|none>` lets the loop take a question's own
+`Recommended:` option, through the same `tldrx answer` path, as `decided_by: agent-default`
+with the alternatives on the fact and a `question.auto_answered` to your hook — and a question
+with no recommendation, or tagged `irreversible: true` / `money: true`, still stops for you.
 
 The operating half of this — the full payload per kind, an adapter skeleton you can paste,
 a first-run checklist and what to check when nothing arrives — is

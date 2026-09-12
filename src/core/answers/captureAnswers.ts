@@ -41,6 +41,14 @@ export interface AnswerOverride {
   readonly decidedBy?: FactDecider;
   /** Explicit `--repo` values. Wins over the question's `affects:`. */
   readonly repos?: readonly string[];
+  /**
+   * The options NOT taken and the asker's reason, written onto the fact by the
+   * loop's auto-answer (gh #251) beside `decidedBy: "agent-default"`. Both land on
+   * the row as the additive `alternatives` / `recommended_why` (`Fact.ts`); a
+   * person's `tldrx answer` passes neither and the row is byte-identical to before.
+   */
+  readonly alternatives?: readonly string[];
+  readonly recommendedWhy?: string;
 }
 
 /**
@@ -65,6 +73,11 @@ export interface AnswerProvenance {
    * is recorded as absence, and means "not stated", never "owner" (`Fact.ts:36`).
    */
   readonly source: { readonly decided_by?: FactDecider };
+  /**
+   * Spread onto the fact ROW (not its source): the #251 fields, present only when
+   * the invocation stated them. `{}` for every human answer.
+   */
+  readonly row: { readonly alternatives?: readonly string[]; readonly recommended_why?: string };
 }
 
 export function answerProvenance(
@@ -84,6 +97,12 @@ export function answerProvenance(
     repos,
     unresolved: named.unresolved,
     source: override?.decidedBy === undefined ? {} : { decided_by: override.decidedBy },
+    row: {
+      ...(override?.alternatives === undefined || override.alternatives.length === 0
+        ? {}
+        : { alternatives: override.alternatives }),
+      ...(override?.recommendedWhy === undefined ? {} : { recommended_why: override.recommendedWhy }),
+    },
   };
 }
 
@@ -228,6 +247,7 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
         fact: text,
         ...(truncated ? { truncated: true as const } : {}),
         ...(clash === null ? {} : { conflicts_with: [clash.fact.id] }),
+        ...prov.row,
         area,
         repos: prov.repos,
         kind: "answer",
@@ -473,6 +493,7 @@ export function supersedeAnswer(
       fact: text,
       ...(truncated ? { truncated: true as const } : {}),
       ...(hit === null ? {} : { conflicts_with: [hit.fact.id] }),
+      ...prov.row,
       area,
       repos: [...prov.repos],
       kind: "answer",

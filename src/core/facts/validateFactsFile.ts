@@ -9,7 +9,7 @@ import {
   type ValidationIssue, type ValidationResult,
 } from "../schemas/validation.ts";
 import {
-  FACT_CONFIDENCES, FACT_KINDS, MAX_FACTS, MAX_FACT_CHARS, factNumber,
+  FACT_CONFIDENCES, FACT_DECIDERS, FACT_KINDS, MAX_FACTS, MAX_FACT_CHARS, factNumber,
   type Fact, type FactsFile,
 } from "./Fact.ts";
 import { readableSource, SRC_PATTERNS } from "../text/srcToken.ts";
@@ -91,11 +91,13 @@ export function validateFactsFile(input: unknown): ValidationResult {
       }
       // Additive, so absence is fine and only a value outside the closed set is an
       // issue: a row written before the field existed must keep validating.
+      // The set is `FACT_DECIDERS`, read from `Fact.ts` and not spelled again here:
+      // this said `owner`/`driver` by hand while the type grew a third value (#251).
       const decidedBy = row.source.decided_by;
-      if (decidedBy !== undefined && decidedBy !== "owner" && decidedBy !== "driver") {
+      if (decidedBy !== undefined && !(FACT_DECIDERS as readonly unknown[]).includes(decidedBy)) {
         issues.push({
           path: `${path}.source.decided_by`,
-          message: "expected owner, driver or absent",
+          message: `expected ${FACT_DECIDERS.join(", ")} or absent`,
         });
       }
     } else if (row.source !== undefined) {
@@ -123,6 +125,25 @@ export function validateFactsFile(input: unknown): ValidationResult {
         }
         links.forEach((id, i) => requireString(id, `${path}.conflicts_with[${i}]`, issues));
       }
+    }
+
+    // The two #251 fields, under `conflicts_with`'s rule: absent is fine, a wrong
+    // shape is an issue, and an EMPTY `alternatives` is refused — on disk it would
+    // say the options were counted and there were none.
+    if (row.alternatives !== undefined) {
+      if (requireArray(row.alternatives, `${path}.alternatives`, issues)) {
+        const options = row.alternatives as unknown[];
+        if (options.length === 0) {
+          issues.push({
+            path: `${path}.alternatives`,
+            message: "expected at least one option not taken, or the key absent",
+          });
+        }
+        options.forEach((option, i) => requireString(option, `${path}.alternatives[${i}]`, issues));
+      }
+    }
+    if (row.recommended_why !== undefined) {
+      requireString(row.recommended_why, `${path}.recommended_why`, issues);
     }
 
     const superseded = typeof row.superseded_by === "string";

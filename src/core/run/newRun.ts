@@ -46,6 +46,7 @@ import { parseShipFlag, ShipPolicyError, type ShipPolicy } from "./shipPolicy.ts
 import { renderHandoff, renderProse, renderQuestions, targetOf } from "../distill/renderDistill.ts";
 import { emitBudgetYaml, emitRunYaml } from "./emitRunYaml.ts";
 import { GatePolicyError, parseGatesFlag, resolveGatesPolicy, type GatesPolicy } from "./gatePolicy.ts";
+import { QuestionsPolicyError, parseQuestionsFlag, type QuestionsPolicy } from "./questionsPolicy.ts";
 import { loadWorkflowPreset, MAX_STAGE_INPUTS, type PlannedStage, type WorkflowPreset } from "./workflowPreset.ts";
 import {
   deriveRunStatus, validateRunFile, type AttendedBy, type RunFile, type RunPhase, type RunStage, type RunTriage,
@@ -94,6 +95,14 @@ export interface NewRunOptions {
    * run means what every run before the key meant: push nothing, open nothing.
    */
   readonly ship?: string;
+  /**
+   * `--questions <stage,stage|all|none>` — the list is the stages a PERSON answers;
+   * everything else is `recommended` (gh #251). Same grammar as `--gates`, frozen
+   * the same way. Absent ⇒ no `questions_policy` key at all, which reads as `human`
+   * everywhere — a run opened today without the flag is byte-identical to one
+   * opened before the flag existed.
+   */
+  readonly questions?: string;
   /**
    * `--attended-by host` — open the run with a host session driving it (§2.2).
    *
@@ -191,6 +200,14 @@ function createRunLocked(options: NewRunOptions): NewRunOutcome {
     if (error instanceof ShipPolicyError) throw new NewRunError(error.message);
     throw error;
   }
+  // No workflow-file half here: the questions policy is the flag or nothing (#251).
+  let questionsPolicy: QuestionsPolicy | undefined;
+  try {
+    questionsPolicy = options.questions === undefined ? undefined : parseQuestionsFlag(options.questions, stageIds);
+  } catch (error) {
+    if (error instanceof QuestionsPolicyError) throw new NewRunError(error.message);
+    throw error;
+  }
   const workspace = loadWorkspace(options.root);
   const repos = resolveRepos(options.repos, workspace.repos);
   const at = rfc3339(options.now);
@@ -244,6 +261,9 @@ function createRunLocked(options: NewRunOptions): NewRunOutcome {
     // Spread for the reason `attended_by` is: a run opened without `--ship` carries
     // no key at all, and its run.yml is byte-identical to the one written before.
     ...(shipPolicy === null ? {} : { ship: shipPolicy }),
+    // Spread, like `attended_by` above: a run opened without `--questions` carries
+    // no key, so its run.yml is byte-identical to one written before #251.
+    ...(questionsPolicy === undefined ? {} : { questions_policy: questionsPolicy }),
     phases,
   };
   const run: RunFile = { ...seed, status: deriveRunStatus(seed) };

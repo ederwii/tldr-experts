@@ -155,6 +155,7 @@ export const EVENT_TYPES = [
   "agent.spawned", "agent.result",
   "question.asked", "question.answered",
   "gate.requested", "gate.approved", "gate.rejected", "gate.revoked", "gate.policy_changed",
+  "questions.policy_changed",
   "story.reopened", "story.base_fastforwarded", "story.review_retried", "story.work_rescued",
   "story.touches_widened",
   "worktree.foreign_work_aside", "worktree.foreign_work_restored",

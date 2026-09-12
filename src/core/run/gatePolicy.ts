@@ -23,6 +23,7 @@
  * is the one that stops.
  */
 import { isRecord, type ValidationIssue } from "../schemas/validation.ts";
+import { parseStagePolicyFlag, validateStagePolicy } from "./stagePolicy.ts";
 
 export const GATE_POLICIES = ["human", "auto", "agent"] as const;
 export type GatePolicy = (typeof GATE_POLICIES)[number];
@@ -95,54 +96,21 @@ export function parseWorkflowGates(
  * stage auto. An empty value is refused rather than read as `none`: `--gates ""`
  * is far more likely to be a shell variable that did not expand than a deliberate
  * request to remove every human from the loop.
+ *
+ * The grammar itself is `stagePolicy.ts`'s, shared with `--questions` (gh #251); this
+ * supplies the words. The refusals are byte-for-byte what they were.
  */
 export function parseGatesFlag(raw: string, stageIds: readonly string[]): GatesPolicy {
-  const value = raw.trim();
-  if (value === "") {
-    throw new GatePolicyError(
-      `--gates needs a value: a comma-separated list of the HUMAN gates (\`plan\`) or of qualified `
-        + `gates (\`plan:agent\`), or \`all\`, or \`none\``,
-    );
-  }
-  if (value === "all") return everyStage(stageIds, "human");
-  if (value === "none") return everyStage(stageIds, "auto");
-
-  const entries = value.split(",").map((part) => part.trim()).filter((part) => part !== "");
-  const known = new Set(stageIds);
-  const named = new Map<string, GatePolicy>();
-  const unknownStages: string[] = [];
-  for (const entry of entries) {
-    // `plan:agent`. Split on the FIRST colon only: a stage id may not contain one
-    // (it is refused below as unknown either way), and the policy never does.
-    const colon = entry.indexOf(":");
-    const id = colon === -1 ? entry : entry.slice(0, colon).trim();
-    const policy = colon === -1 ? "human" : entry.slice(colon + 1).trim();
-    if (!known.has(id)) {
-      unknownStages.push(id);
-      continue;
-    }
-    if (!isGatePolicy(policy)) {
-      throw new GatePolicyError(
-        `--gates: \`${entry}\` names the policy \`${policy}\`, which is not one of `
-          + `${GATE_POLICIES.join(" | ")}. A bare \`${id}\` means \`human\`.`,
-      );
-    }
-    named.set(id, policy);
-  }
-  if (unknownStages.length > 0) {
-    throw new GatePolicyError(
-      `--gates: ${unknownStages.join(", ")} is not a stage of this workflow (${stageIds.join(", ")})`,
-    );
-  }
-  const out: Record<string, GatePolicy> = {};
-  for (const id of stageIds) out[id] = named.get(id) ?? "auto";
-  return out;
-}
-
-function everyStage(stageIds: readonly string[], policy: GatePolicy): GatesPolicy {
-  const out: Record<string, GatePolicy> = {};
-  for (const id of stageIds) out[id] = policy;
-  return out;
+  return parseStagePolicyFlag(raw, stageIds, {
+    flag: "gates",
+    policies: GATE_POLICIES,
+    bare: "human",
+    all: "human",
+    none: "auto",
+    emptyHint: "a comma-separated list of the HUMAN gates (`plan`) or of qualified "
+      + "gates (`plan:agent`), or `all`, or `none`",
+    error: GatePolicyError,
+  });
 }
 
 /**
@@ -175,24 +143,5 @@ export function validateGatesPolicy(
   stageIds: readonly string[],
   issues: ValidationIssue[],
 ): void {
-  if (value === undefined || value === null) return;
-  if (!isRecord(value)) {
-    issues.push({
-      path: "gates_policy",
-      message: `expected a mapping of stage id -> ${GATE_POLICIES.join(" | ")}`,
-    });
-    return;
-  }
-  const known = new Set(stageIds);
-  for (const [key, raw] of Object.entries(value)) {
-    if (!isGatePolicy(raw)) {
-      issues.push({
-        path: `gates_policy.${key}`,
-        message: `expected one of ${GATE_POLICIES.join(" | ")}, got ${JSON.stringify(raw)}`,
-      });
-    }
-    if (known.size > 0 && !known.has(key)) {
-      issues.push({ path: `gates_policy.${key}`, message: `names no stage in this run` });
-    }
-  }
+  validateStagePolicy(value, stageIds, issues, { field: "gates_policy", policies: GATE_POLICIES });
 }

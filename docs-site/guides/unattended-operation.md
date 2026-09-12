@@ -259,6 +259,7 @@ The enum is closed — a kind that arrives from nowhere is a branch nobody wrote
 |---|---|---|---|
 | `question.raised` | the loop parked on an open question | the first question's `tldrx answer` line | `questions[]` — `id`, `title`, `why_asked`, `options[]` as `{letter, text}`, `recommendation` (`option`, `why`, `src`) or `null`, `answer_command` |
 | `question.timeout` | `--wait-answers` lapsed and the loop is about to exit `4` | the same answer line | the same `questions[]`, plus `waited_ms` |
+| `question.auto_answered` | the loop took a question's own `Recommended:` option under `questions_policy: recommended` — it asks for nothing | the `tldrx answer … --supersede` line that reverses it | `question` (`id`, `title`, `file`), `pick` (`letter`, `text`), `alternatives[]`, `why`, `fact`, `decided_by: agent-default`, `supersede_command` |
 | `gate.requested` | a stage finished and a person must sign it — **deferred, and possibly never sent, when an `auto` gate is held only by open questions** | the line that clears the gate: `tldrx answer <id>` with questions open, `tldrx run status <id>` over unfinished stories, `tldrx approve --run <id>` when nothing mechanical is outstanding | `cost_usd`, `approve_command`, `reject_command`, `gate_policy`, `holding` (`questions` \| `stories` \| `none`), and one of `held_by` (an `auto` gate's failing conditions) / `signer_held` (an `agent` signer's reasons) — absent when nothing looked. Plus `continue_command` + `continue_note`, together or not at all, only where the gate can name what has to change |
 | `gate.timeout` | `--wait-gates` lapsed and the loop is about to exit `4` | the same approve line | `approve_command`, `reject_command`, `gate_policy`, `waited_ms`, and `cost_usd` only when this loop is the one that saw the gate raised |
 | `stage.done` | a stage finished and the loop moved on | `null` — the loop is already running the next stage | `cost_usd` |
@@ -330,8 +331,20 @@ process.stdin.on("end", async () => {
 Then `chmod +x bin/notify-owner` and declare it. The loop closes when a person reads that
 message and runs the command it carried — `tldrx answer Q1 "B — rankings are global" --run
 260907-checkout`, from a laptop, a phone over SSH, or a button in your own script that
-shells out on their behalf. It is an ordinary `tldrx answer`; the loop never answers its own
-question.
+shells out on their behalf. It is an ordinary `tldrx answer`; under the default
+`questions_policy` the loop never answers its own question.
+
+The exception is opt-in, per stage, and recorded. Measured on two headless runs (2026-09-12):
+9 of the 10 questions the owner was stopped for carried a `Recommended:` line the asking agent
+had written. `run new --questions none` (every stage `recommended`), or
+`--questions plan,build` (those two stay human), or later `tldrx run questions set
+what:recommended --note "…"`, lets the loop take that recommendation itself the moment the
+stage parks: it goes through the same `tldrx answer` path, the fact carries
+`decided_by: agent-default` with `alternatives` (the options not taken) and `recommended_why`,
+and you get one `question.auto_answered` per answer — no `question.raised` for it — whose
+`command` is the `--supersede` line that reverses it. A question with no `Recommended:` line,
+or tagged `irreversible: true` / `money: true` in its metadata, stops the loop for you exactly
+as before.
 
 ## Running it
 

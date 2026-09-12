@@ -109,8 +109,13 @@ trata la compuerta: `holding` dice si la retienen preguntas abiertas, historias 
 nada mecánico, y una compuerta que puede nombrar qué hay que cambiar lleva la línea
 `--and-continue` lista para disparar. Ambas salen con `4` sin
 cambios cuando el plazo se vence. No se gasta nada mientras esperan, y el bucle no cierra nada
-por su cuenta: nunca responde su propia pregunta ni firma su propia compuerta, tampoco con una
-política `agent`.
+por su cuenta: nunca firma su propia compuerta, tampoco con una política `agent`, y bajo la
+`questions_policy` por defecto nunca responde su propia pregunta. La única excepción es opcional
+y queda registrada: `run new --questions <stage:recommended,…|none>` deja que el bucle tome la
+opción `Recommended:` de la propia pregunta, por el mismo camino de `tldrx answer`, como
+`decided_by: agent-default` con las alternativas en el hecho y un `question.auto_answered` a tu
+hook — y una pregunta sin recomendación, o marcada `irreversible: true` / `money: true`, sigue
+deteniéndose por ti.
 
 La mitad operativa de esto — la carga completa por tipo, un esqueleto de adaptador para
 pegar, una lista para la primera corrida y qué revisar cuando no llega nada — está en

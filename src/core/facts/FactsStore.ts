@@ -101,6 +101,12 @@ export class FactsStore {
       ...(input.conflicts_with !== undefined && input.conflicts_with.length > 0
         ? { conflicts_with: [...input.conflicts_with] }
         : {}),
+      // The same key-by-key rule for the two #251 fields: a `NewFact` carrying
+      // them and no line here would drop them with no type error at all.
+      ...(input.alternatives !== undefined && input.alternatives.length > 0
+        ? { alternatives: [...input.alternatives] }
+        : {}),
+      ...(input.recommended_why === undefined ? {} : { recommended_why: input.recommended_why }),
     };
     this.rows.push(fact);
     return fact;

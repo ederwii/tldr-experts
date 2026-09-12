@@ -17,6 +17,13 @@ import { type Fact } from "./Fact.ts";
 export interface DecidedTally {
   readonly owner: number;
   readonly driver: number;
+  /**
+   * `decided_by: agent-default` — the loop took the asker's recommendation under
+   * `questions_policy: recommended` (gh #251). Counted apart, never folded into
+   * `notStated`: it IS stated, and it is the one count an owner reading a close
+   * most wants to see.
+   */
+  readonly agentDefault: number;
   /** No `decided_by` on the row. "Not stated", never "owner". */
   readonly notStated: number;
 }
@@ -24,21 +31,26 @@ export interface DecidedTally {
 export function decidedTally(facts: readonly Fact[], runId: string): DecidedTally {
   let owner = 0;
   let driver = 0;
+  let agentDefault = 0;
   let notStated = 0;
   for (const fact of facts) {
     if (fact.source.run !== runId) continue;
     if (fact.source.decided_by === "owner") owner += 1;
     else if (fact.source.decided_by === "driver") driver += 1;
+    else if (fact.source.decided_by === "agent-default") agentDefault += 1;
     else notStated += 1;
   }
-  return { owner, driver, notStated };
+  return { owner, driver, agentDefault, notStated };
 }
 
 /** The one sentence both readers print, or null when this run recorded nothing. */
 export function describeDecidedTally(tally: DecidedTally): string | null {
-  const total = tally.owner + tally.driver + tally.notStated;
+  const total = tally.owner + tally.driver + tally.agentDefault + tally.notStated;
   if (total === 0) return null;
+  // The agent-default count is named only when there is one, so every close that
+  // recorded none reads byte-for-byte as it did before the value existed.
+  const agentDefault = tally.agentDefault === 0 ? "" : `${String(tally.agentDefault)} agent-default, `;
   return `${String(total)} decision(s) recorded on this run: ${String(tally.owner)} owner, `
-    + `${String(tally.driver)} driver, ${String(tally.notStated)} not stated. `
+    + `${String(tally.driver)} driver, ${agentDefault}${String(tally.notStated)} not stated. `
     + "A row with no decider says \"not stated\" — it is never read as the owner's.";
 }

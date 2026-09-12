@@ -27,6 +27,7 @@ import { describeDecidedTally } from "../../core/facts/decidedTally.ts";
 import { nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { createRun } from "../../core/run/newRun.ts";
 import { setGatePolicy } from "../../core/run/setGatePolicy.ts";
+import { setQuestionsPolicy } from "../../core/run/setQuestionsPolicy.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { buildStatus, renderStatus } from "../../core/run/runStatus.ts";
 import { parseDurationMs } from "../../core/run/duration.ts";
@@ -45,7 +46,7 @@ import { estimateNextStage, renderEstimate, EstimateError } from "../../core/bud
 const HINT_FILE_COUNT = 10;
 
 const VALUE_FLAGS = [
-  "title", "scope", "budget", "repos", "from", "seed", "gates", "ship", "run", "root",
+  "title", "scope", "budget", "repos", "from", "seed", "gates", "questions", "ship", "run", "root",
   "max-usd", "until", "model", "effort", "ui", "note", "parallel", "attended-by",
   "notify-every", "wait-answers", "wait-gates", "prompt-max-bytes", "max-reads",
   "retry-failed",
@@ -95,7 +96,8 @@ export const runCommand: Command = {
   summary: "Create, inspect or auto-run a piece of work",
   usage: "tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b]\n" +
     "                  [--from <aidlc-intent-dir> | --seed <file|dir> ...] [--gates <a,b|a:agent|all|none>]\n" +
-    "                  [--ship <push|pr|merge>] [--attended-by host] [--root <path>]\n" +
+    "                  [--questions <a,b|a:recommended|all|none>] [--ship <push|pr|merge>]\n" +
+    "                  [--attended-by host] [--root <path>]\n" +
     "       tldrx run attend <host|--none> [<run>] [--run <id>] [--root <path>]\n" +
     "       tldrx run status [<run>] [--json] [--verbose] [--run <id>] [--root <path>]\n" +
     "       tldrx run estimate [<run>] [--json] [--run <id>] [--root <path>]\n" +
@@ -106,6 +108,7 @@ export const runCommand: Command = {
     "                  [--yolo] [--parallel <n>] [--gate-agent] [--ui scene|compact|plain|off]\n" +
     "                  [--run <id>] [--root <path>]\n" +
     "       tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>] [--root <path>]\n" +
+    "       tldrx run questions set <stage>:<human|recommended> --note <text> [--run <id>] [--root <path>]\n" +
     "       tldrx run unlock [<run>] [--force] [--run <id>] [--root <path>]\n" +
     "       tldrx run cancel [<run>] --note <text> [--force] [--run <id>] [--root <path>]",
   implemented: true,
@@ -122,6 +125,8 @@ export const runCommand: Command = {
         return runEstimate(rest);
       case "gates":
         return runGates(rest);
+      case "questions":
+        return runQuestions(rest);
       case "auto":
         return await runAutoLoop(rest);
       case "unlock":
@@ -130,8 +135,8 @@ export const runCommand: Command = {
         return await runCancel(rest);
       default:
         process.stderr.write(
-          `tldrx run: expected \`new\`, \`attend\`, \`status\`, \`estimate\`, \`gates\`, \`auto\`, \`unlock\` `
-            + `or \`cancel\`\n${runCommand.usage}\n`,
+          `tldrx run: expected \`new\`, \`attend\`, \`status\`, \`estimate\`, \`gates\`, \`questions\`, \`auto\`, `
+            + `\`unlock\` or \`cancel\`\n${runCommand.usage}\n`,
         );
         return EXIT_USAGE;
     }
@@ -159,6 +164,7 @@ function runNew(argv: readonly string[]): number {
       seed: seeds.length === 0 ? undefined : seeds.length === 1 ? seeds[0] : seeds,
       gates: stringFlag(args, "gates"),
       ship: stringFlag(args, "ship"),
+      questions: stringFlag(args, "questions"),
       attendedBy: attendedByFlag(args),
       actor: currentActor(),
       now: new Date(),
@@ -468,6 +474,34 @@ function runGates(argv: readonly string[]): number {
     }));
   } catch (error) {
     return fail("run gates set", error);
+  }
+}
+
+/**
+ * `tldrx run questions set <stage>:<policy> --note "…"` (gh #251) — `run gates set`'s
+ * shape for the run's `questions_policy`, verb spelled out for the same reason.
+ */
+function runQuestions(argv: readonly string[]): number {
+  const [sub, ...rest] = argv;
+  if (sub !== "set") {
+    process.stderr.write(
+      "tldrx run questions: expected `set`\n"
+      + '       tldrx run questions set <stage>:<human|recommended> --note "why" [--run <id>]\n',
+    );
+    return EXIT_USAGE;
+  }
+  try {
+    const args = parseArgs(rest, VALUE_FLAGS);
+    return report("run questions set", setQuestionsPolicy({
+      root: workspaceRootFrom(args),
+      entry: args.positionals[0] ?? "",
+      note: stringFlag(args, "note") ?? "",
+      runId: stringFlag(args, "run"),
+      actor: currentActor(),
+      at: nowRfc3339(),
+    }));
+  } catch (error) {
+    return fail("run questions set", error);
   }
 }
 

@@ -107,6 +107,54 @@ export function questionTimeoutNotification(
 }
 
 /**
+ * `question.auto_answered` — the loop took the asker's own recommendation (gh #251).
+ *
+ * It asks for nothing, so the summary is a REPORT: which question, which option, the
+ * asker's reason, what was not taken, and the fact it became. The top-level `command`
+ * is the one thing a person can do about it — reverse it, through the same door a
+ * person's answer goes through — spelled with `--supersede` on the ONE
+ * `answerCommand` every card and payload already uses, never a second spelling.
+ */
+export function questionAutoAnsweredNotification(ctx: NotifyContext, answered: AutoAnsweredView): NotifyPayload {
+  const why = answered.pick.why === "" ? "" : ` — ${answered.pick.why}`;
+  const alternatives = answered.pick.alternatives.length === 0
+    ? "no other option was listed"
+    : `not taken: ${answered.pick.alternatives.join("; ")}`;
+  return {
+    ...base(ctx, "question.auto_answered"),
+    summary: `${ctx.runId} answered ${answered.q} · ${answered.title} itself at `
+      + `${ctx.stage ?? "an unnamed stage"} (questions_policy: recommended): took `
+      + `${answered.pick.letter}) ${answered.pick.text}${why}. Recorded as ${answered.fact}, `
+      + `decided by agent-default, ${alternatives}. Nothing is waiting on you; `
+      + "to reverse it, answer the question again with --supersede.",
+    command: `${answerCommand(answered.q, ctx.runId)} --supersede`,
+    detail: {
+      question: { id: answered.q, title: answered.title, file: answered.file },
+      pick: { letter: answered.pick.letter, text: answered.pick.text },
+      alternatives: [...answered.pick.alternatives],
+      why: answered.pick.why,
+      fact: answered.fact,
+      decided_by: "agent-default",
+      supersede_command: `${answerCommand(answered.q, ctx.runId)} --supersede`,
+    },
+  };
+}
+
+/** What `questionAutoAnsweredNotification` needs — `autoAnswer.ts`'s `AutoAnswered`, as data. */
+export interface AutoAnsweredView {
+  readonly q: string;
+  readonly title: string;
+  readonly file: string;
+  readonly pick: {
+    readonly letter: string;
+    readonly text: string;
+    readonly alternatives: readonly string[];
+    readonly why: string;
+  };
+  readonly fact: string;
+}
+
+/**
  * `a` or `an` for the phrase that follows. One helper rather than a literal at each
  * call site, because the article depends on the POLICY WORD and `auto` is the only
  * vowel among the four — which is how an owner's phone read "waiting at a auto gate"
