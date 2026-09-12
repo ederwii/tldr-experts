@@ -1462,17 +1462,24 @@ other half. See §5's Build-executor review section for the same fact from the r
 | `actor` | str | y | Human id, expert slug, `facilitator`, or `hook:<id>` |
 | `cost_usd` | number ≥0 | y | `0` when not a spend event; sums to `run.budget.spent_usd` |
 | `payload` | object ≤4 KB | y | Free-form; object nesting ≤3 |
-| `payload.detail_omitted` | str | n | **Additive.** Written by the emit seam INSTEAD of `detail` when the payload would clear the 4096-BYTE cap (bytes, not characters — a thousand astral characters is four thousand bytes). It names the omitted field's byte count, the cap, and where the full text went. The text is saved FIRST — `<phase>/log/overflow/<ts>-<seq>-<type>-detail.txt`, run-relative — and only then is the event built, so the pointer is true by construction rather than a promise about a file written later; a save that fails says it failed instead of naming a path that does not exist, and the per-invocation counter is what stops two oversize events in the same second from sharing a file. The cap is never raised and the rest of the payload — the verdict included — survives |
+| `payload.detail_omitted` | str | n | **Additive.** Written by the emit seam INSTEAD of `detail` when the payload would clear the 4096-BYTE cap (bytes, not characters — a thousand astral characters is four thousand bytes). It names the omitted field's byte count, the cap, and where the full text went. The text is saved FIRST — `<phase>/log/overflow/<ts>-<seq>-<type>-detail.txt`, run-relative — and only then is the event built, so the pointer is true by construction rather than a promise about a file written later; a save that fails says it failed instead of naming a path that does not exist, and the counter is what stops two oversize events in the same second from sharing a file. The cap is never raised and the rest of the payload — the verdict included — survives |
+| `payload.outputs_omitted` / `payload.outputs_omitted_reason` | int / str | n | **Additive.** The SECOND field the emit seam knows how to drop, and the pair is written INSTEAD of `outputs` on an `agent.result` whose path list alone clears the cap — a story that writes a few dozen files. `outputs_omitted` is the COUNT the list had; the list is never shortened in place, because a truncated `outputs` reads downstream as the whole list. `outputs_omitted_reason` carries the same sentence `detail_omitted` does, pointing at `<phase>/log/overflow/<ts>-<seq>-<type>-outputs.txt` — the full list, one path per line. `detail` is dropped first where a payload has both, and `outputs` only if the payload is STILL over. The task row in `run.yml` keeps its `outputs` in full: this bounds the EVENT, never the ledger |
 
 **Validation (appended line only).** One-line JSON ≤8 KB; exactly these seven keys; `type` in enum; append-only
 enforced by comparing file byte length before/after — a write that shortens the file is rejected.
 
-**An oversize payload the cap cannot rescue is still refused whole**, and that is the case `detail_omitted` does not
-cover: a payload with no `detail` to drop, or one whose REMAINDER is already over the cap on its own. The refusal
-throws out of `EventLog.append`, and an executor's emit seam catches it and fails the stage BY NAME rather than
-letting it escape past the ledger — which is what it used to do, taking the invocation's unsaved task rows with it.
-What was earned and what was lost are both named: `ExecutorOutcome.tasks` exists only at RETURN, so the rows the
-turn had already earned are gone, and the failure SAYS so rather than implying the ledger is whole.
+**An oversize payload the cap cannot rescue is still refused whole**, and that is the case the two `*_omitted`
+fields do not cover: a payload with neither a `detail` nor an `outputs` to drop, or one whose REMAINDER is already
+over the cap on its own. The seam knows exactly those two fields BY NAME and has no general rule for shrinking
+whatever is biggest — trimming a field it does not understand would be the framework editing its own record — so a
+new payload field that can grow without bound is oversize-and-refused until the seam is taught it. The refusal
+throws out of `EventLog.append`, and the two seams that write a turn's events — the executor's `emit` and the
+task-recording call after it — each catch it and fail the stage BY NAME with exit 5 rather than letting it escape
+past the ledger, which is what it used to do, taking the invocation's unsaved task rows and its epic-branch claim
+with it. What was earned and what was lost are both named: an executor that threw before returning has no rows at
+all and the failure says so, while a throw while RECORDING rows says how many of how many reached `run.yml`. An
+epic branch the invocation claimed is saved the moment it is claimed, so a later throw cannot make the next run
+read its own epic as somebody else's.
 
 **Reading is tolerant, and says so.** A reader SKIPS any non-empty line that does not parse and keeps going — a
 process killed between the `{` and the `\n` leaves a torn last line, and one torn byte must not cost the other

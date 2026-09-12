@@ -25,6 +25,32 @@
   breath, so a payload can no longer name four open questions beside `holding: "none"` — which
   is what the adapter was handed, measured, and why it drew the default two buttons. #239 fixed
   WHICH command a questions-held gate offers; this is WHEN, and whether, it is offered at all.
+- **A turn that wrote a lot of files could not be RECORDED, and the invocation died owing the
+  money it had just spent (#248).** Measured on a live headless run: `tldrx run auto … --retry-failed 2`,
+  eight stories, dead at *"refusing to append an invalid event: payload 4135 bytes exceeds the
+  4096 byte cap"*. The field was `outputs` — every run-relative path the turn wrote, 3924 bytes of
+  it under a 212-byte envelope — on the `agent.result` that `recordExecutorTasks` appends. What
+  that one refused append cost is the reason this is three fixes and not one. The append was
+  RAW, so it never reached the capped seam; the seam would not have saved it anyway, because
+  `capPayload` knew how to name exactly one absence and it was `detail`, which an `agent.result`
+  does not have. The throw landed one line AFTER the try/catch #160 built for precisely this, so
+  it escaped `runNext` entirely and came out of the CLI as exit 1 — a code `--retry-failed` does
+  not retry, since its branch keys on exit 5. A loop told to survive two failures survived zero.
+  And `claimEpicBranches` had put the run's epic branch in memory one line before the throw, with
+  the `store.save()` after it: the branch was cut, on disk, and `run.yml` did not say so, so the
+  relaunch read its OWN epic as a stranger's and refused to stack onto it — with the only way
+  back in being `tldrx next --reuse-epic`, which `run auto` does not expose. So: `capPayload`
+  learns `outputs`, and names it by COUNT (`outputs_omitted: 80`) with the full list written
+  beside the event at `<phase>/log/overflow/…-agent.result-outputs.txt` — never a truncated list,
+  which reads downstream as the whole one. The capped seam moves out of `runExecutor` to module
+  scope and all four raw `agent.result` appends route through it, not just the one that was hit:
+  all four carry `outputs` (measured), and the other three had simply not been reached yet. A
+  throw while recording rows now fails the STAGE with exit 5, in the same family as the executor's
+  own throw, and says how many of how many rows reached `run.yml` rather than a boolean that
+  would be false for a partial truth. It repaints no row: those turns finished, and only their
+  event failed to land. And a claim is saved the moment it is earned. `capPayload` still knows
+  its two fields BY NAME and has no general rule for shrinking whatever is biggest — a third
+  growable payload field has to be taught to it, deliberately, or it is refused whole.
 
 ## 0.17.0 — 2026-09-12
 

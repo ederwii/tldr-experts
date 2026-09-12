@@ -226,54 +226,87 @@ export function validateEvent(input: unknown): ValidationResult {
 /**
  * Fit a payload inside the §2.9 cap by NAMING what was left out, not by raising it.
  *
- * One field overflows in practice and it is always the same one: a reviewer's
- * verdict prose, copied into `check.passed`/`check.failed` as `detail`. Until now
- * `EventLog.append` threw on it, which turned "this verdict was wordy" into "this
- * invocation loses every task row it had earned".
+ * TWO fields overflow in practice, and this function knows exactly those two —
+ * by NAME, one branch each, in the order below. It has no general rule for
+ * "shrink whatever is biggest": trimming a field it does not understand would be
+ * the framework editing its own record, and a payload oversized for any other
+ * reason still comes back untouched and is still refused by the append.
  *
- * So the prose is replaced by a sentence that says how big it was, what the cap
- * is, and where the full text now lives — and the rest of the payload, including
- * the VERDICT, survives intact. A payload that is oversized for any other reason
- * is returned untouched and the append still refuses it: this function knows how
- * to name exactly one absence, and trimming a field it does not understand would
- * be the framework editing its own record.
+ *   1. `detail` — a reviewer's verdict prose, copied into
+ *      `check.passed`/`check.failed` (#160). Prose is the first thing to go: it
+ *      is the field a ledger does not read, and the VERDICT beside it survives.
+ *   2. `outputs` — every run-relative path a turn wrote, on `agent.result`
+ *      (#248). A story with a few dozen files clears 4096 bytes on that array
+ *      alone, and the live incident that filed #248 lost a whole invocation's
+ *      accounting to one. It is dropped WHOLE and replaced by a COUNT: a
+ *      truncated `outputs` would read downstream as the entire list, which is
+ *      the invented value AGENTS.md §7 bans. The full list goes to `save`, one
+ *      path per line.
  *
- * Dropping `detail` does not GUARANTEE the result fits — if the rest of the
- * payload alone is already over the cap, `detail_omitted` is added to a payload
- * that is still oversized, and `EventLog.append` throws on it exactly as it
- * would have before this function existed. That throw is not silent: the emit
- * seam in `runNext.ts` catches it and fails the stage by name (fix round 1).
+ * Adding a THIRD field is a deliberate edit here, not something that happens by
+ * itself: a new payload field that can grow without bound (a `usage` block, a
+ * findings array) is oversized-and-refused until this function is taught it.
+ *
+ * Neither drop GUARANTEES the result fits — if the rest of the payload alone is
+ * already over the cap, the named absence is added to a payload that is still
+ * oversized and `EventLog.append` throws on it exactly as it would have before
+ * this function existed. That throw is not silent: the emit seam in `runNext.ts`
+ * catches it and fails the stage by name (fix round 1; #248 extends the same
+ * treatment to the task-recording seam).
  *
  * Identity is the contract for the ordinary case: an in-cap payload comes back as
  * the SAME object, so every event this framework has ever written is byte-identical.
  *
- * `save`, when given, is called with the text about to be dropped and must
- * return where it now lives — "omitted text saved at <relative path>" (fix
- * round 1: the caller writes that file BEFORE calling this function, so the
- * pointer is true by construction rather than a guess at a story log that may
- * not exist yet, may hold a LATER verdict's prose by the time anyone reads it,
- * or may never be written at all) — or why it could not be, so a failed write
- * is named rather than pointing at a path that does not exist. `save` is called
- * ONLY when a `detail` is actually being dropped, never for an in-cap payload:
- * this function stays synchronous and disk-free on its own, so every test above
- * calls it with no filesystem at all. Omitting `save` (as those tests do) falls
- * back to an honest "not preserved" sentence rather than inventing a path.
+ * `save`, when given, is called with the text about to be dropped and the NAME of
+ * the field it came from, and must return where it now lives — "omitted text
+ * saved at <relative path>" (fix round 1: the caller writes that file BEFORE
+ * calling this function, so the pointer is true by construction rather than a
+ * guess at a story log that may not exist yet, may hold a LATER verdict's prose
+ * by the time anyone reads it, or may never be written at all) — or why it could
+ * not be, so a failed write is named rather than pointing at a path that does not
+ * exist. `save` is called ONLY when a field is actually being dropped, never for
+ * an in-cap payload: this function stays synchronous and disk-free on its own, so
+ * every unit test calls it with no filesystem at all. Omitting `save` falls back
+ * to an honest "not preserved" sentence rather than inventing a path.
  */
 export function capPayload(
   payload: Readonly<Record<string, unknown>>,
-  save?: (text: string) => string,
+  save?: (text: string, field: string) => string,
 ): Readonly<Record<string, unknown>> {
-  const size = Buffer.byteLength(JSON.stringify(payload), "utf8");
-  if (size <= MAX_PAYLOAD_BYTES) return payload;
-  if (typeof payload.detail !== "string") return payload;
-  const { detail: dropped, ...rest } = payload;
-  const where = save === undefined
+  if (byteSize(payload) <= MAX_PAYLOAD_BYTES) return payload;
+
+  const where = (text: string, field: string): string => save === undefined
     ? "the full text was not preserved and is not recoverable from this event"
-    : save(dropped);
-  return {
-    ...rest,
-    detail_omitted: `${String(size)} bytes exceeds the ${String(MAX_PAYLOAD_BYTES)}-byte cap — ${where}`,
-  };
+    : save(text, field);
+  const named = (size: number, text: string, field: string): string =>
+    `${String(size)} bytes exceeds the ${String(MAX_PAYLOAD_BYTES)}-byte cap — ${where(text, field)}`;
+
+  let current = payload;
+
+  // 1. The prose.
+  if (typeof current.detail === "string") {
+    const { detail: dropped, ...rest } = current;
+    current = { ...rest, detail_omitted: named(byteSize(current), dropped, "detail") };
+    if (byteSize(current) <= MAX_PAYLOAD_BYTES) return current;
+  }
+
+  // 2. The path list — only when there is one, since dropping an empty array
+  //    buys nothing and would leave a misleading `outputs_omitted: 0` behind.
+  if (Array.isArray(current.outputs) && current.outputs.length > 0) {
+    const { outputs: dropped, ...rest } = current;
+    const list = dropped as readonly unknown[];
+    current = {
+      ...rest,
+      outputs_omitted: list.length,
+      outputs_omitted_reason: named(byteSize(current), list.map((p) => String(p)).join("\n"), "outputs"),
+    };
+  }
+
+  return current;
+}
+
+function byteSize(payload: Readonly<Record<string, unknown>>): number {
+  return Buffer.byteLength(JSON.stringify(payload), "utf8");
 }
 
 /** Serialize with the seven keys in spec order — the file is diffed by humans. */
