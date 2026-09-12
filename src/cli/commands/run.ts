@@ -16,7 +16,7 @@ import { workspaceRootFrom } from "../workspace.ts";
 import { startUi } from "../ui.ts";
 import { effortFlag } from "../effort.ts";
 import { fail } from "../report.ts";
-import { runAuto, MAX_RETRY_FAILED } from "../../core/facilitator/runAuto.ts";
+import { runAuto, MAX_RETRY_FAILED, MAX_UNTIL_DONE } from "../../core/facilitator/runAuto.ts";
 import { attendRun } from "../../core/run/attend.ts";
 import { ATTENDED_BY, type AttendedBy } from "../../core/run/RunFile.ts";
 import { parallelFlag } from "./next.ts";
@@ -49,7 +49,7 @@ const VALUE_FLAGS = [
   "title", "scope", "budget", "repos", "from", "seed", "gates", "questions", "ship", "run", "root",
   "max-usd", "until", "model", "effort", "ui", "note", "parallel", "attended-by",
   "notify-every", "wait-answers", "wait-gates", "prompt-max-bytes", "max-reads",
-  "retry-failed",
+  "retry-failed", "until-done",
 ];
 
 /**
@@ -91,6 +91,28 @@ function retryFailedFlag(args: ParsedArgs): number | undefined {
   return value;
 }
 
+/**
+ * `--until-done [<n>]` (gh #252): how many times `run auto` may relaunch its own loop
+ * in-process after an exit it can do nothing else with. Bare ⇒ `MAX_UNTIL_DONE`; a number
+ * is refused by name outside `0..MAX_UNTIL_DONE`, and the cap is imported for the same
+ * reason `retryFailedFlag` imports its own. Write the run id BEFORE the flag, or use
+ * `--until-done=<n>`: a bare `--until-done <run>` reads the run id as its number and
+ * refuses it — by name, not silently.
+ */
+function untilDoneFlag(args: ParsedArgs): number | undefined {
+  if (!boolFlag(args, "until-done")) return undefined;
+  if (args.flags.get("until-done") === true) return MAX_UNTIL_DONE;
+  const value = numberFlag(args, "until-done");
+  if (value === undefined || !Number.isInteger(value) || value < 0 || value > MAX_UNTIL_DONE) {
+    throw new UsageError(
+      `--until-done must be a whole number between 0 and ${String(MAX_UNTIL_DONE)}, or bare for `
+      + `${String(MAX_UNTIL_DONE)} (0 is the default: the loop is launched once). A run that has `
+      + "ended that many times is ending for a reason another launch will not discover.",
+    );
+  }
+  return value;
+}
+
 export const runCommand: Command = {
   name: "run",
   summary: "Create, inspect or auto-run a piece of work",
@@ -104,7 +126,7 @@ export const runCommand: Command = {
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
     "                      [--notify-every <duration>] [--wait-answers <duration>]\n" +
     "                      [--wait-gates <duration>] [--prompt-max-bytes <n>] [--max-reads <n>]\n" +
-    "                      [--retry-failed <n>]\n" +
+    "                      [--retry-failed <n>] [--until-done [<n>]]\n" +
     "                  [--yolo] [--parallel <n>] [--gate-agent] [--ui scene|compact|plain|off]\n" +
     "                  [--run <id>] [--root <path>]\n" +
     "       tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>] [--root <path>]\n" +
@@ -334,6 +356,7 @@ async function runAutoLoop(argv: readonly string[]): Promise<number> {
         waitAnswersMs: durationFlag(args, "wait-answers"),
         waitGatesMs: durationFlag(args, "wait-gates"),
         retryFailedStages: retryFailedFlag(args),
+        untilDone: untilDoneFlag(args),
         actor: currentActor(),
         at: nowRfc3339(),
         // Erase the view, let the stage line scroll past on stdout, repaint. A

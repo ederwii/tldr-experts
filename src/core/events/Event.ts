@@ -146,9 +146,20 @@ import {
  * move carried. It is emitted ONLY when the ref actually moved: a divergent or
  * dirty branch is warned about on stdout and changed by nothing, so it has no
  * event, because nothing happened.
+ *
+ * `run.relaunched` was added 2026-09-12 (issue #252), for `tldrx run auto
+ * --until-done`. It is the loop being run AGAIN by its own process after an exit
+ * it could do nothing else with — a stage failure past `--retry-failed`, a throw,
+ * a refusal with no money behind it — where before a person read the exit and
+ * typed the command again, five times on the night that was measured, with
+ * nothing on the ledger to say so. Its payload carries `reason` (the verdict's
+ * sentence), `exit` (the code recovered from), `attempt` (which relaunch this
+ * is, 1-based), `of` (the bound) and `last_line` (the attempt's last line,
+ * bounded). It is never written over exit 4, over a `budget.blocked`, or twice
+ * over the same last line — `facilitator/runAuto.ts`, `relaunchVerdict`.
  */
 export const EVENT_TYPES = [
-  "run.created", "run.closed", "run.unlocked", "run.cancelled", "run.attended",
+  "run.created", "run.closed", "run.unlocked", "run.cancelled", "run.attended", "run.relaunched",
   "phase.started", "phase.done",
   "stage.started", "stage.done", "stage.failed", "stage.skipped",
   "task.started", "task.done",

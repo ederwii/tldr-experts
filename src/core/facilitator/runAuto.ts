@@ -15,7 +15,12 @@
  *
  * It adds no capability `next` does not have, and it deliberately holds no state:
  * every iteration re-reads run.yml off disk, so killing the loop mid-way leaves a
- * run that `tldrx next` picks up exactly where it stopped.
+ * run that `tldrx next` picks up exactly where it stopped. That is also what makes
+ * `--until-done [<n>]` (gh #252) honest: `runAuto` is a bounded supervisor that runs
+ * the loop (`runAutoOnce`) again after an exit it can do nothing else with — 5 past
+ * the retry bound, a throw, a 2 with no money behind it — each relaunch one
+ * `run.relaunched` on the ledger, and never over a person's 4, a `budget.blocked`,
+ * or the same last line twice (`relaunchVerdict`).
  *
  * Headless only. There is no `--prepare`/`--commit` here: those two are a
  * handshake with a host session that dispatches the sub-agent itself, and a loop
@@ -176,6 +181,23 @@ export interface AutoOptions {
    * next attempt with no new instruction. A person typed the same command again.
    */
   readonly retryFailedStages?: number;
+  /**
+   * `--until-done [<n>]`: how many times this process may RELAUNCH the loop after an exit
+   * it can do nothing else with (gh #252). Absent or `0` ⇒ one attempt, exactly what every
+   * invocation before this got; the bare flag ⇒ `MAX_UNTIL_DONE`.
+   *
+   * `--retry-failed` is a bound INSIDE the loop, on one stage's exit 5s in a row. This is a
+   * bound OUTSIDE it, on the loop ending: a stage failure past that bound, a throw that used
+   * to reach `fail()` as a bare exit 1 with nothing on the ledger, a refusal whose remedy is
+   * the same command typed again. Measured 2026-09-12 on a 28 h unattended run: five such
+   * exits, each a person reading it and relaunching by hand, 18 h before a story ran.
+   *
+   * What it never relaunches over — see `relaunchVerdict`: a person's exit 4 (the `--wait-*`
+   * flags own it), a money refusal (`budget.blocked`, or this loop's own `--max-usd` —
+   * nothing in-process moves a ceiling, #232/#244), and an attempt whose last line is the
+   * previous attempt's, because a refusal that repeats verbatim is not one a relaunch moves.
+   */
+  readonly untilDone?: number;
   /** Called with each line as it happens, so a long loop is not silent. */
   readonly onLine?: (line: string) => void;
 }
@@ -196,18 +218,256 @@ const EXIT_AGENT_FAILED = 5;
 export const MAX_RETRY_FAILED = 3;
 
 /**
+ * The largest `--until-done` this loop accepts, and what the bare flag means — the one
+ * place the number lives, read by the flag parser rather than repeated. Five is the count
+ * the measurement produced (five hand relaunches on one night, gh #252): past it a run
+ * that keeps ending is ending for a reason a sixth launch will not discover.
+ */
+export const MAX_UNTIL_DONE = 5;
+
+/**
  * §2.2 caps a run at 40 stages, and a stage can legitimately be visited twice (a
  * retry after `reject`). 96 is well past anything a real run does and well short
  * of a loop that spends all night.
  */
 const MAX_ITERATIONS = 96;
 
+/** The exits `--until-done` may relaunch over — and so the ones its silence has to explain. */
+const RELAUNCHABLE_EXITS: ReadonlySet<number> = new Set([EXIT_USAGE, EXIT_REFUSED, EXIT_AGENT_FAILED]);
+
+/** How much of an attempt's last line the `run.relaunched` payload carries (§2.9 caps a payload at 4 KB). */
+const LAST_LINE_BYTES = 400;
+
+/**
+ * The money and the turns as the FIRST attempt found them, carried across every relaunch
+ * (gh #252). "Spent by this loop" and the `--max-usd` ceiling are figures about the one
+ * command a person typed, not about the attempt that happens to be running: a supervisor
+ * that let each relaunch start from zero would hand the loop a fresh `--max-usd` every
+ * time it ended, which is a ceiling in name only.
+ */
+interface LoopBaseline {
+  readonly spentUsd: number;
+  readonly tally: SpentTally;
+}
+
+/** What the supervisor tells one attempt about the attempts before it. DATA, never the loop. */
+interface Supervision {
+  /** 1-based; 1 is the launch a person typed. */
+  readonly attempt: number;
+  /** Relaunches allowed — `--until-done <n>`. */
+  readonly of: number;
+  /** The previous attempt's last line, or null on the first. */
+  readonly previousLastLine: string | null;
+  /** The first attempt's baseline, or null until one has been measured. */
+  readonly baseline: LoopBaseline | null;
+}
+
+/** One attempt's report back to the supervisor: the loop's outcome plus what a relaunch needs. */
+interface AttemptOutcome extends NextOutcome {
+  readonly runId: string | null;
+  readonly runDir: string | null;
+  readonly baseline: LoopBaseline | null;
+  /**
+   * The verdict this attempt reached about its own relaunch, or null when it ended before
+   * it could form one (a throw the supervisor caught outside the loop). Computed INSIDE the
+   * attempt because `finish` needs it first: an attempt that will be relaunched must not
+   * send `run.failed` — the run has not failed, it is being run again — and the
+   * supervisor reads the same verdict rather than forming a second one.
+   */
+  readonly verdict: RelaunchVerdict | null;
+}
+
+export interface RelaunchVerdict {
+  readonly relaunch: boolean;
+  /** Why — the sentence the `run.relaunched` event and the stop line carry. */
+  readonly reason: string;
+}
+
+/**
+ * Whether the supervisor runs the loop again after this exit — the ONE derivation, read by
+ * `finish` (to hold the run-end notification) and by the supervisor (to relaunch).
+ *
+ * The order is the argument. A person's exits first: `0` is done, `3` has nothing to
+ * relaunch on, `4` is a decision `--wait-answers` / `--wait-gates` already own. Then the
+ * loop's own word — `held` names a stop a relaunch cannot move: a `budget.blocked` (the
+ * ceiling is what refused, and nothing in-process raises it, #232/#244), this loop's own
+ * `--max-usd`, its iteration cap, a run whose files disagree with themselves, a usage
+ * refusal. Then the bound. Then the one check that catches every deterministic refusal
+ * not named above: an attempt whose last line is the previous attempt's verbatim is a
+ * refusal repeating, and a second relaunch over it would be the loop hammering a wall.
+ * Only then are `1`, `2` and `5` relaunched — the three families the measurement behind
+ * gh #252 found a person relaunching by hand.
+ */
+export function relaunchVerdict(input: {
+  readonly code: number;
+  readonly lastLine: string;
+  readonly previousLastLine: string | null;
+  readonly held: string | null;
+  readonly attempt: number;
+  readonly of: number;
+  readonly runDir: string | null;
+}): RelaunchVerdict {
+  const { code } = input;
+  if (code === EXIT_OK) return { relaunch: false, reason: "exit 0 — the loop is done" };
+  if (code === EXIT_NOT_FOUND) return { relaunch: false, reason: "exit 3 — there is no run to relaunch on" };
+  if (code === EXIT_AWAITING_HUMAN) {
+    return { relaunch: false, reason: "exit 4 is a person's — --wait-answers and --wait-gates own it" };
+  }
+  if (input.held !== null) return { relaunch: false, reason: input.held };
+  if (input.runDir === null) return { relaunch: false, reason: "no run resolved — there is nothing to relaunch on" };
+  if (!RELAUNCHABLE_EXITS.has(code)) {
+    return { relaunch: false, reason: `exit ${String(code)} is not one this loop relaunches` };
+  }
+  if (input.attempt > input.of) {
+    return {
+      relaunch: false,
+      reason: `the --until-done ${String(input.of)} bound is spent after ${String(input.attempt)} attempts`,
+    };
+  }
+  if (input.previousLastLine !== null && input.lastLine === input.previousLastLine) {
+    return {
+      relaunch: false,
+      reason: "its last line is the same as the previous attempt's — a refusal that repeats "
+        + "verbatim is not one a relaunch moves",
+    };
+  }
+  const family = code === EXIT_AGENT_FAILED
+    ? "a stage failed past --retry-failed"
+    : code === EXIT_REFUSED
+      ? "a refusal with no money behind it"
+      : "the loop ended with exit 1";
+  return { relaunch: true, reason: `${family}: ${input.lastLine}` };
+}
+
+/**
+ * The words for a `budget.blocked` this attempt appended, or null when it appended none.
+ * Read off the event, never re-derived from budget.yml: the refusal is about the phase as
+ * it was when the brake fired, and the figures it names are the figures a person raises by.
+ */
+function budgetBlockedReason(fresh: readonly TldrxEvent[]): string | null {
+  for (let i = fresh.length - 1; i >= 0; i--) {
+    const event = fresh[i];
+    if (event === undefined || event.type !== "budget.blocked") continue;
+    const remaining = number(payload(event, "remaining_usd"));
+    const estimate = number(payload(event, "estimate_usd"));
+    return `budget.blocked on ${String(payload(event, "phase") ?? "")}: remaining_usd $${remaining.toFixed(2)} `
+      + `< estimate_usd $${estimate.toFixed(2)} — nothing in-process moves that ceiling; raise it `
+      + "(tldrx budget raise) and launch again";
+  }
+  return null;
+}
+
+/**
+ * `tldrx run auto`, supervised (gh #252). Without `--until-done` this IS `runAutoOnce`: one
+ * attempt, the same lines, the same exit, nothing on the ledger that was not there before.
+ * With it, an in-process relauncher over the loop — the loop below holds no state, every
+ * iteration re-reads run.yml, so "run it again" is exactly what a person did five times
+ * on the night this was measured. Each relaunch is one `run.relaunched` on the ledger and
+ * one line on stdout; `run.finished` / `run.failed` go out ONCE, from the last attempt.
+ */
 export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
+  const bound = options.untilDone ?? 0;
+  if (bound <= 0) {
+    const once = await runAutoOnce(options, undefined);
+    return { code: once.code, lines: once.lines };
+  }
+
   const lines: string[] = [];
   const say = (line: string): void => {
     lines.push(line);
     options.onLine?.(line);
   };
+  // Pinned after the first attempt resolves it: a relaunch that re-resolved a bare
+  // `run auto` could drive a different run the moment a second one was opened.
+  let runId = options.runId;
+  let baseline: LoopBaseline | null = null;
+  let previousLastLine: string | null = null;
+  for (let attempt = 1; ; attempt++) {
+    let outcome: AttemptOutcome;
+    try {
+      outcome = await runAutoOnce(
+        { ...options, runId, onLine: say },
+        { attempt, of: bound, previousLastLine, baseline },
+      );
+    } catch (error) {
+      // The attempt's own catch covers the iterating half; this is a throw from before
+      // it — resolving the run, reading run.yml. No run is known, so there is nothing to
+      // relaunch on, and the verdict below says exactly that.
+      const line = `run auto threw: ${error instanceof Error ? error.message : String(error)}`;
+      say(line);
+      outcome = { code: EXIT_USAGE, lines: [line], runId: runId ?? null, runDir: null, baseline, verdict: null };
+    }
+    runId = outcome.runId ?? runId;
+    baseline = outcome.baseline ?? baseline;
+    const lastLine = outcome.lines[outcome.lines.length - 1] ?? "";
+    const verdict = outcome.verdict ?? relaunchVerdict({
+      code: outcome.code, lastLine, previousLastLine, held: null, attempt, of: bound, runDir: outcome.runDir,
+    });
+    if (!verdict.relaunch) {
+      // Said only when there is something to explain: a bound that was used, or an exit
+      // in the flag's own families that it declined. A first attempt ending 0, 3 or 4
+      // prints what it always printed.
+      if (attempt > 1 || RELAUNCHABLE_EXITS.has(outcome.code)) {
+        say(`not relaunching after exit ${String(outcome.code)} — ${verdict.reason}`
+          + (attempt > 1 ? ` (${String(attempt - 1)} of ${String(bound)} relaunches used)` : ""));
+      }
+      return { code: outcome.code, lines };
+    }
+    // `runDir` is non-null here — a null one is a `relaunch: false` verdict above.
+    const runDir = outcome.runDir ?? "";
+    const stage = runId === undefined ? null : cursorContext(runDir, runId)?.stageId ?? null;
+    EventLog.forRun(runDir).append({
+      ts: options.at,
+      run: runId ?? "",
+      stage,
+      type: "run.relaunched",
+      actor: options.actor,
+      cost_usd: 0,
+      payload: {
+        reason: verdict.reason.slice(0, LAST_LINE_BYTES),
+        exit: outcome.code,
+        attempt,
+        of: bound,
+        last_line: lastLine.slice(0, LAST_LINE_BYTES),
+      },
+    });
+    say(`relaunching run auto after exit ${String(outcome.code)} — ${verdict.reason} `
+      + `(relaunch ${String(attempt)} of ${String(bound)}, --until-done)`);
+    previousLastLine = lastLine;
+  }
+}
+
+async function runAutoOnce(options: AutoOptions, supervision: Supervision | undefined): Promise<AttemptOutcome> {
+  const lines: string[] = [];
+  const say = (line: string): void => {
+    lines.push(line);
+    options.onLine?.(line);
+  };
+  let resolved: { readonly runId: string; readonly runDir: string } | null = null;
+  let baseline: LoopBaseline | null = supervision?.baseline ?? null;
+  /**
+   * Every way out of this attempt. `held` is the loop's own word that this stop is not
+   * one a relaunch moves (money, the iteration cap, a usage refusal); null lets
+   * `relaunchVerdict` decide on the exit and the lines alone. Unsupervised, the verdict
+   * is null and nothing here changes.
+   */
+  const leave = (code: number, held: string | null = null): AttemptOutcome => ({
+    code,
+    lines,
+    runId: resolved?.runId ?? null,
+    runDir: resolved?.runDir ?? null,
+    baseline,
+    verdict: supervision === undefined ? null : relaunchVerdict({
+      code,
+      lastLine: lines[lines.length - 1] ?? "",
+      previousLastLine: supervision.previousLastLine,
+      held,
+      attempt: supervision.attempt,
+      of: supervision.of,
+      runDir: resolved?.runDir ?? null,
+    }),
+  });
+  const USAGE_HELD = "a usage refusal — the command is wrong for this run, and typing it again does not change that";
 
   // Resolve ONCE and then always pass the concrete id: a loop that re-resolved
   // every iteration could silently change which run it was driving the moment a
@@ -215,44 +475,53 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
   const resolution = RunStore.resolve(options.root, options.runId);
   if (resolution.kind === "ambiguous") {
     for (const line of ambiguousRunLines(resolution.open)) say(line);
-    return { code: EXIT_REFUSED, lines };
+    return leave(EXIT_REFUSED);
   }
   if (resolution.kind === "none") {
     say(options.runId === undefined
       ? `no non-terminal run in ${PROJECT_WORK_DIR}/`
       : `no run '${options.runId}' in ${PROJECT_WORK_DIR}/`);
-    return { code: EXIT_NOT_FOUND, lines };
+    return leave(EXIT_NOT_FOUND);
   }
   const runDir = resolution.store.runDir;
   const runId = resolution.store.runId;
+  resolved = { runId, runDir };
 
   // `attended_by: host` (spec §2.2). Exit 1, a USAGE error, and before the event
   // log is even opened so nothing is written: this loop's whole job is calling
   // `next` headless over and over, and on this run `next` headless is a refusal.
   // Not exit 4 — a run waiting on a host turn is `next`'s answer to give, and a
   // loop that reported "awaiting human" would invite a retry that can never
-  // succeed. The command is wrong for this run, which is what 1 means.
+  // succeed. The command is wrong for this run, which is what 1 means — and a
+  // supervisor is told so (`held`), so nothing is written on a relaunch either.
   if (isAttendedByHost(resolution.store.run)) {
     say(`${runId} is attended_by: host — \`run auto\` is a loop over spawns and this run does not spawn.`);
     say(`  drive it a turn at a time: tldrx next --prepare ${runId}`);
     say(`  or hand the run back to the framework: tldrx run attend --none ${runId}`);
-    return { code: EXIT_USAGE, lines };
+    return leave(EXIT_USAGE, USAGE_HELD);
   }
 
   if (options.until !== undefined) {
     const known = flatten(resolution.store.run).map((entry) => entry.stage.id);
     if (!known.includes(options.until)) {
       say(`--until: '${options.until}' is not a stage of run ${runId} (${known.join(", ")})`);
-      return { code: EXIT_USAGE, lines };
+      return leave(EXIT_USAGE, USAGE_HELD);
     }
   }
 
   const log = EventLog.forRun(runDir);
-  const startedSpent = resolution.store.run.budget.spent_usd;
+  // The first attempt measures the baseline; every relaunch inherits it (see `LoopBaseline`).
+  if (baseline === null) {
+    baseline = { spentUsd: resolution.store.run.budget.spent_usd, tally: runTally(resolution.store.run) };
+  }
+  const startedSpent = baseline.spentUsd;
   // The task tally as this loop STARTED, so every "spent by this loop" figure
   // below can name what its own delta cannot see (defect 3 of the 2026-09-07
   // audit: two runs reported `$0.00 spent` after 30 and 9 stories).
-  const startedTally = runTally(resolution.store.run);
+  const startedTally = baseline.tally;
+  // Where this attempt's own events begin: a `budget.blocked` behind THIS exit is the one
+  // the relaunch verdict reads, not one an earlier attempt already stopped on.
+  const attemptStart = countEvents(log);
   /**
    * This loop's own spend as a tally — the dollars it metered, and the turns it
    * did not, both as DELTAS against the counts it inherited.
@@ -333,9 +602,16 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
      * Every exit from the loop body below goes through here: the last notification, the
      * timer stopped, every queued send awaited. A `run.finished` that the process exited
      * before delivering would be the one notification that is worse than none.
+     *
+     * `held` is this loop's own word that the stop is not one a relaunch moves (gh #252).
+     * Under `--until-done` the relaunch verdict is formed HERE, before the run-end
+     * notification: an attempt the supervisor is about to run again has not ended the
+     * run, so `run.failed` is not sent for it — the last attempt sends the one that counts.
      */
-    const finish = async (code: number, spentUsd: number): Promise<NextOutcome> => {
+    const finish = async (code: number, spentUsd: number, held: string | null = null): Promise<AttemptOutcome> => {
       if (heartbeat !== null) clearInterval(heartbeat);
+      const outcome = leave(code, held ?? budgetBlockedReason(readEvents(log).slice(attemptStart)));
+      if (outcome.verdict?.relaunch === true) return outcome;
       if (notifier !== null) {
         const run = RunStore.open(runDir).run;
         // The `ship:` record, when THIS loop wrote it (gh #253): read back off
@@ -359,7 +635,7 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
         );
         await notifier.drain();
       }
-      return { code, lines };
+      return outcome;
     };
 
     /**
@@ -544,7 +820,10 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
       if (options.maxUsd !== undefined && spentByLoop >= options.maxUsd) {
         say(`stopped: this loop has spent $${spentByLoop.toFixed(2)} of its `
           + `$${options.maxUsd.toFixed(2)} --max-usd ceiling`);
-        return await finish(EXIT_REFUSED, spentByLoop);
+        return await finish(
+          EXIT_REFUSED, spentByLoop,
+          `this loop's own --max-usd $${options.maxUsd.toFixed(2)} is spent — a relaunch inherits the figure, it does not reset it`,
+        );
       }
 
       const before = countEvents(log);
@@ -811,11 +1090,27 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
       if (fresh.length === 0 && `${after.run.cursor.phase}/${after.run.cursor.stage}` === cursorBefore) {
         say(`stopped: ${cursorBefore} made no progress and appended no event`);
         for (const line of outcome.lines) say(`  ${line}`);
-        return await finish(EXIT_USAGE, spentByLoop);
+        return await finish(
+          EXIT_USAGE, spentByLoop,
+          `${cursorBefore} made no progress and appended no event — the run's files disagree with themselves, and a relaunch reads the same files`,
+        );
       }
     }
     say(`stopped after ${String(MAX_ITERATIONS)} iterations — run \`tldrx run status ${runId}\``);
-    return await finish(EXIT_USAGE, round2(RunStore.open(runDir).run.budget.spent_usd - startedSpent));
+    return await finish(
+      EXIT_USAGE, round2(RunStore.open(runDir).run.budget.spent_usd - startedSpent),
+      `${String(MAX_ITERATIONS)} iterations is this loop's own bound, and a relaunch would be ${String(MAX_ITERATIONS)} more`,
+    );
+  } catch (error) {
+    // Unsupervised, a throw is what it always was: it reaches `fail()` in the CLI as a
+    // bare exit 1. Supervised, it is the exit gh #252 measured a person relaunching over
+    // most — the loop's own catch turns it into an attempt outcome, with the message as
+    // the last line so the relaunch verdict can tell one throw from the next. No
+    // `finish`: nothing is notified for it, exactly as before, and the `finally` below
+    // still stops the heartbeat and drains the queue.
+    if (supervision === undefined) throw error;
+    say(`run auto threw: ${error instanceof Error ? error.message : String(error)}`);
+    return leave(EXIT_USAGE);
   } finally {
     // Defense in depth. Every return above already goes through `finish`, which clears the
     // timer and drains the queue — but an unexpected throw would otherwise leave an interval

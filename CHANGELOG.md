@@ -68,6 +68,24 @@
   `questions.policy_changed` event, every refusal the gates verb has. The close's decided-tally
   counts `agent-default` apart from "not stated" — it IS stated — and names it only when it is
   non-zero, so every close that recorded none reads as it did.
+- **`tldrx run auto --until-done [<n>]` relaunches the loop in-process after an exit it can do
+  nothing else with — a stage failure past `--retry-failed`, a thrown error that used to reach
+  `fail()` as a bare 1, a refusal whose remedy is mechanical — at most `n` times (default 5),
+  writing `run.relaunched` with the exit it recovered from; never over exit 4 (a person's),
+  never over a `budget.blocked` (nothing in-process moves the ceiling, #232/#244), and never
+  twice over the same last line. Measured 2026-09-12: five hand relaunches and 18 h before a
+  story ran (#252).** The loop body is now `runAutoOnce` and `runAuto` a bounded supervisor over
+  it — in the same process, because the loop holds no state and re-reads run.yml every
+  iteration, which is exactly what makes "run it again" honest. The run id the first attempt
+  resolves is pinned for every relaunch, and so is its spend baseline: "spent by this loop" and
+  `--max-usd` describe the one command a person typed, and a relaunch that reset the loop's own
+  ceiling would have been a ceiling in name only (a test pins it: `[fail, ok, ok]` under
+  `--max-usd 0.80` stops at exit 2 after two spawns, not three). One derivation,
+  `relaunchVerdict`, decides both the relaunch and whether the run-end notification is held, so
+  an attempt that is relaunched sends no `run.failed` and `run.finished` / `run.failed` go out
+  once, from the last attempt. A throw is caught only under the flag — without it the loop is
+  byte-identical, pinned against `--until-done 0`, and `fail()` still gets its exit 1. The
+  epic-claim-at-cut half of the issue is #262 and lives in the Build executor, not here.
 
 - **Build entry proves the Definition of Done can run IN A WORKTREE before a developer is
   paid (#254).** Measured on a live workspace, 2026-09-12 at 0.16.1: **18 h from `run auto` to
