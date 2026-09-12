@@ -90,7 +90,7 @@ import {
   buildLedger, questionsBytesOf, renderContextWarning, renderLedger, renderRefusal,
   type ContextLedger,
 } from "./contextLedger.ts";
-import { DEVELOPER_RESULT_SCHEMA } from "./envelope.ts";
+import { DEVELOPER_RESULT_SCHEMA, usagePayload } from "./envelope.ts";
 import { bundlesToCheck, checkBundleResult } from "../build/resultCheck.ts";
 import { byteLength } from "../experts/expertKnowledge.ts";
 import { SEED_INDEX } from "../seed/renderSeed.ts";
@@ -713,6 +713,9 @@ async function runStage(
     // different stories and the file has to be able to tell them apart.
     stopped_by: agent.stoppedBy,
     ...tokenSplit(agent.usage.input_tokens, agent.usage.output_tokens),
+    // The other two counters the same `usage` reported (#222). Separately gated:
+    // see `cacheSplit` for why a cache read is not half of anything.
+    ...cacheSplit(agent.usage.cache_creation_input_tokens, agent.usage.cache_read_input_tokens),
     // The span `spawnAgent` timed around the process itself, with the basis that
     // says what it is (#184). This is the ONE path that can honestly claim to
     // have measured the sub-agent — `started_at`/`ended_at` above are the
@@ -742,12 +745,7 @@ async function runStage(
     // that cannot be derived (AGENTS.md §7).
     ...(agent.usageBasis === "result" ? {} : { usage_basis: agent.usageBasis }),
     ...(agent.unmeteredReason === null ? {} : { unmetered_reason: agent.unmeteredReason }),
-    usage: {
-      input_tokens: agent.usage.input_tokens,
-      output_tokens: agent.usage.output_tokens,
-      cache_creation_input_tokens: agent.usage.cache_creation_input_tokens,
-      cache_read_input_tokens: agent.usage.cache_read_input_tokens,
-    },
+    usage: usagePayload(agent.usage),
   }, agent.metered ? round2(agent.costUsd) : 0, stage.expert);
   store.save();
 
@@ -1531,7 +1529,8 @@ function recordExecutorTasks(
       started_at: options.at,
       ended_at: nowish(options),
       outputs: task.outputs,
-      ...tokenSplit(task.inputTokens, task.outputTokens),
+      ...tokenSplit(task.usage?.input_tokens, task.usage?.output_tokens),
+      ...cacheSplit(task.usage?.cache_creation_input_tokens, task.usage?.cache_read_input_tokens),
       // Only when the executor SPAWNED the turn and timed it. A host turn inside
       // a Build carries no span, and no span is written for it — the row says
       // "not recorded" rather than borrowing the invocation's clock, which is
@@ -1554,6 +1553,13 @@ function recordExecutorTasks(
         : { duration_ms: task.durationMs, duration_basis: "spawned" }),
       ...(metered ? {} : { mode: "in-session", metered: false }),
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
+      // gh #222: every Build and Watch turn appended an `agent.result` with no
+      // `usage` at all, so the four counters this executor had just read were
+      // gone from the event log as well as from the row — and `costView.ts`'s
+      // `toAttempt`, which prices a turn from the EVENT, read `{0,0,0,0}` for
+      // the whole of a Build. Absent for a HOST turn: nothing here watched it,
+      // and absent is "not recorded", never four zeros.
+      ...(task.usage === undefined ? {} : { usage: usagePayload(task.usage) }),
     }, metered ? round2(task.costUsd) : 0);
   }
 }
@@ -2758,6 +2764,9 @@ async function signGate(
     outputs: agent.envelope?.outputs ?? [],
     stopped_by: agent.stoppedBy,
     ...tokenSplit(agent.usage.input_tokens, agent.usage.output_tokens),
+    // The other two counters the same `usage` reported (#222). Separately gated:
+    // see `cacheSplit` for why a cache read is not half of anything.
+    ...cacheSplit(agent.usage.cache_creation_input_tokens, agent.usage.cache_read_input_tokens),
     duration_ms: agent.durationMs,
     duration_basis: "spawned",
   });
@@ -2782,12 +2791,7 @@ async function signGate(
     duration_ms: agent.durationMs,
     duration_basis: "spawned",
     ...(agent.metered ? {} : { metered: false }),
-    usage: {
-      input_tokens: agent.usage.input_tokens,
-      output_tokens: agent.usage.output_tokens,
-      cache_creation_input_tokens: agent.usage.cache_creation_input_tokens,
-      cache_read_input_tokens: agent.usage.cache_read_input_tokens,
-    },
+    usage: usagePayload(agent.usage),
     ...(agent.error === null ? {} : { error: agent.error }),
   }, agent.metered ? round2(agent.costUsd) : 0, GATE_SIGNER_ROLE);
   store.save();
@@ -3103,6 +3107,38 @@ export function tokenSplit(
   if (inputTokens === undefined || outputTokens === undefined) return {};
   if (inputTokens > 0 && outputTokens > 0) return { input_tokens: inputTokens, output_tokens: outputTokens };
   return {};
+}
+
+/**
+ * `cache_creation_input_tokens`/`cache_read_input_tokens` for a run.yml task row
+ * — each written on its OWN evidence, and never an invented zero (gh #222).
+ *
+ * Deliberately NOT `tokenSplit`'s both-or-nothing rule, and the difference is
+ * the design decision. `input_tokens` and `output_tokens` are two halves of one
+ * total — `turnTokens` ADDS them — so a half-known pair manufactures a sum that
+ * nobody measured. Nothing adds a cache write to a cache read: they are separate
+ * quantities at separate prices (1.25x and 0.1x an input token), and they are
+ * read by nothing that sums. Requiring both would therefore buy no honesty and
+ * would drop the single most important number on the row: every turn after the
+ * first of a cached conversation reports `cache_creation: 0` beside millions of
+ * cache reads — 4,911,750 of them on the turn that filed #222, against a row
+ * that said `input_tokens: 84`.
+ *
+ * The strictly-positive gate is `tokenSplit`'s, for `tokenSplit`'s reason:
+ * `envelope.ts`'s `toUsage`/`EMPTY_USAGE` collapses "the result document carried
+ * no usage object" into `0`, so a `0` HERE cannot be told apart from "not
+ * reported" and writing it would be a measurement nobody took. Absent is the
+ * honest record; the EVENT keeps the provider's frame verbatim, zeros and all.
+ */
+export function cacheSplit(
+  cacheCreationTokens: number | undefined, cacheReadTokens: number | undefined,
+): { cache_creation_input_tokens?: number; cache_read_input_tokens?: number } {
+  const reported = (value: number | undefined): boolean =>
+    value !== undefined && Number.isFinite(value) && value > 0;
+  return {
+    ...(reported(cacheCreationTokens) ? { cache_creation_input_tokens: cacheCreationTokens as number } : {}),
+    ...(reported(cacheReadTokens) ? { cache_read_input_tokens: cacheReadTokens as number } : {}),
+  };
 }
 
 /**

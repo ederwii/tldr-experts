@@ -161,8 +161,7 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
         error: outcome.error,
         outputs: outcome.envelope?.outputs ?? [],
         metered: outcome.metered,
-        inputTokens: outcome.usage.input_tokens,
-        outputTokens: outcome.usage.output_tokens,
+        usage: outcome.usage,
         // The watcher's sub-agent span, measured around its process (#184).
         durationMs: outcome.durationMs,
       });

@@ -54,7 +54,7 @@ import {
 } from "../dispatchNotes.ts";
 import { preparedBundles, reviewBundles } from "../../run/prepared.ts";
 import { spawnAgent, BASE_TOOLS, bashGrantsFor } from "../spawnAgent.ts";
-import { DEVELOPER_RESULT_SCHEMA } from "../envelope.ts";
+import { DEVELOPER_RESULT_SCHEMA, type AgentUsage } from "../envelope.ts";
 import {
   PendingError, PENDING_FILE, RAW_FILE, RESULT_FILE, readResult, readResultObject, resultPath,
   writeBundle, writeRaw,
@@ -1929,8 +1929,7 @@ class BuildSession {
       role: "developer",
       outputs: agent.envelope?.outputs ?? [],
       metered: agent.metered,
-      inputTokens: agent.usage.input_tokens,
-      outputTokens: agent.usage.output_tokens,
+      usage: agent.usage,
       // The developer sub-agent's own span, measured around its process (#184).
       // Every task row of a parallel build otherwise shares one `started_at`.
       durationMs: agent.durationMs,
@@ -2066,7 +2065,7 @@ class BuildSession {
       // through to `recordReview` exactly as it always did.
       const again = this.formatRetry(story, review, {
         costUsd: turn, sessionId: agent.sessionId, metered: agent.metered,
-        inputTokens: agent.usage.input_tokens, outputTokens: agent.usage.output_tokens,
+        usage: agent.usage,
         durationMs: agent.durationMs,
       });
       if (again !== null) {
@@ -2080,8 +2079,7 @@ class BuildSession {
         sessionId: agent.sessionId,
         error: agent.error,
         metered: agent.metered,
-        inputTokens: agent.usage.input_tokens,
-        outputTokens: agent.usage.output_tokens,
+        usage: agent.usage,
         durationMs: agent.durationMs,
         source: "agent",
         // MEASURED: these are the arguments this loop handed the provider CLI a
@@ -2110,9 +2108,8 @@ class BuildSession {
       /** False ⇒ the turn was billed to the host session, as in `recordReview`. */
       metered: boolean;
       tokens?: number;
-      /** The provider's own split for this turn, when it reported one. */
-      inputTokens?: number;
-      outputTokens?: number;
+      /** The provider's own accounting for this turn, when it reported any. */
+      usage?: AgentUsage;
       /** The spawn's own wall clock, when this turn was spawned rather than hosted. */
       durationMs?: number;
     },
@@ -2131,8 +2128,7 @@ class BuildSession {
       outputs: [],
       ...(task.metered ? {} : { metered: false }),
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
-      inputTokens: task.inputTokens,
-      outputTokens: task.outputTokens,
+      usage: task.usage,
       // Absent for a HOST review turn, which is the point: absence is "not
       // recorded", and only a span this process timed is written down.
       ...(task.durationMs === undefined ? {} : { durationMs: task.durationMs }),
@@ -2248,9 +2244,8 @@ class BuildSession {
       /** False ⇒ the turn was billed to the host session; `run.yml` records no dollars. */
       metered: boolean;
       tokens?: number;
-      /** The provider's own split for this turn, when it reported one. */
-      inputTokens?: number;
-      outputTokens?: number;
+      /** The provider's own accounting for this turn, when it reported any. */
+      usage?: AgentUsage;
       /** The spawn's own wall clock, when this turn was spawned rather than hosted. */
       durationMs?: number;
       source: "agent" | "host";
@@ -2276,8 +2271,7 @@ class BuildSession {
       outputs: [],
       ...(task.metered ? {} : { metered: false }),
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
-      inputTokens: task.inputTokens,
-      outputTokens: task.outputTokens,
+      usage: task.usage,
       ...(task.durationMs === undefined ? {} : { durationMs: task.durationMs }),
     });
     const id = story.planned.story.id;

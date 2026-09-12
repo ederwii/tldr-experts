@@ -18,12 +18,13 @@ export interface PhaseCostTurn {
   readonly metered?: boolean;
   readonly tokens?: number;
   /**
-   * The provider's measured split for this turn (#159), when the executor
+   * The provider's own accounting for this turn (#159), when the executor
    * spawned one and read its `AgentOutcome.usage`. Absent for a HOST turn —
-   * nothing here watched it.
+   * nothing here watched it. All four counters since #222; only the split is
+   * read here, because `turnTokens` is about what a turn DECLARED and a cache
+   * read is a different currency that nothing may add into that figure.
    */
-  readonly inputTokens?: number;
-  readonly outputTokens?: number;
+  readonly usage?: { readonly input_tokens: number; readonly output_tokens: number };
 }
 
 /**
@@ -209,7 +210,11 @@ export function phaseCostToDate<T extends PhaseCostTurn>(
     ...invocationTurns.map((task) => ({
       costUsd: task.metered === false ? null : round2(task.costUsd),
       metered: task.metered !== false,
-      tokens: turnTokens({ tokens: task.tokens, input_tokens: task.inputTokens, output_tokens: task.outputTokens }),
+      tokens: turnTokens({
+        tokens: task.tokens,
+        input_tokens: task.usage?.input_tokens,
+        output_tokens: task.usage?.output_tokens,
+      }),
     })),
   ];
   hostTokens += invocationTurns.reduce((sum, task) => sum + (task.tokens ?? 0), 0);

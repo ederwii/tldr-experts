@@ -93,6 +93,14 @@ export interface RunTask {
    */
   readonly input_tokens: number | null;
   readonly output_tokens: number | null;
+  /**
+   * The same turn's prompt-cache accounting (#222), when a positive counter
+   * reached the row. A THIRD currency again: a cache read is billed at 0.1x an
+   * input token, so these are transported beside the split and never folded into
+   * it — `budget/turnTokens.ts` reads the split and ignores these on purpose.
+   */
+  readonly cache_creation_input_tokens: number | null;
+  readonly cache_read_input_tokens: number | null;
 }
 
 export interface RunStage {
@@ -510,6 +518,8 @@ function toStage(input: unknown): RunStage | null {
         tokens: num(task.tokens),
         input_tokens: num(task.input_tokens),
         output_tokens: num(task.output_tokens),
+        cache_creation_input_tokens: num(task.cache_creation_input_tokens),
+        cache_read_input_tokens: num(task.cache_read_input_tokens),
       })),
   };
 }

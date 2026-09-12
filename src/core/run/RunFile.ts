@@ -245,6 +245,22 @@ export interface RunTask {
   readonly input_tokens?: number;
   readonly output_tokens?: number;
   /**
+   * Prompt-cache accounting for the same turn (gh #222). ADDITIVE, and gated
+   * SEPARATELY from the split above — see `runNext.ts`'s `cacheSplit`: a cache
+   * WRITE and a cache READ are never added to each other or to anything else
+   * (they are priced at 1.25x and 0.1x an input token), so each is written on
+   * its own evidence, and a turn that only read the cache records the read
+   * alone. Without them a row could say `input_tokens: 84, cost_usd: 1.98` for a
+   * turn the provider billed 4,911,750 cache reads for — a dollar figure with
+   * nothing on the row able to explain it.
+   *
+   * Absent means "no positive counter reached the ledger": every row written
+   * before these existed, and every turn whose result document reported none.
+   * Never a zero standing in for one.
+   */
+  readonly cache_creation_input_tokens?: number;
+  readonly cache_read_input_tokens?: number;
+  /**
    * True when `--commit` recorded this row AHEAD of refusing on an unreadable
    * `questions.md` (spec's ledger-before-refusal rule, gh #124) — the ONLY
    * case where the same `result.json` is expected to come back through
@@ -920,7 +936,10 @@ export function validateRunFile(input: unknown): ValidationResult {
           }
           // Additive: absence is fine, a wrong TYPE is not. A token count that is
           // not a non-negative finite number is a record that cannot be arithmetic.
-          for (const key of ["input_tokens", "output_tokens"] as const) {
+          for (const key of [
+            "input_tokens", "output_tokens",
+            "cache_creation_input_tokens", "cache_read_input_tokens",
+          ] as const) {
             const value = task[key];
             if (value === undefined) continue;
             if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {

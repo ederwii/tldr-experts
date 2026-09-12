@@ -4,6 +4,35 @@
 
 ### Fixed
 
+- **`run.yml` can finally explain its own `cost_usd`, and a Build turn stopped losing its
+  accounting entirely (#222).** A field audit across three workspaces measured a row reading
+  `input_tokens: 84, output_tokens: 37150, cost_usd: 1.98` for a 124 KB prompt — while the
+  provider's own result for that same turn reported `cache_read_input_tokens: 4911750`. 84 plus
+  37,150 tokens do not cost $1.98; the 4.9 M cache reads do, and nothing on the row could say
+  so. Across 101 surviving transcripts in one workspace, cache reads were 97.3% of the input
+  side and the ledger's column saw 0.002% of it. The counters were parsed on every turn
+  (`spawnAgent.ts`) and thrown away one function later. They are now RECORDED: additively on the
+  task row, and — the half the issue did not know about — on the `agent.result` of the executor
+  path, which emitted **no `usage` at all**, so every Build and Watch turn lost all four
+  counters rather than only the two cache ones (measured: `grep -c usage` over the four frozen
+  golden `*-events.txt` returned 0, 0, 0, 0 with ten `agent.result` lines among them, and
+  `costView.ts`'s `toAttempt` therefore priced a whole Build off `{0,0,0,0}`). Nothing is
+  displayed that was not displayed before: this is a fix to the RECORD, and the dashboard and
+  `tldrx cost` are byte-identical. Two decisions worth naming. The cache counters are gated one
+  at a time rather than under `tokenSplit`'s both-or-nothing rule, because `input`+`output` are
+  two halves of one total that `turnTokens` adds and the cache counters are separate quantities
+  at separate prices (1.25x and 0.1x an input token) that nothing adds — and the spec's own
+  measured pair of calls is the proof that a paired rule would be wrong: the second reported
+  `cache_creation: 0` beside 37,059 cache reads, the single most useful number on the row. And
+  `turnTokens` names them in its input type while deliberately reading neither, so the exclusion
+  is a decision on the record rather than a field nobody has noticed yet: it returns one
+  unlabelled `number`, and folding 4.9 M cache reads into an `input_tokens: 84` would make that
+  number a total in no currency at all. `ExecutorTask` now carries the provider's `usage` whole
+  instead of a hand-copied two-field subset, which is what let the cache counters be dropped at
+  that seam in the first place, and the event block has one spelling for all three emitters
+  (`envelope.ts`'s `usagePayload`). A row from before this exists reads absent, as it should:
+  nothing reconstructs a counter nobody wrote down.
+
 - **A gate about to sign itself is no longer sent as a Yes/No the owner cannot answer (#247).**
   #203 holds back the `gate.requested` notification while open questions are the only thing
   holding an `auto` gate, and released it when the answers landed if the gate was still

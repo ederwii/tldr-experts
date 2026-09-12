@@ -133,6 +133,16 @@ reportó. Son **la procedencia de la cifra en dólares que va al lado**, para qu
 después pueda cotejarla contra una tabla de precios en vez de creérsela. No son una segunda
 forma de ponerle precio al turno.
 
+Los contadores de caché del prompt caen al lado — `cache_creation_input_tokens` y
+`cache_read_input_tokens` — y son los que hacen que esa procedencia sirva. Una fila que dice
+`input_tokens: 84, cost_usd: 1.98` no está equivocada: es la astilla NO cacheada de un turno
+cuya entrada real fueron millones de tokens leídos del caché, y sin los contadores nada en la
+fila podía explicar los dólares que tiene al lado. Estos dos se escriben de a uno, no como
+par: una escritura de caché y una lectura de caché tienen precios distintos y ninguna es la
+mitad de la otra, así que el segundo turno de una conversación cacheada registra sus lecturas
+aunque no haya escrito nada. **Tres cantidades, tres precios** — los `tokens` declarados por
+el host, el desglose del proveedor y los contadores de caché — y nada los suma entre sí.
+
 `tldrx run estimate` tiene permiso de adivinar, y se etiqueta a sí mismo `ESTIMATE`. La
 mitad está medida: el prompt de la siguiente etapa, armado por el mismo código que la
 correría. La otra mitad es la mediana de la salida de los intentos pasados en esa etapa, y

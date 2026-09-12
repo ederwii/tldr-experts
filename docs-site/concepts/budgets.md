@@ -128,6 +128,16 @@ because a split with one side missing cannot be told apart from one nobody repor
 are **provenance for the dollar figure beside them**, so a later reader can check it against
 a price table instead of taking it on faith. They are not a second way to price the turn.
 
+The prompt-cache counters land beside them — `cache_creation_input_tokens` and
+`cache_read_input_tokens` — and they are what makes that provenance usable. A row reading
+`input_tokens: 84, cost_usd: 1.98` is not wrong; it is the UNCACHED sliver of a turn whose
+real input was millions of cached tokens, and without the counters nothing on the row could
+explain the dollars beside them. These two are gated one at a time, not as a pair: a cache
+write and a cache read are priced differently and neither is half of the other, so the second
+turn of a cached conversation records its cache reads even though it wrote nothing. **Three
+quantities, three prices** — a host's declared `tokens`, the provider's split, and the cache
+counters — and nothing adds them together.
+
 `tldrx run estimate` is allowed to guess and labels itself `ESTIMATE`. Half of it is
 measured — the next stage's prompt, assembled by the same code that would run it. The
 other half is the median output of past attempts at that stage, and with no history it

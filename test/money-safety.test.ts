@@ -25,7 +25,7 @@ import { MIN_AGENT_USD, floorOverrun } from "../src/core/facilitator/executors/w
 import {
   MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE, developerPriceDivisor,
 } from "../src/core/facilitator/executors/build.ts";
-import { tokenSplit } from "../src/core/facilitator/runNext.ts";
+import { cacheSplit, tokenSplit } from "../src/core/facilitator/runNext.ts";
 import { turnTokens } from "../src/core/budget/turnTokens.ts";
 import { validateRunFile, type RunTask } from "../src/core/run/RunFile.ts";
 import { emitRunYaml } from "../src/core/run/emitRunYaml.ts";
@@ -251,6 +251,44 @@ describe("tokenSplit — both-or-nothing, and never an invented number", () => {
   });
 });
 
+describe("cacheSplit — the two cache counters, each its own quantity (#222)", () => {
+  /**
+   * NOT `tokenSplit`'s both-or-nothing rule, and the difference is the whole
+   * design decision. `input_tokens`/`output_tokens` are two halves of ONE total
+   * (`turnTokens` adds them), so a half-known pair manufactures a sum. A cache
+   * WRITE and a cache READ are never added to each other and never to anything
+   * else — they are priced at 1.25x and 0.1x an input token respectively — so
+   * each is written on its own evidence. Requiring both would drop the single
+   * most important number on the row: every turn after the first of a cached
+   * conversation reports `cache_creation: 0` beside millions of cache reads,
+   * which is exactly the 4.9 M the issue measured.
+   */
+  test("a turn that only READ the cache records the read alone", () => {
+    expect(cacheSplit(0, 4_911_750)).toEqual({ cache_read_input_tokens: 4_911_750 });
+  });
+
+  test("a turn that only WROTE the cache records the write alone", () => {
+    expect(cacheSplit(155_912, 0)).toEqual({ cache_creation_input_tokens: 155_912 });
+  });
+
+  test("both positive writes both", () => {
+    expect(cacheSplit(155_912, 4_911_750)).toEqual({
+      cache_creation_input_tokens: 155_912,
+      cache_read_input_tokens: 4_911_750,
+    });
+  });
+
+  test("nothing reported is nothing written — a 0 here is `EMPTY_USAGE`, not a measurement", () => {
+    expect(cacheSplit(0, 0)).toEqual({});
+    expect(cacheSplit(undefined, undefined)).toEqual({});
+  });
+
+  test("a negative is absent, never clamped into a schema error", () => {
+    expect(cacheSplit(-1, -1)).toEqual({});
+    expect(cacheSplit(-1, 5)).toEqual({ cache_read_input_tokens: 5 });
+  });
+});
+
 describe("the provider's token split on a run.yml task row", () => {
   /**
    * The split is PARSED on every provider turn and used to reach the event log
@@ -356,6 +394,62 @@ describe("the provider's token split on a run.yml task row", () => {
     expect(report.ok).toBe(false);
     expect(report.issues.map((i) => i.message).join(" ")).toContain("expected a number >= 0");
   });
+
+  /**
+   * gh #222, measured in the field: a row reading `input_tokens: 84,
+   * output_tokens: 37150, cost_usd: 1.98` for a 124 KB prompt, while the
+   * provider's own result for the SAME turn reported `cache_read_input_tokens:
+   * 4911750`. 84 + 37,150 tokens do not cost $1.98; the 4.9 M cache reads do,
+   * and nothing on the row could say so.
+   */
+  test("a turn's cache reads round-trip through the emitter and the parser (#222)", () => {
+    const ws = workspace();
+    const store = newRun(ws.root);
+    mapFirstTask(store, (task) => ({
+      ...task,
+      input_tokens: 84,
+      output_tokens: 37_150,
+      cache_creation_input_tokens: 155_912,
+      cache_read_input_tokens: 4_911_750,
+    }));
+    store.save();
+
+    const text = readFileSync(join(store.runDir, "run.yml"), "utf8");
+    expect(text).toContain("cache_creation_input_tokens: 155912");
+    expect(text).toContain("cache_read_input_tokens: 4911750");
+
+    const reread = RunStore.open(store.runDir).run.phases[0]?.stages[0]?.tasks[0];
+    expect(reread?.cache_creation_input_tokens).toBe(155_912);
+    expect(reread?.cache_read_input_tokens).toBe(4_911_750);
+  });
+
+  test("a TASK row with no cache counters carries neither key, and still loads", () => {
+    const ws = workspace();
+    const store = newRun(ws.root);
+    // A real recorded row, so the emitter runs `task()` on it: a mutation as
+    // blunt as writing `cache_read_input_tokens: ${t.x ?? 0}` unconditionally
+    // has to be able to fail here.
+    mapFirstTask(store, (task) => ({ ...task, input_tokens: 100, output_tokens: 10 }));
+    store.save();
+    const text = readFileSync(join(store.runDir, "run.yml"), "utf8");
+    expect(text).toContain("input_tokens: 100");
+    expect(text).not.toContain("cache_creation_input_tokens");
+    expect(text).not.toContain("cache_read_input_tokens");
+    const reread = RunStore.open(store.runDir).run.phases[0]?.stages[0]?.tasks[0];
+    expect(reread?.cache_read_input_tokens).toBeUndefined();
+  });
+
+  test("a non-number cache counter is a schema error too", () => {
+    const ws = workspace();
+    const store = newRun(ws.root);
+    const doc = JSON.parse(JSON.stringify(store.run)) as Record<string, unknown>;
+    const task = firstTaskOf(doc);
+    if (task !== undefined) task.cache_read_input_tokens = "millions";
+    const report = validateRunFile(doc);
+    expect(report.ok).toBe(false);
+    expect(report.issues.map((i) => `${i.path} ${i.message}`).join(" "))
+      .toContain("cache_read_input_tokens expected a number >= 0");
+  });
 });
 
 describe("turnTokens — the scalar, else the provider's split, never a half (#159)", () => {
@@ -401,6 +495,24 @@ describe("turnTokens — the scalar, else the provider's split, never a half (#1
 
   test("a zero on the PROVIDER side is still absent — only the host scalar reads a bare 0", () => {
     expect(turnTokens({ tokens: undefined, input_tokens: 0, output_tokens: 5 })).toBeNull();
+  });
+
+  /**
+   * gh #222. The cache counters live on the row now, and they must NEVER be
+   * added here: a cache read is billed at 0.1x an input token and a cache write
+   * at 1.25x, so folding 4.9 M cache reads into a figure the dashboard prints
+   * beside `input_tokens` would state a total in no currency at all. They are
+   * recorded as their own quantity and read by nothing that sums.
+   */
+  test("cache counters on a row change nothing about what the turn DECLARED", () => {
+    expect(turnTokens({
+      input_tokens: 84, output_tokens: 37_150,
+      cache_creation_input_tokens: 155_912, cache_read_input_tokens: 4_911_750,
+    })).toBe(37_234);
+  });
+
+  test("cache counters alone are not a declaration — the split is still absent", () => {
+    expect(turnTokens({ cache_read_input_tokens: 4_911_750 })).toBeNull();
   });
 });
 

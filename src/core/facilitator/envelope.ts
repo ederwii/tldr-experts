@@ -92,6 +92,31 @@ export interface AgentUsage {
   readonly cache_read_input_tokens: number;
 }
 
+/**
+ * The four counters as ONE `agent.result` payload block, in ONE key order, for
+ * every emitter (gh #222).
+ *
+ * Three call sites write this block — the stage spawn, the gate signer, and
+ * (since #222) the executor path that had been dropping all four — and the event
+ * log is diffed by humans and frozen byte-for-byte by `test/build-golden.test.ts`,
+ * so "the same four keys in the same order" is a property that has to live in one
+ * place rather than be retyped correctly three times.
+ *
+ * The block is the provider's frame VERBATIM: a turn that read nothing from the
+ * cache says `0` here, because the event's job is to record what came back. The
+ * run.yml ROW is the surface where a `0` is refused instead of written
+ * (`runNext.ts`'s `tokenSplit`/`cacheSplit`) — there a zero is indistinguishable
+ * from "no usage object at all" and would be a number nobody measured.
+ */
+export function usagePayload(usage: AgentUsage): Record<string, number> {
+  return {
+    input_tokens: usage.input_tokens,
+    output_tokens: usage.output_tokens,
+    cache_creation_input_tokens: usage.cache_creation_input_tokens,
+    cache_read_input_tokens: usage.cache_read_input_tokens,
+  };
+}
+
 export function parseClaudeJson(text: string): ClaudeResultJson | null {
   const trimmed = text.trim();
   if (trimmed === "") return null;
