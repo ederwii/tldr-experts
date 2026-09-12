@@ -150,7 +150,15 @@
   — is the reason the three are git verbs and is unchanged. And a tool call refused for approval
   now BLOCKS the story at once with `` permission — `<command>` `` and why, one string reaching
   the story file, the handoff's `## Unknowns` and `gate.requested`'s `blocked_reason`, so the
-  next verb that is missing costs one attempt and says so instead of two and nothing. What the
+  next verb that is missing costs one attempt and says so instead of two and nothing. What the detector
+  reads is a structural field first — `tool_result_meta[].non_execution_kind: "user-rejected"`, measured
+  on `claude` 2.1.270, present on both refusals measured and absent on every command that ran, including
+  one the layer allowed and git itself failed — and the `requires approval` sentence only as a fallback,
+  and only on a `Bash` call whose result errored. That fence exists because pre-merge review measured the
+  unfenced version reading a plain `Read` of a file CONTAINING the phrase as a refusal: this CHANGELOG is
+  one of the files that contains it, and the block happens before the DoD and the commit, so a false
+  positive would discard real work and spend the attempt. A refusal carrying neither signal is a miss
+  taken on purpose, and the sentence half depends on prose the host writes and can change without notice. What the
   new grant covers, measured against `claude` 2.1.270 with `Bash(git rm *)` as the only rule:
   `git rm -r`, `git rm -rf` and `git rm -r -- .` all pass (a trailing `*` matches the whole
   argument tail, flags included); a path outside the repo is refused by GIT, not by the rule;

@@ -3400,6 +3400,20 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    is not spent — the same allowance would refuse the same command. Claude only: `codex exec` is bounded by
    `--sandbox` rather than a per-tool allowance and nothing measured has shown this result on its stream, so nothing is
    claimed about it (`permissionRefusal` returns null there rather than matching a shape nobody has seen).
+
+   **What the detector reads, and in which order.** FIRST a structural field, MEASURED on `claude` 2.1.270: a `user`
+   line whose call the permission layer refused carries a sibling
+   `tool_result_meta: [{ id, non_execution_kind: "user-rejected" }]` — present on both refusals measured that day
+   (the unlisted `git -C … rm`, and the `cd … && git rm` safety check whose sentence is completely different) and
+   ABSENT on every command that ran, including `git rm -- <path outside the repo>`, which the layer allowed and GIT
+   failed with `is_error: true`. So the field separates "the layer would not run it" from "it ran and failed", which no
+   sentence can. SECOND, as a fallback for a host that does not emit that field, the `requires approval` sentence —
+   and ONLY on a `Bash` call whose result is `is_error: true`. That fence is not decoration: pre-merge review measured
+   the unfenced version reading a plain `Read` of a file CONTAINING the phrase as a refusal, and this page is one of
+   the files that contains it. The dangerous direction here is the false POSITIVE — the block happens before the DoD
+   and before the commit, so a wrong reading discards work the developer really did and spends the attempt — so a
+   refusal carrying neither signal is a MISS this takes deliberately. The fallback depends on prose the HOST writes
+   and can change with no warning; the structural field is the one to trust.
 3. **The Definition of Done, re-run by the facilitator** in that worktree, through the same runner `dod-gate` uses. All
    commands must exit 0.
 

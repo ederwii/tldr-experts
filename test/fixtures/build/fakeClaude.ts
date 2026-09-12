@@ -92,6 +92,7 @@ if (role === "developer" && !failing && deniedCommand !== null) {
     name: "Bash",
     input: { command: deniedCommand },
     result: "This command requires approval to run",
+    rejected: true,
   });
 } else if (role === "developer" && !failing && gitRmPath !== null) {
   execFileSync("git", ["rm", "--", gitRmPath], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
