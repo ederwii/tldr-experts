@@ -195,8 +195,10 @@ export interface BudgetPhaseModel {
  * `budget.yml`, when it is on disk and parses — null otherwise, which is every
  * run that never had one and every run whose copy is damaged.
  *
- * Distinct from `RunModel.spentUsd`/`ceilingUsd`, which come from the run.yml
- * budget MIRROR. This is the file `tldrx budget show` reads, and it holds the
+ * `RunModel.spentUsd` still comes from the run.yml budget MIRROR;
+ * `RunModel.ceilingUsd` no longer does, since #236 — it reads this file and falls
+ * back to the mirror only when this one will not parse. This is the file
+ * `tldrx budget show` reads, and it holds the
  * things the mirror has never carried: the per-phase ceilings, `on_exceed`,
  * `warn_at_pct`, and — the reason #85 asked for it — the economy the numbers are
  * denominated in and the HOST-TOKEN allowance a host-attended run's turns are
@@ -1229,6 +1231,12 @@ export function toRunModel(
     updatedAt: doc.updated_at,
     cursor: doc.cursor === null ? null : `${doc.cursor.phase} / ${doc.cursor.stage}`,
     spentUsd: doc.spent_usd,
+    // budget.yml's, already resolved by `loadRun.ts` — NOT the run.yml mirror
+    // (#236). This page renders the headline `of $X` (`render.ts`) beside the
+    // budget panel's own `ceiling` row (`toBudgetModel`), and until #236 those
+    // came from two files and could contradict each other on one page. Resolving
+    // it again here would be a second copy of the same derivation (§7); the
+    // fallback to the mirror when budget.yml will not parse lives there too.
     ceilingUsd: doc.ceiling_usd,
     attendedBy: doc.attended_by,
     unmeteredTasks,

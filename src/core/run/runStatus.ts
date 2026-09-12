@@ -195,7 +195,16 @@ export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): Ru
     phases,
     budget: {
       spent_usd: run.budget.spent_usd,
-      ceiling_usd: run.budget.ceiling_usd,
+      // budget.yml, NOT run.yml's mirror (#236). The two figures below it are
+      // one arithmetic sentence, and the remainder has always come from
+      // budget.yml: taking the ceiling from the mirror let a hosted run that
+      // saved after an operator's `budget raise` print `$0.00 spent of $190.00
+      // ceiling ($200.00 left)` — more left than there is ceiling (measured
+      // live). budget.yml is the copy `RunStore.save()` re-reads from disk and
+      // the copy every money DECISION already reads; the mirror is the ceiling
+      // the run was created with. Same field `budget show` reads
+      // (`budgetView.ts`), so the two screens cannot disagree.
+      ceiling_usd: budget.ceiling_usd,
       remaining_usd: remaining(budget),
     },
     attempts: stageAttempts(runDir, run.cursor.phase, run.cursor.stage),

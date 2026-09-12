@@ -141,11 +141,34 @@ export function loadRunResult(root: string, id: string): RunLoad {
     }
   }
 
+  // The run ceiling comes from budget.yml, never from run.yml's mirror (#236).
+  //
+  // Resolved HERE because this is the one place both files are in hand, so every
+  // consumer of a `LoadedRun` — `tldrx replay` and the dashboard — gets the same
+  // figure from one derivation (§7). It is not an optional freshening: run.yml's
+  // budget block is HALF LIVE. `RunStore.rollUp` re-derives `spent_usd` on every
+  // save while carrying `ceiling_usd` through untouched, so the two keys sitting
+  // beside each other in one mapping describe two different moments, and a view
+  // that prints them as one sentence says things like `$12.00 spent of $10.00
+  // ceiling` — measured through the CLI on a run raised $10 → $30. "A replay
+  // narrates the document" does not rescue it: the document itself is mixed.
+  //
+  // The mirror is still the fallback, and only as one: a budget.yml that is
+  // missing or will not parse leaves the creation ceiling as the only figure on
+  // disk, and showing that beats showing nothing on a page whose whole job is to
+  // render a run whose files may be damaged. That fallback path can still pair a
+  // frozen ceiling with a live spend on a RAISED run — filed as #245 with the
+  // measurement, because what a degraded view should SAY is a judgement call and
+  // not a missing line here.
+  const withLiveCeiling = budget?.ceiling_usd === null || budget?.ceiling_usd === undefined
+    ? run
+    : { ...run, ceiling_usd: budget.ceiling_usd };
+
   const { events, error, skipped, mtime } = readEvents(dir);
   return {
     kind: "ok",
     run: {
-      root, dir, id, run, budget, events,
+      root, dir, id, run: withLiveCeiling, budget, events,
       eventsError: error, eventsSkipped: skipped, eventsMtime: mtime,
     },
   };

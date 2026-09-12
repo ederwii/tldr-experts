@@ -9,6 +9,7 @@ import { buildBudgetView, raiseCommand, renderBudget, shortBy } from "../src/cor
 import { describeRaise, raiseBudget, BudgetRaiseError } from "../src/core/budget/raiseBudget.ts";
 import { renderAttempts, stageAttempts } from "../src/core/run/attempts.ts";
 import { asRunFile, type RunFile } from "../src/core/run/RunFile.ts";
+import { RunStore } from "../src/core/run/RunStore.ts";
 import { makeRunWorkspace, type TempRunWorkspace } from "./fixtures/tempRunWorkspace.ts";
 import { helpFor } from "../src/cli/helpText.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
@@ -229,7 +230,15 @@ describe("the CLI", () => {
     expect(view.blocked).toBeNull();
   });
 
-  test("`budget raise` edits budget.yml and mirrors the ceiling into run.yml", async () => {
+  /**
+   * The mirror assertion this test used to carry is GONE, and deliberately (#236):
+   * `budget raise` wrote `run.yml`'s `budget.ceiling_usd` too, which read as
+   * keeping the mirror honest and was a second synchroniser for a figure that
+   * already had an owner — one any long-lived `RunStore` undid on its next save.
+   * run.yml's copy is the run's creation ceiling; the assertion below pins that it
+   * does NOT move, so a future "helpful" re-mirror reddens here.
+   */
+  test("`budget raise` edits budget.yml and leaves run.yml's creation mirror alone", async () => {
     const ws = fresh();
     await tldrx(ws.root, "run", "new", "leaderboard", "--budget", "10");
     const runDir = onlyRunDir(ws.root);
@@ -242,7 +251,8 @@ describe("the CLI", () => {
     const after = loadBudgetFile(runDir);
     const phase = (b: RunBudget): number => b.phases.find((p) => p.id === "01-what")?.ceiling_usd ?? 0;
     expect(phase(after)).toBeCloseTo(phase(before) + 2, 2);
-    expect(loadRunFile(runDir).budget.ceiling_usd).toBe(after.ceiling_usd);
+    expect(loadRunFile(runDir).budget.ceiling_usd).toBe(before.ceiling_usd);
+    expect(after.ceiling_usd).toBeGreaterThan(before.ceiling_usd);
     expect(validateRunBudget(parseYaml(readFileSync(join(runDir, "budget.yml"), "utf8"))).issues).toEqual([]);
   });
 
@@ -274,6 +284,40 @@ describe("the CLI", () => {
     const ws = fresh();
     expect((await tldrx(ws.root, "budget", "show")).code).toBe(EXIT_NOT_FOUND);
     expect((await tldrx(ws.root, "budget", "raise", "01-what", "1")).code).toBe(EXIT_NOT_FOUND);
+  });
+
+  /**
+   * gh #236, measured live: `budget  $0.00 spent of $190.00 ceiling ($200.00 left)`.
+   *
+   * The two figures come from different files — the ceiling used to be run.yml's
+   * mirror, the remainder is budget.yml's — and a long-lived `run auto` that saved
+   * after an operator's `budget raise` wrote the pre-raise ceiling back into the
+   * mirror. The invariant is on the SENTENCE, not on either file: a run cannot
+   * have more left than it has ceiling.
+   */
+  test("`run status` never shows more left than ceiling after a concurrent raise (#236)", async () => {
+    const ws = fresh();
+    await tldrx(ws.root, "run", "new", "leaderboard", "--budget", "10");
+    const runDir = onlyRunDir(ws.root);
+    const runId = loadRunFile(runDir).run;
+
+    // A hosted run holding the files as they were when it started.
+    const inFlight = RunStore.find(ws.root, runId)!;
+
+    const raised = await tldrx(ws.root, "budget", "raise", "01-what", "5.00");
+    expect(raised.code).toBe(EXIT_OK);
+
+    // ... and landing an ordinary save afterwards.
+    inFlight.mutate((run) => run);
+    inFlight.save();
+
+    const shown = await tldrx(ws.root, "run", "status");
+    expect(shown.code).toBe(EXIT_OK);
+    const line = shown.stdout.split("\n").find((l) => l.startsWith("budget")) ?? "";
+    const figures = /of \$([0-9.]+) ceiling \(\$([0-9.]+) left\)/.exec(line);
+    expect(figures).not.toBeNull();
+    expect(Number(figures![2])).toBeLessThanOrEqual(Number(figures![1]));
+    expect(Number(figures![1])).toBeCloseTo(15, 2);
   });
 
   test("`run status` shows per-attempt cost for the cursor stage", async () => {

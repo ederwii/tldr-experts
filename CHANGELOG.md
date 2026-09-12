@@ -30,6 +30,46 @@
   than no button. Every key is additive — a consumer that reads none of them gets exactly the
   payload it got before. Which buttons an adapter draws, and how, stays the adapter's.
 
+### Fixed
+
+- **`run status` could print more money left than it had ceiling, and the fix was to delete a
+  copy rather than synchronise one (#236).** Measured live on a hosted run after four raises:
+  `budget  $0.00 spent of $190.00 ceiling ($200.00 left)` — a sentence that cannot be true. The
+  two figures came from two files. The remainder has always been `budget.yml`'s; the ceiling was
+  `run.yml`'s `budget.ceiling_usd`, and the issue's own diagnosis — that `budget raise` never
+  wrote that key — was WRONG: it wrote it, on the line after it wrote `budget.yml`, and had since
+  the command's first commit. What defeated it was concurrency. `RunStore.save()` re-reads
+  budget.yml's ceilings from disk before every write, precisely because a store that loaded the
+  file an hour ago must not clobber a raise (`ceilingsToWrite`); run.yml's mirror had no such
+  re-read, so `rollUp` carried the pre-raise value straight back out. A long-lived `run auto`
+  saving after an operator's raise reverted the mirror, and the ceiling on screen fell below the
+  remainder beside it. Nothing decided against the stale figure — every refusal, gate and brake
+  already reads budget.yml (measured: all 47 `ceiling_usd` references read; the mirror's four
+  readers are all display), so this was a lie on a screen and not money spent wrongly, which is
+  the part the issue left open. The fix follows §7 rather than the obvious repair: two copies
+  that must both be fresh is the shape the house rule forbids, and writing both harder is exactly
+  what concurrency beat. So the live readers — `run status`, the open-runs table, `tldrx
+  statusline`'s validated path and the dashboard's headline — now read budget.yml, the same field
+  `budget show` reads, and `budget raise` no longer writes the mirror at all. run.yml's
+  `budget.ceiling_usd` and `per_agent_max_usd` are documented for what they always were: the
+  figures the run was CREATED with. That is not a `version: 1` meaning change — the keys are
+  required and still written, they held the creation ceiling before this change too, and what
+  moved is only that nothing reads them as the current one. The corollary is the part worth
+  writing down, because the first cut of this change got it wrong and a pre-merge review caught
+  it: run.yml's budget block is **half live**. `spent_usd` is re-derived by `rollUp` on every
+  save; `ceiling_usd` beside it is frozen. Printing the two as one sentence therefore reproduces
+  the same defect somewhere else, which is precisely what `tldrx replay` did — measured through
+  the CLI on a run raised $10 → $30 with $12 spent: `Status: **pending** · $12.00 spent of $10.00
+  ceiling`, no corruption and no concurrency needed, just a raise. "A replay narrates the
+  document" does not rescue it when the document itself is mixed. So the ceiling is resolved once
+  in `replay/loadRun.ts`, the single place both files are in hand, and `tldrx replay` and the
+  dashboard share that derivation. Swept for the same class: the only other frozen keys in
+  run.yml are `budget.per_agent_max_usd`, which no reader anywhere displays, and `created_with`,
+  which is frozen on purpose and paired with `last_written_by` to show exactly that difference.
+  One reader stays on the mirror by design: the statusline's tolerant fallback, which runs only
+  when run.yml fails validation, where a second tolerant parser for budget.yml would be a worse
+  trade than a figure on an already-degraded screen.
+
 ## 0.16.1 — 2026-09-12
 
 ### Added

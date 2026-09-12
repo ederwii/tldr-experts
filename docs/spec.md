@@ -195,7 +195,7 @@ stage at `cursor`, or `done` when every phase is terminal.
 | `scope` / `workflow` / `repos` | slug / slug / slug[] | y | Scope asked for; workflow file used; repos in play |
 | `status` | status enum | y | Derived, recomputed on every write |
 | `cursor` | {phase, stage, task\|null} | y | **Resume pointer**: the unit `next` acts on |
-| `budget.{ceiling_usd,spent_usd,per_agent_max_usd}` | number | y | Mirror of `budget.yml`; `spent_usd` = Σ task cost |
+| `budget.{ceiling_usd,spent_usd,per_agent_max_usd}` | number | y | Mirror of `budget.yml`. `spent_usd` = Σ task cost and is re-derived on every save; **`ceiling_usd` and `per_agent_max_usd` are the CREATION values and are never updated** — `budget raise` moves `budget.yml` only, and any save by a store that loaded the file earlier carries its own copy back over a raise. Required keys of the v1 shape, so they stay written; nothing reads them as the live ceiling (gh #236). **The block is therefore HALF LIVE**, and a view must never print `spent_usd` and `ceiling_usd` from it as one sentence — they describe two different moments. The live figures are `budget.yml`'s, which `run status`, `budget show`, `tldrx statusline`, the open-runs table, `tldrx replay` and the dashboard all read |
 | `phases[].id` | `^0[1-5]-[a-z]+$` | y | Phase folder name |
 | `stages[].id` / `.expert` / `.model` | slug / slug\|null / str | y | Stage file, expert folder, model pin |
 | `stages[].budget_usd` / `.cost_usd` / `.started_at` / `.ended_at` | number ≥0 / RFC3339\|null | y | Ceiling, actual from `total_cost_usd`, wall clock |
@@ -2571,8 +2571,10 @@ The budget-gate message names the **command** rather than the field it edits. Me
 retry was refused a second time. `tldrx budget raise` computes the shortfall and rounds it **up** to the cent.
 
 Statusline renderer uses `model.display_name`, `cost.total_cost_usd`, `context_window.used_percentage`,
-`worktree.branch`, `session_id` from the statusLine JSON (Appendix A) plus `run`, `cursor`, phase progress and
-`budget.ceiling_usd` from `run.yml`, and prints:
+`worktree.branch`, `session_id` from the statusLine JSON (Appendix A) plus `run`, `cursor` and phase progress from
+`run.yml` and `ceiling_usd` from `budget.yml` (gh #236 — run.yml's mirror is the creation value; the tolerant
+fallback that runs only when `run.yml` fails validation still scrapes the mirror, because a file that does not
+validate is already a degraded reading and budget.yml has no tolerant parser), and prints:
 `[tldrx] 260828-leaderboard · 02-HOW [▓▓░░░] 2/5 > contracts — architect | Sonnet ctx:16% $3.75/$25`
 Up to three markers sit between the stage count and the `>`, in this order and only when each is true: **`att`** (the
 run is `attended_by: host`), `machine:N` (gates a MACHINE closed — the facilitator's and an agent's alike) and

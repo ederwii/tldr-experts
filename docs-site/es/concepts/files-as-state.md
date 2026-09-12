@@ -48,6 +48,12 @@ budget: {ceiling_usd: 5.00, spent_usd: 0.00, per_agent_max_usd: 1.80}
 gates_policy: {what: human, how: auto, plan: human, build: auto, watch: human}
 ```
 
+Ese bloque `budget:` es un **espejo**, y lo único vivo ahí es `spent_usd`. `ceiling_usd` y
+`per_agent_max_usd` son las cifras con las que se creó el run: `tldrx budget raise` mueve
+`budget.yml`, que es donde vive el techo de verdad y lo que leen todas las pantallas y todos
+los rechazos. Las llaves siguen en `run.yml` porque un formato `version: 1` sólo crece — son
+el registro de cómo arrancó el run, no una segunda copia que haya que mantener al día.
+
 Las dos líneas de versión dicen qué tldrx escribió el archivo: la que creó el run y la que
 lo guardó por última vez. No son el `version: 1` de más arriba, que numera el FORMATO del
 archivo. El comportamiento cambia entre releases, así que un run que no puede nombrar la

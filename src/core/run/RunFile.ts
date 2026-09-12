@@ -331,6 +331,28 @@ export interface RunCursor {
   readonly task: string | null;
 }
 
+/**
+ * run.yml's budget block — a MIRROR, and only `spent_usd` is live (#236).
+ *
+ * `ceiling_usd` and `per_agent_max_usd` are the values the run was CREATED with
+ * (`newRun.ts`). Nothing updates them: `budget raise` writes budget.yml, and
+ * `RunStore.save()` carries whatever this store loaded straight back out
+ * (`rollUp`), so a raise that lands while a hosted run holds the file is reverted
+ * here on that run's next save. That is why they are documented rather than
+ * synchronised — the live ceiling lives in budget.yml, which `save()` re-reads
+ * from disk before every write (`ceilingsToWrite`) and which every money decision
+ * and every live display already reads. The keys stay because a `version: 1`
+ * format only grows (§7) and all three are REQUIRED by the v1 schema; what
+ * changed in #236 is not their meaning — they were always the creation figures —
+ * but that nothing reads them as if they were the current ones.
+ *
+ * `spent_usd` is the exception and IS re-derived on every save. So this block is
+ * HALF LIVE, and that is the trap: printing `spent_usd` and `ceiling_usd` from it
+ * as one sentence pairs two different moments, and produces `$12.00 spent of
+ * $10.00 ceiling` on any run whose ceiling was raised. A pre-merge review caught
+ * exactly that in `tldrx replay` while #236 was being fixed. Read the ceiling from
+ * budget.yml; for a read-only view, `replay/loadRun.ts` has already done it.
+ */
 export interface RunBudgetMirror {
   readonly ceiling_usd: number;
   readonly spent_usd: number;

@@ -148,8 +148,14 @@ function budgetRaise(argv: readonly string[]): number {
       return EXIT_GATE_REFUSED;
     }
 
+    // budget.yml ONLY. Until #236 this also wrote `outcome.runCeilingAfter` into
+    // run.yml's `budget.ceiling_usd`, which looked like keeping the mirror honest
+    // and was really a second synchroniser for a figure that already had an owner
+    // — and concurrency defeated it: any long-lived `RunStore` saving afterwards
+    // carried its own loaded copy back over the raise (`RunStore.rollUp`), and
+    // `run status` then read a ceiling smaller than its own remainder. §7 says one
+    // implementation per derivation; the answer is one COPY, not a better sync.
     store.mutateBudget(() => outcome.budget);
-    store.mutate((run) => ({ ...run, budget: { ...run.budget, ceiling_usd: outcome.runCeilingAfter } }));
 
     // Before/after, who, and why — appended BEFORE the save, so a raise that
     // fails validation leaves no event claiming it happened. Until 2026-08-29

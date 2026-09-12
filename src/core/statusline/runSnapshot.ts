@@ -108,7 +108,10 @@ function fromStore(root: string): RunSnapshot | null {
     expert: entry?.stage.expert ?? null,
     done: stages.filter((stage) => isTerminal(stage.status)).length,
     total: stages.length,
-    ceilingUsd: run.budget.ceiling_usd,
+    // budget.yml, not run.yml's mirror (#236). The tolerant path below cannot
+    // do this — see `readBudgetMirror` — but this one holds a validated store
+    // with budget.yml already loaded, so there is no reason to quote the stale copy.
+    ceilingUsd: store.budget.ceiling_usd,
     spentUsd: run.budget.spent_usd,
     openCount: open.length,
     machineGates: stages.filter((s) => s.gate.status === "approved" && closedByMachine(s.gate)).length,
@@ -154,7 +157,18 @@ function fromTolerantRead(root: string): RunSnapshot | null {
   };
 }
 
-/** `run.yml`'s budget mirror, scraped without schema validation. */
+/**
+ * `run.yml`'s budget mirror, scraped without schema validation.
+ *
+ * The one reader left on the mirror after #236, deliberately. This path runs ONLY
+ * when run.yml failed validation — a reading that is already degraded, and one
+ * where `machineGates` and `staleStages` honestly report 0 for "cannot see". The
+ * ceiling here is therefore the run's CREATION figure and may be behind a
+ * `budget raise`. Reading budget.yml instead would mean a second tolerant parser
+ * for a second file, and `numberAfter` would have to learn the difference between
+ * the run ceiling and the first phase's — more machinery on the path that exists
+ * because machinery already failed.
+ */
 function readBudgetMirror(runDir: string): { ceiling_usd: number; spent_usd: number } {
   const path = join(runDir, "run.yml");
   if (!existsSync(path)) return { ceiling_usd: 0, spent_usd: 0 };

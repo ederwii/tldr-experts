@@ -309,6 +309,11 @@ export function toRunDocument(input: unknown, fallbackId: string): RunDocument |
     cursor: cursor === null
       ? null
       : { phase: str(cursor.phase), stage: str(cursor.stage), task: nullableStr(cursor.task) },
+    // run.yml's mirror, which is the FALLBACK and not the answer: `loadRun.ts`
+    // overwrites this field with budget.yml's ceiling whenever that file parses
+    // (#236). This module only projects one already-parsed document and has no
+    // second file to consult, which is exactly why the resolution lives there.
+    // Do not read this value straight out of `toRunDocument` and call it live.
     ceiling_usd: num(budget?.ceiling_usd) ?? num(doc.budget_usd),
     spent_usd: num(budget?.spent_usd),
     created_with: recordedVersion(nullableStr(doc.created_with) ?? undefined),
