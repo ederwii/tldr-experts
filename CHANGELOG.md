@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.18.0 — unreleased
+
+### Fixed
+
+- **A gate about to sign itself is no longer sent as a Yes/No the owner cannot answer (#247).**
+  #203 holds back the `gate.requested` notification while open questions are the only thing
+  holding an `auto` gate, and released it when the answers landed if the gate was still
+  `pending`. Under `--wait-gates` that test is true by construction: the only thing that
+  self-closes an auto gate mid-wait runs one iteration later, inside the gate wait, after the
+  loop has already decided. Measured 2026-09-12 on two live workspaces, 3 of 3 questioned
+  stages: the Yes/No went out 600 ms after the last answer and the gate signed itself on the
+  very next poll — so the one tap the message invited ran `approve` on an already-approved gate,
+  and because the in-wait `gate.approved`/`stage.done` fall between two notify windows nothing
+  ever arrived to settle it: the bridge kept the prompt open and re-mentioned its owner every
+  escalate tick for two hours. *"esa pregunta está de más, es confusa."* The release now asks
+  the gate's CONDITIONS rather than its status — the same `reevaluateAutoGate` the poll uses,
+  extracted so the poll and the release read one measurement and neither can form a second
+  opinion (§7) — together with the policy that will act on them. Every condition holding and a
+  `--wait-gates` to sign it means there is no decision to take: nothing is sent, and the run
+  says which stage and why on stdout rather than going quiet. A gate something else still holds
+  is notified exactly as #203 promised, and now worded from that one reading: the re-measured
+  verdict supplies the summary's `held by:` sentence and the open questions are read in the same
+  breath, so a payload can no longer name four open questions beside `holding: "none"` — which
+  is what the adapter was handed, measured, and why it drew the default two buttons. #239 fixed
+  WHICH command a questions-held gate offers; this is WHEN, and whether, it is offered at all.
+
 ## 0.17.0 — 2026-09-12
 
 ### Added

@@ -153,6 +153,14 @@ compuerta `auto` retenida únicamente por preguntas abiertas:
   la misma puerta `tldrx approve` y sigue a la etapa siguiente. Así que la secuencia que vas a
   ver de verdad es: las preguntas, tus respuestas desde el teléfono, y después `stage.done` de
   la SIGUIENTE etapa. Ningún toque de aprobar.
+- **Lo que libera la compuerta retenida son sus condiciones, no su estado.** Con
+  `--wait-answers` también activo, tus respuestas llegan mientras el bucle las está esperando —
+  y lo que el bucle se pregunta entonces no es "¿la compuerta sigue pendiente?" (sigue, por una
+  consulta más) sino "¿queda algo que la retenga, y hay un `--wait-gates` que la va a firmar?".
+  Si la compuerta está por cerrarse sola, no se manda nada y el run imprime `not asking for a
+  signature on <stage> — every auto-gate condition holds and --wait-gates signs it on the next
+  poll`. Si algo SÍ la sigue reteniendo, el aviso sale redactado desde esa misma medición, así
+  que su resumen y su campo `holding` describen un único instante.
 
 Si lo que retiene la compuerta es OTRA cosa — una cita sin verificar, una etapa por encima de
 su techo — salen los dos avisos, primero las preguntas, y el resumen de la compuerta nombra la

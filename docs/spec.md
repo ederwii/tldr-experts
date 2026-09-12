@@ -2201,13 +2201,27 @@ about what was asked.
 **Order: the questions come first, and the gate may not be sent at all (#203).** When an
 `auto` gate's ONLY failing condition is `questions`, the gate is downstream of the questions
 rather than a second ask — so `question.raised` is delivered first and `gate.requested`'s
-notification is HELD BACK. It is sent only if the gate is still pending once the questions are
-settled, or when `--wait-gates` lapses; if the loop closes the gate itself (§5, "An auto gate
-closes itself"), it is never sent. **The EVENT is appended either way** — this defers a
-notification, never an audit record. When any other condition is also failing, both go out,
-questions first. Measured 2026-09-07: an owner got "waiting at a auto gate that did not close
-by itself", with no reason and before the four question cards that were the only thing holding
-it, and answered the questions to find nothing had closed.
+notification is HELD BACK. It is sent only when the questions are settled and the gate's own
+CONDITIONS, re-measured at that moment, still hold it — a second failing condition, or no
+`--wait-gates` for the loop to close it with — and when `--wait-gates` lapses; if the loop
+closes the gate itself (§5, "An auto gate closes itself"), it is never sent. **The EVENT is
+appended either way** — this defers a notification, never an audit record. When any other
+condition is also failing, both go out, questions first. Measured 2026-09-07: an owner got
+"waiting at a auto gate that did not close by itself", with no reason and before the four
+question cards that were the only thing holding it, and answered the questions to find nothing
+had closed.
+
+**The release is decided by conditions, never by status (#247).** The test used to be "is the
+gate still pending", and under `--wait-gates` that is true by construction at the instant the
+answers land — the loop re-measures the gate one iteration later. Measured 2026-09-12, 3 of 3
+questioned stages across two workspaces: the Yes/No went out 600 ms before the loop signed that
+same gate itself, so the one tap it invited ran `approve` on an already-approved gate and the
+bridge re-mentioned its owner about it every escalate tick for two hours. A gate that is about
+to sign itself is not a decision anybody has to take, and a run that drops the notification
+says so on stdout rather than going quiet (§7, absent-with-reason). A gate that IS still held
+is notified from ONE reading: the re-measured verdict supplies the `held_by` sentence in the
+summary and `openQuestions` is read in the same breath, so a payload can no longer name four
+open questions beside `holding: "none"`.
 
 **A heartbeat over a parked run REMINDS.** When `waiting_on` is non-empty the `status` payload
 names the open questions and its `command` is the literal `tldrx answer` line, not

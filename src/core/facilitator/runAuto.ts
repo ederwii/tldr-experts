@@ -46,7 +46,7 @@ import type { TldrxEvent } from "../events/Event.ts";
 import { ambiguousRunLines } from "../run/openRuns.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { PROJECT_WORK_DIR } from "../paths.ts";
-import { AUTO_GATE_ACTOR, reevaluateAutoGate } from "../run/autoGate.ts";
+import { AUTO_GATE_ACTOR, reevaluateAutoGate, type AutoGateVerdict } from "../run/autoGate.ts";
 import { flatten, isAttendedByHost, isFinished, type RunFile } from "../run/RunFile.ts";
 import { gateStories, outcomeLine } from "../run/runOutcome.ts";
 import { runTally } from "../budget/budgetView.ts";
@@ -442,15 +442,25 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
         // phase comes from the event, so a Plan gate (where every story is `todo`
         // by design) is never described as having delivered nothing.
         const stories = gateStories(runDir, requestedPhase);
-        const send = async (): Promise<void> => {
+        const send = async (heldNow: readonly string[] | null = null): Promise<void> => {
           if (notifier === null) return;
           // The open questions are read HERE, inside the send, not at the moment the
           // gate fired: this closure may be deferred until the questions clear (see
           // `deferredGate` below), and a command chosen from a stale reading would send
           // an owner to `answer` a question he has already answered. `stillBlocking` is
           // the same one predicate `--wait-answers` polls (gh #239).
+          //
+          // `heldNow` is the other half of that reading (gh #247). A gate that fires and
+          // is notified in the same breath has nothing to correct, so it passes null and
+          // keeps the event's own words. A DEFERRED one is released minutes later, after
+          // the thing that held it stopped holding it — and `held` off the event then
+          // says "questions=4 open" beside an `openQuestions` of `[]`, which is one
+          // payload making two claims about one instant. Measured on the owner's phone,
+          // 2026-09-12: `holding: "none"` under a summary naming four open questions. The
+          // release site re-measures the SAME verdict `next` recorded and hands its `why`
+          // through here, so both halves are read at one moment.
           await notifier.send(
-            gateNotification(notifyCtx(), cost, policy, gateHeld(fresh), stories, stillBlocking(runDir)),
+            gateNotification(notifyCtx(), cost, policy, heldNow ?? gateHeld(fresh), stories, stillBlocking(runDir)),
             stageIdOf(),
           );
         };
@@ -556,10 +566,10 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
        * is still true. Idempotent: every call after the first is a no-op, so the
        * three places that must not miss it can each say so without coordinating.
        */
-      const flushGate = async (): Promise<void> => {
+      const flushGate = async (heldNow: readonly string[] | null = null): Promise<void> => {
         const send = deferredGate;
         deferredGate = null;
-        if (send !== null) await send();
+        if (send !== null) await send(heldNow);
       };
 
       // Any outcome that is not a stage failure ends whatever streak was running — a
@@ -596,10 +606,46 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
           if (card !== null && options.waitAnswersMs !== undefined) {
             const waited = await waitForAnswers(runDir, options.waitAnswersMs);
             if (waited.answered) {
-              // The questions are settled. If the gate they were holding is STILL
-              // pending — a second condition, or no `--wait-gates` to close it — the
-              // notification that was deferred is now the actionable one (gh #203).
-              if (pendingGate(runDir) !== null) await flushGate();
+              // The questions are settled, and this is where the notification deferred by
+              // #203 is either released or dropped.
+              //
+              // It used to ask whether the gate was STILL pending. That question is
+              // answered `yes` by construction here (gh #247): the only thing that
+              // self-closes an `auto` gate mid-wait is `selfCloseAutoGate`, which runs
+              // inside `waitForGate` on the NEXT iteration, after the `continue` below. So
+              // every questions-only gate flushed a Yes/No about 600 ms before the loop
+              // signed that same gate itself — measured 3 of 3 questioned stages across two
+              // live workspaces, 2026-09-12 — and the prompt then had nothing behind it: the
+              // one tap it invited ran `approve` on an already-approved gate, and the
+              // bridge kept re-mentioning an owner about it for two hours.
+              //
+              // What decides is the gate's CONDITIONS, re-measured now through the same
+              // `reevaluateAutoGate` the poll uses, plus the policy that will act on them.
+              // An `auto` gate whose seven conditions all hold, with a `--wait-gates` that
+              // will sign it, is not a decision anybody has to take — nothing is sent, and
+              // the run says so on stdout rather than leaving a silence (§7). Anything else
+              // — a second condition still holding, or no `--wait-gates` to close it — is
+              // the actionable notification #203 promised, worded from THIS measurement.
+              const parked = pendingGate(runDir);
+              if (parked !== null) {
+                const verdict = await autoGateVerdict(runDir, parked.stageId, {
+                  root: options.root,
+                  policy: parked.policy,
+                  at: options.at,
+                });
+                if (verdict !== null && verdict.ok && options.waitGatesMs !== undefined) {
+                  deferredGate = null;
+                  say(`not asking for a signature on ${parked.stage} — every auto-gate condition `
+                    + "holds and --wait-gates signs it on the next poll");
+                } else {
+                  // `why` is empty on a verdict that passed and sentences on one that did
+                  // not, which is exactly what `gateHeld` carries — one shape, two readings
+                  // of the one derivation. Null only when no verdict could be measured at
+                  // all, and then the event's own words stand rather than an invented
+                  // silence.
+                  await flushGate(verdict === null ? null : verdict.why.trim() === "" ? [] : [verdict.why]);
+                }
+              }
               say(`waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — `
                 + "every blocking question is answered, resuming");
               continue;
@@ -887,18 +933,45 @@ interface GateWait {
  * flag), and a gate that re-measured lazily would leave an owner's answered question
  * sitting behind a closed condition for however long that knob happened to be.
  */
-async function selfCloseAutoGate(runDir: string, stageId: string, gate: GateWait): Promise<boolean> {
-  if (gate.policy !== "auto") return false;
+/**
+ * The seven conditions of a PENDING gate, re-measured off disk — and nothing signed.
+ *
+ * The reading half of `selfCloseAutoGate`, extracted because two callers need the same
+ * answer and neither may form its own (§7): the poll asks it to decide whether to sign,
+ * and the release of a deferred notification (gh #247) asks it to decide whether there is
+ * still anything to ask a person about. One measurement, two readers — the alternative is
+ * a loop that drops a notification because it believes a gate will close and then does not
+ * close it.
+ *
+ * Null — never a verdict — for a `human` or `agent` policy and for a run this cannot read.
+ * A policy is a statement about WHO may close a gate, so there is no auto verdict to have;
+ * a caller that gets null keeps whatever the run's own log already said.
+ */
+async function autoGateVerdict(
+  runDir: string,
+  stageId: string,
+  gate: GateWait,
+): Promise<AutoGateVerdict | null> {
+  if (gate.policy !== "auto") return null;
   try {
     const store = RunStore.open(runDir);
-    const verdict = await reevaluateAutoGate({
+    return await reevaluateAutoGate({
       root: gate.root,
       runDir: store.runDir,
       run: store.run,
       budget: store.budget,
       stageId,
     });
-    if (verdict === null || !verdict.ok) return false;
+  } catch {
+    return null;
+  }
+}
+
+async function selfCloseAutoGate(runDir: string, stageId: string, gate: GateWait): Promise<boolean> {
+  const verdict = await autoGateVerdict(runDir, stageId, gate);
+  if (verdict === null || !verdict.ok) return false;
+  try {
+    const store = RunStore.open(runDir);
     const approved = await approve(store, {
       root: gate.root,
       actor: AUTO_GATE_ACTOR,
@@ -1094,8 +1167,15 @@ interface FreshNotified {
    * `gate.timeout` then says nothing about cost rather than saying $0.00.
    */
   readonly costUsd: number | null;
-  /** The gate notification held back because the questions come first (gh #203). */
-  readonly deferredGate: (() => Promise<void>) | null;
+  /**
+   * The gate notification held back because the questions come first (gh #203).
+   *
+   * It takes what is holding the gate AT RELEASE TIME, or null to keep the words the
+   * `gate.requested` event carried: a deferred notification is released after the world
+   * moved, and a summary quoting the old reading beside a `holding` read from the new one
+   * is one payload contradicting itself (gh #247).
+   */
+  readonly deferredGate: ((heldNow?: readonly string[] | null) => Promise<void>) | null;
 }
 
 /**

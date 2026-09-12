@@ -149,6 +149,14 @@ gate held only by open questions:
   same `tldrx approve` door and carries on to the next stage. So the sequence you actually
   see is: the questions, your answers from your phone, and then `stage.done` for the NEXT
   stage. No approve tap at all.
+- **What releases the held-back gate is its conditions, not its status.** With `--wait-answers`
+  on as well, your answers land while the loop is polling for them — and what the loop asks
+  next is not "is the gate still pending" (it is, for one more poll) but "does anything still
+  hold it, and is there a `--wait-gates` that will sign it". If the gate is about to close
+  itself, nothing is sent and the run prints `not asking for a signature on <stage> — every
+  auto-gate condition holds and --wait-gates signs it on the next poll`. If something DOES
+  still hold it, the notification goes out worded from that same re-measurement, so its
+  summary and its `holding` field describe one instant.
 
 If something OTHER than the questions is holding the gate — an unverified citation, a stage
 over its ceiling — both notifications go out, questions first, and the gate's summary names
