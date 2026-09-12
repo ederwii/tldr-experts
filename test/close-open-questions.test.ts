@@ -238,11 +238,11 @@ describe("#169 — the close says how many of this run's decisions name a decide
       liveFact({ id: "F003", source: src("R") }),                 // nothing said
       liveFact({ id: "F004", source: src("OTHER-RUN") }),         // another run's
     ];
-    expect(decidedTally(facts, "R")).toEqual({ owner: 1, driver: 1, notStated: 1 });
+    expect(decidedTally(facts, "R")).toEqual({ owner: 1, driver: 1, agentDefault: 0, notStated: 1 });
   });
 
   test("the sentence names all three and claims no timeout mechanism", () => {
-    const said = describeDecidedTally({ owner: 1, driver: 2, notStated: 3 }) ?? "";
+    const said = describeDecidedTally({ owner: 1, driver: 2, agentDefault: 0, notStated: 3 }) ?? "";
     expect(said).toContain("6");
     expect(said).toContain("3");
     // It must not imply a default fired: nothing ages a question into an answer
@@ -252,13 +252,13 @@ describe("#169 — the close says how many of this run's decisions name a decide
   });
 
   test("a run that recorded no facts says nothing rather than a confident zero", () => {
-    expect(describeDecidedTally({ owner: 0, driver: 0, notStated: 0 })).toBeNull();
+    expect(describeDecidedTally({ owner: 0, driver: 0, agentDefault: 0, notStated: 0 })).toBeNull();
   });
 
   test("closing a run carries the tally, and changes no exit code", async () => {
     const ws = workspace();
     seedFact(ws, { id: "F001", run: ws.runId, decided_by: "owner" });
     const closed = await close(ws);
-    expect(closed.decided).toEqual({ owner: 1, driver: 0, notStated: 0 });
+    expect(closed.decided).toEqual({ owner: 1, driver: 0, agentDefault: 0, notStated: 0 });
   });
 });

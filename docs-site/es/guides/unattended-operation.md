@@ -268,6 +268,7 @@ así que un `switch` sobre `kind` con un `default` es un adaptador completo.
 |---|---|---|---|
 | `question.raised` | el bucle se detuvo en una pregunta abierta | la línea `tldrx answer` de la primera pregunta | `questions[]` — `id`, `title`, `why_asked`, `options[]` como `{letter, text}`, `recommendation` (`option`, `why`, `src`) o `null`, `answer_command` |
 | `question.timeout` | se venció `--wait-answers` y el bucle está por salir con `4` | la misma línea de respuesta | los mismos `questions[]`, más `waited_ms` |
+| `question.auto_answered` | el bucle tomó la opción `Recommended:` de la propia pregunta bajo `questions_policy: recommended` — no pide nada | la línea `tldrx answer … --supersede` que la revierte | `question` (`id`, `title`, `file`), `pick` (`letter`, `text`), `alternatives[]`, `why`, `fact`, `decided_by: agent-default`, `supersede_command` |
 | `gate.requested` | una etapa terminó y una persona tiene que firmarla — **se difiere, y puede que nunca se mande, cuando una compuerta `auto` está retenida solo por preguntas abiertas** | la línea que LIBERA la compuerta: `tldrx answer <id>` si hay preguntas abiertas, `tldrx run status <id>` si quedan historias sin terminar, `tldrx approve --run <id>` cuando no queda nada mecánico pendiente | `cost_usd`, `approve_command`, `reject_command`, `gate_policy`, `holding` (`questions` \| `stories` \| `none`), y uno de `held_by` (las condiciones que fallaron en una compuerta `auto`) / `signer_held` (las razones del firmante `agent`) — ausente cuando nadie miró. Más `continue_command` + `continue_note`, juntos o ninguno, solo donde la compuerta puede nombrar qué hay que cambiar |
 | `gate.timeout` | se venció `--wait-gates` y el bucle está por salir con `4` | la misma línea de aprobación | `approve_command`, `reject_command`, `gate_policy`, `waited_ms`, y `cost_usd` solo cuando este bucle es el que vio levantarse la compuerta |
 | `stage.done` | una etapa terminó y el bucle siguió | `null` — el bucle ya está corriendo la siguiente etapa | `cost_usd` |
@@ -339,8 +340,20 @@ process.stdin.on("end", async () => {
 Después `chmod +x bin/notify-owner` y decláralo. El ciclo se cierra cuando una persona lee
 ese mensaje y corre el comando que traía — `tldrx answer Q1 "B — rankings are global" --run
 260907-checkout`, desde una laptop, desde un teléfono por SSH, o desde un botón en tu propio
-script que lo ejecute en su nombre. Es un `tldrx answer` común y corriente; el bucle nunca
-responde su propia pregunta.
+script que lo ejecute en su nombre. Es un `tldrx answer` común y corriente; bajo la
+`questions_policy` por defecto el bucle nunca responde su propia pregunta.
+
+La excepción es opcional, por etapa, y queda registrada. Medido en dos runs sin supervisión
+(2026-09-12): 9 de las 10 preguntas por las que se detuvo al dueño traían una línea
+`Recommended:` escrita por el agente que las hizo. `run new --questions none` (todas las etapas
+`recommended`), o `--questions plan,build` (esas dos siguen siendo humanas), o después
+`tldrx run questions set what:recommended --note "…"`, deja que el bucle tome esa recomendación
+por su cuenta en cuanto la etapa se detiene: pasa por el mismo camino de `tldrx answer`, el hecho
+lleva `decided_by: agent-default` con `alternatives` (las opciones no tomadas) y
+`recommended_why`, y recibes un `question.auto_answered` por respuesta — sin `question.raised`
+para ella — cuyo `command` es la línea `--supersede` que la revierte. Una pregunta sin línea
+`Recommended:`, o marcada `irreversible: true` / `money: true` en sus metadatos, detiene el bucle
+por ti exactamente como antes.
 
 ## Ponerlo a correr
 

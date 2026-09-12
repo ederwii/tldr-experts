@@ -34,11 +34,17 @@ export interface FactSource {
    * as the owner's decision, and a fact is exactly the artefact that gets cited
    * later — so a row that cannot say which of the two it was says nothing rather
    * than implying the stronger one. Absent means "not stated", never "owner".
+   *
+   * `agent-default` (gh #251) is the THIRD value: the loop took the asker's own
+   * `Recommended:` option under `questions_policy: recommended`. A row that said
+   * `owner` there would be an audit record lying in the dangerous direction (§7);
+   * a row that said nothing would hide that a machine decided. Additive: every row
+   * written before the value existed keeps validating and keeps its meaning.
    */
-  readonly decided_by?: "owner" | "driver";
+  readonly decided_by?: FactDecider;
 }
 
-export const FACT_DECIDERS = ["owner", "driver"] as const;
+export const FACT_DECIDERS = ["owner", "driver", "agent-default"] as const;
 export type FactDecider = (typeof FACT_DECIDERS)[number];
 
 export interface FactRetirement {
@@ -77,6 +83,22 @@ export interface Fact {
    * `area`) and cannot see two differently-titled answers that disagree.
    */
   readonly conflicts_with?: readonly string[];
+  /**
+   * The options this answer did NOT take, as `<letter>) <text>` (gh #251).
+   *
+   * Additive and optional, written only when non-empty — the `conflicts_with` rule:
+   * an emitted `alternatives: []` would read as "there were none", which is not
+   * what absence means. Written by the loop's auto-answer beside
+   * `decided_by: agent-default`, so a reader of the fact alone can see what a
+   * machine chose AGAINST and reverse it with `tldrx answer … --supersede`.
+   */
+  readonly alternatives?: readonly string[];
+  /**
+   * The `Recommended:` line's own reason, verbatim minus its `[src:]` token
+   * (gh #251). Additive and optional; absent means the block carried no reason,
+   * or a person answered — never that the reason was checked and found empty.
+   */
+  readonly recommended_why?: string;
 }
 
 export interface FactsFile {

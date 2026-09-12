@@ -380,7 +380,7 @@ describe("renderFacts — {{facts}} carries decided_by attribution", () => {
 
 /** `validateFactsFile` — the closed-set check on `source.decided_by` (task 5, fix round finding 4). */
 describe("validateFactsFile — decided_by is a closed set", () => {
-  test("a value outside owner/driver is rejected with a named issue", () => {
+  test("a value outside the closed set is rejected with a named issue", () => {
     const doc = {
       version: 1,
       facts: [{
@@ -395,7 +395,8 @@ describe("validateFactsFile — decided_by is a closed set", () => {
     expect(outcome.ok).toBe(false);
     expect(outcome.issues).toContainEqual({
       path: "facts[0].source.decided_by",
-      message: "expected owner, driver or absent",
+      // The set is `FACT_DECIDERS`, which grew `agent-default` in #251.
+      message: "expected owner, driver, agent-default or absent",
     });
   });
 });

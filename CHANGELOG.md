@@ -36,6 +36,38 @@
   and `run.yml` records both. Found on the way: `run.yml` is emitted key by key, so the
   block was dropped by the first save until the emitter learned it — pinned by a round-trip
   test.
+- **`questions_policy: recommended` — the loop answers a question that carries its own
+  `Recommended:` line, and escalates only the ones that do not (#251).** Measured 2026-09-12 on
+  two headless runs at 0.16.1, every gate `auto`, `--wait-answers 8h --wait-gates 8h`: $89.82
+  and 28 h wall on one, $26.38 and 5.6 h on the other, the agents busy 4.9 h and 56 min of it,
+  and **10 owner questions, 9 carrying a `Recommended:` line the asking agent had written**. The
+  loop parked on every one, sent `question.raised`, and waited for a person to type
+  `tldrx answer` — over a pick the framework already held in a parsed field (`RECOMMENDED_RE`),
+  on the decision card and in the notification payload. Nothing acted on it, by design:
+  `waitForAnswers` "reads and does nothing else", and `Fact.decided_by` had no honest value for
+  a machine's decision. So: `run new --questions <stage,stage|stage:recommended|all|none>` —
+  `--gates`' grammar, extracted to ONE parser both flags now call rather than a second copy of
+  "split on the first colon" — freezes `questions_policy` into `run.yml` beside `gates_policy`,
+  additive and absent by default, so a run opened without the flag is byte-identical to one
+  opened before it existed and reads `human` everywhere. Under `recommended` for the cursor
+  stage, the moment a stage parks the loop takes each blocking question whose block names one
+  of its own options on a `Recommended:` line, through the SAME `writeAnswerSlot` +
+  `captureAnswers` that `tldrx answer` is — the footer, the `question.answered` and the
+  `fact.added` are a person's bytes — and the fact says the rest: `decided_by: agent-default`
+  (a THIRD value beside `owner`/`driver`, because `owner` there would be an audit record lying
+  in the dangerous direction), `alternatives` (the options not taken) and `recommended_why`
+  (the line's own reason). One `question.auto_answered` per answer reaches the notify hook with
+  the pick, the alternatives and the `--supersede` line that reverses it; no `question.raised`
+  goes out for a question the loop answered; and the deferred-gate release #247 built is now
+  one closure both the human-answer and the loop-answer paths call, so the second cannot form
+  a second opinion about when a gate is worth asking about. It never invents a pick: no
+  `Recommended:` line, a letter naming no option, or a block tagged with the new additive §2.7
+  keys `irreversible: true` / `money: true` is escalated exactly as before — the fixture that
+  proves it goes red the moment the `money:` guard is dropped. `tldrx run questions set
+  <stage>:<policy> --note "…"` mirrors `run gates set` on a shared engine, one
+  `questions.policy_changed` event, every refusal the gates verb has. The close's decided-tally
+  counts `agent-default` apart from "not stated" — it IS stated — and names it only when it is
+  non-zero, so every close that recorded none reads as it did.
 
 ### Fixed
 

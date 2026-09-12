@@ -97,6 +97,14 @@ export function emitFact(fact: Fact, indent = "  "): string {
   if (fact.conflicts_with !== undefined && fact.conflicts_with.length > 0) {
     lines.push(`${inner}conflicts_with: ${inlineList(fact.conflicts_with)}`);
   }
+  // Both written only when present (gh #251), for `conflicts_with`'s reason: an
+  // `alternatives: []` on a person's answer would claim the options were counted.
+  if (fact.alternatives !== undefined && fact.alternatives.length > 0) {
+    lines.push(`${inner}alternatives: ${inlineList(fact.alternatives)}`);
+  }
+  if (fact.recommended_why !== undefined) {
+    lines.push(`${inner}recommended_why: ${yamlScalar(fact.recommended_why)}`);
+  }
   if (fact.retired === null) {
     lines.push(`${inner}retired: null`);
   } else {

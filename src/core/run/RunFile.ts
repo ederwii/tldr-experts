@@ -14,6 +14,7 @@ import {
   requireVersion, result, type ValidationIssue, type ValidationResult,
 } from "../schemas/validation.ts";
 import { GATE_POLICIES, validateGatesPolicy, type GatePolicy, type GatesPolicy } from "./gatePolicy.ts";
+import { validateQuestionsPolicy, type QuestionsPolicy } from "./questionsPolicy.ts";
 import { BRANCH_MODELS, isBranchModelKind, type BranchModelKind } from "../plan/branchModel.ts";
 import {
   EVIDENCE_ROLES, EVIDENCE_VERDICTS, type EvidenceRole, type EvidenceVerdict,
@@ -607,6 +608,15 @@ export interface RunFile {
    */
   readonly gates_policy?: GatesPolicy;
   /**
+   * Who ANSWERS each stage's open questions when `run auto` parks on them (spec
+   * §2.2, gh #251). ADDITIVE and optional, beside `gates_policy` and never instead
+   * of it: absent — every run.yml written before this key, and every run opened
+   * without `--questions` — reads as `human` for every stage, which is exactly the
+   * behaviour it had. Only `recommended` changes anything, and only for a block that
+   * carries its own `Recommended:` line.
+   */
+  readonly questions_policy?: QuestionsPolicy;
+  /**
    * Who drives the turns. ADDITIVE and optional: absent — the default, and every
    * run.yml written before this key existed — means the framework may spawn, and
    * every path behaves exactly as it did.
@@ -906,6 +916,7 @@ export function validateRunFile(input: unknown): ValidationResult {
     }
   }
   validateGatesPolicy(doc.gates_policy, declaredStageIds, issues);
+  validateQuestionsPolicy(doc.questions_policy, declaredStageIds, issues);
 
   let stageCount = 0;
   let taskCount = 0;

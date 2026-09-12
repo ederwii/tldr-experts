@@ -37,10 +37,15 @@ export const NOTIFY_PAYLOAD_VERSION = 1;
  * and the loop goes back to exiting 4; `gate.timeout` is its twin under `--wait-gates`
  * (gh #197) — a gate and a question are the same exit `4` and the same person, and the
  * two waits are kept apart only because they are closed by different verbs.
+ * `question.auto_answered` (gh #251) is the one kind that asks for NOTHING: under
+ * `questions_policy: recommended` the loop took the asker's own pick, and this tells the
+ * owner what was decided, against what, and how to reverse it — a decision a machine took
+ * silently would be the one thing worse than a park.
  */
 export const NOTIFY_KINDS = [
   "question.raised",
   "question.timeout",
+  "question.auto_answered",
   "gate.requested",
   "gate.timeout",
   "stage.done",

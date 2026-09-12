@@ -278,7 +278,8 @@ session or back, or get a stuck one moving again.
 ```
 tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b]
                      [--from <dir> | --seed <file|dir> …] [--gates <a,b|a:agent|all|none>]
-                     [--ship <push|pr|merge>] [--attended-by host]
+                     [--questions <a,b|a:recommended|all|none>] [--ship <push|pr|merge>]
+                     [--attended-by host]
 tldrx run attend   <host|--none> [<run>] [--run <id>]
 tldrx run status   [<run>] [--json] [--verbose] [--run <id>]
 tldrx run estimate [<run>] [--json] [--run <id>]
@@ -288,6 +289,7 @@ tldrx run auto     [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--ef
                           [--wait-gates <duration>] [--prompt-max-bytes <n>] [--max-reads <n>]
                           [--retry-failed <n>]
 tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>]
+tldrx run questions set <stage>:<human|recommended> --note <text> [--run <id>]
 tldrx run unlock   [<run>] [--force] [--run <id>]
 tldrx run cancel   [<run>] --note <text> [--force] [--run <id>]
 ```
@@ -298,6 +300,11 @@ tldrx run cancel   [<run>] --note <text> [--force] [--run <id>]
 preset's `default_budget_usd`. `--from` and `--seed` are mutually exclusive; **`--seed` is
 repeatable**. `--gates` names the HUMAN gates and overrides the workflow's `gates:` wholesale; an entry may
 be qualified as `<stage>:<policy>` (`plan:agent`), and a bare entry still means `human`.
+`--questions` is the same grammar for **who answers a stage's open questions** when `run auto`
+parks on them: the list is the stages a PERSON answers, `all` is every stage human (the
+default), `none` is every stage `recommended`, and a qualified entry (`plan:recommended`) names
+it outright. Under `recommended` the loop takes a question's own `Recommended:` option itself
+(see `auto` below); absent, no `questions_policy` key is written and every stage reads `human`.
 `--attended-by host` opens the run in **attended mode**: a host session does the turns and
 the framework never spawns on it (see below). Any other value is exit `1` and no run is made.
 `--ship <push|pr|merge>` (#253) says how far past the LAST gate the framework may carry the epic
@@ -390,6 +397,20 @@ signature and never produces one — there is no engine-side signing here, so a 
 `gates_policy: agent` stops the loop exactly as a `human` one does and is waited on the same
 way. Both may be given together.
 
+The one exception is `questions_policy: recommended` (`run new --questions`, or `run questions
+set` below), and it is opt-in per stage. Measured 2026-09-12 on two headless runs: 9 of the 10
+questions the owner was stopped for carried a `Recommended:` line the asking agent had written.
+With the cursor stage on `recommended`, the moment a stage parks the loop answers each blocking
+question whose block names one of its own options on a `Recommended: <letter> — <why>` line,
+through the SAME path `tldrx answer` takes — the slot is filled with the option, the footer,
+`question.answered` and `fact.added` are a person's bytes — and the fact says the rest:
+`decided_by: agent-default` (never `owner`), `alternatives` (the options not taken) and
+`recommended_why`. One `question.auto_answered` per answer reaches the notify command with the
+`--supersede` line that reverses it, and no `question.raised` is sent for it. It never invents a
+pick: a question with no `Recommended:` line, a letter naming no option, or a block tagged
+`irreversible: true` / `money: true` in its metadata stops the loop for a person exactly as
+before, and `--wait-answers` then waits on those.
+
 `--retry-failed <n>` is the one loop flag that is a COUNT: how many times in a row the loop
 may run a **failed** stage again before it stops. `0` is the default and is what every
 invocation before it got — one attempt, then exit `5`. A retry is the same `tldrx next` a
@@ -424,6 +445,17 @@ on a default. A no-op (`human` → `human`) is refused rather than recorded.
 moment, your note and the old→new value, which is the whole audit trail for a gate mutation
 nobody would otherwise go looking for. A run with no `gates_policy` map at all gets the full
 map written, every stage explicit, with the one change applied.
+
+**`questions set`** is `gates set` for `questions_policy`, on the same engine and with every one
+of its refusals: one qualified `<stage>:<human|recommended>` per invocation, `--note` required,
+a no-op refused, one **`questions.policy_changed`** event, the full map written on a run that
+had none. It changes who ANSWERS from then on; questions already answered are untouched, and a
+question the run is parked on now is answered on `run auto`'s next look at it — this command
+writes nothing into any questions file.
+
+```
+$ tldrx run questions set what:recommended --note "nine of ten stops were over a pick already on disk"
+```
 
 **`unlock`** drops a `.lock` nobody is behind and puts the stage it stranded back to `ready`.
 It spends nothing and touches no stage output. A live pid needs `--force`.

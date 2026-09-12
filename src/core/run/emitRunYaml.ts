@@ -11,6 +11,7 @@ import {
   DEFAULT_ECONOMY, type RunBudget, DEFAULT_ON_HOST_TOKENS_EXCEED, DEFAULT_ON_GRANT_EXCEED,
 } from "../budget/RunBudget.ts";
 import type { GatesPolicy } from "./gatePolicy.ts";
+import type { QuestionsPolicy } from "./questionsPolicy.ts";
 import type {
   RunFile, RunGate, RunGateAuthority, RunGateEvidence, RunGateExecutor, RunStage, RunTask,
 } from "./RunFile.ts";
@@ -25,11 +26,12 @@ function money(n: number): string {
 
 /**
  * `gates_policy: {what: human, how: auto}` — one flow mapping, stage order kept.
+ * `questions_policy:` is written the same way (gh #251).
  *
  * Emitted only when the run HAS a policy, so a fixture or a hand-written run.yml
  * from before 0.3.0 round-trips byte-for-byte through a save.
  */
-function gatesPolicy(policy: GatesPolicy): string {
+function stagePolicy(policy: GatesPolicy | QuestionsPolicy): string {
   const entries = Object.entries(policy).map(([id, value]) => `${yamlScalar(id)}: ${yamlScalar(value)}`);
   return `{${entries.join(", ")}}`;
 }
@@ -253,7 +255,10 @@ export function emitRunYaml(run: RunFile): string {
     lines.push("keep_worktrees: true");
   }
   if (run.gates_policy !== undefined && Object.keys(run.gates_policy).length > 0) {
-    lines.push(`gates_policy: ${gatesPolicy(run.gates_policy)}`);
+    lines.push(`gates_policy: ${stagePolicy(run.gates_policy)}`);
+  }
+  if (run.questions_policy !== undefined && Object.keys(run.questions_policy).length > 0) {
+    lines.push(`questions_policy: ${stagePolicy(run.questions_policy)}`);
   }
   // Same rule (gh #253): the policy half is always emitted once the block exists —
   // `run new --ship` wrote it — and the record half only when `tldrx ship` wrote

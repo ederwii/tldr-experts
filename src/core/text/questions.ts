@@ -427,6 +427,72 @@ export function isAdvisory(block: QuestionBlock): boolean {
 }
 
 /**
+ * The two optional §2.7 metadata keys that pin a question to a PERSON whatever the
+ * run's `questions_policy` says (gh #251): `irreversible: true` — the answer cannot
+ * be walked back by a later `--supersede` (a dropped table, a sent message) — and
+ * `money: true` — the answer spends, or changes what may be spent.
+ */
+export const IRREVERSIBLE_KEY = "irreversible";
+export const MONEY_KEY = "money";
+
+/**
+ * True when the block says `irreversible: true` or `money: true` — nobody's pick to
+ * take but a person's, even when the asker wrote a `Recommended:` line.
+ *
+ * `isAdvisory`'s rules, for `isAdvisory`'s reasons: additive and tolerant, absence
+ * means "not pinned" so every block written before the keys existed reads exactly as
+ * it did, and only the literal `true` pins — a typo'd value must not be a silent
+ * opt-in to the machine deciding. ONE reader, the auto-answer path; every surface
+ * that LISTS or NOTIFIES a question ignores it, because these keys say who answers,
+ * not whether the question is shown.
+ */
+export function pinnedToPerson(block: QuestionBlock): boolean {
+  return block.metadata?.extra.some(
+    ([key, value]) => (key === IRREVERSIBLE_KEY || key === MONEY_KEY) && value === "true",
+  ) === true;
+}
+
+/** What the loop takes when it answers a question itself (gh #251). */
+export interface RecommendedPick {
+  readonly letter: string;
+  /** The option's own text, so the fact reads as the option and not as a letter. */
+  readonly text: string;
+  /** Every other option, as `<letter>) <text>` — what was NOT taken. */
+  readonly alternatives: readonly string[];
+  /** The `Recommended:` line's reason, `[src:]` stripped. Empty when it carried none. */
+  readonly why: string;
+}
+
+/**
+ * The option the block's own `Recommended:` line names, or null.
+ *
+ * Null in exactly two cases, both "nothing to take": no `Recommended:` line parsed
+ * (`RECOMMENDED_RE` is tolerant, so a malformed line is already null here), or a
+ * letter that names none of the block's options — `Recommended: E` over three
+ * options is a recommendation of nothing, and a reader that took the first option
+ * instead would be inventing the pick `decisionCards.ts` refuses to manufacture.
+ *
+ * The BLOCK's line only. An evidence note's `recommend:` entry wins over it on the
+ * decision card (`decisionCards.ts`, gh #203), but that entry is a reviewer's claim
+ * at a gate and this is an ANSWER: the loop takes what the asker wrote into the
+ * question, and nothing else.
+ */
+export function recommendedPick(block: QuestionBlock): RecommendedPick | null {
+  if (block.recommended === null) return null;
+  const letter = block.recommended.option;
+  const taken = block.options.find((option) => option.letter === letter);
+  if (taken === undefined) return null;
+  return {
+    letter,
+    text: taken.text,
+    alternatives: block.options
+      .filter((option) => option.letter !== letter)
+      .map((option) => `${option.letter}) ${option.text}`),
+    why: block.recommended.why,
+  };
+}
+
+/**
  * Flip `status: open` to `answered` and append the footer, changing nothing else.
  * Returns a new block; the input is untouched.
  */
