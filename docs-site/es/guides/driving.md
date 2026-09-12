@@ -103,7 +103,11 @@ literal, porque un latido que siguiera diciendo que nadie te está esperando ser
 silencio. `--wait-answers` y `--wait-gates` son las dos banderas que cambian dónde se detiene el
 bucle, una por cada mitad de la salida `4`: en vez de salir en una pregunta abierta espera una
 respuesta y **retoma si la das**, y en vez de salir en una compuerta pendiente espera una firma y
-**retoma si alguien la firma**, deteniéndose con tu nota si la rechazas. Ambas salen con `4` sin
+**retoma si alguien la firma**, deteniéndose con tu nota si la rechazas —o siguiendo con ella
+cuando el rechazo dijo `--and-continue`—. La carga `gate.requested` nombra de cuál de esas cosas
+trata la compuerta: `holding` dice si la retienen preguntas abiertas, historias sin terminar o
+nada mecánico, y una compuerta que puede nombrar qué hay que cambiar lleva la línea
+`--and-continue` lista para disparar. Ambas salen con `4` sin
 cambios cuando el plazo se vence. No se gasta nada mientras esperan, y el bucle no cierra nada
 por su cuenta: nunca responde su propia pregunta ni firma su propia compuerta, tampoco con una
 política `agent`.

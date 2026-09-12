@@ -194,6 +194,39 @@ export function gateStoriesPayload(view: StoriesView): Record<string, unknown> {
   };
 }
 
+/**
+ * The note a one-tap "send it back and carry on" carries (gh #243), or **null** when
+ * this gate has nothing of its own to say.
+ *
+ * ## Why it is derived and not canned
+ *
+ * `--note` is mechanically required (`cli/commands/reject.ts:43-45`) and it is not a
+ * formality: the note becomes the next turn's prompt (`reject.ts:107`, under
+ * `## Previous attempt`). So a canned `"rejected from Slack"` would satisfy the flag
+ * and empty the rule it exists for — the audit record would claim a reason where there
+ * was none (§7, absent-with-reason), and the re-run would be told to change nothing in
+ * particular. A button that sends a blank instruction is worse than a button that is
+ * not there.
+ *
+ * So the note is the gate's OWN two measured facts, the same pair `gateStoriesPayload`
+ * already puts on the payload as `blocked_story` and `blocked_reason`: the first
+ * blocked story's id and what the Build handoff recorded stopped it. The imperative
+ * clause is the only word this function adds, and it is what the verb MEANS — a
+ * rejection that carries on is a request to redo that story.
+ *
+ * **Null in two cases, and both are the absence, not a zero.** A view with nothing
+ * blocked (every unfinished story merely `todo`) knows the gate is held but not why in
+ * any way a turn could act on. And a blocked story whose handoff names no reason
+ * reports `REASON_NOT_RECORDED` — a sentence saying the reason is missing, which is
+ * exactly the thing that must not be handed to the next turn as its instruction.
+ */
+export function continueNote(view: StoriesView): string | null {
+  const blocked = view.firstBlocked;
+  if (blocked === null) return null;
+  if (blocked.reason === REASON_NOT_RECORDED) return null;
+  return `${blocked.id} is blocked: ${blocked.reason}. Redo ${blocked.id}.`;
+}
+
 /** The longest a reason is allowed to be inside a one-line summary before it is cut. */
 const REASON_IN_SUMMARY = 80;
 

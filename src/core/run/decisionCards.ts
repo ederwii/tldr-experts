@@ -258,6 +258,31 @@ export function rejectCommand(runId: string): string {
 }
 
 /**
+ * The rejection that means "redo it this way and CARRY ON" (gh #243), spelled here
+ * for the same reason its two siblings are: a notification exists to be acted on from
+ * a phone, and the line a button fires has to be the line the CLI takes.
+ *
+ * Two things about its shape are load-bearing, and both are verified against
+ * `src/cli/commands/reject.ts`, never remembered:
+ *
+ *  - The note is the SUBSTITUTABLE placeholder `…`, the convention `answerCommand`
+ *    established, not `rejectCommand`'s `<why>` — which is prose telling a human what
+ *    to write, and a consumer that pasted it would send the literal string `<why>` as
+ *    the next turn's prompt. `--note` is mechanically required (`reject.ts:43-45`,
+ *    `UsageError` -> exit 1), so the hole is never optional.
+ *  - It carries NO `--stage`. `--and-continue` beside `--stage` is an explicit usage
+ *    refusal (`reject.ts:51-57`): a revoke leaves that gate pending for a decision
+ *    nobody has made, so there is no rejection for the flag to describe.
+ *
+ * WHAT goes in the hole is not this file's business — `continueNote` in
+ * `runOutcome.ts` derives it from the gate, and a gate with nothing to put there is
+ * offered no continue command at all.
+ */
+export function continueCommand(runId: string): string {
+  return `tldrx reject --run ${runId} --and-continue --note "…"`;
+}
+
+/**
  * PRECEDENCE, stated once and referenced from spec §2.17 and §2.18 (gh #203):
  *
  * **An evidence note's `recommend:` entry wins over the question block's own

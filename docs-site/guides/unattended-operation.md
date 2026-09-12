@@ -165,7 +165,18 @@ Build gate's notification says what the stage actually delivered before it says 
 > Nothing runs after it until the gate is approved or rejected."*
 
 The counts and the first blocked story's own reason ride on the `gate.requested` payload as
-`stories`, `blocked_story` and `blocked_reason`, so a script can route on them. The reason is
+`stories`, `blocked_story` and `blocked_reason`, so a script can route on them. **What is
+HOLDING the gate rides there too, as a field**: `holding` is `questions`, `stories` or `none` —
+the same branch the `command` above was chosen by, said once as data so an adapter never has to
+sniff it off the prefix of a CLI string. And where the gate can name what has to change in its
+own words, it also carries `continue_command` — `tldrx reject --run <id> --and-continue --note
+"…"`, the one-tap *"redo it this way and carry on"* — with `continue_note`, the note derived
+from the blocked story and the handoff's reason for it. That pair is ABSENT at a gate held by
+open questions (approving or refusing is the one thing that must not happen before they are
+answered), at a gate held by nothing mechanical (the reason to refuse a judgement is in your
+head, not on disk), and at a gate whose blocked story recorded no reason. A rejection's note
+becomes the next turn's prompt, so a canned *"rejected from Slack"* would satisfy the flag and
+hand the re-run an empty instruction: no button is better than a button that says nothing. The reason is
 the handoff's own sentence, never a paraphrase. Two real runs were approved from a phone over
 a summary that said `$1.78` and one green check while every story was blocked — the counting
 existed and ran for `auto` gates alone.
@@ -231,7 +242,7 @@ The enum is closed — a kind that arrives from nowhere is a branch nobody wrote
 |---|---|---|---|
 | `question.raised` | the loop parked on an open question | the first question's `tldrx answer` line | `questions[]` — `id`, `title`, `why_asked`, `options[]` as `{letter, text}`, `recommendation` (`option`, `why`, `src`) or `null`, `answer_command` |
 | `question.timeout` | `--wait-answers` lapsed and the loop is about to exit `4` | the same answer line | the same `questions[]`, plus `waited_ms` |
-| `gate.requested` | a stage finished and a person must sign it — **deferred, and possibly never sent, when an `auto` gate is held only by open questions** | the line that clears the gate: `tldrx answer <id>` with questions open, `tldrx run status <id>` over unfinished stories, `tldrx approve --run <id>` when nothing mechanical is outstanding | `cost_usd`, `approve_command`, `reject_command`, `gate_policy`, and one of `held_by` (an `auto` gate's failing conditions) / `signer_held` (an `agent` signer's reasons) — absent when nothing looked |
+| `gate.requested` | a stage finished and a person must sign it — **deferred, and possibly never sent, when an `auto` gate is held only by open questions** | the line that clears the gate: `tldrx answer <id>` with questions open, `tldrx run status <id>` over unfinished stories, `tldrx approve --run <id>` when nothing mechanical is outstanding | `cost_usd`, `approve_command`, `reject_command`, `gate_policy`, `holding` (`questions` \| `stories` \| `none`), and one of `held_by` (an `auto` gate's failing conditions) / `signer_held` (an `agent` signer's reasons) — absent when nothing looked. Plus `continue_command` + `continue_note`, together or not at all, only where the gate can name what has to change |
 | `gate.timeout` | `--wait-gates` lapsed and the loop is about to exit `4` | the same approve line | `approve_command`, `reject_command`, `gate_policy`, `waited_ms`, and `cost_usd` only when this loop is the one that saw the gate raised |
 | `stage.done` | a stage finished and the loop moved on | `null` — the loop is already running the next stage | `cost_usd` |
 | `run.finished` | the loop ended with exit `0` | `null` | `exit_code`, `exit_family`, `spent_usd` |
