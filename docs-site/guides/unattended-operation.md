@@ -469,6 +469,17 @@ notification buys back:
    exits `127` and blocks, having already paid for a turn; the message names the absent
    binary and this slot, and the framework guesses no installer for you.
 
+   **And it is checked once, at Build entry, before a developer is paid.** tldrx opens one
+   throwaway worktree of the base sha, runs your `install:` in it, and then checks that each
+   declared Definition-of-Done command's binary actually resolves in that tree — never the
+   suite, which the entry pre-flight already runs in your checkout. If it cannot, Build refuses
+   with exit 2 naming the exact path or binary, before anything is dispatched or charged. The
+   commonest cause is a script the repo never committed: an `install: ./install.sh` whose file
+   is absent from `git ls-files` is refused on sight, with the `git add` that fixes it, because
+   a worktree carries tracked files only. A Definition-of-Done command that names something the
+   install CREATES — `node_modules/.bin/vitest` and friends — is fine and is not refused: the
+   check runs after your install, in that tree.
+
    ```yaml
    repos:
      - name: app
@@ -498,7 +509,9 @@ notification buys back:
 worktree did not have the binary. Declare `install:` (item 1 above) and tldrx installs the
 dependencies there before the developer. The check that failed carries `tree: "worktree"`, so
 it can be told apart from the Build-entry pre-flight, which runs the same command in your own
-checkout — where the dependencies already are, which is why it can be green minutes earlier.
+checkout — where the dependencies already are, which is why it can be green minutes earlier. Since
+the Build-entry worktree probe this should now be rare: the same absence is normally refused
+once, at entry, before any turn is paid for.
 
 **The developer says "This command requires approval to run".** Fixed in gh #209: every
 declared command is now granted both exactly and with trailing arguments, so a developer can

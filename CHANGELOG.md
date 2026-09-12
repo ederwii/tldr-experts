@@ -69,6 +69,49 @@
   counts `agent-default` apart from "not stated" — it IS stated — and names it only when it is
   non-zero, so every close that recorded none reads as it did.
 
+- **Build entry proves the Definition of Done can run IN A WORKTREE before a developer is
+  paid (#254).** Measured on a live workspace, 2026-09-12 at 0.16.1: **18 h from `run auto` to
+  the first story that could run**, five relaunches, two of them environment and both invisible
+  to Build entry. The repo's `install:` named `./install.sh`, which existed in the human's
+  checkout and was never committed — a `git worktree` carries TRACKED FILES ONLY — so every
+  story's install failed identically in its own tree, each time after the story was opened and
+  immediately before the paid turn, and each time a person fixed it and relaunched. The base
+  pre-flight (#41) was green throughout and was right to be: it measures in the checkout, which
+  is where the file is. So Build entry now asks the other question once, before `agent.spawned`:
+  one throwaway detached worktree at the base sha, the declared `install:` run inside it, then a
+  resolution of each declared DoD command's first token in that tree. **Never the suite** — the
+  base pre-flight already measures the suite in the checkout and paying twice for it at every
+  entry is a cost nobody asked for. A refusal is exit 2, once, naming the exact path or binary.
+  Two decisions are the whole design. The `install:` command's own path token is refused by
+  `git ls-files` with NOTHING executed, and that is sound only because of WHEN the install runs:
+  nothing has installed anything yet, so a relative path the install NAMES cannot be one it
+  PRODUCED. A DoD command's path token gets the opposite treatment — tracked-ness decides
+  nothing there, because `node_modules/.bin/vitest` is untracked in every repo on earth and is
+  present by the time the DoD runs; it is probed AFTER the install, in that tree, and an
+  untracked twin in the checkout is rendered as advice, never as the verdict. The same rule has
+  a second half: a `dod` list runs in order, so a path named by any command AFTER the first may
+  be an artefact an earlier `dod` command builds (`dod: ["npm run build", "dist/check.sh"]`) —
+  the probe runs no suite, cannot tell that from "nobody committed it", and therefore writes an
+  advisory instead of a refusal. A bare binary name is never downgraded, at any index: nothing
+  a `dod` command does can put one on this process's PATH. Refusing what would have worked is
+  the expensive direction for an entry gate, so wherever the two readings could not be told
+  apart, this refuses less — each half pinned by a control that reddens when it is removed.
+  One existing behaviour moved with it: an install that fails deterministically in a fresh tree
+  is now refused at entry instead of blocking story 1 (`story-worktree-deps.test.ts` (d) says
+  so and says why). The per-story install is untouched and still answers for an install that
+  passes on the base and fails on a story's branch. The result is cached beside the base result in
+  `04-build/preflight.yml` under an additive `worktree:` key, so a resumed run does not re-pay
+  the install, and the cache is narrowed by three things and not two: the base sha, the
+  declaration hash (the install, every command probed, and the whole allowlist — the operator's
+  fix is an edit to `workspace.yml` and that edit must not be invisible), and AGE. A green gets
+  six hours rather than the base green's forever, because this row is a claim about an
+  ENVIRONMENT — the host's PATH, the registry the install reached — and none of that is in the
+  sha; a red gets the base red's 30 minutes, because #162 is the filed failure where a row
+  measured over a broken environment kept refusing after somebody fixed it. The gate costs
+  exactly zero where it could learn exactly nothing: a repo with no `install:` whose DoD names
+  only bare binaries opens no worktree at all, since `PATH` is the same in both trees and the
+  base pre-flight has already RUN the command there.
+
 ### Fixed
 
 - **`run.yml` can finally explain its own `cost_usd`, and a Build turn stopped losing its

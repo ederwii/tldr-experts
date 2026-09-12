@@ -484,6 +484,18 @@ que el aviso te devuelve:
    pagado un turno; el mensaje nombra el binario ausente y esta ranura, y el framework no
    adivina ningún instalador por ti.
 
+   **Y se comprueba una sola vez, al entrar a Build, antes de pagar un developer.** tldrx abre
+   un worktree descartable en el sha base, corre ahí tu `install:`, y después comprueba que el
+   binario de cada comando declarado de la Definición de Hecho realmente resuelva en ese árbol
+   — nunca la suite completa, que el pre-vuelo de entrada ya corre en tu checkout. Si no puede,
+   Build se niega con código 2 nombrando la ruta o el binario exactos, antes de despachar o
+   cobrar nada. La causa más común es un script que el repo nunca commiteó: un
+   `install: ./install.sh` cuyo archivo no está en `git ls-files` se rechaza de entrada, con el
+   `git add` que lo arregla, porque un worktree sólo lleva archivos versionados. Un comando de
+   la Definición de Hecho que nombra algo que el install CREA — `node_modules/.bin/vitest` y
+   parientes — está bien y no se rechaza: la comprobación corre después de tu install, en ese
+   mismo árbol.
+
    ```yaml
    repos:
      - name: app
@@ -514,7 +526,9 @@ que el aviso te devuelve:
 worktree de la historia no tenía el binario. Declara `install:` (punto 1 de arriba) y tldrx
 instala ahí las dependencias antes del developer. El check que falló trae `tree: "worktree"`,
 así que se distingue del pre-vuelo de entrada a Build, que corre el mismo comando en tu propio
-checkout — donde las dependencias ya están, que es por qué puede estar verde minutos antes.
+checkout — donde las dependencias ya están, que es por qué puede estar verde minutos antes. Desde
+el sondeo en worktree al entrar a Build esto debería ser raro: la misma ausencia normalmente se
+rechaza una sola vez, en la entrada, antes de pagar ningún turno.
 
 **El developer dice "This command requires approval to run".** Arreglado en gh #209: cada
 comando declarado ahora se concede tanto exacto como con argumentos al final, así que un

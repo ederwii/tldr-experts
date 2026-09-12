@@ -487,6 +487,22 @@ export async function addWorktree(cwd: string, path: string, branch: string, bas
 }
 
 /**
+ * A DETACHED worktree at `ref` — a tree to LOOK at, with no branch attached.
+ *
+ * `addWorktree`'s sibling, and deliberately not a flag on it: that one cuts or
+ * adopts a BRANCH, which is a claim on a name the run records, reports and
+ * cleans up. The Build-entry probe (#254) claims nothing — it exists for the
+ * length of one measurement and is removed in a `finally` — and a branch left
+ * behind by it would be a name nobody owns and nothing deletes.
+ */
+export async function addDetachedWorktree(cwd: string, path: string, ref: string): Promise<void> {
+  const result = await git(["worktree", "add", "--detach", path, ref], cwd);
+  if (!result.ok) {
+    throw new GitError(`cannot add a detached worktree at ${path} on \`${ref}\`: ${firstLine(result.stderr)}`);
+  }
+}
+
+/**
  * A worktree that is NOT on the branch its caller is about to write to.
  *
  * Its own class because the one thing that must never happen here is a silent

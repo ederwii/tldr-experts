@@ -25,7 +25,8 @@ import type { BuildRefusal, DodResult, SerialWrite } from "./outcome.ts";
 import type { PlannedStory } from "./plan.ts";
 import {
   BaseGateFailure, baseRefusalLines, baseResultFor, commandHash, EMPTY_PREFLIGHT, loadPreflight, PREFLIGHT_REL,
-  savePreflight, withResult, type BaseCommandResult, type BasePreflight,
+  savePreflight, withResult, withWorktreeRow, type BaseCommandResult, type BasePreflight,
+  type WorktreeProbeRow,
 } from "./preflight.ts";
 import { absentBinaryOf, WORKTREE_TREE } from "./worktreeDeps.ts";
 
@@ -65,7 +66,20 @@ export class PreflightCache {
    * build that is otherwise fine.
    */
   remember(result: BaseCommandResult, at: string): string | null {
-    const next = withResult(this.read(), result, at);
+    return this.save(withResult(this.read(), result, at));
+  }
+
+  /**
+   * Write one Build-ENTRY worktree probe (#254) into the same file, through the
+   * same single writer — a second writer for the same file is the bug either
+   * could have.
+   */
+  rememberWorktree(row: WorktreeProbeRow, at: string): string | null {
+    return this.save(withWorktreeRow(this.read(), row, at));
+  }
+
+  /** Best-effort, always: a cache that cannot be saved costs the NEXT invocation a re-run. */
+  private save(next: BasePreflight): string | null {
     this.preflight = next;
     this.loaded = true;
     try {
