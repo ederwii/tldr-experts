@@ -720,7 +720,7 @@ async function runStage(
     duration_ms: agent.durationMs,
     duration_basis: "spawned",
   });
-  store.append(event(options, store.runId, stageId, "agent.result", {
+  appendCappedEvent(store, options, phaseId, stageId, "agent.result", {
     phase: phaseId,
     task: taskId,
     session_id: agent.sessionId,
@@ -748,7 +748,7 @@ async function runStage(
       cache_creation_input_tokens: agent.usage.cache_creation_input_tokens,
       cache_read_input_tokens: agent.usage.cache_read_input_tokens,
     },
-  }, agent.metered ? round2(agent.costUsd) : 0, stage.expert));
+  }, agent.metered ? round2(agent.costUsd) : 0, stage.expert);
   store.save();
 
   if (!agent.ok) {
@@ -760,6 +760,79 @@ async function runStage(
   return withStderr(await finishStage(store, options, phaseId, stageId, spec, notes), advisories);
 }
 
+// Payload-cap sidecar bookkeeping (spec §2.9, fix round 1; module-scoped since
+// #248). A counter, not just a timestamp: the bug this closes was measured as TWO
+// oversized verdicts for the same story (an attempt-1 `changes`, an attempt-2
+// `approve`) — a timestamp alone can collide within the same wall-clock second,
+// and the second write must never silently overwrite the first. Monotonic for the
+// life of the process, which is strictly safer than per-invocation was: two
+// invocations in one process can no longer land on the same name either.
+let overflowSeq = 0;
+
+/**
+ * Save omitted text to a sidecar file BEFORE the event that names it is built,
+ * so the pointer `capPayload` writes is true by construction — never a promise
+ * about a file that does not exist yet (`writeLog` runs later, inside `settle`),
+ * never one that later holds a DIFFERENT verdict's prose (only the FINAL review's
+ * summary survives in the story's own log), and never one that is simply never
+ * written at all (a story that does not settle this invocation). A failed write is
+ * named, never a path that does not exist.
+ *
+ * Keyed on the CALLER's own `phaseId`, not the `BUILD_PHASE` constant:
+ * `runExecutor` also runs Watch stages, and a Watch failure's sidecar must not be
+ * filed under a directory named `04-build`. `LOG_DIR` ("log") is the generic
+ * convention both phases already share for their own artefacts.
+ *
+ * The FIELD is part of the file name (#248): `…-agent.result-outputs.txt` beside
+ * `…-check.failed-detail.txt`, so a directory listing says which absence each
+ * file is the evidence for without opening it.
+ */
+function saveOverflow(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  type: EventType,
+  field: string,
+  text: string,
+): string {
+  overflowSeq += 1;
+  const stamp = nowish(options).replace(/:/g, "-");
+  const relPath = `${phaseId}/${LOG_DIR}/overflow/${stamp}-${String(overflowSeq)}-${type}-${field}.txt`;
+  try {
+    mkdirSync(join(store.runDir, phaseId, LOG_DIR, "overflow"), { recursive: true });
+    writeFileSync(join(store.runDir, relPath), text, "utf8");
+    return `omitted text saved at ${relPath}`;
+  } catch (error) {
+    return `could not be saved: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+/**
+ * Cap, THEN append — the ONE seam every event this file writes for a TURN goes
+ * through (#248).
+ *
+ * It used to be a closure inside `runExecutor`, reachable only by the executor's
+ * own `emit`. The four `agent.result` appends in this file were raw, and the one
+ * in `recordExecutorTasks` is the line that killed a live 8-story run: an
+ * `outputs` array of 3924 bytes put the payload at 4135, `EventLog.append` threw,
+ * and the invocation lost every task row and every dollar it had just earned. All
+ * four carry `outputs` (measured — `:723`, `:1446`, `:1581`, `:2670`), so all four
+ * route through here; the other three had simply not been hit yet.
+ */
+function appendCappedEvent(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  stageId: string,
+  type: EventType,
+  payload: Record<string, unknown>,
+  costUsd = 0,
+  actor: string | null = null,
+): void {
+  const capped = capPayload(payload, (text, field) => saveOverflow(store, options, phaseId, type, field, text));
+  store.append(event(options, store.runId, stageId, type, capped, costUsd, actor));
+}
+
 /**
  * Merge the branches an executor claimed into `run.yml` (`build.epic_branch`),
  * with the branch model it used beside them (`build.branch_model`, issue #57).
@@ -769,6 +842,8 @@ async function runStage(
  * keeps two runs from stacking commits on the same branch. The model is what lets
  * that invocation cut the SAME branches again rather than re-deciding: a run that
  * started per-epic stays per-epic, whatever its plan says today.
+ *
+ * It SAVES what it claimed before returning (#248) — see the comment on the call.
  */
 function claimEpicBranches(
   store: RunStore,
@@ -792,6 +867,25 @@ function claimEpicBranches(
       },
     };
   });
+  // SAVE HERE, not at the caller's next `store.save()` (#248).
+  //
+  // The claim used to sit in memory for exactly one more line before
+  // `recordExecutorTasks`, and when that line threw the `store.save()` after it
+  // never ran. The branch was cut, on disk, in the repo — and `run.yml` did not
+  // say so, so `branchClaims.ts` read `build.epic_branch` on the NEXT `run auto`,
+  // found `epic/<slug>` in the repo and not in the file, and refused the run its
+  // own epic: "this run did not cut it — refusing to stack this run's commits
+  // onto someone else's epic". The only way back in was `tldrx next
+  // --reuse-epic`, which `run auto` does not expose (measured, `src/cli`).
+  //
+  // Why here rather than teaching `branchClaims.ts` to reconstruct the claim from
+  // the ledger: the story branches this run cut ARE evidence it cut the epic, but
+  // making the guard accept evidence instead of a record widens exactly the hole
+  // it exists to close — a sibling run whose story branches happen to match would
+  // then be waved through, and a guard that can be argued with is not a guard.
+  // The claim is a RECORD, and the fix is to write the record when it is earned.
+  // Cheap, too: this fires only on an invocation that actually claimed something.
+  store.save();
 }
 
 /** Carry advisories out through an outcome another function already built. */
@@ -1202,45 +1296,15 @@ async function runExecutor(
   }
   announce(store.runId, stageId, nextTaskId(store, phaseId, stageId), agentCap(options, store, stage));
 
-  // Payload-cap sidecar bookkeeping for THIS invocation (spec §2.9, fix round 1).
-  // A counter, not just a timestamp: the bug this closes was measured as TWO
-  // oversized verdicts for the same story (an attempt-1 `changes`, an attempt-2
-  // `approve`) — a timestamp alone can collide within the same wall-clock second,
-  // and the second write must never silently overwrite the first.
-  let overflowSeq = 0;
-
   /**
-   * Save omitted text to a sidecar file BEFORE the event that names it is built,
-   * so the pointer `capPayload` writes is true by construction — never a promise
-   * about a file that does not exist yet (`writeLog` runs later, inside
-   * `settle`), never one that later holds a DIFFERENT verdict's prose (only the
-   * FINAL review's summary survives in the story's own log), and never one that
-   * is simply never written at all (a story that does not settle this
-   * invocation). A failed write is named, never a path that does not exist.
+   * Cap, THEN append — the seam every executor event goes through, and the same
+   * one this function's own catch block below uses for its `error` event, so a
+   * giant thrown message is bounded by the exact same byte-accurate rule (fix
+   * round 1, finding 2) rather than a second, character-based one.
    *
-   * Keyed on THIS invocation's own `phaseId`, not the `BUILD_PHASE` constant:
-   * `runExecutor` also runs Watch stages, and a Watch failure's sidecar must not
-   * be filed under a directory named `04-build`. `LOG_DIR` ("log") is the
-   * generic convention both phases already share for their own artefacts.
-   */
-  const saveOverflow = (type: EventType, text: string): string => {
-    overflowSeq += 1;
-    const stamp = nowish(options).replace(/:/g, "-");
-    const relPath = `${phaseId}/${LOG_DIR}/overflow/${stamp}-${String(overflowSeq)}-${type}-detail.txt`;
-    try {
-      mkdirSync(join(store.runDir, phaseId, LOG_DIR, "overflow"), { recursive: true });
-      writeFileSync(join(store.runDir, relPath), text, "utf8");
-      return `omitted text saved at ${relPath}`;
-    } catch (error) {
-      return `could not be saved: ${error instanceof Error ? error.message : String(error)}`;
-    }
-  };
-
-  /**
-   * Cap, THEN append — the ONE seam every executor event goes through, and the
-   * same one this function's own catch block below uses for its `error` event,
-   * so a giant thrown message is bounded by the exact same byte-accurate rule
-   * (fix round 1, finding 2) rather than a second, character-based one.
+   * A thin closure over `appendCappedEvent` since #248: the `agent.result`
+   * appends elsewhere in this file needed the same treatment, so the seam moved
+   * out to module scope and this is the executor's view of it.
    */
   const appendCapped = (
     type: EventType,
@@ -1248,8 +1312,7 @@ async function runExecutor(
     costUsd = 0,
     actor: string | null = null,
   ): void => {
-    const capped = capPayload(payload, (text) => saveOverflow(type, text));
-    store.append(event(options, store.runId, stageId, type, capped, costUsd, actor));
+    appendCappedEvent(store, options, phaseId, stageId, type, payload, costUsd, actor);
   };
 
   const executorCtx: ExecutorContext = {
@@ -1354,7 +1417,41 @@ async function runExecutor(
   }
 
   claimEpicBranches(store, outcome.epicBranches, outcome.branchModel);
-  recordExecutorTasks(store, options, phaseId, stageId, spec, outcome);
+  try {
+    recordExecutorTasks(store, options, phaseId, stageId, spec, outcome);
+  } catch (error) {
+    // #248, the half the payload cap alone does not fix: this call sits AFTER the
+    // executor try/catch above has closed, so a throw here reached
+    // `src/cli/commands/run.ts`'s `fail()` and came out as EXIT_USAGE (1) — a code
+    // `run auto --retry-failed` does not retry, because its retry branch keys on
+    // EXIT_AGENT_FAILED (5). A loop told to survive two failures survived zero.
+    //
+    // Same family as the executor's own throw, for the same reason: the turns ran,
+    // the money is spent, and the operator's next move is a retry. What is NOT
+    // borrowed from that catch is its row-repainting — `recordTask` has already
+    // put this invocation's rows in the store, so `failStage` is handed the count
+    // AFTER them and repaints none. Those turns finished; only their event failed
+    // to land, and rewriting a `done` row `failed` would put an error in the
+    // ledger that the turn did not produce (the #234 lesson, in the other seam).
+    const why = error instanceof Error ? error.message : String(error);
+    const recorded = requireStage(store, phaseId, stageId).tasks.length;
+    appendCappedEvent(store, options, phaseId, stageId, "error", {
+      phase: phaseId,
+      where: "record-tasks",
+      detail: why,
+      // Counts, not a boolean: the executor's catch can honestly say
+      // `tasks_recorded: false` because it runs before a single row exists. Here
+      // some rows DID land, and saying how many of how many is the difference
+      // between a named absence and a guessed one (§7).
+      rows_written: recorded - tasksBefore,
+      rows_expected: outcome.tasks.length,
+    }, 0);
+    store.save();
+    return failStage(store, options, phaseId, stageId,
+      `recording this invocation's task rows threw — ${String(recorded - tasksBefore)} of `
+      + `${String(outcome.tasks.length)} rows are in run.yml and the rest are not: ${why}`,
+      notes, recorded);
+  }
   store.save();
 
   // A refusal is a precondition the operator can fix (spec §3 exit 2), not a
@@ -1443,7 +1540,7 @@ function recordExecutorTasks(
         ? {}
         : { duration_ms: task.durationMs, duration_basis: "spawned" as const }),
     });
-    store.append(event(options, store.runId, stageId, "agent.result", {
+    appendCappedEvent(store, options, phaseId, stageId, "agent.result", {
       phase: phaseId,
       task: id,
       key: task.key,
@@ -1457,7 +1554,7 @@ function recordExecutorTasks(
         : { duration_ms: task.durationMs, duration_basis: "spawned" }),
       ...(metered ? {} : { mode: "in-session", metered: false }),
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
-    }, metered ? round2(task.costUsd) : 0));
+    }, metered ? round2(task.costUsd) : 0);
   }
 }
 
@@ -1578,7 +1675,7 @@ async function commitStage(
       ...(looksLikeARepeat ? { dedupe: "none — no session id" } : {}),
       ...durationRow,
     });
-    store.append(event(options, store.runId, stageId, "agent.result", {
+    appendCappedEvent(store, options, phaseId, stageId, "agent.result", {
       phase: phaseId,
       task: taskId,
       session_id: result.session_id,
@@ -1592,7 +1689,7 @@ async function commitStage(
       // that nothing was declared lives in the payload where it can be null.
       metered: cost !== null,
       ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
-    }, cost ?? 0, currentStage.expert));
+    }, cost ?? 0, currentStage.expert);
     store.save();
     if (looksLikeARepeat) {
       notes.push(
@@ -2667,7 +2764,7 @@ async function signGate(
   store.save();
 
   const after = await evaluateAgentGate(reevaluate());
-  store.append(event(options, store.runId, stageId, "agent.result", {
+  appendCappedEvent(store, options, phaseId, stageId, "agent.result", {
     phase: phaseId,
     task: taskId,
     role: GATE_SIGNER_ROLE,
@@ -2692,7 +2789,7 @@ async function signGate(
       cache_read_input_tokens: agent.usage.cache_read_input_tokens,
     },
     ...(agent.error === null ? {} : { error: agent.error }),
-  }, agent.metered ? round2(agent.costUsd) : 0, GATE_SIGNER_ROLE));
+  }, agent.metered ? round2(agent.costUsd) : 0, GATE_SIGNER_ROLE);
   store.save();
   return after;
 }

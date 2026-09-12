@@ -102,7 +102,12 @@ if (liveMarker !== null && liveDir !== undefined) {
 process.stdout.write(claudeOutput(argv, {
   isError: failing,
   result: `fake ${role} for ${storyId}`,
-  sessionId: `fake-${role}-${storyId}`,
+  // `FAKE_BUILD_SESSION_PAD` pads the session id with N characters (#248). It is
+  // the one field an `agent.result` carries that NO earlier event does, which is
+  // what makes it the only honest way to drive a payload over the cap at
+  // `recordExecutorTasks` and nowhere before it — a provider is free to hand
+  // back a session id of any length, and the framework must not die on one.
+  sessionId: `fake-${role}-${storyId}${"s".repeat(Number(process.env.FAKE_BUILD_SESSION_PAD ?? "0"))}`,
   costUsd: cost,
   usage: { input_tokens: 100, output_tokens: 10 },
   structured,

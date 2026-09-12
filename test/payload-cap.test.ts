@@ -156,6 +156,8 @@ afterEach(() => {
   delete process.env.FAKE_BUILD_FAIL;
   delete process.env.FAKE_BUILD_FAIL_REASON;
   delete process.env.FAKE_BUILD_STATE;
+  delete process.env.FAKE_BUILD_WRITE;
+  delete process.env.FAKE_BUILD_SESSION_PAD;
   delete process.env.TLDRX_AGENT_PROVIDER;
   for (const ws of open) ws.dispose();
   open = [];
@@ -425,4 +427,189 @@ describe("the emit seam under a real build run — a non-cap throw", () => {
     // also swallow the fact that this invocation's rows are unrecorded.
     expect(outcome.lines.join("\n")).toContain("executor threw before returning its task rows");
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// #248: the SECOND field that overflows in the wild, and the two things the
+// throw took with it.
+//
+// `agent.result` carries `outputs` — every run-relative path a turn wrote — and
+// a story with a few dozen files clears 4096 bytes on that array alone. Three
+// separate defects met there, and each half below is one of them:
+//
+//   1. the append in `recordExecutorTasks` was RAW (not the capped seam), and
+//      `capPayload` only knew how to name `detail`, so routing alone would not
+//      have saved it either;
+//   2. the throw landed AFTER the executor try/catch closed, so it killed the
+//      loop with exit 1 — outside `--retry-failed`'s exit-5 family;
+//   3. the epic claim was in memory one line before the throw and `store.save()`
+//      never ran, so the next `run auto` was refused its OWN epic as a foreign
+//      one.
+// ---------------------------------------------------------------------------
+
+/**
+ * A developer whose `outputs` array alone clears the cap — 80 realistic paths,
+ * ~4.6 KB of JSON array. The live incident that filed #248 measured 3924 bytes of
+ * `outputs` under a 212-byte envelope: this is that, rounded up so the assertion
+ * cannot pass by a handful of bytes either way.
+ */
+const MANY_FILES_COUNT = 80;
+const MANY_FILES: Record<string, string> = Object.fromEntries(
+  Array.from({ length: MANY_FILES_COUNT }, (_, i) => [
+    `src/generated/module-${String(i).padStart(3, "0")}/very-long-descriptive-name.ts`,
+    `// generated ${String(i)}\n`,
+  ]),
+);
+
+/**
+ * The same one story, with `src/generated` DECLARED as its surface.
+ *
+ * Deliberate, and worth the sentence: a story that writes 60 files it never
+ * declared also emits `story.touches_widened`, whose `paths`/`after` lists are a
+ * THIRD uncapped field family — measured here at 7060 bytes, and refused for the
+ * same reason `outputs` was. That is a separate defect on a separate event and it
+ * is filed, not fixed in this change (AGENTS.md §1). Declaring the surface keeps
+ * this test on the seam it is about: the `agent.result` for a turn that wrote a
+ * lot of files.
+ */
+const WIDE_STORY: BuildWorkspaceOptions = {
+  stories: [{ id: "S1", epic: "E1", title: "First story", touches: ["src/generated"] }],
+  epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+  waves: [["S1"]],
+};
+
+describe("capPayload learns `outputs` (#248)", () => {
+  test("an oversized `outputs` list is named by COUNT, never truncated in place", () => {
+    const outputs = Array.from({ length: 200 }, (_, i) => `src/generated/file-${String(i)}.ts`);
+    const payload = { phase: "04-build", task: "t2", key: "S2", outputs, tldrx_version: "0.17.0" };
+    expect(bytes(payload)).toBeGreaterThan(MAX_PAYLOAD_BYTES);
+    let saved = "";
+
+    const capped = capPayload(payload, (text) => {
+      saved = text;
+      return "omitted text saved at 04-build/log/overflow/2026-09-12T00-00-00Z-1-agent.result-outputs.txt";
+    });
+
+    // The list is GONE, not shortened: a 12-of-200 `outputs` would read as the
+    // whole list to everything downstream, which is the invented value §7 bans.
+    expect(capped.outputs).toBeUndefined();
+    expect(capped.outputs_omitted).toBe(200);
+    expect(String(capped.outputs_omitted_reason)).toContain(String(MAX_PAYLOAD_BYTES));
+    expect(String(capped.outputs_omitted_reason)).toContain(
+      "omitted text saved at 04-build/log/overflow/2026-09-12T00-00-00Z-1-agent.result-outputs.txt",
+    );
+    // `save` got the full list, one path per line — recoverable verbatim.
+    expect(saved.split("\n")).toEqual(outputs);
+    // Everything the ledger reads survives.
+    expect(capped.task).toBe("t2");
+    expect(capped.key).toBe("S2");
+    expect(bytes(capped)).toBeLessThanOrEqual(MAX_PAYLOAD_BYTES);
+  });
+
+  test("`detail` still goes first, and `outputs` only if the payload is STILL over", () => {
+    // Order matters: `detail` is prose and `outputs` is a list a ledger reads, so
+    // the prose is the first thing to go. A payload that fits once `detail` is
+    // named keeps its `outputs` untouched.
+    const outputs = ["a.ts", "b.ts"];
+    const payload = { phase: "04-build", outputs, detail: "x".repeat(MAX_PAYLOAD_BYTES * 2) };
+    const capped = capPayload(payload, () => "omitted text saved at somewhere.txt");
+    expect(capped.detail_omitted).toBeDefined();
+    expect(capped.outputs).toEqual(outputs);
+    expect(capped.outputs_omitted).toBeUndefined();
+  });
+
+  test("an in-cap payload carrying `outputs` is the SAME object — every existing event is byte-identical", () => {
+    const payload = { phase: "04-build", task: "t1", outputs: ["s1.txt"] };
+    expect(capPayload(payload)).toBe(payload);
+  });
+});
+
+describe("#248 half 1 — a huge `outputs` never kills the money path", () => {
+  test("the task row, its cost and the epic merge all land; the list is beside the event", async () => {
+    const ws = workspace(WIDE_STORY);
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({ S1: MANY_FILES });
+    process.env.FAKE_BUILD_COST = "0.25";
+
+    // Before the fix this threw out of `EventLog.append` — "payload NNNN bytes
+    // exceeds the 4096 byte cap" — and took `store.save()` with it.
+    const outcome = await next(ws);
+
+    expect(outcome.code).not.toBe(1);
+    const stage = buildStage(ws);
+    // The row is ON DISK with its money, which is the whole point.
+    const dev = stage?.tasks.find((t) => t.role === "developer");
+    expect(dev).toBeDefined();
+    expect(dev?.cost_usd).toBe(0.25);
+    expect(dev?.outputs.length).toBe(MANY_FILES_COUNT);
+
+    // The event is inside the cap, and says what it left out by COUNT.
+    const result = events(ws).find((e) => e.type === "agent.result" && e.payload.outputs_omitted !== undefined);
+    expect(result?.payload.outputs).toBeUndefined();
+    expect(result?.payload.outputs_omitted).toBe(MANY_FILES_COUNT);
+    expect(bytes(result?.payload as Record<string, unknown>)).toBeLessThanOrEqual(MAX_PAYLOAD_BYTES);
+
+    // The full list is beside the event, relative and real.
+    const relPath = savedPathIn(String(result?.payload.outputs_omitted_reason));
+    expect(relPath.startsWith("/")).toBe(false);
+    expect(relPath).toMatch(/^04-build\/log\/overflow\/.+-agent\.result-outputs\.txt$/);
+    const sidecar = readFileSync(join(ws.runDir, relPath), "utf8");
+    expect(sidecar.split("\n").length).toBe(MANY_FILES_COUNT);
+    expect(sidecar).toContain("src/generated/module-079/very-long-descriptive-name.ts");
+  }, 90_000);
+});
+
+/**
+ * A payload oversized for a reason `capPayload` does NOT know how to name, in
+ * the one place it can only be recorded and nowhere earlier: `session_id`.
+ *
+ * `agent.result` is the only event that carries it (grep over `src/`, measured),
+ * so a 6000-character session id sails through every executor emit and throws at
+ * `recordExecutorTasks`'s append and nowhere else — which is precisely the line
+ * halves 2 and 3 are about. A provider may hand back a session id of any length,
+ * and naming ONE absence has never promised a fit (see `capPayload` above): what
+ * may not happen is the throw escaping past the accounting.
+ */
+const HUGE_SESSION = "6000";
+
+describe("#248 half 2 — a throw while recording rows fails the STAGE, it does not kill the loop", () => {
+  test("exit 5, not 1, and the rows already earned are on disk", async () => {
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_SESSION_PAD = HUGE_SESSION;
+
+    // Before the fix this REJECTED — the throw escaped `runNext` entirely, and
+    // `run auto` turned it into exit 1 via `fail()`, outside `--retry-failed`'s
+    // exit-5 family. The loop told to survive two failures survived zero.
+    const outcome = await next(ws);
+
+    expect(outcome.code).toBe(5); // EXIT_AGENT_FAILED — `--retry-failed`'s family
+    expect(outcome.lines.join("\n")).toContain("exceeds the 4096 byte cap");
+    const stage = buildStage(ws);
+    expect(stage?.status).toBe("failed");
+    // Every row recorded before the throw is on disk: the catch saves.
+    expect(stage?.tasks.length ?? 0).toBeGreaterThan(0);
+    // And the loss is named in the log, where it happened — not under `executor`,
+    // which would send a reader looking at the wrong seam.
+    const errorEvent = events(ws).find((e) => e.type === "error" && e.payload.where === "record-tasks");
+    expect(errorEvent).toBeDefined();
+    expect(String(errorEvent?.payload.detail)).toContain("exceeds the 4096 byte cap");
+  }, 90_000);
+});
+
+describe("#248 half 3 — a claim already earned is on disk before anything that can throw", () => {
+  test("the epic branch this run cut is in run.yml even when recording the rows throws", async () => {
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_SESSION_PAD = HUGE_SESSION;
+    // Deliberately tolerant of a REJECTION rather than asserting exit 5: the exit
+    // code is half 2's property and half 2 owns the test for it. This one has to
+    // hold even for a throw nothing catches, which is what makes it a separate
+    // defect — so it asserts the claim and nothing else.
+    await next(ws).catch(() => null);
+
+    // The refusal this closes: `branchClaims.ts` reads `build.epic_branch` off
+    // run.yml, finds `epic/e1` on disk and NOT in the file, and refuses the run
+    // its own epic — "this run did not cut it". It did cut it. The claim is
+    // saved the moment it is earned, one line BEFORE anything that can throw.
+    const onDisk = RunStore.open(ws.runDir).run;
+    expect(onDisk.build?.epic_branch ?? []).toContain("epic/e1");
+  }, 90_000);
 });
