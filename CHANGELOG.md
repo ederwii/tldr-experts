@@ -4,6 +4,28 @@
 
 ### Fixed
 
+- **The `merge-wave` "known flake" was a real race, and it was in the guard's own INSTALL
+  (#115).** For months `test/merge-wave.test.ts`'s concurrency cases reddened CI, went green on
+  a same-sha re-run, and were waved through under §4's re-run licence — three separate cases in
+  one night alone. Nobody had read the failure detail. `gh run view 34671878974 --log-failed`
+  (sha `8cd4df2`) says it in two lines: `fatal: cannot exec '.git/hooks/reference-transaction':
+  Text file busy` → `update aborted by the reference-transaction hook`. `merge-wave.sh` installs
+  the ref guard BEFORE it queues for the lock — deliberately, so an unguarded window never
+  exists — so two invocations overlap on exactly one file, and `install_hook` wrote it with
+  `cat > "$hook"`: truncate-and-rewrite THE SAME INODE, while the invocation holding the lock
+  has a `git merge` exec'ing it. On Linux exec of a file open for write is ETXTBSY; on macOS the
+  identical race is benign, which is the whole of why it was green locally and red on CI, and
+  why a same-sha re-run failed 2-for-2 rather than passing. The hook is now written to
+  `reference-transaction.tmp.$$`, made executable there, and `mv -f`'d into place — the exec'd
+  inode is never the written inode, and no reader can catch a zero-length window. It is the
+  answer `$MARKER` in `merge-wave.sh` already used, and the trap AGENTS.md §12 already named.
+  The race is untestable on macOS by design, so the WRITE is what is pinned: a reinstall must
+  land on a new inode and must leave the inode a hard link is holding byte-identical — red on
+  both counts before the fix. And the refusal that hid all this now tells the truth: a merge the
+  ref-transaction hook aborted, with no conflicting path anywhere, says so and exits **11**, its
+  own code, instead of borrowing `2` and telling the agent to go rebase against a conflict that
+  never existed. A mislabelled refusal is how a deterministic defect becomes folklore; §4's
+  re-run licence for this test is withdrawn in the same change.
 - **The views fixture no longer decays: `test/experts.test.ts` was a wall-clock time bomb
   (#240).** `main` went red at `e1d284d` — the exact sha of published 0.16.0, with no commit in
   between — because `competencyLevel` weighs every evidence row by its AGE and the fixture dated
