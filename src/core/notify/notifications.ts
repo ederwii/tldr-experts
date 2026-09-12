@@ -14,10 +14,12 @@
  */
 import type { DecisionCard } from "../ui/decisionCard.ts";
 // The one spelling of `tldrx answer <Qid> "…" --run <id>`, shared with every decision card.
-import { answerCommand, approveCommand, rejectCommand } from "../run/decisionCards.ts";
+import {
+  answerCommand, approveCommand, continueCommand, rejectCommand,
+} from "../run/decisionCards.ts";
 import type { GatePolicy } from "../run/gatePolicy.ts";
 import {
-  deliveredPhrase, gateStoriesPayload, type OutcomeLine, type StoriesView,
+  continueNote, deliveredPhrase, gateStoriesPayload, type OutcomeLine, type StoriesView,
 } from "../run/runOutcome.ts";
 import { NOTIFY_PAYLOAD_VERSION, exitFamily, type NotifyKind, type NotifyPayload } from "./payload.ts";
 import { spentBasis, spentFigure, type SpentTally } from "../budget/spentFigure.ts";
@@ -179,10 +181,46 @@ function clearingCommand(
   openQuestions: readonly string[],
   unfinishedStories: number,
 ): string {
-  const first = openQuestions[0];
-  if (first !== undefined) return answerCommand(first, runId);
-  if (unfinishedStories > 0) return `tldrx run status ${runId}`;
-  return approveCommand(runId);
+  switch (gateHolding(openQuestions, unfinishedStories)) {
+    case "questions":
+      // Non-null by construction: `gateHolding` returns `questions` only when there is
+      // a first id. The fallback exists so the narrowing is the compiler's, not a
+      // comment's — and it can never be the string a reader sees.
+      return answerCommand(openQuestions[0] ?? "", runId);
+    case "stories":
+      return `tldrx run status ${runId}`;
+    default:
+      return approveCommand(runId);
+  }
+}
+
+/**
+ * The NAME of the branch `clearingCommand` just took (gh #243).
+ *
+ * ## Why the tri-state has to travel as a field
+ *
+ * Measured, the owner's Slack adapter, 2026-09-11: a `gate.requested` renders two
+ * buttons, Yes and No, and No rejects nothing — it logs "gate stays open". To do
+ * better the adapter has to know WHICH gate this is, and today only one third of that
+ * travels structured: `detail.stories` says there is unbuilt work, but "there are open
+ * questions" is carried by nothing except the PREFIX of `command` (`tldrx answer …`).
+ * So a consumer that wants a third button has to sniff a CLI string for a substring —
+ * a second, untested, out-of-repo copy of the mapping right below, and one that goes
+ * quietly wrong the day a command is reworded.
+ *
+ * This is that same mapping, named. It is not a second measurement and it must never
+ * become one: `clearingCommand` switches on it, so `holding` and `command` are two
+ * renderings of one branch and cannot disagree (§7). It makes exactly the claim
+ * `command` already made and no stronger one — `none` means "the inputs this payload
+ * was built from name nothing mechanical outstanding", which is why a caller that read
+ * no questions gets the same answer it always got.
+ */
+export type GateHolding = "questions" | "stories" | "none";
+
+function gateHolding(openQuestions: readonly string[], unfinishedStories: number): GateHolding {
+  if (openQuestions[0] !== undefined) return "questions";
+  if (unfinishedStories > 0) return "stories";
+  return "none";
 }
 
 /**
@@ -246,6 +284,22 @@ export function gateNotification(
   // would break the three that read best without it. So the article is fixed here, at
   // the only call site that needed a sentence.
   const delivered = stories === null ? "" : ` It has ${deliveredPhrase(stories)}.`;
+  const holding = gateHolding(openQuestions, stories?.unfinished.length ?? 0);
+  // The one-tap "send it back and carry on" (#243), offered ONLY where the gate can
+  // say what has to change in its own words.
+  //
+  // Not on a gate held by open QUESTIONS: it is downstream of them, and a one-tap
+  // refusal there is the mirror of the mistake #239 was filed over. Not on a gate
+  // held by nothing mechanical either: that gate is waiting on a judgement, and the
+  // reason to refuse a judgement is in a person's head, not on disk. And not even on
+  // every gate held by stories — `continueNote` returns null when no story is blocked,
+  // or when the blocked one's reason was never recorded, because `--note` is the next
+  // turn's prompt (`reject.ts:107`) and a canned note would satisfy the flag while
+  // emptying the rule it exists for (§7, absent-with-reason).
+  //
+  // Both keys travel together or neither does: a command whose hole nothing can fill
+  // is a button that cannot be pressed.
+  const note = holding === "stories" && stories !== null ? continueNote(stories) : null;
   return {
     ...base(ctx, "gate.requested"),
     summary: `${ctx.runId} finished ${ctx.stage ?? "a stage"} for $${costUsd.toFixed(2)} and is waiting `
@@ -261,6 +315,15 @@ export function gateNotification(
       // read events.jsonl to learn what a gate is over. Absent for a non-Build
       // stage — a zeroed count would say a plan was read and found empty (§7).
       ...(stories === null ? {} : gateStoriesPayload(stories)),
+      // What is holding this gate, as DATA. Always present on `gate.requested`: it is
+      // the name of the branch `command` above was chosen by, so a payload carrying a
+      // command but no holding would be hiding half of one fact.
+      holding,
+      // `…` is the placeholder the framework has always used for "the consumer fills
+      // this in" (`answerCommand`); `continue_note` is what a one-tap button puts in
+      // it, derived from the gate. A consumer that wants the owner to type instead
+      // substitutes their text and ignores the note.
+      ...(note === null ? {} : { continue_command: continueCommand(ctx.runId), continue_note: note }),
       // Absent, never `[]`, when no signer ran: an empty list would read as "the
       // signer found nothing wrong", which is the opposite of "no signer looked".
       ...(held.length === 0 ? {} : policy === "auto" ? { held_by: held } : { signer_held: held }),

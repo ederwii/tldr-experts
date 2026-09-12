@@ -97,7 +97,11 @@ command, because a heartbeat that kept saying nothing is waiting on you would be
 silence. `--wait-answers` and `--wait-gates` are the two flags that change where the loop stops,
 one for each half of exit `4`: instead of exiting at an open question it polls for an answer and
 **resumes if you give one**, and instead of exiting at a pending gate it polls for a signature
-and **resumes if somebody signs**, stopping with your note if you reject. Both exit `4` unchanged
+and **resumes if somebody signs**, stopping with your note if you reject — or carrying on with
+it when the rejection said `--and-continue`. A `gate.requested` payload names which of those the
+gate is even about: `holding` says whether it is held by open questions, by unfinished stories or
+by nothing mechanical, and a gate that can name what has to change carries the `--and-continue`
+line ready to fire. Both exit `4` unchanged
 when the wait lapses. Nothing is spent while either waits, and the loop closes nothing of its
 own — it never answers its own question and it never signs its own gate, an `agent` policy
 included.

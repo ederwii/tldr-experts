@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.16.2 — unreleased
+
+### Added
+
+- **A `gate.requested` payload says what is HOLDING the gate, and hands over the rejection that
+  carries on (#243).** The owner's phone renders a gate as two buttons, Yes and No, and the No
+  branch rejects nothing — it logs *"gate stays open"*. That is not the adapter being lazy: it is
+  the adapter working with what it was handed. Of the three things #239 taught the framework to
+  distinguish, exactly one travelled as data — `detail.stories` says there is unbuilt work —
+  while "there are open questions" travelled in nothing but the PREFIX of `command`
+  (`tldrx answer …`). Routing on that is a second, untested, out-of-repo copy of the mapping,
+  and it goes quietly wrong the day a command is reworded. So the branch `clearingCommand`
+  already takes is now NAMED: `detail.holding` is `questions`, `stories` or `none`, and
+  `clearingCommand` switches on it, so the field and the command are two renderings of one
+  derivation and cannot disagree (§7). And the payload now spells the other half of what a third
+  button needs: `detail.continue_command` is `tldrx reject --run <id> --and-continue --note "…"`
+  — #242's verb, with the substitutable `…` `answer_command` established, rather than
+  `reject_command`'s `<why>`, which is prose for a human and would have been sent literally as
+  the next turn's prompt. Its note is DERIVED, never canned: `continue_note` is the blocked
+  story and the handoff's own reason for it, the same two facts already on the payload as
+  `blocked_story` and `blocked_reason`. Both keys are absent together wherever the gate cannot
+  name what has to change — held by open questions (the gate is downstream of them, and a
+  one-tap refusal there is the mirror of the mistake #239 was filed over), held by nothing
+  mechanical (the reason to refuse a judgement is in a person's head), and held by stories none
+  of which is blocked or whose blocked one recorded no reason. `--note` is mechanically required
+  and becomes the next turn's prompt, so a canned *"rejected from Slack"* would satisfy the flag
+  and empty the rule it exists for: a button that hands the re-run an empty instruction is worse
+  than no button. Every key is additive — a consumer that reads none of them gets exactly the
+  payload it got before. Which buttons an adapter draws, and how, stays the adapter's.
+
 ## 0.16.1 — 2026-09-12
 
 ### Added

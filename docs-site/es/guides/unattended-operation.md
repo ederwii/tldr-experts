@@ -171,7 +171,19 @@ de decir cuánto costó:
 
 Los conteos y el motivo de la primera historia bloqueada viajan en el payload de
 `gate.requested` como `stories`, `blocked_story` y `blocked_reason`, así que un script puede
-enrutar con ellos. El motivo es la frase del propio handoff, nunca una paráfrasis. Dos runs
+enrutar con ellos. **Lo que RETIENE la compuerta también viaja, como campo**: `holding` es
+`questions`, `stories` o `none` — la misma rama por la que se eligió el `command` de arriba,
+dicha una vez como dato, para que un adaptador nunca tenga que olfatearla del prefijo de una
+cadena de CLI. Y donde la compuerta puede nombrar con sus propias palabras qué hay que cambiar,
+lleva además `continue_command` — `tldrx reject --run <id> --and-continue --note "…"`, el
+*«rehacelo así y seguí»* de un solo toque — con `continue_note`, la nota derivada de la historia
+bloqueada y del motivo que el handoff registró. Ese par está AUSENTE en una compuerta retenida
+por preguntas abiertas (aprobar o rechazar es justo lo que no debe pasar antes de responderlas),
+en una retenida por nada mecánico (el motivo para rechazar un juicio está en tu cabeza, no en el
+disco) y en una cuya historia bloqueada no registró motivo. La nota de un rechazo entra al
+prompt del turno siguiente, así que un *«rechazado desde Slack»* enlatado cumpliría con la
+bandera y le daría a la re-corrida una instrucción vacía: es mejor ningún botón que un botón que
+no dice nada. El motivo es la frase del propio handoff, nunca una paráfrasis. Dos runs
 reales se aprobaron desde el teléfono sobre un resumen que decía `$1.78` y un chequeo en verde
 mientras todas las historias estaban bloqueadas — el conteo ya existía y corría solo para las
 compuertas `auto`.
@@ -239,7 +251,7 @@ así que un `switch` sobre `kind` con un `default` es un adaptador completo.
 |---|---|---|---|
 | `question.raised` | el bucle se detuvo en una pregunta abierta | la línea `tldrx answer` de la primera pregunta | `questions[]` — `id`, `title`, `why_asked`, `options[]` como `{letter, text}`, `recommendation` (`option`, `why`, `src`) o `null`, `answer_command` |
 | `question.timeout` | se venció `--wait-answers` y el bucle está por salir con `4` | la misma línea de respuesta | los mismos `questions[]`, más `waited_ms` |
-| `gate.requested` | una etapa terminó y una persona tiene que firmarla — **se difiere, y puede que nunca se mande, cuando una compuerta `auto` está retenida solo por preguntas abiertas** | la línea que LIBERA la compuerta: `tldrx answer <id>` si hay preguntas abiertas, `tldrx run status <id>` si quedan historias sin terminar, `tldrx approve --run <id>` cuando no queda nada mecánico pendiente | `cost_usd`, `approve_command`, `reject_command`, `gate_policy`, y uno de `held_by` (las condiciones que fallaron en una compuerta `auto`) / `signer_held` (las razones del firmante `agent`) — ausente cuando nadie miró |
+| `gate.requested` | una etapa terminó y una persona tiene que firmarla — **se difiere, y puede que nunca se mande, cuando una compuerta `auto` está retenida solo por preguntas abiertas** | la línea que LIBERA la compuerta: `tldrx answer <id>` si hay preguntas abiertas, `tldrx run status <id>` si quedan historias sin terminar, `tldrx approve --run <id>` cuando no queda nada mecánico pendiente | `cost_usd`, `approve_command`, `reject_command`, `gate_policy`, `holding` (`questions` \| `stories` \| `none`), y uno de `held_by` (las condiciones que fallaron en una compuerta `auto`) / `signer_held` (las razones del firmante `agent`) — ausente cuando nadie miró. Más `continue_command` + `continue_note`, juntos o ninguno, solo donde la compuerta puede nombrar qué hay que cambiar |
 | `gate.timeout` | se venció `--wait-gates` y el bucle está por salir con `4` | la misma línea de aprobación | `approve_command`, `reject_command`, `gate_policy`, `waited_ms`, y `cost_usd` solo cuando este bucle es el que vio levantarse la compuerta |
 | `stage.done` | una etapa terminó y el bucle siguió | `null` — el bucle ya está corriendo la siguiente etapa | `cost_usd` |
 | `run.finished` | el bucle terminó con salida `0` | `null` | `exit_code`, `exit_family`, `spent_usd` |

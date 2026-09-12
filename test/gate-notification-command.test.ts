@@ -28,8 +28,12 @@
  */
 import { describe, expect, test } from "bun:test";
 import { gateNotification, statusNotification } from "../src/core/notify/notifications.ts";
-import { answerCommand, approveCommand, rejectCommand } from "../src/core/run/decisionCards.ts";
-import { deliveredPhrase, type StoriesView } from "../src/core/run/runOutcome.ts";
+import {
+  answerCommand, approveCommand, continueCommand, rejectCommand,
+} from "../src/core/run/decisionCards.ts";
+import {
+  continueNote, deliveredPhrase, REASON_NOT_RECORDED, type StoriesView,
+} from "../src/core/run/runOutcome.ts";
 import type { NotifyContext } from "../src/core/notify/notifications.ts";
 
 const RUN = "260910-checkout";
@@ -130,5 +134,132 @@ describe("the parked heartbeat repeats the same command (#239)", () => {
     const beat = statusNotification(ctx, "status text", [], { stage: "01-what/what", policy: "human" });
 
     expect(beat.command).toBe(approveCommand(RUN));
+  });
+});
+
+/**
+ * The holding condition travels as DATA, and a rejection that carries on is a command
+ * the framework spells (gh #243).
+ *
+ * ## What was measured
+ *
+ * tldrx 0.16.1, the owner's Slack adapter, 2026-09-11: a `gate.requested` renders exactly
+ * two buttons, Yes and No, and the No branch logs `gate stays open` and rejects nothing.
+ * The adapter cannot do better with what it is handed: "there are unfinished stories"
+ * travels structured (`detail.stories`), "there are open questions" does not travel at
+ * all — the only thing that betrays it is the PREFIX of `payload.command` — and there is
+ * no executable reject-and-continue line anywhere in the payload (`reject_command` spells
+ * `--note "<why>"`, which is prose for a human, not the `…` the adapter substitutes).
+ *
+ * So the tri-state #239 already computes is NAMED in the detail instead of being sniffed
+ * off a string, and the `--and-continue` rejection #242 added is spelled by the one file
+ * that spells `approve` and `reject`.
+ *
+ * The second half is the half that makes this a proof and not a guard: the command and
+ * its note are ABSENT whenever the gate has no reason of its own to put in `--note`
+ * (§7). A `continue_command` on every gate would say "you may always carry on", and a
+ * canned note would satisfy the flag `reject.ts:43` requires while emptying the rule it
+ * exists for — the note is the next turn's prompt (`reject.ts:107`).
+ */
+describe("the gate payload names what holds it and how to send it back (#243)", () => {
+  test("a Build gate over a blocked story names `stories` and spells reject --and-continue", () => {
+    const view = stories(5, 6);
+
+    const payload = gateNotification(ctx, 1.78, "human", [], view);
+
+    expect(payload.detail.holding).toBe("stories");
+    expect(payload.detail.continue_command).toBe(continueCommand(RUN));
+    // The note is DERIVED from the gate — the blocked story and the handoff's own
+    // reason, the same two keys `blocked_story`/`blocked_reason` already carry.
+    expect(payload.detail.continue_note).toBe(continueNote(view));
+    expect(payload.detail.continue_note).toContain("S6");
+    expect(payload.detail.continue_note).toContain("dotnet test exited 2");
+  });
+
+  test("open questions name `questions`, and offer no way to carry on", () => {
+    const payload = gateNotification(ctx, 1.78, "auto", [], stories(5, 6), ["Q1", "Q2"]);
+
+    expect(payload.detail.holding).toBe("questions");
+    // Downstream of the questions: the tap is `answer`, and a rejection here would be
+    // the one-tap refusal #239 was filed over.
+    expect(payload.detail).not.toHaveProperty("continue_command");
+    expect(payload.detail).not.toHaveProperty("continue_note");
+  });
+
+  test("with nothing outstanding it names `none` and the keys are ABSENT, not empty", () => {
+    const payload = gateNotification(ctx, 1.78, "human", [], stories(6, 6));
+
+    expect(payload.detail.holding).toBe("none");
+    expect(payload.detail).not.toHaveProperty("continue_command");
+    expect(payload.detail).not.toHaveProperty("continue_note");
+    expect(Object.keys(payload.detail)).not.toContain("continue_command");
+  });
+
+  test("a non-Build gate names `none` — no plan was read, so no story is unfinished", () => {
+    const payload = gateNotification(ctx, 1.78, "human", [], null);
+
+    expect(payload.detail.holding).toBe("none");
+    expect(payload.detail).not.toHaveProperty("continue_command");
+  });
+
+  test("unfinished but nothing BLOCKED: `stories`, and still no continue — the gate has no reason to send", () => {
+    // Every story merely `todo`. The gate is held, and the framework knows WHY it is
+    // held no better than "not started" — which is not an instruction for the next
+    // turn. Absent-with-reason beats a note that says nothing (§7).
+    const todoOnly: StoriesView = {
+      counts: { total: 3, done: 1, in_progress: 0, review: 0, blocked: 0, todo: 2 },
+      unfinished: [
+        { id: "S2", status: "todo", reason: REASON_NOT_RECORDED },
+        { id: "S3", status: "todo", reason: REASON_NOT_RECORDED },
+      ],
+      firstBlocked: null,
+    };
+
+    const payload = gateNotification(ctx, 1.78, "human", [], todoOnly);
+
+    expect(payload.detail.holding).toBe("stories");
+    expect(payload.detail).not.toHaveProperty("continue_command");
+    expect(continueNote(todoOnly)).toBeNull();
+  });
+
+  test("a blocked story whose handoff recorded NO reason is not given an invented one", () => {
+    const noReason: StoriesView = {
+      counts: { total: 2, done: 1, in_progress: 0, review: 0, blocked: 1, todo: 0 },
+      unfinished: [{ id: "S2", status: "blocked", reason: REASON_NOT_RECORDED }],
+      firstBlocked: { id: "S2", status: "blocked", reason: REASON_NOT_RECORDED },
+    };
+
+    const payload = gateNotification(ctx, 1.78, "human", [], noReason);
+
+    expect(payload.detail.holding).toBe("stories");
+    expect(payload.detail).not.toHaveProperty("continue_command");
+  });
+
+  test("the continue command carries the substitutable placeholder, not prose", () => {
+    // The adapter fills the `…` (the convention `answerCommand` established); it must
+    // never have to notice that `<why>` is a hole.
+    expect(continueCommand(RUN)).toContain('--note "…"');
+    expect(continueCommand(RUN)).toContain("--and-continue");
+    // `--stage` beside `--and-continue` is a usage refusal (`reject.ts:51-57`), so the
+    // line the framework hands a button must never carry one.
+    expect(continueCommand(RUN)).not.toContain("--stage");
+    expect(rejectCommand(RUN)).not.toContain("--and-continue");
+  });
+
+  test("`holding` names the branch `command` was chosen by — one derivation, never two", () => {
+    const cases: readonly [StoriesView | null, readonly string[], string][] = [
+      [stories(5, 6), ["Q1"], "questions"],
+      [stories(5, 6), [], "stories"],
+      [stories(6, 6), [], "none"],
+      [null, [], "none"],
+    ];
+    for (const [view, open, holding] of cases) {
+      const payload = gateNotification(ctx, 1.0, "human", [], view, open);
+      const expected = holding === "questions"
+        ? answerCommand(open[0] ?? "", RUN)
+        : holding === "stories" ? `tldrx run status ${RUN}` : approveCommand(RUN);
+      expect(payload.detail.holding).toBe(holding);
+      expect(payload.command).toBe(expected);
+    }
   });
 });
