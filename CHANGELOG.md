@@ -2,6 +2,29 @@
 
 ## 0.16.1 — unreleased
 
+### Added
+
+- **`tldrx reject --and-continue` — a rejection that means "redo it this way and carry on"
+  (#242).** `run auto --wait-gates` resumed after an approve and STOPPED after a reject, so on a
+  phone the button meaning *there is still work to do* was the one that ended the run: the only
+  way to act on a rejection was to walk to a terminal and relaunch. The stop was deliberate and
+  its reasoning is real — resuming re-spends the stage on a decision the person who rejected it
+  has not been shown the result of — but it is the reasoning for ONE kind of rejection, "stop, I
+  will look", and the issue measured five consecutive live rejections that all meant the other
+  one: *"faltan 4 stories sin arrancar; continuar el build"*, *"Rehacer S2 y las waves 3 y 4"*,
+  *"Una ronda mas"*. Five rejections, five manual relaunches, the assumption holding zero times
+  out of five. So the rejection now SAYS which act it is instead of the loop guessing from the
+  note's words or from what was holding the gate: `--and-continue` records `and_continue: true`
+  on the gate record `tldrx reject` writes — the same object `--wait-gates` already reads the
+  gate's `status` off, in the same read, so there is no second derivation and no second process
+  to ask — and the loop re-runs the stage with the note, exactly as the manual relaunch did. A
+  bare `tldrx reject` is byte-identical to what it wrote before and stops the loop exactly as
+  before; `and_continue` is additive and only ever `true`, so a gate written before this key
+  existed reads as "stop". It is cleared when the stage parks on its gate again, so it never
+  outlives the rejection it describes. The rationale in `runAuto.ts` now names both kinds and
+  says which one is the default. Which BUTTON a notification offers for which effect is
+  deliberately not part of this change.
+
 ### Fixed
 
 - **The `merge-wave` "known flake" was a real race, and it was in the guard's own INSTALL

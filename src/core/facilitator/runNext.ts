@@ -1823,7 +1823,11 @@ async function finishStage(
       ...s,
       status: "awaiting_gate",
       ended_at: nowish(options),
-      gate: { ...s.gate, type: "approve", status: "pending" },
+      // `and_continue` is cleared here, where the gate goes back to `pending`: it
+      // describes the rejection that sent this stage back to `ready`, and that
+      // rejection is now answered by the attempt that just ran (#242). Leaving it
+      // on a pending gate would be a claim about a decision nobody has made yet.
+      gate: { ...s.gate, type: "approve", status: "pending", and_continue: undefined },
     }));
     // The auto verdict is taken HERE, one statement before the event that announces
     // the gate, and the order is the whole of gh #203. It used to be measured a

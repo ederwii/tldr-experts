@@ -52,6 +52,13 @@ export interface GateContext {
   readonly executorId?: string | null;
   /** Present only when an `agent` policy is closing this gate. */
   readonly evidence?: GateEvidenceInput;
+  /**
+   * `tldrx reject --and-continue` — this rejection means "redo it this way and
+   * carry on", not "stop, I will look" (gh #242). Recorded on the gate so an
+   * unattended `run auto` waiting somewhere else can tell the two apart; absent
+   * or false is the default and stops the loop exactly as it always did.
+   */
+  readonly andContinue?: boolean;
 }
 
 export interface ApproveOutcome {
@@ -213,6 +220,8 @@ export interface RejectOutcome {
   readonly note: string;
   /** The status the stage was in when it was rejected: `awaiting_gate` or `failed`. */
   readonly from: string;
+  /** True when the rejection asked an unattended loop to carry on (#242). */
+  readonly andContinue: boolean;
 }
 
 /**
@@ -241,16 +250,30 @@ export function reject(store: RunStore, ctx: GateContext): RejectOutcome {
       ...stage,
       status: "ready",
       ended_at: null,
-      gate: { ...stage.gate, status: "rejected", by: ctx.actor, at: ctx.at, note: ctx.note } satisfies RunGate,
+      // `and_continue` is written on EVERY rejection, `true` or nothing at all: a
+      // bare rejection must not inherit a previous one's answer through the spread
+      // (#242), and `undefined` is what the emitter omits.
+      gate: {
+        ...stage.gate,
+        status: "rejected",
+        by: ctx.actor,
+        at: ctx.at,
+        note: ctx.note,
+        and_continue: ctx.andContinue === true ? true : undefined,
+      } satisfies RunGate,
     })),
   );
   store.append(event(ctx.at, store.runId, entry.stage.id, "gate.rejected", ctx.actor, {
     phase: entry.phase.id,
     note: ctx.note,
     from,
+    // On the event as well as the gate, and for the same reason the gate carries it:
+    // "was this rejection asking for another round" is a fact about the decision, and
+    // the gate mapping is overwritten by the next `gate.requested` while the log is not.
+    ...(ctx.andContinue === true ? { and_continue: true } : {}),
   }));
   store.save();
-  return { stage: entry.stage.id, phase: entry.phase.id, note: ctx.note, from };
+  return { stage: entry.stage.id, phase: entry.phase.id, note: ctx.note, from, andContinue: ctx.andContinue === true };
 }
 
 export interface RevokeOutcome {

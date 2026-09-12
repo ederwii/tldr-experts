@@ -445,7 +445,7 @@ const ENTRIES: readonly CommandHelp[] = [
       {
         name: "wait-gates",
         arg: "<duration>",
-        meaning: "Instead of exiting 4 the moment a stage parks on a pending GATE, poll the run for this long and resume if somebody signs it. `--wait-answers`\u0027 sibling for the other half of exit 4: a gate is closed by `tldrx approve` / `tldrx reject`, not by an answer. Approved \u2192 the loop carries on; rejected \u2192 it stops and prints the note; lapsed \u2192 exit 4 with the same lines it always had, after one `gate.timeout` notification. It WAITS FOR a signature and never produces one. A stage on `gates_policy: agent` has already had the engine\u0027s own gate signer run on it before this flag ever sees the gate (see the `gates_policy: agent` note below), so what is left to wait for here is a PERSON \u2014 the same wait a `human` gate gets. Nothing is spent while it waits. Both wait flags may be given together.",
+        meaning: "Instead of exiting 4 the moment a stage parks on a pending GATE, poll the run for this long and resume if somebody signs it. `--wait-answers`\u0027 sibling for the other half of exit 4: a gate is closed by `tldrx approve` / `tldrx reject`, not by an answer. Approved \u2192 the loop carries on; rejected \u2192 it stops and prints the note, unless the rejection was `tldrx reject --and-continue`, which re-runs the stage with the note instead (#242); lapsed \u2192 exit 4 with the same lines it always had, after one `gate.timeout` notification. It WAITS FOR a signature and never produces one. A stage on `gates_policy: agent` has already had the engine\u0027s own gate signer run on it before this flag ever sees the gate (see the `gates_policy: agent` note below), so what is left to wait for here is a PERSON \u2014 the same wait a `human` gate gets. Nothing is spent while it waits. Both wait flags may be given together.",
         sub: "auto",
       },
       {
@@ -784,6 +784,11 @@ const ENTRIES: readonly CommandHelp[] = [
     flags: [
       { name: "note", arg: "<text>", meaning: "What has to change. Required — a rejection with no reason is not actionable." },
       {
+        name: "and-continue",
+        arg: null,
+        meaning: "This rejection means \u201credo it this way and carry on\u201d, not \u201cstop, I will look\u201d. The stage goes back to `ready` with the note exactly as a bare rejection leaves it \u2014 what changes is that an unattended `tldrx run auto --wait-gates` re-runs the stage instead of exiting 4, so a rejection sent from a phone does not need a walk to a terminal to take effect. Recorded on the gate, so the waiting loop reads it rather than guessing from the note\u2019s words. Without it a rejection stops the loop, which is the default and always was. Refused with exit 1 beside `--stage`: a revoke leaves that gate pending for a decision nobody has made yet, so there is no rejection for it to describe.",
+      },
+      {
         name: "stage",
         arg: "<phase>/<stage>",
         meaning: "Revoke an approval already given, whoever signed it: the cursor moves back to that stage, one gate.revoked is appended carrying signed_by, and later stages that had run are marked stale — their files stay on disk and stop counting as current. Nothing is deleted and no cost is refunded. The one verb that may reopen a finished run.",
@@ -793,6 +798,7 @@ const ENTRIES: readonly CommandHelp[] = [
     ],
     examples: [
       'tldrx reject --note "contracts.md does not name the events"',
+      'tldrx reject --and-continue --note "S2 fell over on a missing binary — redo S2 and waves 3 and 4"',
       'tldrx reject --stage 02-how/design --note "the auto gate signed over four open questions"',
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],

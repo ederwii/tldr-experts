@@ -78,14 +78,18 @@ function gateAuthority(a: RunGateAuthority): string {
  * sixth one held in memory but not written here would be DROPPED by the next
  * save, silently, which is the failure this emitter has to be extended for rather
  * than worked around. `executed_by` and `authority` (#122) are the seventh and
- * eighth, and carry the same warning.
+ * eighth, and carry the same warning. `and_continue` (#242) is the ninth.
  */
 function gate(g: RunGate): string {
   const evidence = g.evidence === undefined ? "" : `, evidence: ${gateEvidence(g.evidence)}`;
   const executor = g.executed_by === undefined ? "" : `, executed_by: ${gateExecutor(g.executed_by)}`;
   const authority = g.authority === undefined ? "" : `, authority: ${gateAuthority(g.authority)}`;
+  // The ninth key (#242), written ONLY when a rejection asked the loop to carry on:
+  // a gate from before it existed, and every gate a bare rejection wrote, is
+  // byte-identical to what it was.
+  const andContinue = g.and_continue === undefined ? "" : ", and_continue: true";
   return `{type: ${yamlScalar(g.type)}, status: ${yamlScalar(g.status)}, by: ${yamlScalar(g.by)}, ` +
-    `at: ${yamlScalar(g.at)}, note: ${yamlScalar(g.note)}${evidence}${executor}${authority}}`;
+    `at: ${yamlScalar(g.at)}, note: ${yamlScalar(g.note)}${evidence}${executor}${authority}${andContinue}}`;
 }
 
 function task(t: RunTask, indent: string): string {

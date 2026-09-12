@@ -699,10 +699,16 @@ Send the current stage back with a note saying what has to change, or revoke an 
 already given.
 
 ```
-tldrx reject --note <text> [--stage <phase>/<stage>] [--run <id>] [--root <path>]
+tldrx reject --note <text> [--and-continue] [--stage <phase>/<stage>] [--run <id>] [--root <path>]
 ```
 
-`--note` is required — a rejection with no reason is not actionable. `--stage` revokes an
+`--note` is required — a rejection with no reason is not actionable. `--and-continue` says this
+rejection means *redo it this way and carry on* rather than *stop, I will look*: the stage goes
+back to `ready` with the note exactly as a bare rejection leaves it, and an unattended
+`tldrx run auto --wait-gates` re-runs it instead of exiting `4` — so a rejection sent from a
+phone does not need a walk to a terminal to take effect. Without it a rejection stops that
+loop, which is the default and always was; beside `--stage` it is refused (`1`), because a
+revoke leaves the gate pending for a decision nobody has made yet. `--stage` revokes an
 approval already given, whoever signed it: the cursor moves back, `gate.revoked` is appended
 carrying `signed_by`, and later stages that had run are marked `stale`. Nothing is deleted and
 no cost is refunded. It is the one verb that may reopen a finished run. Exits: `0` `1` `2` `3`.
