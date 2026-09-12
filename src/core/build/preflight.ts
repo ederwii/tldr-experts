@@ -125,9 +125,58 @@ export interface BaseCommandResult {
   readonly checkedAt?: string;
 }
 
+/**
+ * One repo's Build-ENTRY worktree probe (#254) — the additive sibling of a
+ * `BaseCommandResult`, in this file for the same reason it is: a fact this run
+ * OWNS about its own environment, written where the run's other state lives, so
+ * a resumed run does not re-pay for it.
+ *
+ * It answers a DIFFERENT question from every row above. A `BaseCommandResult`
+ * says what a command DID in the human's checkout; this says whether the tree a
+ * story is actually written in — a fresh `git worktree`, tracked files only —
+ * can install and reach the commands the Definition of Done names. The two
+ * disagreeing, silently, is the whole of #254.
+ */
+export interface WorktreeProbeRow {
+  readonly repo: string;
+  readonly baseRef: string;
+  /** Short sha of `baseRef` when it was probed; `""` when git had no answer. */
+  readonly baseSha: string;
+  /** `ok` and `failed` are MEASUREMENTS; `unmeasured` is "we could not look". */
+  readonly status: BaseStatus;
+  /** The `install:` that ran in the probe tree, when the repo declares one. */
+  readonly installCommand?: string;
+  /** Absent — and only ever absent — when nothing ran to produce one (#165). */
+  readonly exitCode?: number;
+  readonly timedOut: boolean;
+  /** The sentence the refusal renders: what could not run, and in which tree. */
+  readonly tail: string;
+  readonly refusedBecause?: string;
+  /**
+   * The one edit that would fix it, when the probe could name one. ADVICE — the
+   * verdict is `status` and `tail`, which are the measurement.
+   */
+  readonly advice?: string;
+  /**
+   * The install command, every DoD command probed, and the whole workspace
+   * allowlist, hashed together through `commandHash`. The operator's fix is an
+   * edit to `.tldrx/workspace.yml`, so that edit must not be invisible here —
+   * the same hole `command_hash` closed for a base row.
+   */
+  readonly declarationHash?: string;
+  readonly checkedAt?: string;
+  /** What the probe COST, in ms. Visible because it is paid at every entry. */
+  readonly durationMs?: number;
+}
+
 export interface BasePreflight {
   readonly checkedAt: string;
   readonly results: readonly BaseCommandResult[];
+  /**
+   * ADDITIVE (§7): absent on every `preflight.yml` written before #254, and an
+   * absence is a question rather than a fault — the probe simply re-measures.
+   */
+  readonly worktree?: readonly WorktreeProbeRow[];
 }
 
 export const EMPTY_PREFLIGHT: BasePreflight = { checkedAt: "", results: [] };
@@ -171,6 +220,29 @@ export function emitPreflightYaml(preflight: BasePreflight): string {
       if (row.outputLine !== undefined) lines.push(`    output_line: ${String(row.outputLine)}`);
       if (row.commandHash !== undefined) lines.push(`    command_hash: ${yamlScalar(row.commandHash)}`);
       if (row.checkedAt !== undefined) lines.push(`    checked_at: ${yamlScalar(row.checkedAt)}`);
+    }
+  }
+  // #254, emitted LAST and only when there is one, so a file that has no
+  // worktree probe keeps exactly the bytes it always had.
+  const probes = preflight.worktree ?? [];
+  if (probes.length > 0) {
+    lines.push("worktree:");
+    for (const row of probes) {
+      lines.push(
+        `  - repo: ${yamlScalar(row.repo)}`,
+        `    base_ref: ${yamlScalar(row.baseRef)}`,
+        `    base_sha: ${yamlScalar(row.baseSha)}`,
+        ...(typeof row.exitCode === "number" ? [`    exit_code: ${String(row.exitCode)}`] : []),
+        `    timed_out: ${row.timedOut ? "true" : "false"}`,
+        `    status: ${yamlScalar(row.status)}`,
+        `    tail: ${yamlScalar(row.tail)}`,
+      );
+      if (row.installCommand !== undefined) lines.push(`    install_command: ${yamlScalar(row.installCommand)}`);
+      if (row.refusedBecause !== undefined) lines.push(`    refused_because: ${yamlScalar(row.refusedBecause)}`);
+      if (row.advice !== undefined) lines.push(`    advice: ${yamlScalar(row.advice)}`);
+      if (row.declarationHash !== undefined) lines.push(`    declaration_hash: ${yamlScalar(row.declarationHash)}`);
+      if (row.checkedAt !== undefined) lines.push(`    checked_at: ${yamlScalar(row.checkedAt)}`);
+      if (row.durationMs !== undefined) lines.push(`    duration_ms: ${String(row.durationMs)}`);
     }
   }
   return `${lines.join("\n")}\n`;
@@ -243,7 +315,64 @@ export function parsePreflight(text: string): BasePreflight | null {
       ...(rowCheckedAt === "" ? {} : { checkedAt: rowCheckedAt }),
     });
   }
-  return { checkedAt: asText((doc as { checked_at?: unknown }).checked_at), results };
+  const worktree = parseWorktreeRows((doc as { worktree?: unknown }).worktree);
+  return {
+    checkedAt: asText((doc as { checked_at?: unknown }).checked_at),
+    results,
+    ...(worktree.length === 0 ? {} : { worktree }),
+  };
+}
+
+/**
+ * The `worktree:` rows (#254), read tolerantly — a MALFORMED ROW IS SKIPPED, and
+ * that is deliberately not what a malformed `results:` row does.
+ *
+ * A bad `results:` row invalidates the file because those rows decide whether a
+ * command is green on base, and a truncated one would read as a cached green. A
+ * worktree row is additive and NEWER: if a bad one could invalidate the file, a
+ * key added in 2026 would be able to break a reader of the half written in
+ * 2025. A skipped row is simply re-measured, which costs one probe.
+ *
+ * `repo` is the join key, so a row without one is not a row; and — the same rule
+ * #165 settled for the base — an `ok` or `failed` row is a MEASUREMENT and must
+ * carry its own exit code or reason, so a truncated `status: ok` can never
+ * become a cached green that waves a broken environment through.
+ */
+function parseWorktreeRows(value: unknown): readonly WorktreeProbeRow[] {
+  if (!Array.isArray(value)) return [];
+  const rows: WorktreeProbeRow[] = [];
+  for (const entry of value) {
+    if (entry === null || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const repo = asText(row.repo);
+    if (repo === "") continue;
+    const status = row.status === "ok" || row.status === "failed" ? row.status : "unmeasured";
+    const exitCode = Number.isInteger(row.exit_code) ? row.exit_code as number : null;
+    if (row.exit_code !== undefined && exitCode === null) continue;
+    const refusedBecause = asText(row.refused_because);
+    const tail = asText(row.tail);
+    if (status !== "unmeasured" && exitCode === null && refusedBecause === "" && tail === "") continue;
+    const installCommand = asText(row.install_command);
+    const advice = asText(row.advice);
+    const declarationHash = asText(row.declaration_hash);
+    const checkedAt = asText(row.checked_at);
+    rows.push({
+      repo,
+      baseRef: asText(row.base_ref),
+      baseSha: asText(row.base_sha),
+      status,
+      ...(exitCode === null ? {} : { exitCode }),
+      timedOut: row.timed_out === true,
+      tail,
+      ...(installCommand === "" ? {} : { installCommand }),
+      ...(refusedBecause === "" ? {} : { refusedBecause }),
+      ...(advice === "" ? {} : { advice }),
+      ...(declarationHash === "" ? {} : { declarationHash }),
+      ...(checkedAt === "" ? {} : { checkedAt }),
+      ...(Number.isInteger(row.duration_ms) ? { durationMs: row.duration_ms as number } : {}),
+    });
+  }
+  return rows;
 }
 
 /**
@@ -383,6 +512,28 @@ export function withResult(
   // first stale red look like a re-probe of every other row in the file.
   const stamped = checkedAt === "" ? result : { ...result, checkedAt };
   return { checkedAt: checkedAt === "" ? preflight.checkedAt : checkedAt, results: [...kept, stamped] };
+}
+
+/**
+ * The same file with this repo's worktree probe kept once — newest wins (#254).
+ *
+ * `withResult`'s sibling, and the row carries the moment it was measured for the
+ * same reason a base row does: the freshness rule is per row, and one shared
+ * file-level clock would make re-probing one repo look like a re-probe of every
+ * other repo in the file.
+ */
+export function withWorktreeRow(
+  preflight: BasePreflight,
+  row: WorktreeProbeRow,
+  checkedAt: string,
+): BasePreflight {
+  const kept = (preflight.worktree ?? []).filter((existing) => existing.repo !== row.repo);
+  const stamped = checkedAt === "" ? row : { ...row, checkedAt };
+  return {
+    checkedAt: checkedAt === "" ? preflight.checkedAt : checkedAt,
+    results: preflight.results,
+    worktree: [...kept, stamped],
+  };
 }
 
 // --- what the operator reads ------------------------------------------------

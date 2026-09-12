@@ -26,7 +26,7 @@ import { EventLog } from "../src/core/events/EventLog.ts";
 import { developerTools, REVIEWER_TOOLS } from "../src/core/facilitator/executors/build.ts";
 import { bashGrantsFor, allowedTools } from "../src/core/facilitator/spawnAgent.ts";
 import {
-  BINARY_ABSENT_MARKER, INSTALL_SLOT, notFoundBinary, WORKTREE_TREE,
+  BINARY_ABSENT_MARKER, INSTALL_SLOT, installFailureReason, notFoundBinary, WORKTREE_TREE,
 } from "../src/core/build/worktreeDeps.ts";
 import {
   makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions,
@@ -171,26 +171,62 @@ describe("the declared `install:` runs in the story's fresh worktree", () => {
     expect(storyFile(ws, "S1")).toContain("status: done");
   }, 120_000);
 
-  test("(d) an install that FAILS blocks the story with `check: install` and what it printed", async () => {
+  /**
+   * MOVED EARLIER BY #254, deliberately — read this before "fixing" it back.
+   *
+   * Until #254 an install that fails in a fresh worktree was discovered PER
+   * STORY: `openStory` had already run, the story had a row, a branch and a
+   * worktree, and the failure arrived one line before the paid turn. That is the
+   * shape this test used to freeze, and it is the shape the live 18-hour run
+   * (#254) spent five relaunches on — the same install failing identically in
+   * story after story.
+   *
+   * Build entry now runs the declared `install:` in a throwaway worktree of the
+   * base sha before anything is dispatched, so a DETERMINISTIC install failure
+   * is caught THERE: exit 2, once, with no story opened and no story row. Every
+   * claim the old assertions made is still made below — nothing spawned, the
+   * install's own stderr in front of the operator, the command named — against
+   * the door that now answers first.
+   *
+   * The per-story install has NOT been removed and is not dead: an install that
+   * passes on the base and fails on a story's branch, or one that fails
+   * intermittently, still fails where it always did. `(c)` above pins the
+   * story-level `check: install` event end to end, and `installFailureReason`
+   * still writes that story's sentence.
+   */
+  test("(d) an install that FAILS is refused at BUILD ENTRY (#254) with what it printed, and no story is opened", async () => {
     const ws = depsWorkspace("node install-fail.js");
 
-    await next(ws);
+    const outcome = await next(ws);
 
-    const install = checksNamed(ws, INSTALL_SLOT);
-    expect(install).toHaveLength(1);
-    expect(install[0]?.type).toBe("check.failed");
-    expect(install[0]?.payload).toMatchObject({ check: INSTALL_SLOT, story: "S1", exit_code: 1 });
+    // Exit 2: a gate refusal, not a failed stage — nothing was dispatched.
+    expect(outcome.code).toBe(2);
+    const said = outcome.lines.join("\n");
+    expect(said).toContain("node install-fail.js");
     // The stderr tail, not a sentence about it.
-    expect(String(install[0]?.payload.detail)).toContain("could not resolve dependency");
+    expect(said).toContain("could not resolve dependency");
 
-    expect(storyFile(ws, "S1")).toContain("status: blocked");
-    const log = reviewLog(ws, "S1");
-    expect(log).toContain("node install-fail.js");
-    expect(log).toContain("could not resolve dependency");
-    // No developer was dispatched into a tree that did not install: the story
-    // blocked before a dollar was spent.
+    // Earlier than the old door in the one way that matters: the story never
+    // opened at all, so there is no story-level install check and no story row.
+    expect(checksNamed(ws, INSTALL_SLOT)).toEqual([]);
+    expect(storyFile(ws, "S1")).toContain("status: todo");
+    // No developer was dispatched into a tree that did not install.
     expect(events(ws).filter((e) => e.type === "agent.spawned")).toEqual([]);
   }, 120_000);
+
+  test("(d2) the story-level sentence for a failed install is still there, for the failure entry cannot see", () => {
+    // A guard, not a proof: it passed before #254 too. It exists because #254
+    // moved the DETERMINISTIC case to Build entry, and an unreferenced message is
+    // one refactor away from being deleted as dead — while the story-level path
+    // it speaks for (an install that fails only on a story's branch) is live.
+    const reason = installFailureReason(
+      { command: "npm ci", exitCode: 1, timedOut: false, tail: "npm ERR! ERESOLVE", durationMs: 12 },
+      "app",
+    );
+    expect(reason).toContain("npm ci");
+    expect(reason).toContain("npm ERR! ERESOLVE");
+    expect(reason).toContain(INSTALL_SLOT);
+  });
 });
 
 describe("an undeclared `install:` — the 127 is named, not called a red test", () => {

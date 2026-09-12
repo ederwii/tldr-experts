@@ -119,6 +119,7 @@ import {
 import {
   installCommandFor, installFailed, installFailureReason, runWorktreeInstall, type InstallCheck,
 } from "../../build/worktreeDeps.ts";
+import { entryProbeRefusal, type EntryProbeParts } from "../../build/entryProbe.ts";
 import {
   dirtyRepoRefusal, epicRows, foreignEpicRefusal, relaunchCommand, resolveBranchModel, type ClaimParts,
 } from "../../build/branchClaims.ts";
@@ -592,7 +593,8 @@ class BuildSession {
     const refusal = await this.refuseOnDirtyRepos()
       ?? await this.refuseOnForeignEpic()
       ?? await this.setAsideForeign()
-      ?? await this.refuseOnRedBase();
+      ?? await this.refuseOnRedBase()
+      ?? await this.refuseOnUnrunnableWorktree();
     if (refusal !== null) return refusal;
     this.recordGateFeedback();
 
@@ -657,7 +659,8 @@ class BuildSession {
     const refusal = await this.refuseOnDirtyRepos()
       ?? await this.refuseOnForeignEpic()
       ?? await this.setAsideForeign()
-      ?? await this.refuseOnRedBase();
+      ?? await this.refuseOnRedBase()
+      ?? await this.refuseOnUnrunnableWorktree();
     if (refusal !== null) return refusal;
 
     // A story waiting on nothing but a REVIEW gets its reviewer bundle written
@@ -2831,6 +2834,40 @@ class BuildSession {
    */
   private async refuseOnRedBase(): Promise<ExecutorOutcome | null> {
     const refusal = await redBaseRefusal(this.baseParts, this.pendingStories());
+    return refusal === null ? null : {
+      ok: false, refused: true, awaiting: false, tasks: [], costUsd: 0, outputs: [],
+      lines: [...this.lines, ...refusal.lines], error: refusal.error,
+    };
+  }
+
+  /** What `build/entryProbe.ts` needs to ask a FRESH worktree the same question (#254). */
+  private get entryProbeParts(): EntryProbeParts {
+    return {
+      workspace: this.workspace,
+      cache: this.preflight,
+      root: this.ctx.root,
+      runId: this.ctx.runId,
+      at: this.ctx.at,
+      timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
+      write: (work) => this.writes.run(work),
+      advisories: this.advisories,
+      lines: this.lines,
+    };
+  }
+
+  /**
+   * The LAST door (#254), after the base pre-flight and for the same reason it is
+   * after the stash: it needs the clean tree the stash produced, and it opens a
+   * worktree of the base sha, which a dirty repo would have made a measurement of
+   * somebody's uncommitted work. `withRestore` carries its lines out.
+   *
+   * Its order relative to `refuseOnRedBase` is deliberate and cheap: a command
+   * that is red in the OWNER'S OWN checkout is the simpler fault and the better
+   * sentence, and saying it first means the expensive probe is never paid for a
+   * workspace that was going to refuse anyway.
+   */
+  private async refuseOnUnrunnableWorktree(): Promise<ExecutorOutcome | null> {
+    const refusal = await entryProbeRefusal(this.entryProbeParts, this.pendingStories());
     return refusal === null ? null : {
       ok: false, refused: true, awaiting: false, tasks: [], costUsd: 0, outputs: [],
       lines: [...this.lines, ...refusal.lines], error: refusal.error,

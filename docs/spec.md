@@ -3390,6 +3390,40 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    invalidates the whole file, which costs a re-measurement and nothing else. An `unmeasured` row with neither an
    `exit_code` nor a `refused_because` is malformed for the same reason: absent-with-reason, or not a record.
 
+   **And the OTHER tree, before a developer is paid (2026-09-12, #254).** The base pre-flight above measures in the
+   human's checkout by design, so a green there proves the OWNER's tree can run the gate — not that the tree a story
+   is written in can. Measured on a live workspace at 0.16.1: 18 h from `run auto` to the first story that could run,
+   five relaunches, two of them environment. The repo's `install:` named `./install.sh`, which existed in the
+   checkout and was never committed — a `git worktree` carries TRACKED FILES ONLY — so every story's install failed
+   identically in its own tree, each time after the story was opened and immediately before the paid turn. So Build
+   entry now asks the worktree question too, ONCE, after the base pre-flight and before `agent.spawned`: one
+   throwaway **detached** worktree at the base sha, the declared `install:` run inside it, then a RESOLUTION of each
+   declared dod command's first token in that tree — never the suite, because the base pre-flight already measures
+   the suite in the checkout. A failure is exit 2, naming the exact path or binary and the edit that fixes it, with
+   no story attempt spent. Two rules decide who is refused, and the asymmetry between them is the design. The
+   `install:` command's own relative-path token is refused by `git ls-files` with NOTHING executed — sound only
+   because of WHEN the install runs: nothing has installed anything yet, so a path the install NAMES cannot be one it
+   PRODUCED. A **dod** command's path token gets the opposite treatment: tracked-ness decides nothing, because
+   `node_modules/.bin/vitest` is untracked in every repo and is present by the time the DoD runs, so it is probed
+   AFTER the install in that tree and an untracked twin in the checkout is rendered as ADVICE, never as the verdict.
+   A token is resolved exactly the way `runDodCommand` will spawn it — a `/` means the tree, a bare name means
+   `PATH` — and a repo that declares no `install:` and whose dod names only bare binaries opens **no worktree at
+   all**, since `PATH` is the same in both trees and the base pre-flight has already run the command there.
+
+   The result is cached beside the base results, in the same `04-build/preflight.yml`, under an additive `worktree:`
+   key: one row per repo carrying `base_ref`, `base_sha`, `status`, `tail`, and optionally `install_command`,
+   `exit_code`, `refused_because`, `advice`, `declaration_hash`, `checked_at` and `duration_ms`. Three things narrow
+   it, not two: the base sha, the **declaration hash** (the install, every command probed and the whole workspace
+   allowlist hashed together, because the operator's fix is an edit to `workspace.yml` and that edit must not be
+   invisible), and AGE. A green is trusted for **6 hours** rather than forever — unlike a base green, this row is a
+   claim about an ENVIRONMENT (the host's `PATH`, the registry the install reached) and none of that is in the sha,
+   and a stale green spends money by waving a run into an environment that has since broken. A red is trusted for the
+   base red's **30 minutes**, because #162 is the filed failure where a row measured over a broken environment kept
+   refusing after somebody fixed it. A malformed `worktree:` row is SKIPPED rather than invalidating the file — the
+   opposite of a malformed `results:` row — because an additive key added later must not be able to break a reader of
+   the half that was there first; and an `ok` or `failed` row still has to carry its own exit code or reason, so a
+   truncated `status: ok` can never become a cached green.
+
    When a story's DoD then fails, the cached base result decides ATTRIBUTION: a command red on the base too
    halts the build with the same config error instead of blocking the story. Measured on `260829-scoring-leaderboard`:
    two of three declared commands already failed on pristine main — one of them running paid `Live` AI tests the repo's
