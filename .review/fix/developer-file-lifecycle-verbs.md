@@ -1,8 +1,73 @@
-verdict: fixes required
+verdict: merge
 reviewed-by: Claude Sonnet 5 (fresh pre-merge reviewer)
-against: 7e6a724
+against: a0360ef
 
-## Important — CONFIRMED false positive in `permissionRefusal()` (risk 3)
+## Second pass — delta only (7e6a724 → a0360ef)
+
+The content below was reviewed against `7e6a724` and flagged the false positive as
+Important / fixes required. That finding is FIXED in `a0360ef`, verified independently
+in this pass (not taken on the author's word). Not re-reviewed this pass, per the
+coordinator's instruction, because already confirmed against `7e6a724` and untouched by
+this delta: grant amplitude, `stack-packs-prompt`, the golden, and #252's exit-4 /
+non-interaction with the relaunch loop.
+
+**The fix.** `permissionRefusal()` now checks a STRUCTURAL signal first —
+`tool_result_meta: [{ id, non_execution_kind: "user-rejected" }]` on the `user` line —
+and only falls back to the `requires approval` sentence when fenced to
+`call?.name === "Bash" && block.is_error === true`. Read the code
+(`src/core/facilitator/agentEvents.ts:476-515`): the structural check
+(`if (!structural && !byPhrase) continue;`) is checked and returns before the phrase
+fallback is even consulted for that block — it is genuinely primary, not a decoration
+bolted onto the old logic.
+
+**Reproduced myself, not taken on word:**
+- Ran `bun test test/agent-stream.test.ts` (39 pass) — includes the exact false-positive
+  case I found last pass (`Read` of `docs/spec.md`), now asserted `toBeNull()`.
+- Mutation A: removed both the `call?.name === "Bash"` and `is_error === true` conditions
+  from `byPhrase` → 3 tests went RED, including my original `docs/spec.md` case and a new
+  "Bash command that ran and printed the sentence" case. Reverted; tree clean after.
+- Mutation B: removed only `is_error === true` (kept the `Bash` check) → 1 test went RED
+  (a successful `Bash` grep that prints the phrase). Reverted; tree clean after.
+- Both mutations confirm the fence is load-bearing in both halves, exactly as claimed.
+
+**#267's scope.** Checked `gh issue view 267` and its comments: a comment was posted
+(2026-09-12T23:22:25Z, from this same pre-merge review) stating the structural signal
+now catches the `cd && git rm` family too, and narrowing #267 to what remains
+unmeasured — whether `non_execution_kind` is emitted on every refusal family/version, and
+what the fallback should do on a host emitting neither. Issue stays open, correctly
+narrowed rather than closed or left stale.
+
+**`fakeTranscript.ts` (shared emitter, §8).** `FakeTool.rejected` is optional and
+additive: when absent, the `user`-line object literal builds through the same keys in
+the same order as before (the new fields are added only via
+`...(tool.rejected === true ? {...} : {})` spreads with no effect when false/undefined).
+`codexOutput` is a distinct function in the same file and is untouched by this diff — the
+Codex fake does not share this code path, so its shape (no per-tool allowance) is
+unaffected. `bun test test/build-golden.test.ts` (4 pass) and
+`test/build-executor.test.ts` (139 pass) both green, which is the practical check that
+no existing fixture/golden byte moved.
+
+**Golden.** `grep -rln "allowedTools" test/fixtures/build/golden/` → no matches (exit 1),
+same as last pass.
+
+**Count.** `git diff --name-status 7e6a724..a0360ef` shows no new test file — only
+`test/agent-stream.test.ts` modified. It constructs transcripts as plain strings, no
+process spawning, and does not appear in `test/machine-load.test.ts`'s guard-row list —
+consistent with needing no new row.
+
+## What was run this pass
+
+- `bun run typecheck` (no pipe) → exit 0.
+- `bun test test/agent-stream.test.ts` → 39 pass, 0 fail.
+- `bun test test/build-executor.test.ts` → 139 pass, 0 fail.
+- `bun test test/build-golden.test.ts` → 4 pass, 0 fail.
+- Two targeted mutations in `agentEvents.ts` (above), each reverted immediately;
+  `git status --porcelain` clean before and after.
+- No permission probes, no destructive commands, no processes killed.
+
+## First pass (against 7e6a724) — kept for the record
+
+## Important — CONFIRMED false positive in `permissionRefusal()` (risk 3), FIXED in a0360ef
 
 `permissionRefusal()` (`src/core/facilitator/agentEvents.ts:401-455`) scans **every**
 `tool_result` block in the developer's transcript for the substring `requires approval`,
@@ -34,12 +99,15 @@ shell command), and a human is paged for a wall that never existed. This is exac
 "blocked mentiroso" direction risk 3 asked about, and it costs real completed work, not just
 an unused attempt.
 
-Fix needed before merge: require the paired `tool_use` to be `Bash` **and** the `tool_result`
+Fix requested: require the paired `tool_use` to be `Bash` **and** the `tool_result`
 to carry `is_error === true` (both measured refusals — #209's and #261's own — are
 `is_error: true`; nothing else on the developer's allowance can be denied for approval this
 way). That alone would have refused the false positive above (`Read` is not `Bash`, and a
 successful Read is not `is_error`). It does not need to solve #267 (the `cd &&` sentence
 family) — that is correctly scoped out and already filed.
+
+**Status: FIXED in `a0360ef`** — see "Second pass" above for independent verification
+(reproduced the false positive's absence and both required mutations myself).
 
 ## Everything else checked — no other Important finding
 
