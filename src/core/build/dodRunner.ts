@@ -16,7 +16,9 @@
 import { DodCommandRefused, runDodCommand } from "../../hooks/lib/story.ts";
 import { FALLBACK_DEFAULT_BRANCH, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import type { EventType } from "../events/Event.ts";
-import { failureExcerpt, failureSummaryLine, writeDodOutput, type DodOutputFile } from "./dodOutput.ts";
+import {
+  baseOutputId, failureExcerpt, failureSummaryLine, writeDodOutput, type DodOutputFile,
+} from "./dodOutput.ts";
 import { repoDirOf, shaOf } from "./git.ts";
 import { dodRefused } from "./outcome.ts";
 import type { BuildRefusal, DodResult, SerialWrite } from "./outcome.ts";
@@ -82,6 +84,12 @@ export interface BaseParts {
   readonly at: string;
   readonly preparing: boolean;
   readonly timeoutMs: number;
+  /**
+   * The run directory — a RED base's kept output is written under it (#229),
+   * the same way a red story DoD's is. DATA the executor owns and passes, never
+   * `ctx` and never the session.
+   */
+  readonly runDir: string;
   /** The executor's single writer — passed, never duplicated. */
   readonly write: SerialWrite;
   /** stderr sink, append-only, owned by the executor. */
@@ -120,8 +128,27 @@ export async function baseResultOf(
   try {
     const outcome = await runDodCommand(command, repoDir, timeoutMs, parts.workspace.commands);
     const exitCode = outcome.timedOut ? 124 : outcome.exitCode;
+    const output = outcome.output ?? "";
+    // #229: a RED base refuses the WHOLE stage before anything is dispatched, so
+    // it keeps what the command SAID — through the same seam a red story DoD has
+    // used since #211, never a second reading of it. A GREEN base still writes
+    // nothing: it blocks nobody, and it is re-used from cache far more often
+    // than a story's, so a file per passing run would be megabytes of chatter.
+    const kept: DodOutputFile | null = exitCode === 0 && !outcome.timedOut
+      ? null
+      : writeDodOutput(parts.runDir, baseOutputId(repo, command), 0, output);
     measured = {
-      repo, command, baseRef, baseSha, exitCode, timedOut: outcome.timedOut, tail: outcome.tail,
+      repo, command, baseRef, baseSha, exitCode, timedOut: outcome.timedOut,
+      // The failure-looking line, not the last line of stdout+stderr.
+      // `outcome.tail` is the old reading, kept only when there is no output to
+      // choose from — which is every green row and an empty red one.
+      tail: kept === null ? outcome.tail : failureSummaryLine(output),
+      ...(kept === null ? {} : {
+        excerpt: failureExcerpt(output),
+        outputPath: kept.rel,
+        outputBytes: kept.bytes,
+        outputLine: kept.line,
+      }),
       status: exitCode === 0 && !outcome.timedOut ? "ok" : "failed", commandHash: hash,
     };
   } catch (error) {

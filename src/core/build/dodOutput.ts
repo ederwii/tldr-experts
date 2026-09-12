@@ -33,6 +33,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { lineOf } from "../detect/lineOf.ts";
+import { hashText } from "../experts/packTemplates.ts";
 import { BUILD_PHASE, LOG_DIR } from "./plan.ts";
 
 /** Lines of a red command's combined output kept on disk. */
@@ -75,6 +76,27 @@ const FAILURE_RE =
 /** `04-build/log/dod-output/<story>-<n>.txt`, relative to the run dir. ONE derivation. */
 export function dodOutputRel(storyId: string, index: number): string {
   return `${BUILD_PHASE}/${LOG_DIR}/${DOD_OUTPUT_DIR}/${storyId}-${String(index + 1)}.txt`;
+}
+
+/**
+ * The id a BASE pre-flight measurement keeps its output under (#229).
+ *
+ * A base result has no story — it is a fact about the untouched tree — so it
+ * borrows the story slot in `dodOutputRel` with an id that is a fact about the
+ * measurement instead. `repo` and `command` are exactly the join key
+ * `preflight.yml` identifies a row by, so one row owns one file: a re-probe of
+ * the same command overwrites its own output rather than littering a file per
+ * invocation, and no two rows can ever share one. Hashed rather than spelled
+ * out because a repo name and a command are free text — slashes, spaces and
+ * quotes — and a path is not the place to discover that. The row beside it
+ * names the repo and the command in full.
+ *
+ * It is a story id in the shape `dodOutputRel` expects, so the file lands as
+ * `base-<hash>-1.txt`: the trailing index is the check number, and a base row
+ * has exactly one.
+ */
+export function baseOutputId(repo: string, command: string): string {
+  return `base-${hashText(JSON.stringify([repo, command]))}`;
 }
 
 /** Non-empty lines, right-trimmed — the shape both derivations below work on. */

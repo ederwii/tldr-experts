@@ -77,6 +77,26 @@ export interface BaseCommandResult {
   readonly tail: string;
   /** Present only on a REFUSED probe: the gate's own sentence, verbatim. */
   readonly refusedBecause?: string;
+  /**
+   * What a RED base actually said — the same four fields a red story DoD has
+   * carried since #211, written by the same seam (#229).
+   *
+   * `excerpt` is up to `DOD_EXCERPT_MAX_LINES` failure-looking lines and `tail`
+   * is its first line; `outputPath` is where the whole kept tail lives relative
+   * to the run dir, `outputBytes` its size, and `outputLine` the 1-based line
+   * inside it where the excerpt starts, so the refusal cites the failure and
+   * not the top of a 200-line tail.
+   *
+   * ADDITIVE and optional, all four. Absent on every `preflight.yml` written
+   * before they existed, absent on a GREEN row — a base that passed is re-used
+   * from cache far more often than a story's and has nothing anybody needs at
+   * 2am — and absent on an `unmeasured` row, where nothing ran and `tail` is
+   * already a reason sentence rather than command output.
+   */
+  readonly excerpt?: string;
+  readonly outputPath?: string;
+  readonly outputBytes?: number;
+  readonly outputLine?: number;
   readonly status: BaseStatus;
   /**
    * What the row was measured UNDER, beyond the command string itself.
@@ -143,6 +163,12 @@ export function emitPreflightYaml(preflight: BasePreflight): string {
         `    tail: ${yamlScalar(row.tail)}`,
       );
       if (row.refusedBecause !== undefined) lines.push(`    refused_because: ${yamlScalar(row.refusedBecause)}`);
+      // #229: only a RED row has these, and they are emitted in this order so a
+      // row that never had them keeps exactly the bytes it always had.
+      if (row.excerpt !== undefined) lines.push(`    excerpt: ${yamlScalar(row.excerpt)}`);
+      if (row.outputPath !== undefined) lines.push(`    output_path: ${yamlScalar(row.outputPath)}`);
+      if (row.outputBytes !== undefined) lines.push(`    output_bytes: ${String(row.outputBytes)}`);
+      if (row.outputLine !== undefined) lines.push(`    output_line: ${String(row.outputLine)}`);
       if (row.commandHash !== undefined) lines.push(`    command_hash: ${yamlScalar(row.commandHash)}`);
       if (row.checkedAt !== undefined) lines.push(`    checked_at: ${yamlScalar(row.checkedAt)}`);
     }
@@ -192,6 +218,12 @@ export function parsePreflight(text: string): BasePreflight | null {
       if (refusedBecause === "") return null;
     }
     const hash = asText(row.command_hash);
+    // #229, tolerant in the additive direction only: a kept-output pointer is
+    // taken when the file has one and the row is otherwise unchanged without it.
+    // A non-number size or line is simply absent — every reader already falls
+    // back, and promoting corruption to a citation is the dangerous direction.
+    const excerpt = asText(row.excerpt);
+    const outputPath = asText(row.output_path);
     const rowCheckedAt = asText(row.checked_at);
     results.push({
       repo,
@@ -204,6 +236,10 @@ export function parsePreflight(text: string): BasePreflight | null {
       ...(refusedBecause === "" ? {} : { refusedBecause }),
       status: row.status === "ok" || row.status === "failed" ? row.status : "unmeasured",
       ...(hash === "" ? {} : { commandHash: hash }),
+      ...(excerpt === "" ? {} : { excerpt }),
+      ...(outputPath === "" ? {} : { outputPath }),
+      ...(Number.isInteger(row.output_bytes) ? { outputBytes: row.output_bytes as number } : {}),
+      ...(Number.isInteger(row.output_line) ? { outputLine: row.output_line as number } : {}),
       ...(rowCheckedAt === "" ? {} : { checkedAt: rowCheckedAt }),
     });
   }
@@ -359,9 +395,15 @@ export function baseFailureLine(result: BaseCommandResult): string {
   const ran = result.exitCode === undefined
     ? "was refused and never ran"
     : `exited ${String(result.exitCode)}`;
+  // #229: when the red kept its output, the line that names the failure also
+  // says where to read the rest of it — the same `[src: <rel>:<line>]` citation
+  // a blocked story's reason carries, resolved to the failing line.
+  const cite = result.outputPath === undefined
+    ? ""
+    : ` [src: ${result.outputPath}:${String(result.outputLine ?? 1)}]`;
   return `  · \`${result.command}\` ${ran}`
     + `${result.timedOut ? " (timed out)" : ""} in repo ${result.repo}`
-    + ` on \`${result.baseRef}\`${at}${why}`;
+    + ` on \`${result.baseRef}\`${at}${why}${cite}`;
 }
 
 /**

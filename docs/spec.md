@@ -3316,6 +3316,18 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    absent `command_hash` is a missing answer, not a mismatch, and an absent per-row `checked_at` falls back to the
    file-level one, with neither making a row stale.
 
+   **A RED base keeps its output (2026-09-11, #229).** A red base refuses the whole stage before anything is
+   dispatched, and until this it kept ONE line — `outcome.tail`, the last line of stdout+stderr — while a red story
+   DoD, which blocks a single story, had kept the failing line, an excerpt and a file since #211. Measured: a
+   `dotnet test` whose 163,702 lines named a dead container daemon on line 12 refused six stories with the closing
+   summary every failing run of that runner prints. The base row now goes through the SAME seam: `tail` is the
+   failure-looking line, and a red row additionally carries `excerpt`, `output_path`
+   (`04-build/log/dod-output/base-<hash>-1.txt`, keyed on the repo+command pair the row is identified by, so a
+   re-probe overwrites its own file), `output_bytes` and `output_line` — and the refusal cites the file at the
+   failing line. A GREEN base writes nothing, deliberately: it blocks nobody and is re-used from cache far more often
+   than a story's. An `unmeasured` row is unchanged — nothing ran, so there is no output, and its `tail` is already
+   the gate's reason sentence. All four fields are additive to `version: 1` and an older file still reads.
+
    **A REFUSED probe carries no exit code (2026-09-06, #165).** A command the gate declines to run never spawned, so
    the `unmeasured` row it writes has **no `exit_code` at all** and carries the gate's own sentence in a new
    `refused_because` instead. Before this the framework wrote a fabricated `exit_code: 126` there and every reader

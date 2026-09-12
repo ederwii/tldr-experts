@@ -303,7 +303,14 @@ export interface PreflightRowModel {
   readonly timedOut: boolean;
   /** `ok` | `failed` | `unmeasured`. */
   readonly status: string;
-  /** Last meaningful line of the output — the operator's first clue. */
+  /**
+   * One line of the output — the operator's first clue.
+   *
+   * On a measured RED it is the FAILURE-looking line since #229 (the reading a
+   * story's DoD has used since #211); on anything else it is the last meaningful
+   * line, which is what it always was. No field was added and no meaning moved
+   * for a reader, so `DASHBOARD_MODEL_VERSION` does not bump.
+   */
   readonly tail: string;
   /** Present only on a REFUSED probe: the gate's own sentence, verbatim. */
   readonly refusedBecause?: string;
