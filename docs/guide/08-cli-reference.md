@@ -287,7 +287,7 @@ tldrx run auto     [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--ef
                           [--parallel <n>] [--yolo] [--gate-agent] [--ui <mode>] [--run <id>]
                           [--notify-every <duration>] [--wait-answers <duration>]
                           [--wait-gates <duration>] [--prompt-max-bytes <n>] [--max-reads <n>]
-                          [--retry-failed <n>]
+                          [--retry-failed <n>] [--until-done [<n>]]
 tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>]
 tldrx run questions set <stage>:<human|recommended> --note <text> [--run <id>]
 tldrx run unlock   [<run>] [--force] [--run <id>]
@@ -421,6 +421,19 @@ human decides about money*, and a retry would make that a delay. Only CONSECUTIV
 count; a stage that succeeds puts the count back to zero. A retry SPENDS, under the same phase
 ceiling and the same `--max-usd`, and when the bound is spent the loop stops on the failure's
 own exit `5` with the count as its last line. `n` outside `0..3` is exit `1`, by name.
+
+`--until-done [<n>]` is the bound OUTSIDE the loop, where `--retry-failed` is the one inside
+it: how many times the same process may relaunch the loop after an exit it can do nothing
+else with — a stage failure past the retry bound (`5`), a thrown error that used to reach
+the shell as a bare `1` with nothing on the ledger, a refusal whose remedy is the same
+command typed again (`2`). Bare means `5`, the cap; `0` is the default and is one launch.
+Every relaunch is a `run.relaunched` event carrying the exit it recovered from, the attempt
+and the bound, and `run.finished` / `run.failed` go out once, from the last attempt. It
+never relaunches over exit `4` (a person's — the `--wait-*` flags own it), over a
+`budget.blocked` or the loop's own `--max-usd` (nothing in-process moves a ceiling, and
+`--max-usd` spans every relaunch rather than resetting), or twice over the same last line.
+Put the run id before the flag, or write `--until-done=3`. `n` outside `0..5` and a
+fraction are exit `1`, by name.
 
 `auto`'s `--model`, `--effort`, `--max-usd`, `--ui` and `--yolo` are the same flags
 [`tldrx next`](#tldrx-next) explains, passed to every stage the loop runs — so `--yolo` here

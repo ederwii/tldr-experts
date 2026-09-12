@@ -358,7 +358,7 @@ por ti exactamente como antes.
 ## Ponerlo a correr
 
 ```bash
-tldrx run auto 260907-checkout --notify-every 10m --wait-answers 4h --wait-gates 4h --retry-failed 2
+tldrx run auto 260907-checkout --notify-every 10m --wait-answers 4h --wait-gates 4h --retry-failed 2 --until-done
 ```
 
 Las tres banderas toman una **duración**: `30s`, `10m`, `2h`, o un número pelado de segundos.
@@ -457,8 +457,40 @@ Tres cosas lo acotan, y las tres importan:
 El máximo es `3`; cualquier valor mayor se rechaza por nombre con salida `1`.
 
 La salida `4` no es una falla. Es "esperando a una persona", y con el hook declarado a esa
-persona ya se le avisó; lo que queda es tu bucle externo de relanzamiento, que te toca
-escribir a ti.
+persona ya se le avisó. Todas las otras formas en que el bucle puede terminar son para lo
+que sirve la bandera siguiente.
+
+## Relanzar el bucle mismo
+
+`--until-done [<n>]` es la cota POR FUERA del bucle, donde `--retry-failed` es la de adentro:
+cuántas veces el mismo proceso puede relanzar el bucle después de una salida con la que no
+puede hacer nada más. Sin valor significa `5`, el máximo; `0` es el valor por defecto y es un
+solo lanzamiento, exactamente lo que recibió toda invocación anterior.
+
+La medición detrás: en un run desatendido de 28 horas, cinco salidas con las que el bucle no
+podía hacer nada — un error lanzado que llegó a la shell como un `1` pelado sin nada en el
+libro de eventos, una etapa fallada más allá de la cota de reintentos, rechazos cuyo remedio
+era teclear el mismo comando otra vez — y cada una fue una persona leyéndola y tecleando
+`tldrx run auto` de nuevo. Pasaron 18 horas antes de que corriera una story.
+
+Así que después de una salida `5` más allá de `--retry-failed`, una salida `1`, o una salida
+`2` sin dinero detrás, el bucle se vuelve a correr desde el mismo proceso. Cada relanzamiento
+es un evento `run.relaunched` que lleva la salida de la que se recuperó, el intento y la cota,
+y `run.finished` / `run.failed` llegan a tu hook una sola vez, desde el último intento. Tres
+cosas sobre las que nunca relanza:
+
+- **Una salida `4`, que es de una persona.** Una pregunta abierta o una compuerta pendiente
+  son tuyas; `--wait-answers` y `--wait-gates` son las banderas que te esperan.
+- **Dinero.** Un `budget.blocked` nombra `remaining_usd < estimate_usd`, y nada dentro del
+  proceso mueve ese techo — la línea de parada dice las dos cifras, y `tldrx budget raise` es
+  tuyo. El `--max-usd` propio del bucle abarca todos los relanzamientos en vez de reiniciarse
+  con cada uno.
+- **La misma última línea dos veces.** Un rechazo que se repite textualmente no es uno que un
+  relanzamiento mueva; un relanzamiento lo demuestra, y el bucle se detiene en vez de
+  martillarlo.
+
+Pon el id del run antes de la bandera, o escribe `--until-done=3`: un `--until-done` sin
+valor seguido de un id de run lee el id como su número y lo rechaza, por nombre.
 
 Vale la pena nombrar las dos cosas que ganas frente al modo anfitrión, porque son justo lo
 que el aviso te devuelve:

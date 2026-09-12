@@ -349,7 +349,7 @@ as before.
 ## Running it
 
 ```bash
-tldrx run auto 260907-checkout --notify-every 10m --wait-answers 4h --wait-gates 4h --retry-failed 2
+tldrx run auto 260907-checkout --notify-every 10m --wait-answers 4h --wait-gates 4h --retry-failed 2 --until-done
 ```
 
 All three flags take a **duration**: `30s`, `10m`, `2h`, or a bare number of seconds. A value
@@ -445,7 +445,37 @@ Three things bound it, and all three matter:
 The maximum is `3`; anything higher is refused by name with exit `1`.
 
 Exit `4` is not a failure. It is "awaiting a person", and with the hook declared the person
-has already been told; what is left is your outer relaunch loop, which is yours to write.
+has already been told. Every other way the loop can end is what the next flag is for.
+
+## Relaunching the loop itself
+
+`--until-done [<n>]` is the bound OUTSIDE the loop, where `--retry-failed` is the one inside
+it: how many times the same process may relaunch the loop after an exit it can do nothing
+else with. Bare means `5`, the cap; `0` is the default and is one launch, exactly what every
+invocation before it got.
+
+The measurement behind it: on one 28-hour unattended run, five exits the loop could do
+nothing with — a thrown error that reached the shell as a bare `1` with nothing on the
+ledger, a stage failure past the retry bound, refusals whose remedy was the same command
+typed again — and each one was a person reading it and typing `tldrx run auto` again. It was
+18 hours before a story ran.
+
+So after an exit `5` past `--retry-failed`, an exit `1`, or an exit `2` with no money behind
+it, the loop is run again from the same process. Every relaunch is a `run.relaunched` event
+carrying the exit it recovered from, the attempt and the bound, and `run.finished` /
+`run.failed` reach your hook once, from the last attempt. Three things it never relaunches
+over:
+
+- **A person's exit `4`.** An open question or a pending gate is yours; `--wait-answers` and
+  `--wait-gates` are the flags that wait for you.
+- **Money.** A `budget.blocked` names `remaining_usd < estimate_usd`, and nothing in-process
+  moves that ceiling — the stop line says the two figures, and `tldrx budget raise` is yours.
+  The loop's own `--max-usd` spans every relaunch rather than resetting with each one.
+- **The same last line twice.** A refusal that repeats verbatim is not one a relaunch moves;
+  one relaunch proves it, and the loop stops rather than hammering it.
+
+Put the run id before the flag, or write `--until-done=3`: a bare `--until-done` followed
+by a run id reads the id as its number and refuses it, by name.
 
 The two things you gain over host mode are worth naming, because they are what the
 notification buys back:
