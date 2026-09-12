@@ -160,7 +160,8 @@ said only "did not close by itself" and named nothing.
 Build gate's notification says what the stage actually delivered before it says what it cost:
 
 > *"260909-scoring finished 04-build/build for $1.78 and is waiting at a human gate — a person
-> signs it. It 0 of 3 stories delivered, S1 blocked (npm run test exited 127…), S2 not started.
+> signs it. It has 0 of 3 stories delivered, S1 blocked (npm run test exited 127…), S2 not
+> started.
 > Nothing runs after it until the gate is approved or rejected."*
 
 The counts and the first blocked story's own reason ride on the `gate.requested` payload as
@@ -210,8 +211,13 @@ signature is pending the payload grows two keys:
 }
 ```
 
-…the summary says the run is waiting for a person to sign that stage, and `command` becomes
-`tldrx approve --run <id>`. `waiting_on_gate` is a **sibling** of `waiting_on`, not a member
+…the summary says the run is waiting for a person to sign that stage, and `command` becomes the
+one line that CLEARS it — the same mapping `gate.requested` uses, over the same reading of the
+run: `tldrx answer <id>` while the gate also has open questions, `tldrx run status <id>` while a
+Build gate still has unfinished stories, `tldrx approve --run <id>` when the signature really is
+the only thing missing. A gate held by
+five unanswered questions used to hand over `approve` and repeat it every interval, and two
+Build gates were approved by mistake in one evening over unbuilt stories. `waiting_on_gate` is a **sibling** of `waiting_on`, not a member
 of it: an adapter maps every id in `waiting_on` to `tldrx answer <id>`, and a stage id there
 would make it build a command nobody can type. Both keys are **absent** when no gate is
 pending, so an adapter written before this existed sees the payload it always saw.
@@ -225,13 +231,13 @@ The enum is closed — a kind that arrives from nowhere is a branch nobody wrote
 |---|---|---|---|
 | `question.raised` | the loop parked on an open question | the first question's `tldrx answer` line | `questions[]` — `id`, `title`, `why_asked`, `options[]` as `{letter, text}`, `recommendation` (`option`, `why`, `src`) or `null`, `answer_command` |
 | `question.timeout` | `--wait-answers` lapsed and the loop is about to exit `4` | the same answer line | the same `questions[]`, plus `waited_ms` |
-| `gate.requested` | a stage finished and a person must sign it — **deferred, and possibly never sent, when an `auto` gate is held only by open questions** | `tldrx approve --run <id>` | `cost_usd`, `approve_command`, `reject_command`, `gate_policy`, and one of `held_by` (an `auto` gate's failing conditions) / `signer_held` (an `agent` signer's reasons) — absent when nothing looked |
+| `gate.requested` | a stage finished and a person must sign it — **deferred, and possibly never sent, when an `auto` gate is held only by open questions** | the line that clears the gate: `tldrx answer <id>` with questions open, `tldrx run status <id>` over unfinished stories, `tldrx approve --run <id>` when nothing mechanical is outstanding | `cost_usd`, `approve_command`, `reject_command`, `gate_policy`, and one of `held_by` (an `auto` gate's failing conditions) / `signer_held` (an `agent` signer's reasons) — absent when nothing looked |
 | `gate.timeout` | `--wait-gates` lapsed and the loop is about to exit `4` | the same approve line | `approve_command`, `reject_command`, `gate_policy`, `waited_ms`, and `cost_usd` only when this loop is the one that saw the gate raised |
 | `stage.done` | a stage finished and the loop moved on | `null` — the loop is already running the next stage | `cost_usd` |
 | `run.finished` | the loop ended with exit `0` | `null` | `exit_code`, `exit_family`, `spent_usd` |
 | `run.failed` | the loop ended with any non-zero exit, refusals included | `tldrx run status <id>` | `exit_code`, `exit_family`, `spent_usd` |
 | `budget.warned` | a ceiling is close | `tldrx budget show --run <id>` | `spent_usd`, `ceiling_usd` |
-| `status` | every `--notify-every <duration>` while the loop runs | `tldrx run status <id>`, or the answer line when parked on a question, or the approve line when parked on a gate | `status_text` — what `tldrx run status` prints, verbatim — `waiting_on`, the blocking open question ids (`[]` when none), and `waiting_on_gate` + `gate_policy` only while a gate is pending |
+| `status` | every `--notify-every <duration>` while the loop runs | `tldrx run status <id>`, or the answer line when parked on a question, or — at a gate — the same line that clears it | `status_text` — what `tldrx run status` prints, verbatim — `waiting_on`, the blocking open question ids (`[]` when none), and `waiting_on_gate` + `gate_policy` only while a gate is pending |
 
 **A truncated input rides in the summary, and adds no kind.** When a stage's `inputs_max_bytes`
 could not fit a declared input whole, the `stage.done`, `run.failed` and `status` summaries end

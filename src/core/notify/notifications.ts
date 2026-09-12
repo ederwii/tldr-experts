@@ -143,6 +143,49 @@ function gatePhrase(policy: GatePolicy | null): string {
 }
 
 /**
+ * THE one mapping from "what is holding this run" to "the one command that clears it"
+ * (gh #239), shared by `gate.requested` and the parked heartbeat.
+ *
+ * ## Why it is not `approve`
+ *
+ * Measured, an owner's phone, 2026-09-10: a gate held BY five unanswered questions went
+ * out as `Run: tldrx approve --run <id>`, and the heartbeat repeated that line seven
+ * times in an hour. The summary named the holding condition correctly (#203) and the
+ * ACTION contradicted it. Two Build gates were approved by mistake that evening, both
+ * over unbuilt stories, both revoked with `reject --stage` — *"creo que le di por
+ * error"*. A notification exists to be obeyed off a lock screen, so the tap it offers
+ * has to be the tap that helps.
+ *
+ * The order is the order in which a thing becomes answerable:
+ *
+ *  - **open blocking questions -> `answer`.** The gate is DOWNSTREAM of them; approving
+ *    is the one thing that must not happen yet. The first id, for the reason
+ *    `questionNotification` already gives: questions are answered one at a time and a
+ *    payload has one `command` slot, and every id is in the detail.
+ *  - **unfinished stories -> `run status`.** Not `reject`: nobody has decided to abandon
+ *    that work, and a one-tap refusal is the mirror of the mistake being fixed. Not
+ *    `null` either — a person whose run is parked needs somewhere to go, and what is
+ *    missing here is knowledge, not a signature. `run status` is the screen that says
+ *    which story stopped and why.
+ *  - **nothing mechanical outstanding -> `approve`.** The gate really is waiting on a
+ *    judgement, which is what this field always meant.
+ *
+ * `approve_command` and `reject_command` stay in the DETAIL of every payload either
+ * way: a script that renders buttons keeps both, and nothing a consumer already reads
+ * was taken away.
+ */
+function clearingCommand(
+  runId: string,
+  openQuestions: readonly string[],
+  unfinishedStories: number,
+): string {
+  const first = openQuestions[0];
+  if (first !== undefined) return answerCommand(first, runId);
+  if (unfinishedStories > 0) return `tldrx run status ${runId}`;
+  return approveCommand(runId);
+}
+
+/**
  * `gate.requested` — a stage finished and a person has to sign it.
  *
  * `policy` is nullable rather than defaulted: a loop that could not read the run's
@@ -167,6 +210,18 @@ export function gateNotification(
    * Passed IN, never derived here: this file words, it never measures (gh #197).
    */
   stories: StoriesView | null = null,
+  /**
+   * The run's OPEN blocking question ids (gh #239), read off disk by the caller
+   * through `blockingQuestionIds` — the one predicate for "does this question park
+   * a run". They pick the `command` (see `clearingCommand`); they are not worded
+   * into the summary, which already carries `held`.
+   *
+   * SIXTH and last for the reason `stories` is fifth: every caller passes these
+   * positionally. Empty is the honest default — a caller that did not read the
+   * questions is not claiming there are none, it is claiming nothing, and the
+   * mapping falls through to what it did before.
+   */
+  openQuestions: readonly string[] = [],
 ): NotifyPayload {
   const approve = approveCommand(ctx.runId);
   // `held` is what the engine's gate signer could not sign over (gh #198), in the
@@ -185,13 +240,18 @@ export function gateNotification(
     : policy === "auto"
       ? ` It is held by: ${held.join("; ")}.`
       : ` The engine's signer held it: ${held.join("; ")}.`;
-  const delivered = stories === null ? "" : ` It ${deliveredPhrase(stories)}.`;
+  // `It has 5 of 6 stories delivered` — the verb #239 found missing. `deliveredPhrase`
+  // is a NOUN phrase and stays one: `runNext`, `ship` and the decision card all embed
+  // it after a label (`stories: …`), and giving it a verb for this one caller's sake
+  // would break the three that read best without it. So the article is fixed here, at
+  // the only call site that needed a sentence.
+  const delivered = stories === null ? "" : ` It has ${deliveredPhrase(stories)}.`;
   return {
     ...base(ctx, "gate.requested"),
     summary: `${ctx.runId} finished ${ctx.stage ?? "a stage"} for $${costUsd.toFixed(2)} and is waiting `
       + `at ${gateArticle(policy)} ${gatePhrase(policy)}.${delivered}${why} Nothing runs after it until the gate is `
       + "approved or rejected.",
-    command: approve,
+    command: clearingCommand(ctx.runId, openQuestions, stories?.unfinished.length ?? 0),
     detail: {
       cost_usd: costUsd,
       approve_command: approve,
@@ -415,6 +475,18 @@ export function statusNotification(
   waitingOnGate: WaitingGate | null = null,
   /** Same contract as `stageDoneNotification`'s `truncation` (#207). */
   truncation: string | null = null,
+  /**
+   * What the PENDING gate is over, for a Build gate (gh #239) — the same
+   * `gateStories` view `gate.requested` is built from, passed in by the caller,
+   * never re-derived here. It picks the `command` and nothing else: the heartbeat's
+   * summary is `run status`'s own text and does not grow a sentence.
+   *
+   * Null, not an empty view, when no gate is pending or the gate is not a Build one
+   * — "no stories were looked at" is not "no story is unfinished", and it was the
+   * hard-wired zero here that kept offering `approve` at a gate held by unbuilt
+   * work.
+   */
+  stories: StoriesView | null = null,
 ): NotifyPayload {
   const ids = [...waitingOn];
   const parked = ids.length > 0;
@@ -437,13 +509,17 @@ export function statusNotification(
           + "Nothing is waiting on you — this is the periodic heartbeat `--notify-every` asked for.") + tail,
     // The literal line to type, exactly as `question.raised` and `gate.requested` spelled it
     // — a reminder that made the reader go and find the command would be a reminder to go and
-    // look at a screen. A pending gate wins the one slot: it is the thing that has stopped
-    // the loop, and its verb is not `answer`.
-    command: waitingOnGate !== null
-      ? approveCommand(ctx.runId)
-      : parked
-        ? answerCommand(ids[0] ?? "Q1", ctx.runId)
-        : `tldrx run status ${ctx.runId}`,
+    // look at a screen. A pending gate wins the one slot over a run that is merely running:
+    // it is the thing that has stopped the loop.
+    //
+    // But a gate held over OPEN QUESTIONS does not win it against those questions (gh #239):
+    // this heartbeat is the surface that repeated `tldrx approve` seven times in an hour at a
+    // gate whose five questions nobody had answered. `clearingCommand` is the same mapping
+    // `gate.requested` uses — one implementation, so the alert and its reminder can never
+    // offer two different taps for the same parked run (§7).
+    command: waitingOnGate !== null || parked
+      ? clearingCommand(ctx.runId, ids, stories?.unfinished.length ?? 0)
+      : `tldrx run status ${ctx.runId}`,
     detail: {
       status_text: statusText,
       waiting_on: ids,

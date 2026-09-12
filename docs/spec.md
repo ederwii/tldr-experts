@@ -2149,7 +2149,12 @@ a configured hook that never fires and never says why. An unknown kind is a vali
 `summary` is one paragraph a person can act on from a lock screen. `command` is the exact line
 to type, already carrying the run id — or **null**, honestly, when there is nothing to do
 (`stage.done`, a clean `run.finished`); an invented next command would be the framework guessing
-at an intention. `stage` is `<phase>/<stage>` or null. `detail` is per-kind and always an object.
+at an intention. **At a parked gate it follows what is HOLDING the gate** (#239): open blocking
+questions make it the `tldrx answer` line, unfinished stories make it `tldrx run status`, and it
+is `tldrx approve` only when nothing mechanical is outstanding and the gate really is waiting on
+a judgement. One mapping serves `gate.requested` and the `status` heartbeat, so an alert and its
+reminder cannot offer two different taps for the same run; `approve_command` and `reject_command`
+are in the `detail` of both either way. `stage` is `<phase>/<stage>` or null. `detail` is per-kind and always an object.
 
 **Kind enum** (closed): `question.raised` `question.timeout` `gate.requested` `gate.timeout`
 `stage.done` `run.finished` `run.failed` `budget.warned` `status`.
@@ -2164,10 +2169,10 @@ at an intention. `stage` is `<phase>/<stage>` or null. `detail` is per-kind and 
 | `run.finished` | the loop ended with exit `0` | `exit_code`, `exit_family`, `spent_usd`, and — only when the RUN itself is over — `outcome` (`delivered` \| `partial` \| `nothing-delivered` \| `n/a` \| `not-recorded`) with `outcome_detail`, the sentence §2.2's `outcome:` renders. Absent while the run is still open: an outcome there would claim a run still running had ended without one (#210) |
 | `run.failed` | the loop ended with any non-zero exit, refusals included | `exit_code`, `exit_family`, `spent_usd` |
 | `budget.warned` | a ceiling is close | `spent_usd`, `ceiling_usd` |
-| `status` | every `--notify-every <duration>` while the loop runs | `status_text` — what `tldrx run status` prints, verbatim — `waiting_on`, the blocking open question ids (`[]` when none), and, ONLY while a gate is pending, `waiting_on_gate` (`<phase>/<stage>`) with `gate_policy` |
+| `status` | every `--notify-every <duration>` while the loop runs | `status_text` — what `tldrx run status` prints, verbatim — `waiting_on`, the blocking open question ids (`[]` when none), and, ONLY while a gate is pending, `waiting_on_gate` (`<phase>/<stage>`) with `gate_policy`. Its `command` follows the same holding-condition mapping as `gate.requested`, over the same reading of the pending gate — open questions repeat the `tldrx answer` line and a Build gate with unfinished stories repeats `tldrx run status`, never `tldrx approve` (#239) |
 
 **A summary says what the stage DELIVERED, not only what it cost.** For a Build gate the
-`summary` carries the story sentence — `It 0 of 1 stories delivered, S1 blocked (…)` — and a
+`summary` carries the story sentence — `It has 0 of 1 stories delivered, S1 blocked (…)` — and a
 `run.finished` over a closed run carries `The run: nothing delivered: 0 of 3 stories; S1 — …`.
 Both are built by ONE renderer (`core/run/runOutcome.ts`), so the notification, the terminal
 line, the decision card, `tldrx run status`, the dashboard and the `ship` PR body cannot

@@ -158,6 +158,26 @@ function blockedReasons(runDir: string): ReadonlyMap<string, string> {
 }
 
 /**
+ * The stories view a GATE at `phaseId` is over — the view for a Build gate, null for
+ * every other phase (gh #210, #239).
+ *
+ * ONE selection, because two surfaces ask the same question about the same pending
+ * gate: the `gate.requested` notification when it is raised, and the `status`
+ * heartbeat every interval it stays up. The heartbeat asked with a hard-wired `0`
+ * unfinished stories, so a Build gate held by unbuilt work and no open question kept
+ * repeating `tldrx approve` — which is the exact gate an owner approved by mistake
+ * twice in one evening (#239). A second opinion about "is this gate over stories" is
+ * how the alert and its reminder came to disagree; this is that opinion, once.
+ *
+ * Null on a Plan gate is deliberate and is not a zero: every story there is `todo` by
+ * design, and describing that as "unfinished work" would refuse a signature the
+ * workflow is asking for.
+ */
+export function gateStories(runDir: string, phaseId: string): StoriesView | null {
+  return phaseId === BUILD_PHASE ? storiesView(runDir) : null;
+}
+
+/**
  * `stories: {…}` on a Build `gate.requested`, plus the first blocked story's id
  * and reason as two flat keys.
  *

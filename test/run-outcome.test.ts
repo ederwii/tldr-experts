@@ -40,7 +40,8 @@ import { gateNotification, runEndNotification } from "../src/core/notify/notific
 import { EXIT_OK, EXIT_USAGE } from "../src/cli/exitCodes.ts";
 import { OUTCOME_NOT_RECORDED, type RunFile } from "../src/core/run/RunFile.ts";
 import {
-  deliveredPhrase, deriveRunOutcome, describeRunOutcome, outcomeLine, storiesView, withRunOutcome,
+  deliveredPhrase, deriveRunOutcome, describeRunOutcome, gateStories, outcomeLine, storiesView,
+  withRunOutcome,
 } from "../src/core/run/runOutcome.ts";
 import { makeBuildWorkspace, type BuildWorkspace } from "./fixtures/build/workspace.ts";
 import { GOLDEN_REFUSED, GOLDEN_STORY } from "./fixtures/build/golden.ts";
@@ -142,8 +143,17 @@ describe("a Build gate says what the stage delivered (#210)", () => {
     );
     // The SUMMARY, not only the detail: the summary is the half that reaches a
     // lock screen, and it is the half that said only a dollar figure in #210.
-    expect(notification.summary).toContain(`It ${deliveredPhrase(view!)}.`);
+    // `It has …` since #239: `deliveredPhrase` is a noun phrase and the summary owes
+    // it a verb — `It 0 of 1 stories delivered` is what reached a lock screen.
+    expect(notification.summary).toContain(`It has ${deliveredPhrase(view!)}.`);
     expect(notification.detail.blocked_story).toBe("S1");
+
+    // The ONE selection both gate surfaces ask through (#239): a Build gate is over
+    // these stories, every other phase's gate is over none — and `null` there is not a
+    // zero, it is "no stories were looked at". The heartbeat asked with a hard-wired 0
+    // and kept offering `approve` at a gate held by unbuilt work.
+    expect(gateStories(ws.runDir, "04-build")).toEqual(view!);
+    expect(gateStories(ws.runDir, "01-what")).toBeNull();
   }, 180_000);
 });
 

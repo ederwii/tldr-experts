@@ -165,7 +165,8 @@ is held by: claim-sources=1 unverified citation(s) — …"*. Antes, esa frase d
 de decir cuánto costó:
 
 > *"260909-scoring finished 04-build/build for $1.78 and is waiting at a human gate — a person
-> signs it. It 0 of 3 stories delivered, S1 blocked (npm run test exited 127…), S2 not started.
+> signs it. It has 0 of 3 stories delivered, S1 blocked (npm run test exited 127…), S2 not
+> started.
 > Nothing runs after it until the gate is approved or rejected."*
 
 Los conteos y el motivo de la primera historia bloqueada viajan en el payload de
@@ -217,8 +218,13 @@ Mientras una firma está pendiente la carga suma dos claves:
 }
 ```
 
-…el resumen dice que el run está esperando que una persona firme esa etapa, y `command` pasa
-a ser `tldrx approve --run <id>`. `waiting_on_gate` es una clave **hermana** de `waiting_on`,
+…el resumen dice que el run está esperando que una persona firme esa etapa, y `command` pasa a
+ser la única línea que la LIBERA — el mismo mapeo que usa `gate.requested`, sobre la misma
+lectura del run: `tldrx answer <id>` mientras la compuerta además tenga preguntas abiertas,
+`tldrx run status <id>` mientras una compuerta de Build tenga historias sin terminar, y
+`tldrx approve --run <id>` cuando la firma sea de verdad lo único que falta. Una compuerta retenida por cinco preguntas sin responder ofrecía `approve` y lo repetía
+en cada intervalo, y así se aprobaron por error dos compuertas de Build en una sola noche sobre
+historias sin construir. `waiting_on_gate` es una clave **hermana** de `waiting_on`,
 no un miembro de ella: un adaptador convierte cada id de `waiting_on` en `tldrx answer <id>`,
 y un id de etapa ahí lo haría armar un comando que nadie puede teclear. Las dos claves están
 **ausentes** cuando no hay compuerta pendiente, así que un adaptador escrito antes de que
@@ -233,13 +239,13 @@ así que un `switch` sobre `kind` con un `default` es un adaptador completo.
 |---|---|---|---|
 | `question.raised` | el bucle se detuvo en una pregunta abierta | la línea `tldrx answer` de la primera pregunta | `questions[]` — `id`, `title`, `why_asked`, `options[]` como `{letter, text}`, `recommendation` (`option`, `why`, `src`) o `null`, `answer_command` |
 | `question.timeout` | se venció `--wait-answers` y el bucle está por salir con `4` | la misma línea de respuesta | los mismos `questions[]`, más `waited_ms` |
-| `gate.requested` | una etapa terminó y una persona tiene que firmarla — **se difiere, y puede que nunca se mande, cuando una compuerta `auto` está retenida solo por preguntas abiertas** | `tldrx approve --run <id>` | `cost_usd`, `approve_command`, `reject_command`, `gate_policy`, y uno de `held_by` (las condiciones que fallaron en una compuerta `auto`) / `signer_held` (las razones del firmante `agent`) — ausente cuando nadie miró |
+| `gate.requested` | una etapa terminó y una persona tiene que firmarla — **se difiere, y puede que nunca se mande, cuando una compuerta `auto` está retenida solo por preguntas abiertas** | la línea que LIBERA la compuerta: `tldrx answer <id>` si hay preguntas abiertas, `tldrx run status <id>` si quedan historias sin terminar, `tldrx approve --run <id>` cuando no queda nada mecánico pendiente | `cost_usd`, `approve_command`, `reject_command`, `gate_policy`, y uno de `held_by` (las condiciones que fallaron en una compuerta `auto`) / `signer_held` (las razones del firmante `agent`) — ausente cuando nadie miró |
 | `gate.timeout` | se venció `--wait-gates` y el bucle está por salir con `4` | la misma línea de aprobación | `approve_command`, `reject_command`, `gate_policy`, `waited_ms`, y `cost_usd` solo cuando este bucle es el que vio levantarse la compuerta |
 | `stage.done` | una etapa terminó y el bucle siguió | `null` — el bucle ya está corriendo la siguiente etapa | `cost_usd` |
 | `run.finished` | el bucle terminó con salida `0` | `null` | `exit_code`, `exit_family`, `spent_usd` |
 | `run.failed` | el bucle terminó con cualquier salida distinta de cero, rechazos incluidos | `tldrx run status <id>` | `exit_code`, `exit_family`, `spent_usd` |
 | `budget.warned` | un techo está cerca | `tldrx budget show --run <id>` | `spent_usd`, `ceiling_usd` |
-| `status` | cada `--notify-every <duration>` mientras el bucle corre | `tldrx run status <id>`, o la línea de respuesta cuando está detenido en una pregunta, o la de aprobación cuando lo está en una compuerta | `status_text` — lo que imprime `tldrx run status`, textual — `waiting_on`, los ids de las preguntas abiertas que lo detienen (`[]` si no hay), y `waiting_on_gate` + `gate_policy` solo mientras hay una compuerta pendiente |
+| `status` | cada `--notify-every <duration>` mientras el bucle corre | `tldrx run status <id>`, o la línea de respuesta cuando está detenido en una pregunta, o — en una compuerta — la misma línea que la libera | `status_text` — lo que imprime `tldrx run status`, textual — `waiting_on`, los ids de las preguntas abiertas que lo detienen (`[]` si no hay), y `waiting_on_gate` + `gate_policy` solo mientras hay una compuerta pendiente |
 
 **Una entrada truncada viaja en el resumen, y no agrega un tipo.** Cuando el `inputs_max_bytes`
 de una etapa no pudo entrar una entrada declarada entera, los resúmenes de `stage.done`,
