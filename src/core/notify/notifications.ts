@@ -468,16 +468,24 @@ export function runEndNotification(
    * positionally by its caller, so a new one goes at the end.
    */
   truncation: string | null = null,
+  /**
+   * What `tldrx ship` did when the run closed under this loop (gh #253) — the
+   * run.yml `ship:` record. NINTH, for the reason the two before it give. Null on
+   * every run without a `ship:` block, which leaves the payload byte-identical.
+   */
+  ship: ShipRecordLine | null = null,
 ): NotifyPayload {
   const kind: NotifyKind = exitCode === 0 ? "run.finished" : "run.failed";
   const verb = exitCode === 0 ? "finished" : "stopped";
   const delivered = outcome === null ? "" : ` The run: ${outcome.text}.`;
+  const shipped = ship === null ? "" : ` ${shipSentence(ship)}`;
   return {
     ...base(ctx, kind),
     summary: `${ctx.runId}: the loop ${verb} with exit ${String(exitCode)} `
       + `(${exitFamily(exitCode)}), ${spentFigure(tally)} spent by this loop.${delivered} ${lastLine}`
       + `${note === null ? "" : ` ${note}`}`
-      + `${truncation === null ? "" : ` ${truncation}`}`,
+      + `${truncation === null ? "" : ` ${truncation}`}`
+      + shipped,
     command: exitCode === 0 ? null : `tldrx run status ${ctx.runId}`,
     detail: {
       exit_code: exitCode,
@@ -488,8 +496,27 @@ export function runEndNotification(
       // Absent while the run is still open: `outcome: "not-recorded"` on a loop
       // that merely stopped would claim the run had ended without one (§7).
       ...(outcome === null ? {} : { outcome: outcome.kind, outcome_detail: outcome.text }),
+      // Only on a run that carried a `ship:` block. `pr_url` is the ONE url when
+      // there is exactly one — the common case, and the field the issue asks for;
+      // `pr_urls` is always the list, so a multi-repo run is not reduced to a guess.
+      ...(ship === null ? {} : {
+        ...(ship.pr_urls.length === 1 ? { pr_url: ship.pr_urls[0] } : {}),
+        pr_urls: ship.pr_urls,
+        merge: ship.merge,
+      }),
     },
   };
+}
+
+/** The `ship:` record as the payload reads it — `run.yml`'s `RunShip`, with the optional halves resolved. */
+export interface ShipRecordLine {
+  readonly pr_urls: readonly string[];
+  readonly merge: string;
+}
+
+function shipSentence(ship: ShipRecordLine): string {
+  const urls = ship.pr_urls.length === 0 ? "no PR was opened" : `PR: ${ship.pr_urls.join(", ")}`;
+  return `Shipped — ${urls}; merge: ${ship.merge}.`;
 }
 
 /**

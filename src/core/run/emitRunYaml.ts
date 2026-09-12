@@ -247,6 +247,19 @@ export function emitRunYaml(run: RunFile): string {
   if (run.gates_policy !== undefined && Object.keys(run.gates_policy).length > 0) {
     lines.push(`gates_policy: ${gatesPolicy(run.gates_policy)}`);
   }
+  // Same rule (gh #253): the policy half is always emitted once the block exists —
+  // `run new --ship` wrote it — and the record half only when `tldrx ship` wrote
+  // it. Measured red before this branch existed: `run new --ship merge` wrote the
+  // block, the first `RunStore.save` dropped it, and `run auto` shipped nothing
+  // while believing the run had never asked.
+  if (run.ship !== undefined) {
+    const s = run.ship;
+    const parts = [`push: ${String(s.push)}`, `pr: ${String(s.pr)}`, `auto_merge: ${yamlScalar(s.auto_merge)}`];
+    if (s.pr_urls !== undefined) parts.push(`pr_urls: ${inlineList(s.pr_urls)}`);
+    if (s.merge !== undefined) parts.push(`merge: ${yamlScalar(s.merge)}`);
+    if (s.shipped_at !== undefined) parts.push(`shipped_at: ${yamlScalar(s.shipped_at)}`);
+    lines.push(`ship: {${parts.join(", ")}}`);
+  }
   lines.push("phases:");
   for (const phase of run.phases) {
     lines.push(`  - id: ${yamlScalar(phase.id)}`);

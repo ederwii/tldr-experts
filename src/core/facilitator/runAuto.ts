@@ -70,6 +70,8 @@ import {
 import { GATE_SIGNER_ROLE } from "./gateSigner.ts";
 import { approve } from "../run/gates.ts";
 import { runNext, type NextOutcome } from "./runNext.ts";
+import { realShipTransport, shipRun } from "../run/ship.ts";
+import { shipWanted } from "../run/shipPolicy.ts";
 
 export interface AutoOptions {
   readonly root: string;
@@ -332,6 +334,11 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
       if (heartbeat !== null) clearInterval(heartbeat);
       if (notifier !== null) {
         const run = RunStore.open(runDir).run;
+        // The `ship:` record, when THIS loop wrote it (gh #253): read back off
+        // disk, never off the outcome, so the phone reads what run.yml says.
+        const shipped = run.ship?.shipped_at === undefined
+          ? null
+          : { pr_urls: run.ship.pr_urls ?? [], merge: run.ship.merge ?? "never" };
         await notifier.send(
           runEndNotification(
             notifyCtx(), code, spentUsd, lines[lines.length - 1] ?? "",
@@ -342,6 +349,7 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
             // `not recorded` there would be a claim about a run still running.
             isFinished(run.status) ? outcomeLine(run.outcome) : null,
             cutInputs(stageIdOf()),
+            shipped,
           ),
           stageIdOf(),
         );
@@ -508,6 +516,17 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
       if (store.run.status === "done" || store.run.status === "cancelled") {
         say(`run ${runId} is ${store.run.status} — ${spentFigure(loopTally(store.run, spentByLoop))} `
           + "spent by this loop");
+        // The last mile (gh #253): a run opened with `--ship` is shipped by the
+        // same verb a person would type, once. A refusal is this loop's exit code
+        // — it was asked for a PR and did not deliver one — and its lines are the
+        // ones `finish` hands the notify hook.
+        if (store.run.status === "done" && shipWanted(store.run)) {
+          const shipped = await shipRun({
+            root: options.root, runId, actor: options.actor, at: at(), transport: realShipTransport(),
+          });
+          for (const line of shipped.lines) say(line);
+          return await finish(shipped.code, spentByLoop);
+        }
         return await finish(EXIT_OK, spentByLoop);
       }
       if (options.until !== undefined && store.run.cursor.stage === options.until) {

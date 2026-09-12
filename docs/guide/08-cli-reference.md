@@ -278,7 +278,7 @@ session or back, or get a stuck one moving again.
 ```
 tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b]
                      [--from <dir> | --seed <file|dir> …] [--gates <a,b|a:agent|all|none>]
-                     [--attended-by host]
+                     [--ship <push|pr|merge>] [--attended-by host]
 tldrx run attend   <host|--none> [<run>] [--run <id>]
 tldrx run status   [<run>] [--json] [--verbose] [--run <id>]
 tldrx run estimate [<run>] [--json] [--run <id>]
@@ -300,6 +300,12 @@ repeatable**. `--gates` names the HUMAN gates and overrides the workflow's `gate
 be qualified as `<stage>:<policy>` (`plan:agent`), and a bare entry still means `human`.
 `--attended-by host` opens the run in **attended mode**: a host session does the turns and
 the framework never spawns on it (see below). Any other value is exit `1` and no run is made.
+`--ship <push|pr|merge>` (#253) says how far past the LAST gate the framework may carry the epic
+branch, frozen into `run.yml` as `ship: {push, pr, auto_merge}`: `push` publishes it, `pr` also
+opens the pull request, `merge` also arms `gh pr merge --auto --merge` so the remote's own checks
+decide — a PR that reports no check at all is left open with `merge: absent — no checks to wait
+on`. `run auto` runs `tldrx ship` the moment it sees the run `done`; absent, nothing is pushed
+and nothing is opened. Any other value is exit `1` and no run is made.
 
 **Every close names the questions nobody answered (#141).** `cancel`, `tldrx approve` signing the
 last gate and `tldrx next` closing the last stage all read every phase's `questions.md` and print
@@ -1334,8 +1340,15 @@ tldrx ship [<run>] [--branch <name>] [--repo <name>] [--base <branch>]
                    [--draft] [--dry-run] [--run <id>] [--root <path>]
 ```
 
-It NEVER pushes. tldrx does not publish a branch on its own (spec §5), so a branch the remote
-has not seen is a refusal that names the `git push` command rather than running it. The body is
+It pushes ONLY when the run says so. Publishing a branch is a decision, so by default a branch
+the remote has not seen is a refusal that names the `git push` command rather than running it;
+a run opened with `tldrx run new --ship <push|pr|merge>` (#253) took that decision once, and
+then this verb pushes the epic first — through the one push wrapper in the codebase, the Build
+phase itself still having none (spec §5) — and under `merge` arms `gh pr merge --auto --merge`
+after the PR opens, unless the PR reports no check at all, in which case it is left open and
+`run.yml` says `merge: absent — no checks to wait on`. On such a run it writes ONE `run.yml`
+record (`pr_urls`, `merge`, `shipped_at`) and a second ship is skipped; a run without the
+block is never written. The body is
 WRITTEN for a PR (#167): what shipped and what did not, from the handoff's own done/not-done
 split; the reviewer findings still open, read from the run's fix lists; and the LAST phase
 handoff the run has on disk — `04-build/handoff.md` on a run that built something — verbatim

@@ -62,6 +62,8 @@ export interface WorkspaceOptions {
   readonly gates?: Readonly<Record<string, string>>;
   /** `run new --gates <value>`, exercised through `createRun` exactly as the CLI does. */
   readonly gatesFlag?: string;
+  /** `run new --ship <push|pr|merge>`, the same way (gh #253). */
+  readonly shipFlag?: string;
   /** Extra files, keyed by path relative to the workspace root. */
   readonly files?: Readonly<Record<string, string>>;
   /**
@@ -150,6 +152,7 @@ export function makeFacilitatorWorkspace(options: WorkspaceOptions): Facilitator
     scope: options.scope,
     budgetUsd: options.budgetUsd,
     gates: options.gatesFlag,
+    ship: options.shipFlag,
     actor: options.actor ?? "alan",
     now: new Date("2026-08-28T09:00:00Z"),
   });

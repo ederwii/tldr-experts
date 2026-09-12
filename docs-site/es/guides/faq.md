@@ -35,8 +35,16 @@ stdin. `tldrx install --claude --uninstall` quita exactamente lo que escribió.
 ## ¿Hace commit? ¿Hace push?
 
 Build hace commits — en una rama propia, uno por story, mergeados a una rama de épica.
-**Nunca hace push.** La rama de la épica te espera a ti, y el merge final es tuyo.
-`tldrx ship` abre un PR desde ella cuando tú quieras.
+**Por omisión nunca hace push.** La rama de la épica te espera a ti, y el merge final es
+tuyo. `tldrx ship` abre un PR desde ella cuando tú quieras.
+
+Esa decisión la puedes tomar una sola vez, al abrir el run: `tldrx run new … --ship pr`
+deja que el run publique su rama de épica y abra el PR en cuanto se firma la última
+compuerta, y `--ship merge` además arma el auto-merge de GitHub para que decidan los checks
+de tu propio repo — un PR que no reporta ningún check se queda abierto, nunca se mergea sobre
+el silencio. Sin el flag, nada cambia. Cada compuerta la sigue firmando quien diga `--gates`:
+un run que termina en un PR sin nadie en medio es `--gates none --ship merge`, elegido a
+propósito, y `run.yml` registra las dos cosas.
 
 ## ¿Cuánto cuesta de verdad un run?
 
