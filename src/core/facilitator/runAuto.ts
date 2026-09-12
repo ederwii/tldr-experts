@@ -48,8 +48,7 @@ import { RunStore } from "../run/RunStore.ts";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import { AUTO_GATE_ACTOR, reevaluateAutoGate } from "../run/autoGate.ts";
 import { flatten, isAttendedByHost, isFinished, type RunFile } from "../run/RunFile.ts";
-import { BUILD_PHASE } from "../run/buildProgress.ts";
-import { outcomeLine, storiesView } from "../run/runOutcome.ts";
+import { gateStories, outcomeLine } from "../run/runOutcome.ts";
 import { runTally } from "../budget/budgetView.ts";
 import { spentFigure, tallyOf, type SpentTally } from "../budget/spentFigure.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
@@ -306,9 +305,18 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
             // "Nothing is waiting on you" every interval while his signature was the only
             // thing the run was missing (gh #197) — the identical defect this comment's
             // first half already records, one park along.
+            // And the STORIES the pending gate is over, through the same `gateStories`
+            // the `gate.requested` above is built from (gh #239). Hard-wiring "no
+            // unfinished stories" here is what kept a Build gate held by unbuilt work
+            // repeating `tldrx approve` every ten minutes — the gate this owner
+            // approved by mistake twice in one evening. Read every tick, off the same
+            // disk the status text was just read from: a story that settles while the
+            // gate waits changes what the next beat should ask for.
+            const gate = pendingGate(runDir);
             await notifier.send(
               statusNotification(
-                notifyCtx(), text, stillBlocking(runDir), pendingGate(runDir), cutInputs(stageIdOf()),
+                notifyCtx(), text, stillBlocking(runDir), gate, cutInputs(stageIdOf()),
+                gate === null ? null : gateStories(runDir, gate.phase),
               ),
               stageIdOf(),
             );
@@ -433,10 +441,18 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
         // so disk and the event that just fired describe the same instant. The
         // phase comes from the event, so a Plan gate (where every story is `todo`
         // by design) is never described as having delivered nothing.
-        const stories = requestedPhase === BUILD_PHASE ? storiesView(runDir) : null;
+        const stories = gateStories(runDir, requestedPhase);
         const send = async (): Promise<void> => {
           if (notifier === null) return;
-          await notifier.send(gateNotification(notifyCtx(), cost, policy, gateHeld(fresh), stories), stageIdOf());
+          // The open questions are read HERE, inside the send, not at the moment the
+          // gate fired: this closure may be deferred until the questions clear (see
+          // `deferredGate` below), and a command chosen from a stale reading would send
+          // an owner to `answer` a question he has already answered. `stillBlocking` is
+          // the same one predicate `--wait-answers` polls (gh #239).
+          await notifier.send(
+            gateNotification(notifyCtx(), cost, policy, gateHeld(fresh), stories, stillBlocking(runDir)),
+            stageIdOf(),
+          );
         };
         // The ONE case that waits: an auto gate whose only failing condition is
         // `questions` (gh #203). The questions ARE the gate — it is downstream of
@@ -728,7 +744,7 @@ function pollInterval(limitMs: number): number {
  * what `waitForGate` hands to `selfCloseAutoGate`, which acts on `auto` and on nothing else;
  * for `human` and `agent` this loop waits the same way it always did.
  */
-function pendingGate(runDir: string): (WaitingGate & { readonly stageId: string }) | null {
+function pendingGate(runDir: string): (WaitingGate & { readonly stageId: string; readonly phase: string }) | null {
   try {
     const store = RunStore.open(runDir);
     if (waitingFor(store.run, store.runDir).kind !== "gate") return null;
@@ -736,6 +752,10 @@ function pendingGate(runDir: string): (WaitingGate & { readonly stageId: string 
     return {
       stage: `${cursor.phase}/${cursor.stage}`,
       stageId: cursor.stage,
+      // The phase on its own, not re-split from `stage`: `gateStories` takes a phase
+      // id, and parsing one back out of a rendered `<phase>/<stage>` would be a second
+      // reader of a string this function just built.
+      phase: cursor.phase,
       policy: gatePolicyFor(store.run.gates_policy, cursor.stage),
     };
   } catch {

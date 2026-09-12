@@ -18,6 +18,33 @@
   moved a year forward: reverted, five tests red (the one that reds today plus four with longer
   fuses); fixed, the whole suite is green at +1 year and the fixture's own consumers are green at
   +5. §8's hermeticity rule now covers the clock as well as `$TMPDIR`.
+- **A parked gate hands over the command that CLEARS it, not `tldrx approve` whatever is
+  holding it (#239).** Measured on an owner's phone, 2026-09-10: a gate held BY five
+  unanswered questions was announced as `Run: tldrx approve --run <id>`, and the
+  `--notify-every` heartbeat repeated that same line seven times in an hour. The sentence
+  named the holding condition correctly — #203 was working — and the ACTION contradicted it,
+  which is the worse half: a notification exists to be obeyed off a lock screen. Two Build
+  gates were approved by mistake that evening, both over unbuilt stories, both revoked with
+  `reject --stage`; the owner said so himself — *"no sé por qué me avisa que ya puedo cerrarlo
+  si aún hay preguntas"*. `command` now follows the holding condition, in ONE mapping shared by
+  `gate.requested` and the parked heartbeat — and over ONE reading of the pending gate,
+  `gateStories`, so the alert and its reminder can never offer two different taps: open blocking questions → the `tldrx answer` line (the gate is downstream of
+  them); unfinished stories → `tldrx run status` (not `reject` — nobody has decided to abandon
+  that work, and a one-tap refusal is the mirror of the mistake being fixed — and not `null`,
+  because what is missing there is knowledge, not a signature); nothing mechanical outstanding
+  → `tldrx approve`, which is what the field always meant. `approve_command` and
+  `reject_command` stay in the `detail` of every payload, so an adapter that renders buttons
+  keeps both. The open question ids are read off disk by the loop through `blockingQuestionIds`
+  — the one predicate `--wait-answers` polls — at the moment the notification is SENT, so a
+  gate whose questions cleared while the send was deferred does not point at an answered
+  question; the heartbeat reads the gate's stories the same way, every tick, instead of the
+  hard-wired "nothing unfinished" that kept it saying `approve` at a Build gate held by unbuilt
+  work — the gate the two mistaken approvals were on.
+- **The Build gate's summary has a verb again (#239).** `deliveredPhrase` is a noun phrase and
+  three callers embed it after a label, so `It 5 of 6 stories delivered, S6 blocked (…)` was
+  reaching lock screens as a typo. The article is fixed at the one call site that needed a
+  sentence — `It has 5 of 6 stories delivered` — and the phrase's contract is unchanged for
+  `run next`, `ship` and the decision card.
 
 - **A red base pre-flight now keeps what the command SAID, so a stage-wide refusal names a
   cause (#229).** #211 taught a red story DoD to keep its output — the file on disk, an
