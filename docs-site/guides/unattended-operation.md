@@ -331,6 +331,14 @@ that is not a duration is refused with exit `1`.
   printing your note; let it lapse and it sends one `gate.timeout` and exits `4`. Nothing is
   spent while it polls.
 
+  A rejection is two different acts under one verb, and the rejection says which one it is
+  rather than the loop guessing. A bare `tldrx reject` means *stop, I will look* and ends the
+  loop, as it always has: resuming would re-spend the stage on a decision you have not been
+  shown the result of. `tldrx reject --and-continue` means *redo it this way and carry on* —
+  the stage goes back to `ready` with your note exactly the same way, and the loop re-runs it
+  instead of exiting, which is what relaunching by hand used to do. Nothing infers this from
+  the words of your note.
+
   It waits FOR a signature and produces one only where the run already said it could: an
   `auto` gate is re-evaluated on every poll and signed the moment its seven conditions hold
   (below). For `human` and `agent` it produces none — and by the time it is waiting on an

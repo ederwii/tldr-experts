@@ -340,6 +340,14 @@ Un valor que no sea una duración se rechaza con salida `1`.
   rechaza y se detiene, imprimiendo tu nota; deja que se venza y manda un `gate.timeout` y
   sale con `4`. No se gasta nada mientras consulta.
 
+  Un rechazo son dos actos distintos bajo un mismo verbo, y es el rechazo el que dice cuál de
+  los dos es, en vez de que el bucle lo adivine. Un `tldrx reject` pelado significa *pará, lo
+  quiero mirar* y termina el bucle, como siempre: seguir sería volver a gastar la etapa sobre
+  una decisión cuyo resultado no viste. `tldrx reject --and-continue` significa *rehacelo así y
+  seguí* — la etapa vuelve a `ready` con tu nota igual que siempre, y el bucle la vuelve a
+  correr en lugar de salir, que es lo que hacía relanzarlo a mano. Nada de esto se deduce de
+  las palabras de tu nota.
+
   Espera UNA firma, y solo la produce donde el run ya había dicho que podía: una compuerta
   `auto` se vuelve a evaluar en cada consulta y se firma apenas se cumplen sus siete
   condiciones (más abajo). Para `human` y `agent` no produce ninguna — y para cuando está

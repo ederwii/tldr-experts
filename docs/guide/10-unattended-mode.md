@@ -747,6 +747,13 @@ they are closed by different verbs — so this is a separate flag rather than a 
 you did. Approve within the window and the loop carries on; reject and it stops, printing your
 note; let it lapse and it exits `4` with the same lines, after one `gate.timeout`.
 
+A rejection is two different acts under one verb, and the rejection itself says which — the
+loop does not guess. A bare `tldrx reject` means *stop, I will look* and ends the loop, as it
+always has: carrying on would re-spend the stage on a decision you have not been shown the
+result of. `tldrx reject --and-continue` means *redo it this way and carry on*: the stage goes
+back to `ready` with your note exactly the same way, and the loop re-runs it instead of
+exiting, which is what relaunching by hand used to do.
+
 It waits FOR a signature, and produces one only where the run already said it could. A stage on
 `gates_policy: agent` stops it exactly as a `human` one does — there is no engine-side
 evidence-writing signer in this loop, so `--wait-gates` waits for an agent to sign that gate over

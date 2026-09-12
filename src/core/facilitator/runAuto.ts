@@ -634,11 +634,35 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
                 continue;
               }
               if (waited.resolution === "rejected") {
-                // The rejection's own semantics, unchanged: `tldrx reject` has already put the
-                // stage back to `ready` with the note fed into the next prompt, and the loop
-                // stops on the exit `next` gave it. Resuming here would re-spend the stage on
-                // a decision the person who rejected it has not been shown the result of.
+                // A rejection is two different acts under one verb, and the rejection itself
+                // now says which one it is (gh #242) — this loop does not guess.
                 //
+                //   "STOP, I WILL LOOK"  — the DEFAULT, and the behaviour this loop has always
+                //     had. `tldrx reject` has already put the stage back to `ready` with the
+                //     note fed into the next prompt, and the loop stops on the exit `next`
+                //     gave it. Resuming here would re-spend the stage on a decision the person
+                //     who rejected it has not been shown the result of. That reasoning is why
+                //     a bare `tldrx reject` still stops, and why nothing infers "carry on"
+                //     from the note's words or from the gate's holding condition.
+                //
+                //   "REDO IT THIS WAY AND CARRY ON" — `tldrx reject --and-continue`, and the
+                //     measurement that made it exist: five of five rejections issued against
+                //     a live loop on 2026-09-11/12 meant this, and each cost a walk to a
+                //     terminal to relaunch what the rejection had just stopped. The person
+                //     asking for it has SAID they do not need to see the next result first,
+                //     which is the exact assumption the stop rests on; the stage re-runs with
+                //     the note, the same one `next` would have read after a manual relaunch.
+                //
+                // The bit travels on the gate record `tldrx reject` writes — the same object
+                // `waitForGate` reads `status` off, read once and not re-derived here, because
+                // the rejecting process is a different process from this one.
+                if (waited.andContinue) {
+                  say(`waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — `
+                    + `the gate on ${gate.stage} was REJECTED with --and-continue`
+                    + (waited.note === null ? "" : `: ${waited.note}`)
+                    + " — re-running the stage with the note, resuming");
+                  continue;
+                }
                 // Said AFTER the stop block rather than before it, unlike every other `waited
                 // …` line: the rejection is the stop REASON, and `run.finished`/`run.failed`
                 // carries the last line — so a note written by the person who stopped the loop
@@ -784,7 +808,9 @@ function gatePolicyNow(runDir: string): GatePolicy | null {
  * The status is read off the STAGE'S OWN GATE rather than through `waitingFor`, because
  * the question here is a different one: `waitingFor` answers "is a gate holding this run",
  * which stops being true the moment either verb lands, and approve and reject then need
- * telling apart. `gate.status` is the field both verbs write, read once, not re-derived.
+ * telling apart. `gate.status` is the field both verbs write, read once, not re-derived —
+ * and `and_continue` (#242) rides along in that same read, because which KIND of rejection
+ * this was is a property of the rejection and a second read could land after a write.
  */
 async function waitForGate(
   runDir: string,
@@ -795,23 +821,34 @@ async function waitForGate(
   readonly resolution: "approved" | "rejected" | "lapsed";
   readonly ms: number;
   readonly note: string | null;
+  /** Only ever true on a `rejected` resolution: the rejection asked the loop to carry on. */
+  readonly andContinue: boolean;
 }> {
   const started = Date.now();
   for (;;) {
     const elapsed = Date.now() - started;
     const found = gateOf(runDir, stageId);
-    if (found !== null && found.status === "approved") return { resolution: "approved", ms: elapsed, note: null };
+    if (found !== null && found.status === "approved") {
+      return { resolution: "approved", ms: elapsed, note: null, andContinue: false };
+    }
     if (found !== null && found.status === "rejected") {
-      return { resolution: "rejected", ms: elapsed, note: found.note.trim() === "" ? null : found.note.trim() };
+      return {
+        resolution: "rejected",
+        ms: elapsed,
+        note: found.note.trim() === "" ? null : found.note.trim(),
+        // Read off the SAME gate object as `status`, in the same read: two reads could
+        // land either side of a write and report a rejection with the wrong answer.
+        andContinue: found.andContinue,
+      };
     }
     // The one thing this loop DOES rather than watches (gh #203). An `auto` policy has
     // already said the machine may close this gate; before #203 the offer expired the
     // moment `next` handed the gate over, so an auto gate held by four open questions
     // stayed a human gate forever once the answers landed.
     if (found !== null && await selfCloseAutoGate(runDir, stageId, gate)) {
-      return { resolution: "approved", ms: Date.now() - started, note: null };
+      return { resolution: "approved", ms: Date.now() - started, note: null, andContinue: false };
     }
-    if (elapsed >= limitMs) return { resolution: "lapsed", ms: elapsed, note: null };
+    if (elapsed >= limitMs) return { resolution: "lapsed", ms: elapsed, note: null, andContinue: false };
     const pollMs = pollInterval(limitMs);
     await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, limitMs - elapsed)));
   }
@@ -875,10 +912,19 @@ async function selfCloseAutoGate(runDir: string, stageId: string, gate: GateWait
 }
 
 /** One stage's gate object, off disk. Null when the run or the stage cannot be read. */
-function gateOf(runDir: string, stageId: string): { readonly status: string; readonly note: string } | null {
+function gateOf(
+  runDir: string,
+  stageId: string,
+): { readonly status: string; readonly note: string; readonly andContinue: boolean } | null {
   try {
     const found = flatten(RunStore.open(runDir).run).find((entry) => entry.stage.id === stageId);
-    return found === undefined ? null : { status: found.stage.gate.status, note: found.stage.gate.note };
+    return found === undefined ? null : {
+      status: found.stage.gate.status,
+      note: found.stage.gate.note,
+      // Absent is "stop" — every gate written before `--and-continue` existed, and every
+      // bare rejection since, reads the same way (#242).
+      andContinue: found.stage.gate.and_continue === true,
+    };
   } catch {
     return null;
   }

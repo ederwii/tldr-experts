@@ -15,7 +15,7 @@
  */
 import type { Command } from "../Command.ts";
 import { EXIT_GATE_REFUSED, EXIT_OK } from "../exitCodes.ts";
-import { parseArgs, stringFlag, UsageError } from "../argv.ts";
+import { boolFlag, parseArgs, stringFlag, UsageError } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { isResolved, notFound, renderAmbiguous, resolveRunOrExplain, type RunOrExit } from "../resolveRun.ts";
@@ -29,11 +29,16 @@ import { EXIT_NOT_FOUND } from "../exitCodes.ts";
 export const rejectCommand: Command = {
   name: "reject",
   summary: "Request changes at the current gate, or revoke an approval already given",
-  usage: "tldrx reject --note <text> [--stage <phase>/<stage>] [--run <id>] [--root <path>]",
+  usage: "tldrx reject --note <text> [--and-continue] [--stage <phase>/<stage>] [--run <id>] [--root <path>]",
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {
       const args = parseArgs(argv, ["run", "note", "root", "stage"]);
+      // `--and-continue` (#242): the rejection says which of the two acts it is — "redo it
+      // this way and carry on" rather than "stop, I will look". It changes nothing this
+      // verb does; it is recorded on the gate for an unattended `run auto --wait-gates`
+      // waiting in ANOTHER process to read. Absent is the default and stops that loop.
+      const andContinue = boolFlag(args, "and-continue");
       const note = stringFlag(args, "note") ?? args.positionals.join(" ");
       if (note.trim() === "") {
         throw new UsageError('reject needs --note: `tldrx reject --note "what to change"`');
@@ -41,12 +46,22 @@ export const rejectCommand: Command = {
       const root = workspaceRootFrom(args);
       const wanted = stringFlag(args, "run");
       const target = stringFlag(args, "stage");
+      // Refused rather than accepted and ignored: `--stage` is a REVOKE, which leaves the
+      // gate `pending` for a decision nobody has made yet, so there is no rejection for
+      // `--and-continue` to describe and no loop parked on that gate to read it. A flag
+      // silently doing nothing is how a person learns to distrust the record.
+      if (andContinue && target !== undefined && target !== "") {
+        throw new UsageError(
+          "--and-continue is about a rejection at the CURRENT gate; --stage revokes an approval "
+          + "already given, which leaves that gate pending for a decision nobody has made yet",
+        );
+      }
       const resolved = target === undefined || target === ""
         ? resolveRunOrExplain("tldrx reject", root, wanted)
         : resolveIncludingFinished(root, wanted);
       if (!isResolved(resolved)) return resolved.exit;
       const store = resolved.store;
-      const ctx = { root, actor: currentActor(), at: nowRfc3339(), note };
+      const ctx = { root, actor: currentActor(), at: nowRfc3339(), note, andContinue };
 
       if (target !== undefined && target !== "") {
         const outcome = revoke(store, ctx, target);
@@ -80,9 +95,17 @@ export const rejectCommand: Command = {
 
       const outcome = reject(store, ctx);
       const came = outcome.from === "failed" ? " (it had failed)" : "";
+      // Said out loud, both ways: the effect on a loop waiting somewhere else is the
+      // whole point of the flag, and its ABSENCE is the case a person needs told too —
+      // a rejection typed at a terminal while `run auto --wait-gates` runs elsewhere
+      // ends that loop, which is invisible from here.
+      const loop = outcome.andContinue
+        ? "an unattended `tldrx run auto --wait-gates` re-runs the stage instead of stopping (--and-continue)"
+        : "an unattended `tldrx run auto --wait-gates` STOPS here — pass --and-continue to have it carry on instead";
       process.stdout.write(
         `rejected ${outcome.phase}/${outcome.stage}${came} — back to \`ready\`\n` +
-          `note: ${outcome.note}\nthe note goes into the next prompt — \`tldrx next\` to re-run the stage\n`,
+          `note: ${outcome.note}\nthe note goes into the next prompt — \`tldrx next\` to re-run the stage\n` +
+          `${loop}\n`,
       );
       return EXIT_OK;
     } catch (error) {

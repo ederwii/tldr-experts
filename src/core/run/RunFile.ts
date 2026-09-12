@@ -152,6 +152,20 @@ export interface RunGate {
    */
   readonly executed_by?: RunGateExecutor;
   readonly authority?: RunGateAuthority;
+  /**
+   * What the REJECTION asked for, when it asked for anything (gh #242).
+   *
+   * `tldrx reject` covers two different acts under one verb: "stop, I will look"
+   * and "redo it this way and carry on". Only the second one is written here, by
+   * `tldrx reject --and-continue`, and it is the bit an unattended `run auto`
+   * reads off this same gate object to decide whether to re-run the stage or stop.
+   *
+   * ADDITIVE, optional, and only ever `true`: absent means stop, which is what
+   * every gate written before this key existed says and what a bare rejection
+   * still says today. It is written by `reject` and cleared when the stage parks
+   * on its gate again, so it never outlives the rejection it describes.
+   */
+  readonly and_continue?: true;
 }
 
 export interface RunTask {
