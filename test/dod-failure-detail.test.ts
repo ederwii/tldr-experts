@@ -22,7 +22,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runStoryDod } from "../src/core/build/dodRunner.ts";
+import { baseResultOf, PreflightCache, runStoryDod } from "../src/core/build/dodRunner.ts";
 import {
   DOD_DETAIL_MAX_BYTES, DOD_EXCERPT_MAX_LINES, DOD_OUTPUT_MAX_BYTES, DOD_OUTPUT_MAX_LINES,
   dodOutputRel, failureExcerpt, failureSummaryLine, outputTail,
@@ -37,7 +37,11 @@ import { runNext } from "../src/core/facilitator/runNext.ts";
 import { reject } from "../src/core/run/gates.ts";
 import { reopenStory } from "../src/core/run/reopenStory.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
-import { makeBuildWorkspace } from "./fixtures/build/workspace.ts";
+import {
+  baseRefusalLines, parsePreflight, type BaseCommandResult,
+} from "../src/core/build/preflight.ts";
+import { loadWorkspace } from "../src/hooks/lib/workspace.ts";
+import { makeBuildWorkspace, type BuildWorkspace } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
 setDefaultTimeout(spawnTestTimeout());
@@ -480,4 +484,123 @@ describe("#211 · the heuristic reads bun's summary line", () => {
     expect(excerpt).not.toContain("swigvarlink");
     expect(failureSummaryLine(text)).toBe("(fail) the thing > it works");
   });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * #229 — the BASE pre-flight keeps the same evidence the story DoD has kept
+ * since #211.
+ *
+ * The two rows are produced a hundred lines apart in `dodRunner.ts` and only one
+ * of them was carried forward: a red base wrote `tail: outcome.tail`, the LAST
+ * line of stdout+stderr, and nothing else. Measured in the field (issue #229): a
+ * `dotnet test` whose 163,702 lines named a dead container daemon on line 12
+ * refused all six stories of a stage with the one line every failing run of that
+ * runner prints — `Test run completed with non-success exit code: 2`. Nothing in
+ * the run directory contained the word `Docker`, so diagnosing the refusal meant
+ * re-running by hand the command the pre-flight exists to have already run.
+ *
+ * The blast radius is inverted against the evidence: a red story DoD blocks ONE
+ * story and keeps a file, an excerpt and a failing line; a red base refuses the
+ * WHOLE stage before anything is dispatched.
+ */
+describe("#229 · a red base pre-flight keeps its output too", () => {
+  /**
+   * The base measured for real, through the shipped seam, on a fixture
+   * workspace whose `npm run test` runs `body` in the repo's own checkout.
+   *
+   * The gate is a FILE and not a `node -e` one-liner for a measured reason: npm
+   * echoes the script it is about to run, and a one-liner containing the word
+   * `FAIL` makes that banner the failure-looking line — the instrument reading
+   * its own fixture back.
+   */
+  async function measureBase(body: string, command = "npm run test"): Promise<{
+    ws: BuildWorkspace; result: BaseCommandResult | null;
+  }> {
+    const ws = makeBuildWorkspace({
+      stories: [{ id: "S1", epic: "E1", title: "First story" }],
+      epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+      waves: [["S1"]],
+      testScript: "sh ./gate.sh",
+      repoFiles: { "gate.sh": body },
+    });
+    const result = await baseResultOf({
+      workspace: loadWorkspace(ws.root),
+      cache: new PreflightCache(ws.runDir),
+      at: "2026-09-11T09:00:00Z",
+      preparing: false,
+      timeoutMs: 60_000,
+      runDir: ws.runDir,
+      write: async <T,>(work: () => T | Promise<T>) => await work(),
+      advisories: [],
+    }, ws.repoName, command);
+    return { ws, result };
+  }
+
+  test("a RED base names the failure, keeps the output on disk, and cites it", async () => {
+    const { ws, result } = await measureBase(RED_SCRIPT);
+    try {
+      expect(result?.status).toBe("failed");
+      // The bug, in one assertion: the row used to keep the LAST line only.
+      expect(result?.tail).toContain("FAIL test_x — AssertionError: expected 3, got 4");
+      expect(result?.tail).not.toContain("swigvarlink");
+      expect(result?.excerpt).toContain("FAIL test_x");
+      // …and the whole tail is a file the operator can open.
+      const rel = String(result?.outputPath ?? "");
+      expect(rel).not.toBe("");
+      const kept = readFileSync(join(ws.runDir, rel), "utf8");
+      expect(kept).toContain("collected 42 items");
+      expect(kept).toContain("FAIL test_x — AssertionError: expected 3, got 4");
+      expect(result?.outputBytes).toBe(Buffer.byteLength(kept, "utf8"));
+      expect(result?.outputLine).toBe(
+        kept.split("\n").findIndex((l) => l.includes("FAIL test_x")) + 1,
+      );
+      // The stage-wide refusal the operator actually reads cites it by line.
+      const refusal = baseRefusalLines([result as BaseCommandResult]).join("\n");
+      expect(refusal).toContain("FAIL test_x");
+      expect(refusal).toContain(`[src: ${rel}:${String(result?.outputLine ?? 0)}]`);
+      // And it survives the round trip through `04-build/preflight.yml`.
+      const reread = parsePreflight(readFileSync(join(ws.runDir, "04-build/preflight.yml"), "utf8"));
+      const row = reread?.results[0];
+      expect(row?.outputPath).toBe(rel);
+      expect(row?.outputLine).toBe(result?.outputLine);
+      expect(row?.excerpt).toContain("FAIL test_x");
+    } finally {
+      ws.dispose();
+    }
+  }, 60_000);
+
+  /**
+   * GUARD, not a proof — it passed before the change too. The `unmeasured` row is
+   * the third case and the scope line of #229: the gate DECLINED to run the
+   * command, so nothing spawned, nothing is known about the base, and the row
+   * refuses nothing. Its `tail` is already the gate's own reason sentence rather
+   * than command output, and there is no output to keep.
+   */
+  test("an UNMEASURED row is untouched — the gate's sentence, and no output keys", async () => {
+    const { ws, result } = await measureBase(RED_SCRIPT, "npm run undeclared");
+    try {
+      expect(result?.status).toBe("unmeasured");
+      expect(result?.exitCode).toBeUndefined();
+      expect(result?.tail).toBe(result?.refusedBecause ?? "");
+      expect(result?.tail).not.toBe("");
+      expect(result?.outputPath).toBeUndefined();
+      expect(result?.excerpt).toBeUndefined();
+    } finally {
+      ws.dispose();
+    }
+  }, 60_000);
+
+  test("a GREEN base still writes nothing — no file, no output keys", async () => {
+    const { ws, result } = await measureBase(GREEN_SCRIPT);
+    try {
+      expect(result?.status).toBe("ok");
+      expect(result?.outputPath).toBeUndefined();
+      expect(result?.excerpt).toBeUndefined();
+      expect(existsSync(join(ws.runDir, "04-build/log/dod-output"))).toBe(false);
+    } finally {
+      ws.dispose();
+    }
+  }, 60_000);
 });

@@ -450,8 +450,13 @@ uninstrumented signal is a fact about coverage, and it belongs in a panel the wa
 join key everywhere), `baseRef` (the repo's `default_branch`), `baseSha` (short
 sha when git had an answer, `""` when it did not), `exitCode` (number \| null),
 `timedOut` (boolean), `status` (`"ok"` | `"failed"` | `"unmeasured"`), `tail`
-(the last meaningful line of the output) and `refusedBecause` (string,
-present only on a refused probe).
+(one line of the output — since #229 the FAILURE-looking line on a measured red,
+the same reading a story's DoD has used since #211, and the last meaningful line
+everywhere else) and `refusedBecause` (string, present only on a refused probe).
+
+A red row's kept output — the file, the excerpt, the line — is in
+`04-build/preflight.yml` and is NOT on the page: `tail` is the one-line clue the
+page has always drawn, and the model carries no story-DoD output path either.
 
 `unmeasured` is a third case and **not** a synonym for either of the other two:
 the gate declined to run the command at all, so nothing is known about the base

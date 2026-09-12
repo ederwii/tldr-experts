@@ -19,6 +19,26 @@
   fuses); fixed, the whole suite is green at +1 year and the fixture's own consumers are green at
   +5. §8's hermeticity rule now covers the clock as well as `$TMPDIR`.
 
+- **A red base pre-flight now keeps what the command SAID, so a stage-wide refusal names a
+  cause (#229).** #211 taught a red story DoD to keep its output — the file on disk, an
+  excerpt, the failing line, a failure-shaped `tail` — and the base row, produced a hundred
+  lines away in the same file, was left on `outcome.tail`: the last line of stdout+stderr.
+  The blast radius and the evidence were the wrong way round. A red story DoD blocks ONE
+  story; a red base refuses the WHOLE stage before anything is dispatched or charged.
+  Measured in the field: a `dotnet test` whose 163,702 captured lines named a dead container
+  daemon on line 12 refused all six stories of a stage with `Test run completed with
+  non-success exit code: 2` — the sentence every failing run of that runner prints, whatever
+  broke. Nothing in the run directory contained the word `Docker`, so diagnosing the refusal
+  meant re-running by hand the command the pre-flight exists to have already run. The base
+  row now goes through the SAME seam, not a second reading of it: `tail` is the
+  failure-looking line, `excerpt` the few lines around it, and the whole bounded tail is
+  written to `04-build/log/dod-output/base-<hash>-1.txt`, which the refusal cites by file and
+  line. A GREEN base still writes nothing — #211's argument holds harder here, since a green
+  base is re-used from cache far more often than a story's — and an `unmeasured` row is
+  untouched: nothing ran, it refuses nothing, and its `tail` is already a reason sentence.
+  `04-build/preflight.yml` stays `version: 1`: four optional fields, and every older file
+  still reads.
+
 ## 0.16.0 — 2026-09-11
 
 ### Added

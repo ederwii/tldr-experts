@@ -2815,6 +2815,7 @@ class BuildSession {
       at: this.ctx.at,
       preparing: this.ctx.mode === "prepare",
       timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
+      runDir: this.ctx.runDir,
       write: (work) => this.writes.run(work),
       advisories: this.advisories,
     };
