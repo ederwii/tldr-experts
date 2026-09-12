@@ -106,8 +106,13 @@ function task(t: RunTask, indent: string): string {
   // to what they were.
   const inTokens = t.input_tokens === undefined ? "" : `, input_tokens: ${String(t.input_tokens)}`;
   const outTokens = t.output_tokens === undefined ? "" : `, output_tokens: ${String(t.output_tokens)}`;
+  // The turn's own role, next to the stage's expert it is so easily confused
+  // with (#234). Written only when an executor recorded one, so a row from
+  // before the key existed — and any turn nothing could attribute — round-trips
+  // byte-for-byte and stays silent rather than guessing.
+  const role = t.role === undefined ? "" : `, role: ${yamlScalar(t.role)}`;
   return [
-    `${indent} - {id: ${yamlScalar(t.id)}, status: ${yamlScalar(t.status)}, expert: ${yamlScalar(t.expert)}, ` +
+    `${indent} - {id: ${yamlScalar(t.id)}, status: ${yamlScalar(t.status)}, expert: ${yamlScalar(t.expert)}${role}, ` +
       `model: ${yamlScalar(t.model)}, cost_usd: ${cost}${metered}${tokens}${inTokens}${outTokens},`,
     `${inner}error: ${yamlScalar(t.error)}, session_id: ${yamlScalar(t.session_id)},`,
     `${inner}started_at: ${yamlScalar(t.started_at)}, ended_at: ${yamlScalar(t.ended_at)},`,

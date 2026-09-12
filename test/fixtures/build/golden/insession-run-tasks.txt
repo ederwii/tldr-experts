@@ -1,2 +1,2 @@
-{"cost_usd":0.1,"ended_at":"<TS>","error":null,"expert":"developer","id":"t1","model":"sonnet","outputs":["s1.txt"],"session_id":null,"started_at":"2026-08-29T09:30:00Z","status":"done"}
-{"cost_usd":0.1,"duration_basis":"spawned","duration_ms":"<MS>","ended_at":"<TS>","error":null,"expert":"developer","id":"t2","input_tokens":100,"model":"sonnet","output_tokens":10,"outputs":[],"session_id":"fake-reviewer-S1","started_at":"2026-08-29T09:30:00Z","status":"done"}
+{"cost_usd":0.1,"ended_at":"<TS>","error":null,"expert":"developer","id":"t1","model":"sonnet","outputs":["s1.txt"],"role":"developer","session_id":null,"started_at":"2026-08-29T09:30:00Z","status":"done"}
+{"cost_usd":0.1,"duration_basis":"spawned","duration_ms":"<MS>","ended_at":"<TS>","error":null,"expert":"developer","id":"t2","input_tokens":100,"model":"sonnet","output_tokens":10,"outputs":[],"role":"reviewer","session_id":"fake-reviewer-S1","started_at":"2026-08-29T09:30:00Z","status":"done"}
