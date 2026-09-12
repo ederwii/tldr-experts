@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.16.1 — unreleased
+
+### Fixed
+
+- **The views fixture no longer decays: `test/experts.test.ts` was a wall-clock time bomb
+  (#240).** `main` went red at `e1d284d` — the exact sha of published 0.16.0, with no commit in
+  between — because `competencyLevel` weighs every evidence row by its AGE and the fixture dated
+  its rows ABSOLUTELY (`at: 2026-08-20`, …). An in-process test hands the reader `VIEWS_NOW` and
+  is hermetic; a test that spawns the CLI cannot, because the CLI reads `new Date()`. So
+  `dotnet-stack/ef-core` sat 3% above the level-3 threshold on the day the assertion was written
+  and fell through it eleven days later, by the calendar alone. Bumping the expected number would
+  only have re-armed the bomb for a later date, so the FIXTURE moved instead:
+  `makeViewsWorkspace({ now })` re-dates the copied evidence so every row keeps the age the
+  fixture meant, relative to the clock the assertion is evaluated against, and `NOW` in
+  `experts.test.ts` is the real clock rather than a pinned calendar day. Measured with the clock
+  moved a year forward: reverted, five tests red (the one that reds today plus four with longer
+  fuses); fixed, the whole suite is green at +1 year and the fixture's own consumers are green at
+  +5. §8's hermeticity rule now covers the clock as well as `$TMPDIR`.
+
 ## 0.16.0 — 2026-09-11
 
 ### Added
