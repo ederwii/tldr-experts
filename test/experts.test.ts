@@ -24,7 +24,12 @@ import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 setDefaultTimeout(spawnTestTimeout());
 
 const BIN = join(FRAMEWORK_ROOT, "bin", "tldrx.ts");
-const NOW = new Date("2026-09-01T00:00:00Z");
+// The clock every date in this file is relative to. It is the REAL clock, not a
+// fixed day, because half these tests spawn the CLI — which reads `new Date()` —
+// and `competencyLevel` weighs a row by its AGE. Pinning it to a calendar date made
+// the dates recede and the levels fall with them, one assertion at a time (#240).
+// Midnight UTC today, so `daysAgo(0)` IS `NOW` — the rows are dates, not timestamps.
+const NOW = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
 
 interface Run {
   readonly code: number;
@@ -798,7 +803,7 @@ describe("expert create yields a TRAINABLE expert (#94)", () => {
 
 describe("expert recompute", () => {
   test("settles the level an in-session training left behind, and says what moved", async () => {
-    const workspace = makeViewsWorkspace();
+    const workspace = makeViewsWorkspace({ now: NOW });
     try {
       // The fixture's lab-ui stores 5 over one piece of evidence, which computes 1.
       const run = await tldrx("expert", "recompute", "lab-ui", "--root", workspace.root);
@@ -806,7 +811,7 @@ describe("expert recompute", () => {
       expect(run.stdout).toBe("lab-ui/scoreboard-ui: level 5 → 1 (1 evidence)\n");
 
       // The warning it was the remedy for is gone, because the file agrees now.
-      const after = loadExpert(workspace.root, "lab-ui", VIEWS_NOW);
+      const after = loadExpert(workspace.root, "lab-ui", NOW);
       expect(after.drifted).toHaveLength(0);
       expect(after.areas[0]!.storedLevel).toBe(1);
       // Not a training run: status and last_trained are untouched.
@@ -818,7 +823,7 @@ describe("expert recompute", () => {
   });
 
   test("is idempotent — the second run writes nothing, byte-identical", async () => {
-    const workspace = makeViewsWorkspace();
+    const workspace = makeViewsWorkspace({ now: NOW });
     try {
       const path = join(workspace.root, ".tldrx", "experts", "lab-ui", "competencies.yml");
       await tldrx("expert", "recompute", "lab-ui", "--root", workspace.root);
@@ -837,7 +842,7 @@ describe("expert recompute", () => {
   });
 
   test("with no name it recomputes every expert, one line per area", async () => {
-    const workspace = makeViewsWorkspace();
+    const workspace = makeViewsWorkspace({ now: NOW });
     try {
       const run = await tldrx("expert", "recompute", "--root", workspace.root);
       expect(run.code).toBe(EXIT_OK);
@@ -853,7 +858,7 @@ describe("expert recompute", () => {
   });
 
   test("an unknown expert is exit 3, naming the ones that exist", async () => {
-    const workspace = makeViewsWorkspace();
+    const workspace = makeViewsWorkspace({ now: NOW });
     try {
       const run = await tldrx("expert", "recompute", "nope", "--root", workspace.root);
       expect(run.code).toBe(EXIT_NOT_FOUND);
@@ -866,7 +871,7 @@ describe("expert recompute", () => {
   });
 
   test("it reports unknown evidence kinds on stderr like every other reader", async () => {
-    const workspace = makeViewsWorkspace();
+    const workspace = makeViewsWorkspace({ now: NOW });
     try {
       withEvidence(workspace.root, "lab-ui", "scoreboard-ui", [
         `{kind: code, src: "lab:src/A.tsx:1", at: ${daysAgo(1)}}`,
