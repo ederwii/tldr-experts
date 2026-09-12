@@ -18,7 +18,7 @@
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { foreignWaveLogPath } from "./fixtures/foreignWaveLog.ts";
@@ -536,7 +536,9 @@ describe("the dirty-tree guard and the pack artifact (#45)", () => {
   });
 
   /**
-   * #115 — the flake that could not be read.
+   * #115 — the flake that could not be read. (And, once it WAS read, not a flake at all:
+   * the cause is ETXTBSY on the guard's hook install — see the rename tests at the end of
+   * this file. This machinery is what finally surfaced the `merge.log` that said so.)
    *
    * CI run 33653699970 (sha `b64950d`) caught ONE failure in 3161: run A of the #44
    * concurrency test exiting 2, which merge-wave calls a merge conflict, in a sandbox
@@ -1081,6 +1083,97 @@ describe("the guard refuses raw git in the SHARED checkout while a wave holds th
     expect(code).not.toBe(0);
     expect(err).toContain("already exists");
     expect(readFileSync(hook, "utf8")).not.toContain("merge guard");
+  });
+});
+
+/**
+ * #115 — the "known flake" that was a real race, and the write that caused it.
+ *
+ * `merge-wave.sh` installs the guard BEFORE queueing for the lock (its own comment says
+ * so), so two invocations overlap on exactly one file: `.git/hooks/reference-transaction`.
+ * `install_hook` used to write it with `cat > "$hook"` — truncate-and-rewrite THE SAME
+ * INODE — while the invocation that already holds the lock has a `git merge` exec'ing it.
+ * On Linux exec of a file open for write is ETXTBSY; CI run 34671878974 on `8cd4df2`:
+ *
+ *   fatal: cannot exec '.git/hooks/reference-transaction': Text file busy
+ *   fatal: in 'prepared' phase, update aborted by the reference-transaction hook
+ *
+ * — reported by merge-wave as `FAIL merge conflict`, exit 2, which is how it stayed
+ * mislabelled for months. On macOS the identical race is benign, so the RACE is not
+ * testable here. The WRITE is: a rename can never be caught half-done and never hands a
+ * running exec a truncated inode, and that is what these two tests pin. AGENTS.md §12
+ * names the same trap, and `$MARKER` in merge-wave.sh already answers it the same way.
+ */
+describe("the guard installs itself by RENAME, never truncating a hook in place (#115)", () => {
+  /** A second copy of the guard, so a REINSTALL writes different bytes than the first. */
+  function guardCopy(sb: Sandbox): string {
+    const dir = join(sb.dir, "guard-copy");
+    mkdirSync(dir, { recursive: true });
+    for (const f of ["merge-guard.sh", "merge-lock.sh"]) copyFileSync(join(REPO, "scripts", f), join(dir, f));
+    return join(dir, "merge-guard.sh");
+  }
+
+  test("a reinstall replaces the inode, and never rewrites the one already in place", () => {
+    const sb = sandbox();
+    expect(installGuard(sb.main).code).toBe(0);
+    const hook = join(sb.main, ".git", "hooks", "reference-transaction");
+    const before = statSync(hook).ino;
+    const original = readFileSync(hook, "utf8");
+
+    // A hard link pins the inode a concurrent `git merge` would be holding open. It is the
+    // only way to observe, after the fact, whether that inode was written THROUGH.
+    const pinned = join(sb.dir, "hook-inode-pin");
+    linkSync(hook, pinned);
+
+    // Reinstall from a copy at a different path, so the new hook's bytes differ from the
+    // old one's: with `cat >` the pinned inode reads back as the NEW text (it was the same
+    // inode all along), with a rename it still holds every byte it had.
+    const r = spawnSync("bash", [guardCopy(sb), "--install"], { cwd: sb.main, encoding: "utf8" });
+    expect(r.status, r.stderr).toBe(0);
+
+    expect(readFileSync(hook, "utf8")).not.toBe(original);      // the reinstall really landed
+    expect(statSync(hook).ino).not.toBe(before);                // ... on a NEW inode
+    expect(readFileSync(pinned, "utf8")).toBe(original);        // ... and never through the old one
+    expect(statSync(pinned).size).toBe(Buffer.byteLength(original));   // no zero-length window
+  });
+
+  test("what it leaves behind is a working, executable hook and no temp file", () => {
+    const sb = sandbox();
+    expect(installGuard(sb.main).code).toBe(0);
+    const hooks = join(sb.main, ".git", "hooks");
+    const hook = join(hooks, "reference-transaction");
+    expect(readFileSync(hook, "utf8")).toContain("merge guard");
+    expect(statSync(hook).mode & 0o111).not.toBe(0);            // git must be able to exec it
+    expect(readdirSync(hooks).filter((f) => f.startsWith("reference-transaction."))).toEqual([]);
+    // And it still refuses, which is the property the rename must not have cost.
+    holdLock(sb);
+    expect(gitTry(sb.main, {}, "commit", "-q", "--allow-empty", "-m", "after the reinstall").code).not.toBe(0);
+  });
+
+  test("a merge the ref guard aborted says the HOOK refused it, not `merge conflict` (#115)", async () => {
+    const sb = sandbox();
+    // A foreign hook — merge-wave's own --install leaves it alone and merges unguarded —
+    // that refuses exactly the ref a merge commit updates. That is the observable half of
+    // what CI hit: git aborting the transaction, with no conflicting path anywhere.
+    const hook = join(sb.main, ".git", "hooks", "reference-transaction");
+    mkdirSync(dirname(hook), { recursive: true });
+    writeFileSync(hook, [
+      "#!/usr/bin/env bash",
+      'REFS="$(cat 2>/dev/null || true)"',
+      'case "$REFS" in *refs/heads/main*) exit 1 ;; esac',
+      "exit 0",
+      "",
+    ].join("\n"));
+    chmodSync(hook, 0o755);
+
+    const run = invoke(sb, "wave-a");
+    const r = await run.done;
+    // The label is the whole point: `merge conflict` over a hook abort is what turned a
+    // deterministic defect into folklore. It must name the hook, and say no path conflicted.
+    expect(r.stdout, evidence(run, r)).not.toContain("FAIL merge conflict");
+    expect(r.stdout, evidence(run, r)).toContain("reference-transaction");
+    expectExit(run, r, 11);                                     // its own code, not 2
+    expect(sb.git("status", "--porcelain")).toBe("");           // and still cleaned up
   });
 });
 

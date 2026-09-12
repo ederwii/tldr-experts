@@ -31,6 +31,7 @@
 #             8 unpushed, ungated commits were already sitting on main
 #             9 could not snapshot this script before running it
 #             10 no usable review record on the branch (#192)
+#             11 the ref-transaction hook aborted the merge — NOT a conflict (#115)
 # One code per condition, deliberately: this table is its own namespace and has nothing to do
 # with `src/cli/exitCodes.ts`'s families (where 2 is a gate refusal). Here 2 is already "merge
 # conflict", so the review refusal took the next free code rather than making 2 ambiguous.
@@ -279,10 +280,27 @@ Claude-Session: https://claude.ai/code/session_019gpPtEAhKfcQc7vfZtmT2L" >"$LOGS
   # merged nothing, until a human intervenes. One conflict wedged the whole wave.
   # The agent still learns exactly which files conflicted and still has to rebase.
   CONFLICTS="$(git diff --name-only --diff-filter=U | tr '\n' ' ')"
+  # A merge git never even got to ATTEMPT is not a conflict (#115). When the
+  # reference-transaction guard aborts the ref update — because a sibling was rewriting the
+  # hook file under git's exec (ETXTBSY on Linux), or because someone else's hook refuses —
+  # git leaves no conflicting path at all, and the old wording called it `merge conflict`
+  # and told the agent to rebase. That label is why CI run 34671878974 and its siblings were
+  # waved through as "the known flake" for months instead of being read. Its own exit code,
+  # because this table is one code per condition and a hook abort is not a conflict.
+  HOOKED=""
+  if [ -z "$CONFLICTS" ]; then
+    HOOKED="$(grep -m1 -E "aborted by (the reference-transaction )?hook|cannot exec .*hooks/reference-transaction" "$LOGS/merge.log" 2>/dev/null || true)"
+  fi
   # The guard above proved this tree clean moments ago under the lock, so the fallback
   # can only ever discard the failed merge's own residue.
   git merge --abort >>"$LOGS/merge.log" 2>&1 || git reset -q --hard HEAD >>"$LOGS/merge.log" 2>&1
   LEFT="$(git status --porcelain)"
+  if [ -n "$HOOKED" ]; then
+    TAIL=""
+    [ -n "$LEFT" ] && TAIL=" The abort did NOT clean up; this checkout still needs a human: $(echo "$LEFT" | tr '\n' ' ' | cut -c1-200)"
+    echo "FAIL merge refused by the reference-transaction hook — NOT a conflict, no path conflicted: ${HOOKED}. Nothing merged, nothing gated. If another merge-wave is running in this checkout, wait for it and retry; the guard is scripts/merge-guard.sh and the log is $LOGS/merge.log.${TAIL}"
+    exit 11
+  fi
   if [ -n "$LEFT" ]; then
     echo "FAIL merge conflict: ${CONFLICTS}— and the abort did NOT clean up; this checkout still needs a human: $(echo "$LEFT" | tr '\n' ' ' | cut -c1-200)"
   else

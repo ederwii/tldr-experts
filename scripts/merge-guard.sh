@@ -62,14 +62,35 @@ install_hook() {
     echo "merge-guard: $hook already exists and is not ours — left alone; the guard is NOT installed" >&2
     return 3
   fi
-  cat > "$hook" <<EOF
+  # WRITE A NEW INODE AND RENAME IT INTO PLACE — never `cat > "$hook"` (#115).
+  #
+  # merge-wave.sh installs the guard BEFORE it queues for the lock, deliberately, so two
+  # invocations overlap on exactly this file and the one that already holds the lock has a
+  # `git merge` EXEC'ing it. Truncate-and-rewrite hands that exec a half-written inode: on
+  # Linux that is ETXTBSY — CI run 34671878974 on `8cd4df2`,
+  #   fatal: cannot exec '.git/hooks/reference-transaction': Text file busy
+  #   fatal: in 'prepared' phase, update aborted by the reference-transaction hook
+  # — reported by merge-wave as `FAIL merge conflict`, exit 2, which is why this read as a
+  # flake for months rather than as the deterministic race it is. On macOS the same race is
+  # benign, so it is green here and red there; measured 31% of execs under contention on
+  # Linux. rename(2) is atomic: the inode being exec'd is never the inode being written, and
+  # no reader can catch a zero-length window. `$MARKER` in merge-wave.sh already does this,
+  # and AGENTS.md §12 names the trap.
+  local tmp="$hooks/reference-transaction.tmp.$$"
+  cat > "$tmp" <<EOF
 #!/usr/bin/env bash
 # $MARK — installed by scripts/merge-guard.sh --install. Regenerated on every merge-wave run.
 G='$SELF'
 [ -f "\$G" ] || { echo "merge-guard: \$G is missing — ref updates are NOT guarded" >&2; exit 0; }
 exec bash "\$G" "\$@"
 EOF
-  chmod +x "$hook" || return 2
+  local wrote=$?      # its OWN line, immediately — nothing may stand between cat and its code
+  # chmod BEFORE the rename, so the file is never visible at $hook without its exec bit —
+  # a non-executable hook is the same `cannot exec` failure by another route.
+  if [ "$wrote" != 0 ] || ! chmod +x "$tmp" || ! mv -f "$tmp" "$hook"; then
+    rm -f "$tmp"
+    return 2
+  fi
   return 0
 }
 

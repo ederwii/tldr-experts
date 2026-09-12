@@ -117,10 +117,17 @@ calls `Bun.build` by design). Run each without pipes and read each exit code.
   steps > 0, every step success. "No checks found" is a FAILURE state, not a pass. A clean
   report over zero checks is the classic false all-clear.
 - Both workflows matter: `ci` AND `docs`.
-- **Known flake**: `test/merge-wave.test.ts`'s concurrency case (#115) can redden a run under
-  machine load. A re-run of the SAME sha going green with nothing pushed in between is an
-  acceptable pass — say so explicitly when it happens. If you can reproduce it, that issue
-  wants your evidence. The dashboard SSE flake (#193) had two halves: the deadline half is
+- **`test/merge-wave.test.ts`'s concurrency case (#115) was NEVER a flake** — and the re-run
+  licence that used to live here is withdrawn. It was a real race: `merge-guard.sh`'s
+  `install_hook` rewrote `.git/hooks/reference-transaction` IN PLACE while a sibling wave's
+  `git merge` was exec'ing it, which is ETXTBSY on Linux (`cannot exec …: Text file busy`) and
+  benign on macOS — green here, red there. The hook is now written to a temp file and RENAMED
+  into place, so a re-run that goes green no longer proves anything: a merge-wave concurrency
+  failure is a defect to read, not to retry. Read the refusal LINE first — a merge the ref
+  hook aborted now says so and exits **11**, where it used to borrow `2`/`merge conflict` and
+  send everyone looking for a conflict that was never there. That mislabel is what kept this
+  filed as folklore for months; when a refusal names the wrong cause, fix the refusal. The
+  dashboard SSE flake (#193) had two halves: the deadline half is
   fixed at the source — every wait in `test/dashboard-live.test.ts` /
   `test/dashboard-server.test.ts` goes through `eventWaitMs()`, so a hard-coded millisecond
   deadline there is a regression, not a re-run. The other half was #213 — a dropped FSEvents
