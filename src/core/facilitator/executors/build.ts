@@ -1011,6 +1011,9 @@ class BuildSession {
       costUsd: cost ?? 0,
       sessionId: result.session_id,
       error: null,
+      // The HOST ran this turn, but it ran it AS the developer — the role is
+      // known here, so the row says it rather than inheriting the stage's (#234).
+      role: "developer",
       outputs: result.outputs,
       ...(cost === null ? { metered: false } : {}),
       ...(this.ctx.tokens === null ? {} : { tokens: this.ctx.tokens }),
@@ -1922,6 +1925,8 @@ class BuildSession {
       costUsd: round2(agent.costUsd),
       sessionId: agent.sessionId,
       error: agent.error,
+      // The same role this spawn was made under, three lines up (#234).
+      role: "developer",
       outputs: agent.envelope?.outputs ?? [],
       metered: agent.metered,
       inputTokens: agent.usage.input_tokens,
@@ -2121,6 +2126,8 @@ class BuildSession {
       costUsd: task.costUsd,
       sessionId: task.sessionId,
       error: null,
+      // A review turn whose verdict would not parse is still a REVIEW turn (#234).
+      role: "reviewer",
       outputs: [],
       ...(task.metered ? {} : { metered: false }),
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
@@ -2264,6 +2271,8 @@ class BuildSession {
       costUsd: task.costUsd,
       sessionId: task.sessionId,
       error: task.error ?? null,
+      // Spawned or hosted, this row is the reviewer's turn (#234).
+      role: "reviewer",
       outputs: [],
       ...(task.metered ? {} : { metered: false }),
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),

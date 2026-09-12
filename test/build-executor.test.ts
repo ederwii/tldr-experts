@@ -38,6 +38,8 @@ import { updateStoryFront, evidenceFor } from "../src/core/build/storyFile.ts";
 import { renderBuildProgress, buildProgress } from "../src/core/run/buildProgress.ts";
 import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
+import { asRunFile, validateRunFile } from "../src/core/run/RunFile.ts";
+import { parseYaml } from "../src/core/yaml.ts";
 import { spendReason } from "../src/core/budget/spendBasis.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { emptySrcContext, MAX_BULLETS, validateHandoff } from "../src/core/text/handoff.ts";
@@ -732,6 +734,68 @@ describe("a spawned reviewer's task row carries its token split (#173)", () => {
     expect(reviewer?.input_tokens).toBe(developer?.input_tokens);
     expect(reviewer?.output_tokens).toBe(developer?.output_tokens);
     expect(reviewer?.input_tokens).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * gh #234 — every task row of a Build claimed the STAGE's first expert, so the
+ * reviewer's turn was filed under `developer`.
+ *
+ * `recordExecutorTasks` wrote `expert: spec.planned.experts[0]` for every row of
+ * the stage (runNext.ts), and `ExecutorTask` carried no role for it to write
+ * instead — the role was known at the spawn (`agent.spawned … role: "reviewer"`)
+ * and thrown away one function later. `expert:` keeps meaning what it always
+ * meant, the stage's expert; `role:` is the new, additive key that says WHICH
+ * TURN this row is, and a run.yml stops asserting something false about who did
+ * the work (§7: an audit record never lies in the dangerous direction).
+ */
+describe("a task row records the ROLE that took the turn (#234)", () => {
+  test("the reviewer's row says reviewer, the developer's says developer", async () => {
+    const ws = workspace(ONE_STORY);
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(4);
+
+    const run = RunStore.open(ws.runDir).run;
+    const rows = run.phases.flatMap((p) => p.stages).flatMap((s) => s.tasks);
+    // Each row is found by the session the FAKE actually returned for that turn —
+    // never by `outputs: []`, which would infer the role from a proxy, which is
+    // the guess this issue is about.
+    const reviewer = rows.find((row) => row.session_id === "fake-reviewer-S1");
+    const developer = rows.find((row) => row.session_id === "fake-developer-S1");
+    expect(reviewer, "the spawned reviewer wrote a task row").toBeDefined();
+    expect(developer, "the spawned developer wrote a task row").toBeDefined();
+    expect(reviewer?.role).toBe("reviewer");
+    expect(developer?.role).toBe("developer");
+    // Both halves, in one assertion that cannot pass on one constant: the two
+    // turns of one stage must not be given the same answer.
+    expect(reviewer?.role).not.toBe(developer?.role);
+    // And the stage's own expert is untouched by the new key.
+    expect(developer?.expert).toBe("developer");
+  });
+
+  /**
+   * GUARD, not a proof (it passed before the fix too): the key is ADDITIVE.
+   * A run.yml written before it existed has no `role:` on any row, and it must
+   * still validate and read as "not recorded" rather than as a guessed role.
+   */
+  test("a row with no `role:` still validates, and reads as not recorded", async () => {
+    const ws = workspace(ONE_STORY);
+    await next(ws);
+
+    const path = join(ws.runDir, "run.yml");
+    const stripped = readFileSync(path, "utf8")
+      .split("\n")
+      .map((line) => line.replace(/, role: [a-z-]+/, ""))
+      .join("\n");
+    expect(stripped).not.toContain("role:");
+
+    const doc = parseYaml(stripped);
+    expect(validateRunFile(doc).issues).toEqual([]);
+    const old = asRunFile(doc);
+    const rows = old.phases.flatMap((p) => p.stages).flatMap((s) => s.tasks);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row.role).toBeUndefined();
   });
 });
 

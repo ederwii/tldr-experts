@@ -171,7 +171,23 @@ export interface RunGate {
 export interface RunTask {
   readonly id: string;
   readonly status: StageStatus;
+  /**
+   * The STAGE's expert — one value for every row of the stage, written from
+   * `stage.experts[0]`. It is NOT who took this turn: see `role`.
+   */
   readonly expert: string | null;
+  /**
+   * Which ROLE took this turn — `"developer"` or `"reviewer"` today (gh #234).
+   *
+   * ADDITIVE and optional, and a NEW key rather than a new meaning for `expert`:
+   * a Build stage declares `experts: [developer]` and runs both roles under it,
+   * so every row — the reviewer's included — said `developer`, and `run.yml`
+   * asserted something false about who did the work. Absent means no executor
+   * recorded one, which is every row written before this key existed and every
+   * path that cannot say; absent reads as "not recorded" and never as a guessed
+   * `developer`.
+   */
+  readonly role?: string;
   readonly model: string | null;
   /**
    * What the turn cost — or `null` when nobody could say.
@@ -884,6 +900,12 @@ export function validateRunFile(input: unknown): ValidationResult {
           // It contributes nothing to the total, which is why `budget.spent_usd`
           // can be below what was really spent and why every report says so.
           if (task.cost_usd !== null) requireNumber(task.cost_usd, `${tp}.cost_usd`, issues);
+          // Additive (#234): absence is fine — a run.yml from before the key
+          // existed has none, and so does any turn nothing could attribute — but
+          // a non-string role is a record no reader can join on.
+          if (task.role !== undefined && typeof task.role !== "string") {
+            issues.push({ path: `${tp}.role`, message: "expected a string" });
+          }
           if (task.metered !== undefined && typeof task.metered !== "boolean") {
             issues.push({ path: `${tp}.metered`, message: "expected true or false" });
           }

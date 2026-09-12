@@ -1418,6 +1418,13 @@ function recordExecutorTasks(
       id,
       status: task.error === null ? "done" : "failed",
       expert: spec.planned.experts[0] ?? null,
+      // `expert` is the STAGE's — one value for every row of the stage. `role` is
+      // this TURN's, and it is written ONLY when the executor knew it: a Build's
+      // reviewer turn used to be filed under the stage's first expert, which for
+      // `experts: [developer]` made `run.yml` say a reviewer's work was the
+      // developer's (gh #234). A turn with no role recorded carries no key —
+      // absent is "not recorded", never a guessed `developer`.
+      ...(task.role === undefined ? {} : { role: task.role }),
       model: task.model,
       cost_usd: metered ? round2(task.costUsd) : null,
       ...(metered ? {} : { metered: false }),

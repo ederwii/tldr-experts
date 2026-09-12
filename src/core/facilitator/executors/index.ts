@@ -41,6 +41,18 @@ export interface ExecutorTask {
   /** Run-relative paths the task wrote. */
   readonly outputs: readonly string[];
   /**
+   * WHICH TURN this row is — the same role the executor spawned the agent under
+   * and emitted on `agent.spawned`/`task.started` (gh #234).
+   *
+   * ADDITIVE and optional, and deliberately NOT `expert`: that one is the
+   * STAGE's expert, one value for the whole stage, and `run.yml` wrote it on
+   * every row — so a reviewer's turn inside a Build was filed as `developer`,
+   * an audit record lying in the dangerous direction (§7). Absent means the
+   * executor could not say, and then nothing is written: a row with no role
+   * reads as "not recorded", never as a guessed `developer`.
+   */
+  readonly role?: "developer" | "reviewer";
+  /**
    * False when this turn was billed to the HOST session rather than metered here
    * (design §B.3): `run.yml` records `cost_usd: null, metered: false` instead of
    * a `$0.00` that reads as a measurement and is a false one.

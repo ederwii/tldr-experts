@@ -70,6 +70,25 @@
   when run.yml fails validation, where a second tolerant parser for budget.yml would be a worse
   trade than a figure on an already-degraded screen.
 
+- **A task row now says which ROLE took the turn, instead of filing every Build turn under the
+  developer (#234).** `run.yml`'s `tasks[].expert` is the STAGE's expert — one value copied onto
+  every row from `stage.experts[0]` — and a Build stage declares `experts: [developer]` while
+  running two roles under it. So the reviewer's turn, with its own money, its own token split
+  and its own measured span, was recorded as the developer's, and the golden fixtures had that
+  frozen: three of the four Build scenarios shipped a `fake-reviewer-*` session labelled
+  `developer`. The role was never unknown — the executor spawns under it and emits it on
+  `agent.spawned` — it was thrown away one function later, because `ExecutorTask` had nowhere to
+  put it. Nothing downstream computed a wrong NUMBER from this (no reader reads the field; the
+  per-role cost report it looked like it fed does not exist), which is exactly why it was worth
+  fixing now rather than after something started reading it: what was broken is the audit
+  record, and §7's rule is that those never lie in the dangerous direction. The fix is a new
+  additive `tasks[].role`, NOT a new meaning for `expert` — a `version: 1` field never changes
+  what it says — carried from the four places the Build executor records a turn. A turn whose
+  role nothing recorded carries no key at all: absent is "not recorded", never a `developer` of
+  convenience, which is the same guess the bug was made of. Rows written before the key exist
+  unchanged and still validate. `docs/spec.md` documents the new field and, while it was open,
+  the `tasks[].expert` that has been written on every row since 0.1 and was never documented.
+
 ## 0.16.1 — 2026-09-12
 
 ### Added
