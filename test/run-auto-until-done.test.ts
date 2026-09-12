@@ -34,7 +34,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
-import { runAuto, MAX_UNTIL_DONE, type AutoOptions } from "../src/core/facilitator/runAuto.ts";
+import { runAuto, LAST_LINE_CHARS, MAX_UNTIL_DONE, type AutoOptions } from "../src/core/facilitator/runAuto.ts";
 import { runCommand } from "../src/cli/commands/run.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import type { TldrxEvent } from "../src/core/events/Event.ts";
@@ -224,6 +224,35 @@ describe("a throw that used to be a bare exit 1", () => {
     expect(delivered.filter((kind) => kind === "run.finished")).toHaveLength(1);
     expect(delivered).not.toContain("run.failed");
     expect(delivered[delivered.length - 1]).toBe("run.finished");
+  });
+});
+
+describe("the ledger keeps the END of a long last line — the actionable end", () => {
+  test("a 600-char throw whose useful token is last: `last_line` ends with it, and stays under the cap", async () => {
+    const ws = workspace();
+    // The message the throw carries is `… got "<value>"`: the value is its END, which is
+    // where a branch name, an exit code or a refusal's reason sits on a real line (the
+    // #235 shape — a front slice keeps the boilerplate and cuts the part a person acts on).
+    // Lower-case on purpose: `agentProvider()` lower-cases the value before quoting it.
+    const token = "the-token-at-the-end";
+    process.env.TLDRX_AGENT_PROVIDER = `${"x".repeat(600)}${token}`;
+    const outcome = await auto(ws, {
+      untilDone: 1,
+      onLine: (line) => {
+        if (line.startsWith("relaunching")) delete process.env.TLDRX_AGENT_PROVIDER;
+      },
+    });
+    expect(outcome.code).toBe(0);
+    const relaunches = relaunched(ws);
+    expect(relaunches).toHaveLength(1);
+    const lastLine = String(relaunches[0]?.payload.last_line);
+    const reason = String(relaunches[0]?.payload.reason);
+    expect(lastLine.endsWith(`${token}"`)).toBe(true);
+    expect(reason.endsWith(`${token}"`)).toBe(true);
+    expect(lastLine.startsWith("run auto threw:")).toBe(true);
+    expect(lastLine).toContain("…");
+    expect(lastLine.length).toBeLessThanOrEqual(LAST_LINE_CHARS);
+    expect(reason.length).toBeLessThanOrEqual(LAST_LINE_CHARS);
   });
 });
 

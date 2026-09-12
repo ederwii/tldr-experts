@@ -1268,7 +1268,8 @@ a thrown error that used to reach the shell as a bare `1` with nothing on the le
 it (`2`). Before it, that relaunch was a person reading the exit and typing the command again — five times on the
 28 h run that was measured, 18 h before a story ran — and the log could not say so. Its payload carries `reason` (the
 verdict's own sentence), `exit` (the code recovered from), `attempt` (which relaunch this is, 1-based), `of` (the
-bound) and `last_line` (the attempt's last line, bounded to fit the payload cap); the envelope's `stage` is the
+bound) and `last_line` (the attempt's last line — its head, an ellipsis and its TAIL when it is long, because the
+tail is the end a person acts on and a front slice cuts it, the #235 shape); the envelope's `stage` is the
 cursor stage at the moment of the relaunch, `cost_usd` is `0`. It is NEVER written over exit `4` (a person's), over
 a `budget.blocked` or the loop's own `--max-usd` (nothing in-process moves a ceiling), or twice over the same last
 line — one derivation, `relaunchVerdict` in `core/facilitator/runAuto.ts`, decides both this event and whether the

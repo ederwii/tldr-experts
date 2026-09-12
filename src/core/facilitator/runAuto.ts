@@ -235,8 +235,26 @@ const MAX_ITERATIONS = 96;
 /** The exits `--until-done` may relaunch over — and so the ones its silence has to explain. */
 const RELAUNCHABLE_EXITS: ReadonlySet<number> = new Set([EXIT_USAGE, EXIT_REFUSED, EXIT_AGENT_FAILED]);
 
-/** How much of an attempt's last line the `run.relaunched` payload carries (§2.9 caps a payload at 4 KB). */
-const LAST_LINE_BYTES = 400;
+/**
+ * How much of an attempt's last line the `run.relaunched` payload carries, in UTF-16 code
+ * units (a `slice`, not bytes — §2.9's 4 KB payload cap is what this stays well under, with
+ * two such strings in the payload). Exported for the test that pins which END survives.
+ */
+export const LAST_LINE_CHARS = 400;
+
+/**
+ * A long line, clipped for the ledger: its head, an ellipsis, and its TAIL. The tail is
+ * what a person acts on — a branch name, an exit code, the reason of a refusal, the value
+ * a throw quotes — and the head names what said it. A front slice keeps the boilerplate
+ * and cuts the actionable end: the #235 shape, reproduced in the pre-merge review of gh
+ * #252 on a 600-char throw. A line that fits is returned as it is.
+ */
+const CLIP_HEAD_CHARS = 120;
+function clipForLedger(text: string): string {
+  if (text.length <= LAST_LINE_CHARS) return text;
+  const tail = text.slice(-(LAST_LINE_CHARS - CLIP_HEAD_CHARS - 1));
+  return `${text.slice(0, CLIP_HEAD_CHARS)}…${tail}`;
+}
 
 /**
  * The money and the turns as the FIRST attempt found them, carried across every relaunch
@@ -424,11 +442,11 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
       actor: options.actor,
       cost_usd: 0,
       payload: {
-        reason: verdict.reason.slice(0, LAST_LINE_BYTES),
+        reason: clipForLedger(verdict.reason),
         exit: outcome.code,
         attempt,
         of: bound,
-        last_line: lastLine.slice(0, LAST_LINE_BYTES),
+        last_line: clipForLedger(lastLine),
       },
     });
     say(`relaunching run auto after exit ${String(outcome.code)} — ${verdict.reason} `

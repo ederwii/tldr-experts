@@ -154,7 +154,7 @@ import {
  * typed the command again, five times on the night that was measured, with
  * nothing on the ledger to say so. Its payload carries `reason` (the verdict's
  * sentence), `exit` (the code recovered from), `attempt` (which relaunch this
- * is, 1-based), `of` (the bound) and `last_line` (the attempt's last line,
+ * is, 1-based), `of` (the bound) and `last_line` (the attempt's last line — its head and its TAIL,
  * bounded). It is never written over exit 4, over a `budget.blocked`, or twice
  * over the same last line — `facilitator/runAuto.ts`, `relaunchVerdict`.
  */
