@@ -134,9 +134,11 @@ see and exits `2`; `tldrx questions lint --fix` converts the prose form
 
 **`tldrx next` exits 2, "refusing to spawn — <phase> is priced in `host-tokens`".** The phase
 carries `economy: host-tokens` (guide 06) and this invocation is headless, so the ceiling on it
-is not a number of dollars a spawn may spend. Nothing was billed. Either run the stage
-in-session (`tldrx next --prepare`), or re-price the phase in `metered-usd`. The two units are
-never converted.
+is not a number of dollars a spawn may spend. Nothing was billed, and one `budget.blocked`
+(`economy: host-tokens`) is on the ledger — so `tldrx run auto --until-done` stops on it instead
+of relaunching into the same refusal, and a replay or the dashboard can say money stopped the
+run. Either run the stage in-session (`tldrx next --prepare`), or re-price the phase in
+`metered-usd`. The two units are never converted.
 
 **`tldrx next` exits 2 with a `tldrx budget raise …` command in the message.** The cursor
 phase cannot afford the stage's estimate. The command in the message already has the shortfall

@@ -438,6 +438,32 @@ describe("a headless spawn under a host-tokens ceiling (§E.2)", () => {
     expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.status).toBe("pending");
   });
 
+  /**
+   * #266: this was the one money-family exit 2 with no row on the ledger. The
+   * `--until-done` supervisor keys its money guard on a `budget.blocked` among
+   * the attempt's fresh events, so a refusal that wrote nothing looked like a
+   * refusal "with no money behind it" and was relaunched in vain; a replay or
+   * dashboard asking "did money stop this run?" could not see it either.
+   */
+  test("the refusal is on the ledger: one `budget.blocked` naming the host-tokens economy", async () => {
+    const ws = workspace();
+    fakeClaude(ws);
+    priceInHostTokens(ws);
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(2);
+
+    const blocked = events(ws).filter((e) => e.type === "budget.blocked");
+    expect(blocked).toHaveLength(1);
+    const payload = blocked[0]?.payload as { phase?: string; economy?: string; reason?: string };
+    expect(blocked[0]?.stage).toBe("alpha");
+    expect(payload.phase).toBe("01-what");
+    expect(payload.economy).toBe("host-tokens");
+    expect(payload.reason).toContain("headless");
+    // Still nothing spawned and nothing started — the row records a refusal, not a stage.
+    expect(events(ws).filter((e) => e.type === "stage.started")).toHaveLength(0);
+  });
+
   test("the message names the phase, the number, the unit and both ways out", async () => {
     const ws = workspace();
     fakeClaude(ws);
