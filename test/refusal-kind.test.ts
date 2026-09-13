@@ -64,6 +64,14 @@ describe("unquotedShellSeparator — the tokenizer `splitArgv` already has, aske
     expect(unquotedShellSeparator("echo $HOME")).toBeNull();
   });
 
+  test("arithmetic expansion `$((…))` is not a command substitution — a line with it is still alone", () => {
+    // Review finding on the first cut: `\\$\\(` also matched `$((`, so a line that
+    // was already alone would have burned the one retry on a cure that cannot apply.
+    expect(unquotedShellSeparator("echo $((1+2))")).toBeNull();
+    expect(classifyRefusal("echo $((1+2))")).toEqual({ kind: "unknown" });
+    expect(unquotedShellSeparator("echo $(date)")).toBe("$(");
+  });
+
   test("a newline splits a line as surely as `;`", () => {
     expect(unquotedShellSeparator("a\nb")).toBe("\n");
   });

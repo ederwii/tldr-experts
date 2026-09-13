@@ -136,11 +136,13 @@ const TOKEN_RE = /"([^"]*)"|'([^']*)'|([^\s"']+)/g;
 /**
  * The SUBSET of `META_RE` that splits a line into more than one command: a
  * control operator (`| || & && ;`), a redirection (`< > >> 2>&1`), a command or
- * process substitution (`$( <( >(`) or a backtick. A glob, a tilde, braces and
- * a plain `$VAR` are metacharacters `splitArgv` refuses to run without a shell,
- * but they do not make a line TWO commands, which is the question this answers.
+ * process substitution (`$( <( >(`) or a backtick. A glob, a tilde, braces, a
+ * plain `$VAR` and an arithmetic expansion `$((…))` — `$(` NOT followed by a
+ * second `(`, review finding on gh #278 — are metacharacters `splitArgv`
+ * refuses to run without a shell, but they do not make a line TWO commands,
+ * which is the question this answers.
  */
-const SEPARATOR_RE = /\|\||&&|2>&1|>>|\$\(|[|&;<>`]/;
+const SEPARATOR_RE = /\|\||&&|2>&1|>>|\$\((?!\()|[|&;<>`]/;
 
 /**
  * The first bare separator that turns one line into several commands, or null.
