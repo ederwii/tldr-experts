@@ -1918,6 +1918,17 @@ agents that overwrite each other. Concept §9: "wave N+1 starts only when wave N
 **Where it is enforced.** `tldrx approve` re-runs the `plan` check at the Plan gate, which reads all three artefacts
 together — the only place the cross-file rules can be checked, since each file on its own is well formed.
 
+**The fourth artefact.** The same check reads `03-plan/budget.yml` when it exists, through the §2.11 validator every
+reader of it runs (`validateBudget`: `version`, `run`, `ceiling_usd`, `spent_usd`, `per_phase_usd` keyed by story),
+and refuses the gate naming the file and every missing key. Before 2026-09-12 nothing at the Plan gate opened the file
+and the stage prompt named it only as a filename: a field run's Plan priced every story under `stories[].estimate_usd`
+and the Build executor, whose reader accepts only the shape above, gave each the uniform share — $5.40 for a story
+priced at $28 — with the one diagnostic it computed read by nothing. The file is optional; its shape is not. The Build
+loader is unchanged on purpose: an invalid budget that reaches Build (edited after its gate) is still the advisory and
+the uniform split of §E, never a refused build, so the budget check is the gate's own and not a fourth pass inside
+`validatePlan`, which the Build loader refuses on. The shape is in the Plan prompt's `## Output schemas`, generated from
+the validator's own key list, and in `tldrx plan schema --budget`.
+
 ### 2.16 `tldrx-work/<run>/05-watch/watchers/<feature>.md`
 
 One card per shipped feature: the signal that proves it works, where it is read, the healthy baseline, what broken looks

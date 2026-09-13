@@ -19,11 +19,18 @@ import type { ValidationIssue } from "../schemas/validation.ts";
 import { validateStoryFile } from "../schemas/story.ts";
 import { validateEpicFile } from "../schemas/epic.ts";
 import { asWavesFile, validateWaveOrder, validateWaves } from "../schemas/waves.ts";
+import { validateBudget } from "../schemas/budget.ts";
 import { detectEpicChain, type EpicDependencyEdge } from "./branchModel.ts";
 
 export const WAVES_FILE = "waves.yml";
 export const STORIES_DIR = "stories";
 export const EPICS_DIR = "epics";
+/**
+ * The Plan's fourth artefact: what it priced each story at (spec §2.11 shape,
+ * keyed by story). Declared here, beside the other three, and re-exported by
+ * `build/plan.ts` for the reader that prices from it.
+ */
+export const PLAN_BUDGET_FILE = "budget.yml";
 
 export interface PlanIssue extends ValidationIssue {
   /** The Plan file the issue is in, relative to the phase dir. */
@@ -217,6 +224,36 @@ export function validatePlan(
   add(WAVES_FILE, validateWaveOrder(waves, dependsOn));
 
   return report(issues, storyIds.size, epicIds.size, waves.waves.length, epicChain);
+}
+
+/**
+ * `budget.yml`, checked against the ONE schema every reader of it runs —
+ * `validateBudget`, which `loadPlanPrices` (`build/plan.ts`) applies before it
+ * prices a story (#264).
+ *
+ * A separate function, not a fourth pass inside `validatePlan`, on purpose. The
+ * Build loader calls `validatePlan` and refuses to load on ANY issue, while the
+ * spec's rule for a budget that will not parse or validate at Build time is an
+ * advisory and the uniform split — a file edited after its gate must not stop a
+ * build. So this is the GATE's question (`checkPlan`, `run/checks.ts`): a Plan
+ * agent may not pass its gate having written prices in a shape nothing can read.
+ * Measured on a field run: `stories[].estimate_usd`, `total_estimate_usd: 111`,
+ * no `per_phase_usd` — and every story capped at the uniform share as if Delivery
+ * had priced nothing, with the only diagnostic computed one stage later and read
+ * by nobody.
+ *
+ * No file is no finding: pricing is optional, the shape of a price is not.
+ */
+export function validatePlanBudget(planDir: string): readonly PlanIssue[] {
+  const path = join(planDir, PLAN_BUDGET_FILE);
+  if (!existsSync(path)) return [];
+  let doc: unknown;
+  try {
+    doc = parseYaml(readFileSync(path, "utf8"));
+  } catch (error) {
+    return [{ file: PLAN_BUDGET_FILE, path: "", message: `is not valid YAML: ${first(error)}` }];
+  }
+  return validateBudget(doc).issues.map((issue) => ({ ...issue, file: PLAN_BUDGET_FILE }));
 }
 
 /** One line, ready for a check `detail` or a deny message. */

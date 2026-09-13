@@ -20,6 +20,29 @@
   headless run on a host-tokens phase → exit 2 AND exactly one `budget.blocked` on the ledger,
   with `stage.started` still at zero (the row records a refusal, not a stage); removing the
   append reddens exactly that test.
+- **A Plan that priced its stories in a shape nothing reads is refused at the Plan gate, and the
+  Plan agent is now told the shape (#264).** Measured on a field run: `03-plan/budget.yml` carried
+  `ceiling_usd: 108`, a `stories:` list with an `estimate_usd` and a `why` per story, and
+  `total_estimate_usd: 111` — priced, sourced, and unreadable. The only reader, `loadPlanPrices`,
+  accepts `validateBudget`'s shape (`run`, `ceiling_usd`, `spent_usd`, `per_phase_usd`) and prices
+  only the `per_phase_usd` keys that are story ids, so the file failed validation before the map was
+  ever looked for and every story got the uniform cap: $5.40 for the story the plan had priced at
+  $28, about a quarter of what the reader's own arithmetic would have handed it. Nothing could have
+  gone otherwise — the Plan prompt named `budget.yml` as a filename and never its shape,
+  `validatePlan` had zero references to the file, and the one string that named the problem
+  (`priceIssue`) was computed at Build time and read by nothing. Two halves. The `## Output
+  schemas` section the Plan agent reads carries a fourth artefact, GENERATED like the other three:
+  its rule table from `BUDGET_REQUIRED_KEYS`, the list `validateBudget` itself enforces, and its
+  example run through that validator by the test that pins the contract — and `tldrx plan schema
+  --budget` prints it for a person. And the `plan` check runs `validateBudget` over
+  `03-plan/budget.yml` at the gate when the file exists, naming the file and every missing key
+  (`budget.yml spent_usd: missing required key \`spent_usd\``), so the shape is refused where it
+  costs nothing instead of pricing nothing one stage later. The file stays optional; only its shape
+  is not. The Build loader is untouched on purpose: it refuses to load on any `validatePlan` issue,
+  and the spec's rule for an invalid budget at Build time — an advisory and the uniform split, never
+  a refused build — is what a file edited after its gate still gets, which is why the budget check
+  is the gate's own function and not a fourth pass inside `validatePlan` (a guard test pins that
+  `validatePlan` does not learn it).
 
 ## 0.18.0 — 2026-09-13
 

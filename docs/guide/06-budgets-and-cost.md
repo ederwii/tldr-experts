@@ -375,6 +375,14 @@ escape the ceiling. A `budget.yml` that will not parse or validate is an advisor
 and an equal split — never a refused build. So is one labelled `economy: host-tokens`: those
 numbers are not dollars, so they never become `--max-budget-usd` on a spawn.
 
+That tolerance is Build's. The Plan GATE is not tolerant: the `plan` check runs the same validator over
+`03-plan/budget.yml` before the phase can advance, and refuses it naming the file and every key it lacks.
+It has to, because the Build fallback is silent from the plan's point of view — measured on a field run,
+a Plan that priced its stories as `stories[].estimate_usd` with a `why` each passed its gate and every story
+got the uniform cap, $5.40 for one priced at $28. The shape the reader accepts is in the Plan prompt's
+`## Output schemas` and in `tldrx plan schema --budget`: `per_phase_usd:` keyed by story id, beside `run`,
+`ceiling_usd` and `spent_usd`. The file stays optional; only its shape is enforced.
+
 Until 2026-08-30 nothing read that file, and a seven-story plan that priced one story at
 $4.75 and another at $0.75 handed both the same $1.03. Until 2026-09-02 the price that WAS
 read was halved before the first attempt ran: a story priced $2.10 of a $3.85 Build stage

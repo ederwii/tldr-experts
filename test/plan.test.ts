@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readYamlFile } from "../src/core/yaml.ts";
+import { parseYaml, readYamlFile } from "../src/core/yaml.ts";
 import { TEMPLATES_DIR } from "../src/core/paths.ts";
 import { validate } from "../src/core/schemas/index.ts";
 import {
@@ -11,7 +11,8 @@ import {
 import { validateEpic, validateEpicFile } from "../src/core/schemas/epic.ts";
 import { asWavesFile, validateWaveOrder, validateWaves } from "../src/core/schemas/waves.ts";
 import { splitFrontMatter } from "../src/core/schemas/frontMatter.ts";
-import { validatePlan } from "../src/core/plan/validatePlan.ts";
+import { PLAN_BUDGET_FILE, validatePlan, validatePlanBudget } from "../src/core/plan/validatePlan.ts";
+import { BUDGET_REQUIRED_KEYS } from "../src/core/schemas/budget.ts";
 import { planContractExamples } from "../src/core/plan/schemaContract.ts";
 import { loadPlanPrices, type PlannedStory } from "../src/core/build/plan.ts";
 import { runCheck } from "../src/core/run/checks.ts";
@@ -316,6 +317,88 @@ describe("validatePlan — the three artefacts read together", () => {
   });
 });
 
+/**
+ * The shape a field run's Plan phase actually wrote for `03-plan/budget.yml`
+ * (#264): priced, sourced, and unreadable — `validateBudget` requires `run`,
+ * `spent_usd` and `per_phase_usd`, and `loadPlanPrices` only ever reads the last.
+ * Every story on that run got the uniform cap while the file said $28.
+ */
+const FIELD_BUDGET = [
+  "version: 1",
+  'phase: "04-build"',
+  "ceiling_usd: 108.00",
+  "stories:",
+  '  - {id: S1, estimate_usd: 28.00, why: "the read model touches three tables"}',
+  "total_estimate_usd: 111.00",
+  "",
+].join("\n");
+
+/** The same prices in the shape the Build reader prices from. */
+const READER_BUDGET = [
+  "version: 1",
+  'run: "260830-leaderboard"',
+  "ceiling_usd: 108.00",
+  "spent_usd: 0",
+  "per_phase_usd:",
+  "  S1: 28.00",
+  "",
+].join("\n");
+
+describe("the Plan gate refuses a budget.yml the Build reader could never price from (#264)", () => {
+  let dir: string | null = null;
+  afterEach(() => {
+    if (dir !== null) rmSync(dir, { recursive: true, force: true });
+    dir = null;
+  });
+
+  function planWith(budget: string | null): string {
+    dir = mkdtempSync(join(tmpdir(), "tldrx-plan-budget-"));
+    mkdirSync(join(dir, "stories"), { recursive: true });
+    mkdirSync(join(dir, "epics"), { recursive: true });
+    writeFileSync(join(dir, "stories", "S1.md"), STORY, "utf8");
+    writeFileSync(join(dir, "epics", "E1.md"), EPIC, "utf8");
+    writeFileSync(join(dir, "waves.yml"), WAVES, "utf8");
+    if (budget !== null) writeFileSync(join(dir, PLAN_BUDGET_FILE), budget, "utf8");
+    return dir;
+  }
+
+  test("names every required key the file lacks, against budget.yml", () => {
+    const issues = validatePlanBudget(planWith(FIELD_BUDGET));
+    const written = parseYaml(FIELD_BUDGET) as Record<string, unknown>;
+    const lacking = BUDGET_REQUIRED_KEYS.filter((key) => !(key in written));
+    expect(lacking.length).toBeGreaterThan(0);
+    for (const key of lacking) expect(messages(issues)).toContain(`missing required key \`${key}\``);
+    expect(issues.map((i) => i.file)).toEqual(issues.map(() => PLAN_BUDGET_FILE));
+  });
+
+  test("the reader's shape passes", () => {
+    expect(validatePlanBudget(planWith(READER_BUDGET))).toEqual([]);
+  });
+
+  test("no file is no finding — pricing is optional, the shape of a price is not", () => {
+    expect(validatePlanBudget(planWith(null))).toEqual([]);
+  });
+
+  test("a file that does not parse is named, never thrown", () => {
+    const issues = validatePlanBudget(planWith("per_phase_usd: [unclosed\n"));
+    expect(issues.length).toBe(1);
+    expect(issues[0]?.file).toBe(PLAN_BUDGET_FILE);
+    expect(messages(issues)).toContain("is not valid YAML");
+  });
+
+  /**
+   * Guard, not proof (it passed before the fix): the Build loader calls
+   * `validatePlan` and REFUSES to load on any issue, while the spec says an
+   * invalid budget at Build time is an advisory and the uniform split. So the
+   * budget check is the GATE's, and `validatePlan` itself must not learn it.
+   */
+  test("`validatePlan` is unchanged by it — the Build loader stays tolerant", () => {
+    const report = validatePlan(planWith(FIELD_BUDGET), new Set(["npm run test"]));
+    expect(messages(report.issues)).toBe("");
+    expect(report.ok).toBe(true);
+  });
+});
+
 describe("the `plan` gate check (spec §2.15)", () => {
   let ws: TempRunWorkspace | null = null;
   afterEach(() => {
@@ -366,6 +449,33 @@ describe("the `plan` gate check (spec §2.15)", () => {
     expect(outcome.status).toBe("failed");
     expect(outcome.detail).toContain("stories/S1.md");
     expect(outcome.detail).toContain("not one of .tldrx/workspace.yml's commands");
+  });
+
+  test("fails, naming budget.yml and the keys it lacks, when the Plan priced in a shape nothing reads (#264)", async () => {
+    const { root, runDir } = setUp({
+      "stories/S1.md": STORY.replace("repo: lab", "repo: api").replace("npm run test", "true"),
+      "epics/E1.md": EPIC.replace("repos: [lab]", "repos: [api]"),
+      "waves.yml": WAVES,
+      [PLAN_BUDGET_FILE]: FIELD_BUDGET,
+    });
+    const outcome = await runCheck(CHECK, { root, runDir, stage: stageSpec(root, "plan") });
+    expect(outcome.status).toBe("failed");
+    expect(outcome.detail).toContain(PLAN_BUDGET_FILE);
+    const written = parseYaml(FIELD_BUDGET) as Record<string, unknown>;
+    for (const key of BUDGET_REQUIRED_KEYS.filter((k) => !(k in written))) {
+      expect(outcome.detail).toContain(`missing required key \`${key}\``);
+    }
+  });
+
+  test("passes with a budget.yml in the shape the Build reader prices from (#264)", async () => {
+    const { root, runDir } = setUp({
+      "stories/S1.md": STORY.replace("repo: lab", "repo: api").replace("npm run test", "true"),
+      "epics/E1.md": EPIC.replace("repos: [lab]", "repos: [api]"),
+      "waves.yml": WAVES,
+      [PLAN_BUDGET_FILE]: READER_BUDGET,
+    });
+    const outcome = await runCheck(CHECK, { root, runDir, stage: stageSpec(root, "plan") });
+    expect(outcome).toMatchObject({ id: "plan", status: "passed" });
   });
 
   test("is skipped for a stage that writes no waves.yml", async () => {

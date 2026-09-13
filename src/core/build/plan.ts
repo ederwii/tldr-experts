@@ -20,7 +20,9 @@ import type { Story, DodBlock } from "../schemas/story.ts";
 import type { Epic } from "../schemas/epic.ts";
 import { validateBudget } from "../schemas/budget.ts";
 import { STORY_ID_RE } from "../schemas/planCommon.ts";
-import { describePlanIssues, validatePlan, EPICS_DIR, STORIES_DIR, WAVES_FILE } from "../plan/validatePlan.ts";
+import {
+  describePlanIssues, validatePlan, EPICS_DIR, PLAN_BUDGET_FILE, STORIES_DIR, WAVES_FILE,
+} from "../plan/validatePlan.ts";
 import { PROJECT_WORKTREES_DIR } from "../paths.ts";
 
 /** The phase folder this executor owns (spec §1). The registry keys on it. */
@@ -35,8 +37,12 @@ export const LOG_DIR = "log";
  * reads to find this run's epic worktrees (issue #16) — one literal, two readers.
  */
 export const WORKTREES = PROJECT_WORKTREES_DIR;
-/** What the Plan phase priced each story at — `03-plan/budget.yml` (spec §2.11). */
-export const PLAN_BUDGET_FILE = "budget.yml";
+/**
+ * What the Plan phase priced each story at — `03-plan/budget.yml` (spec §2.11).
+ * Declared with the other three artefacts in `plan/validatePlan.ts` since the
+ * Plan gate started checking it (#264); re-exported so nothing here moved.
+ */
+export { PLAN_BUDGET_FILE };
 
 export interface PlannedStory {
   readonly story: Story;

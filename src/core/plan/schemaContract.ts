@@ -32,14 +32,16 @@ import {
 } from "../schemas/planCommon.ts";
 import { STORY_KEYS } from "../schemas/story.ts";
 import { EPIC_KEYS } from "../schemas/epic.ts";
+import { BUDGET_REQUIRED_KEYS } from "../schemas/budget.ts";
 import { FENCE } from "../schemas/frontMatter.ts";
-import { EPICS_DIR, STORIES_DIR, WAVES_FILE } from "./validatePlan.ts";
+import { EPICS_DIR, PLAN_BUDGET_FILE, STORIES_DIR, WAVES_FILE } from "./validatePlan.ts";
 
 /** The H2 the facilitator splices this under, in `stage.md`. */
 export const PLAN_CONTRACT_HEADING = "Output schemas";
 
 type StoryKey = (typeof STORY_KEYS)[number] | (typeof STORY_OPTIONAL_KEYS)[number];
 type EpicKey = (typeof EPIC_KEYS)[number];
+type BudgetKey = "version" | (typeof BUDGET_REQUIRED_KEYS)[number];
 
 interface Field {
   /** The value the worked example writes for this key, verbatim. */
@@ -151,6 +153,38 @@ const EPIC_FIELDS: Readonly<Record<EpicKey, Field>> = {
   status: { value: "todo", rule: `one of ${STATUS_CELL}` },
 };
 
+/**
+ * `budget.yml` (#264). The SAME schema as the run's own `budget.yml` — one
+ * validator, `validateBudget`, which is also the one `loadPlanPrices` runs before
+ * it prices a story — so the map is called `per_phase_usd` here too, keyed by
+ * story. The keys are `BUDGET_REQUIRED_KEYS`, the list the validator enforces;
+ * `Record<BudgetKey, Field>` stops this compiling the day that list grows.
+ *
+ * Why it is here at all: the stage prompt named `budget.yml` as a FILENAME and
+ * left the shape to be discovered, and there was nothing to discover it by —
+ * the Plan gate never opened the file. A field run wrote `stories[].estimate_usd`
+ * with a `why` per story and a `total_estimate_usd`, and the Build executor,
+ * whose reader accepts only the shape below, priced every story at the uniform
+ * share as if nobody had priced anything.
+ */
+const BUDGET_FIELDS: Readonly<Record<BudgetKey, Field>> = {
+  version: { value: "1", rule: "always `1`" },
+  run: { value: "260829-scoring-leaderboard", rule: "this run's id — the `tldrx-work/<run>/` folder name" },
+  ceiling_usd: {
+    value: "8",
+    rule: "a number: the Build stage's ceiling when you know it, else the sum of the prices below. "
+      + "The executor scales against the Build stage's REAL ceiling — prices summing above it are "
+      + "scaled down proportionally, never refused",
+  },
+  spent_usd: { value: "0", rule: "`0` — nothing priced here has been spent yet" },
+  per_phase_usd: {
+    value: "{S1: 4.75}",
+    rule: "`<story id>: <usd>`, one entry per scheduled story, every value a number. Keyed by STORY "
+      + "despite the name (the run's own budget.yml keys the same map by phase), and it is the ONLY key "
+      + "anything prices from: a `stories:` list or an `estimate_usd` field validates nothing and prices nothing",
+  },
+};
+
 /** The dod command the worked story uses. Named so a validator can allow it. */
 const EXAMPLE_DOD_COMMAND = "npm run test";
 
@@ -161,6 +195,12 @@ export interface PlanContractExamples {
   readonly epic: string;
   /** A `waves.yml` the `plan` check accepts as it stands. */
   readonly waves: string;
+  /**
+   * A `budget.yml` `validateBudget` accepts as it stands — the validator the
+   * `plan` check runs over the file at the gate, and the one the Build executor
+   * runs before it prices a story (#264).
+   */
+  readonly budget: string;
   /**
    * The commands the story example's ```dod block runs. A caller validating the
    * example must allow them: `validateStoryDod` refuses every command under an
@@ -219,7 +259,12 @@ export function planContractExamples(): PlanContractExamples {
     "",
   ].join("\n");
 
-  return { story, epic, waves, dodCommands: [EXAMPLE_DOD_COMMAND] };
+  const budget = [
+    ...(["version", ...BUDGET_REQUIRED_KEYS] as const).map((key) => `${key}: ${BUDGET_FIELDS[key].value}`),
+    "",
+  ].join("\n");
+
+  return { story, epic, waves, budget, dodCommands: [EXAMPLE_DOD_COMMAND] };
 }
 
 /** Every cap the Plan schemas enforce, with the constant that sets it. */
@@ -308,6 +353,29 @@ export function renderPlanSchemaContract(): string {
     "",
     outer,
     examples.waves.trimEnd(),
+    outer,
+    "",
+    `### \`${PLAN_BUDGET_FILE}\``,
+    "",
+    "Plain YAML, no front matter — the SAME schema as the run's own `budget.yml`, which is why the",
+    "map is called `per_phase_usd` here too. The check runs that schema's validator over this file",
+    "at the gate, and the Build executor runs the same validator before it prices a single story:",
+    "a file in any other shape is refused here, and one that reached Build anyway would price",
+    "NOTHING — every story falls back to an equal share of the stage, however carefully it was",
+    "priced. Measured on a field run: a plan that wrote its prices as `stories[].estimate_usd`",
+    "handed the story it had priced at $28 the uniform $5.40. The file is optional; its shape is",
+    "not. Exactly these keys, all required:",
+    "",
+    ...ruleTable(["version", ...BUDGET_REQUIRED_KEYS], BUDGET_FIELDS),
+    "",
+    "An optional `economy: host-tokens` at the root says the numbers are tokens, not dollars — it",
+    "validates and it prices nothing, because a token figure must never become a dollar cap. Leave",
+    "it out when pricing in dollars.",
+    "",
+    "Copy this — it is a file the check accepts as it stands:",
+    "",
+    outer,
+    examples.budget.trimEnd(),
     outer,
     "",
     "### Caps",
