@@ -255,6 +255,9 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
   // A refusal the story survived (gh #271): the `blocked` case already carries
   // the command inside its reason, so this names only the ones that went on.
   const refusedButMeasured = done.filter((o) => o.permissionRefused != null);
+  // A cap death the story survived (gh #277), on the same terms: the `blocked`
+  // case already carries the sentence inside its reason.
+  const diedButMeasured = done.filter((o) => o.budgetDeath != null);
 
   const lines = [
     `# Handoff — 04-build / ${parts.stageId} — run ${parts.runId}`,
@@ -286,6 +289,7 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
     ...(notDone.length === 0 && (parts.carried ?? []).length === 0
       && (parts.unreadableStories ?? []).length === 0 && (parts.foreignWork ?? []).length === 0
       && (parts.notStarted ?? []).length === 0 && refusedButMeasured.length === 0
+      && diedButMeasured.length === 0
       ? [`- none — every scheduled story reached \`done\` and no carried finding is unowned `
         + `[src: absent:04-build/log]`]
       : []),
@@ -299,6 +303,12 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
         `- ${o.id}'s developer had \`${o.permissionRefused ?? ""}\` refused for approval by the agent's own ` +
         `permission layer; its tree held committed work, so the Definition of Done decided and the story is ` +
         `\`${o.status}\` — a person may still want to know the command it could not run [src: ${o.reviewRel}:1]`,
+    ),
+    ...diedButMeasured.map(
+      (o) =>
+        `- ${o.id}'s developer died on its per-story cap (${o.budgetDeath ?? ""}) with work in its tree, ` +
+        `so the Definition of Done decided and the story is \`${o.status}\` — the plan priced this story ` +
+        `below what it cost, which is worth knowing before the next one [src: ${o.reviewRel}:1]`,
     ),
     ...(parts.notStarted ?? []).map(
       (row) =>

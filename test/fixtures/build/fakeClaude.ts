@@ -106,7 +106,26 @@ const gitRmPath = perStory("FAKE_BUILD_GIT_RM");
  */
 const deniedWork = perStory("FAKE_BUILD_DENIED_WORK");
 
-if (role === "developer" && !failing && deniedCommand !== null) {
+/**
+ * gh #277 — what the tree holds when the developer DIES on its per-story cap.
+ * `FAKE_BUILD_FAIL_WORK` = `{"S1": "committed" | "uncommitted"}`, read only
+ * beside a `FAKE_BUILD_FAIL` that selects this spawn. The real shape: the turn
+ * edited (and often committed) and was then killed mid-sentence by
+ * `--max-budget-usd`, so the work is on disk and the envelope never arrives.
+ * Absent means the 2026-08-30 shape this fake already played — a spawn that died
+ * having written nothing at all, which still parks the story where it was.
+ */
+const failWork = failing && role === "developer" ? perStory("FAKE_BUILD_FAIL_WORK") : null;
+
+if (failWork === "committed" || failWork === "uncommitted") {
+  const rel = `${storyId.toLowerCase()}.txt`;
+  writeFileSync(join(process.cwd(), rel), `${storyId} was here\n`, "utf8");
+  if (failWork === "committed") {
+    execFileSync("git", ["add", "-A"], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("git", ["commit", "-m", `feat(${storyId}): fake developer commit`],
+      { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+  }
+} else if (role === "developer" && !failing && deniedCommand !== null) {
   if (deniedWork === "committed" || deniedWork === "uncommitted") {
     const rel = `${storyId.toLowerCase()}.txt`;
     writeFileSync(join(process.cwd(), rel), `${storyId} was here\n`, "utf8");

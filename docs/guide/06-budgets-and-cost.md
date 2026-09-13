@@ -364,10 +364,12 @@ there is nothing left to refuse; the command says so on stdout.
 ## The Plan prices its own stories
 
 `03-plan/budget.yml` is written by the Plan phase: a `per_phase_usd:` map from story id to
-dollars, inside the Build stage's ceiling. The Build executor reads it. A story the plan
-priced gets its **first** developer attempt at `price / (developer + a quarter for the
-reviewer)` — the pass the plan priced — and a **second** attempt, which nobody priced, at
-half of that. Its reviewer gets a quarter of the halved figure on every attempt. A story
+dollars, inside the Build stage's ceiling. The Build executor reads it — **as a ceiling, not
+as a forecast**. A story the plan priced gets a ceiling of
+`max(price × story_cap_multiplier, story_cap_floor_usd)` (3 and $4.00 by default, both
+`stage.yml` keys): its **first** developer attempt — the pass the plan priced — gets the whole
+of it, and a **second** attempt, which nobody priced, gets an `attempts`-th. Its reviewer gets
+a quarter of the price on every attempt, unchanged. A story
 the plan did not price falls back
 to an equal share of the stage. If the prices add up to more than the stage was given they
 are scaled down proportionally, so the ratio the plan decided survives and the total cannot
@@ -387,6 +389,20 @@ Until 2026-08-30 nothing read that file, and a seven-story plan that priced one 
 $4.75 and another at $0.75 handed both the same $1.03. Until 2026-09-02 the price that WAS
 read was halved before the first attempt ran: a story priced $2.10 of a $3.85 Build stage
 was dispatched under $0.84, which is what a big atomic story starving looks like.
+
+**Why the multiplier (gh #277).** Until 2026-09-13 the price was taken literally — the first
+attempt got `0.8 × price` — and a planner writes that number before it has read a line of the
+repo. Unattended runs measured the consequence the day the prices went live: stories died
+mid-change on ceilings a dollar or two wide, were left `todo` having spent the money, and the
+runs stalled with nothing delivered. The error is not symmetric, so the plan's number is read
+as the order of magnitude of the work and the stage's own budget gate — metered against real
+spend — is what stops a stage that runs out. Raise `story_cap_multiplier:` on the stage if your
+planner is systematically low; lower it to 1 to take the price literally.
+
+**A developer that dies on its ceiling with work in its tree no longer parks the story.** The
+death is recorded (the story's review log, its `task.done`, the handoff) and the facilitator's
+own Definition of Done decides: green is a delivered story, red blocks with both reasons named.
+A cap death that left no work still parks the story where it was.
 
 **The reviewer has a floor of $1.00.** Whatever the arithmetic says, a reviewer is given at
 least that (clamped by what the stage has left and by `per_agent_max_usd`). Measured the

@@ -48,8 +48,68 @@ export const REVIEWER_SHARE = STAGE_TUNING_DEFAULTS.reviewerShare;
 export const REVIEWER_FLOOR_USD = 1.00;
 
 /**
+ * What a story's PLANNED price is multiplied by to get the developer's ceiling
+ * (gh #277).
+ *
+ * **This is a regression we shipped ourselves.** #264 made the executor actually
+ * read `03-plan/budget.yml`'s per-story prices. Before it, nothing did: the
+ * price was decorative and every story got the uniform stage share. From #264
+ * on, the number the planner wrote — BEFORE it had read a line of the repo —
+ * became the hard ceiling of the developer's turn, at `price / (1 +
+ * REVIEWER_SHARE)` = 0.8 x price. Measured by the session running two live
+ * unattended runs on 0.18.1 (their measurement, not this file's): stories died
+ * mid-flight on caps a dollar or three wide, were parked `todo` having spent
+ * real money, and both runs stalled with nothing delivered. The spread between
+ * what a planner estimates and what a story costs is roughly an order of
+ * magnitude wide (gh #277 carries the figures).
+ *
+ * So the price stops being read as a forecast of the spend and starts being read
+ * as the ORDER OF MAGNITUDE of the work. `3` NARROWS the gap for the low and
+ * middle of the range and does not close it: over the prices the planner writes
+ * today ($1.20-$4.00), the ceiling lands at $4.00-$12.00, so a story that really
+ * costs at the top of the observed spread still dies on it. **A story still dies
+ * on its cap whenever its real cost exceeds `max(price x 3, $4.00)`** — that is
+ * the number to check before raising this, not a claim that the wall is gone.
+ * What carries the expensive end is the OTHER half of #277: a developer that
+ * dies with work in its tree no longer parks the story, so the work is committed
+ * and the DoD decides it rather than the money being lost. What neither half
+ * covers — a stage that still reports `done` over a story that died — is #263,
+ * explicitly out of scope here. `3` is chosen against that division of labour and
+ * against keeping one story's worst case legible in the stage it sits in: at
+ * `k = 3` a story can be asked for `3 x price` on the pass the plan priced and
+ * `1.5 x price` on the contingency attempt, which the stage's own budget gate is
+ * what bounds — not this arithmetic, which is now deliberately allowed to
+ * over-run a single estimate. Under-spending here costs a dead story and
+ * everything already paid for it; over-spending costs the difference, on work
+ * that lands.
+ *
+ * A stage may say `story_cap_multiplier: N` and every read site takes it from
+ * `CapParts` instead (`schemas/stageTuning.ts`).
+ */
+export const STORY_CAP_MULTIPLIER = STAGE_TUNING_DEFAULTS.storyCapMultiplier;
+
+/**
+ * The least a PRICED story's developer may be given, whatever the multiplied
+ * price says (gh #277) — the developer-side sibling of `REVIEWER_FLOOR_USD`, and
+ * it exists for the same reason.
+ *
+ * A multiplier alone does not save a story the planner priced at a few dimes:
+ * `3 x $0.40` is still a turn that dies before it has read the repo. $4.00 is a
+ * deliberately small multiple of the reviewer's own $1.00 floor, and the
+ * justification is the asymmetry between the two roles: the reviewer reads one
+ * diff, while the developer reads the repo, edits it, runs the story's DoD —
+ * which is a whole test suite, minutes of it on a real repo — and commits.
+ *
+ * Like the reviewer's, this floor is traded against the "every worst-case cap
+ * sums inside the stage ceiling" arithmetic on purpose; unlike the multiplied
+ * price, it knows nothing about the stage it is in, so it is clamped to the
+ * stage's own ceiling below. A stage may say `story_cap_floor_usd: N`.
+ */
+export const STORY_CAP_FLOOR_USD = STAGE_TUNING_DEFAULTS.storyCapFloorUsd;
+
+/**
  * The divisor a PRICED story's per-attempt developer ceiling is derived with
- * (gh #91, 2026-09-02).
+ * (gh #91, 2026-09-02; re-derived by gh #277).
  *
  * `03-plan/budget.yml` prices a story at what Delivery measured the WORK to
  * cost. Until now the executor divided that by the worst case one story can be
@@ -59,15 +119,23 @@ export const REVIEWER_FLOOR_USD = 1.00;
  * dispatched under $0.84. A deliberately-atomic large story starved on the one
  * attempt that mattered while trivial ones carried slack.
  *
- * Two attempts, two different things:
+ * Two attempts, two different things — the property #91 established, kept
+ * verbatim over the ceiling #277 raised:
  *
- *  - **Attempt 1 is the pass the plan priced.** It gets `price / (1 +
- *    REVIEWER_SHARE)` — the whole price less the reviewer's derived quarter —
- *    so a story is dispatched at what Delivery said it was worth.
- *  - **Attempt 2 is a CONTINGENCY nobody priced.** It keeps the pre-#91 figure,
- *    `price / (MAX_ATTEMPTS x (1 + REVIEWER_SHARE))`. Handing it attempt 1's
- *    ceiling again would double the stage's worst case, which is the "Build 2.5x
- *    su fase" overrun `worstCaseShares` exists to stop.
+ *  - **Attempt 1 is the pass the plan priced.** It gets the story's whole
+ *    ceiling, `storyCeilingUsd`.
+ *  - **Attempt 2 is a CONTINGENCY nobody priced.** It gets that divided by the
+ *    stage's `attempts` — the same 2:1 ratio #91 left behind, since
+ *    `MAX_ATTEMPTS x (1 + REVIEWER_SHARE)` over `(1 + REVIEWER_SHARE)` is
+ *    exactly `attempts`. Handing it attempt 1's ceiling again would double the
+ *    stage's worst case, which is the "Build 2.5x su fase" overrun
+ *    `worstCaseShares` exists to stop.
+ *
+ * What #277 DID change in here: the reviewer's quarter is no longer carved out
+ * of the developer's ceiling. It never funded the reviewer — `reviewerCap`
+ * derives its own share from the price independently, and always did — so the
+ * `(1 + REVIEWER_SHARE)` divisor was money taken off the developer and handed to
+ * nobody. The reviewer's share is additive now, and visibly so.
  *
  * Why the second attempt is not the measured REMAINDER of the story's price,
  * which would be tighter still: the spend is recoverable (`agent.result` events
@@ -87,12 +155,8 @@ export const REVIEWER_FLOOR_USD = 1.00;
  * already opens by design, and `remainingWork` still clamps the brake's estimate
  * to the stage's own price so it can never refuse more often than it used to.
  */
-export function developerPriceDivisor(
-  attempt: number,
-  attempts: number = MAX_ATTEMPTS,
-  reviewerShare: number = REVIEWER_SHARE,
-): number {
-  return attempt <= 1 ? 1 + reviewerShare : attempts * (1 + reviewerShare);
+export function developerAttemptDivisor(attempt: number, attempts: number = MAX_ATTEMPTS): number {
+  return attempt <= 1 ? 1 : attempts;
 }
 
 /**
@@ -140,11 +204,28 @@ export interface CapParts {
    */
   readonly attempts?: number;
   readonly reviewerShare?: number;
+  /**
+   * The stage's `story_cap_multiplier:` and `story_cap_floor_usd:` (gh #277),
+   * passed as DATA for the same reason the two above are. Absent ⇒ the shipped
+   * defaults.
+   */
+  readonly storyCapMultiplier?: number;
+  readonly storyCapFloorUsd?: number;
 }
 
 /** `parts.attempts`, or the default. One place, so no call site re-decides. */
 export function attemptsOf(parts: CapParts): number {
   return parts.attempts ?? MAX_ATTEMPTS;
+}
+
+/** `parts.storyCapMultiplier`, or the default. */
+export function storyCapMultiplierOf(parts: CapParts): number {
+  return parts.storyCapMultiplier ?? STORY_CAP_MULTIPLIER;
+}
+
+/** `parts.storyCapFloorUsd`, or the default. */
+export function storyCapFloorOf(parts: CapParts): number {
+  return parts.storyCapFloorUsd ?? STORY_CAP_FLOOR_USD;
 }
 
 /** `parts.reviewerShare`, or the default. */
@@ -166,26 +247,51 @@ export function round2(n: number): number {
  * file is Delivery pricing each story against the stage ceiling, and until
  * 2026-08-30 it was read by nothing: on
  * `260830-tenancy-identity-customers` the executor handed $1.03 to the story
- * priced at $4.75 and the same $1.03 to the one priced at $0.75. The price is
- * divided by `developerPriceDivisor(attempt)`: the whole price less the
- * reviewer's derived quarter on attempt 1 — the pass Delivery priced — and the
- * worst-case share `MAX_ATTEMPTS × (1 + REVIEWER_SHARE)` on the contingency
- * attempt after it (gh #91; before it, both attempts got the worst-case share
- * and a $2.10 story was dispatched under $0.84).
+ * priced at $4.75 and the same $1.03 to the one priced at $0.75. The price now
+ * buys `storyCeilingUsd` — `max(price × k, floor)` — of which attempt 1 gets the
+ * whole and the contingency attempt after it gets a `attempts`-th (gh #91's
+ * ratio, gh #277's ceiling).
  *
  * **A uniform share**, otherwise, exactly as before. Measured 2026-08-29: a
  * story's spend was `developer (1/N) + reviewer (0.25/N)` and the whole pipeline
  * could run TWICE, so N stories could charge 2.5x the stage ceiling — the
  * audit's "Build 2.5x su fase". Dividing by the worst case up front fixes that,
- * and a plan with no prices still gets it.
+ * and a plan with no prices still gets it. #277 leaves this half alone: an
+ * unpriced story's share is derived from the stage's own money, so there is no
+ * estimate to be wrong about.
  */
 export function developerCap(parts: CapParts, storyId?: string, attempt = 1): number {
   const price = priceOf(parts, storyId);
   if (price === null) return parts.agentCap(1 / worstCaseShares(parts));
   return parts.agentCap(shareOf(
     parts,
-    price / developerPriceDivisor(attempt, attemptsOf(parts), reviewerShareOf(parts)),
+    storyCeilingUsd(parts, price) / developerAttemptDivisor(attempt, attemptsOf(parts)),
   ));
+}
+
+/**
+ * What ONE priced story's developer may be asked for on the pass the plan priced
+ * — `max(price × STORY_CAP_MULTIPLIER, STORY_CAP_FLOOR_USD)` (gh #277).
+ *
+ * Derived HERE, at dispatch, off the price as it sits on disk, and deliberately
+ * NOT migrated into `budget.yml`: a run already in flight carries prices written
+ * by an older planner, and deriving at dispatch is what covers those runs the
+ * moment this is installed. A rewrite of the file would cover only runs planned
+ * afterwards, and would destroy the planner's own number on the way.
+ *
+ * The floor is clamped to the stage's ceiling; the multiplied price is not. The
+ * asymmetry is the point: the multiplied price is derived from a figure Delivery
+ * wrote FOR THIS STAGE, so letting it over-run a single story's estimate is the
+ * whole fix — the stage's budget gate is what stops a stage that runs out, and
+ * it is metered against real spend rather than against a guess. The floor knows
+ * nothing about the stage it landed in, so it never claims more than the stage
+ * has.
+ */
+export function storyCeilingUsd(parts: CapParts, price: number): number {
+  const floor = parts.budgetUsd > 0
+    ? Math.min(storyCapFloorOf(parts), parts.budgetUsd)
+    : storyCapFloorOf(parts);
+  return Math.max(price * storyCapMultiplierOf(parts), floor);
 }
 
 /**

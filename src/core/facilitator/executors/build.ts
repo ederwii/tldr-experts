@@ -143,8 +143,9 @@ import {
 import { phaseCostToDate, storySpendToDate } from "../../build/phaseCost.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
 import {
-  clampParallel, developerCap, developerPriceDivisor, reviewerCap, round2,
+  clampParallel, developerAttemptDivisor, developerCap, reviewerCap, round2, storyCeilingUsd,
   DEFAULT_PARALLEL, MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
+  STORY_CAP_MULTIPLIER, STORY_CAP_FLOOR_USD,
   type CapParts,
 } from "../../build/caps.ts";
 import type { PlanStatus } from "../../schemas/planCommon.ts";
@@ -494,6 +495,12 @@ class BuildSession {
    * paths need no sixth argument. Cleared at the top of every attempt.
    */
   private readonly refusals = new Map<string, string>();
+  /**
+   * Per story, the `Reached maximum budget (…)` a developer died on during an
+   * attempt that went on anyway because its tree held work (gh #277). Same shape
+   * and same lifetime as `refusals` above, for the same reason.
+   */
+  private readonly capDeaths = new Map<string, string>();
   /**
    * The epic branches, worktrees and merges this invocation accumulated
    * (`build/worktrees.ts`). ONE instance, created here and passed by reference
@@ -1208,6 +1215,7 @@ class BuildSession {
     // here, before any early return, so a developer that fails on attempt 2
     // cannot settle with attempt 1's command on its record.
     this.refusals.delete(planned.story.id);
+    this.capDeaths.delete(planned.story.id);
     // (a)(b)(c) touch the SHARED repo — `git branch`, `git worktree add` — so they
     // go through the one writer even though the sub-agent below does not.
     // `true`: same reason as `prepare()` — the headless developer is dispatched
@@ -1245,12 +1253,32 @@ class BuildSession {
     // be built: the sub-agent never wrote a line, so nothing about the work has
     // been learned and nothing about it may be settled. `failure` stays null —
     // that field blocks the story — and `developerError` parks it instead.
+    //
+    // gh #277: unless it left WORK. A developer killed by its own
+    // `--max-budget-usd` mid-sentence is not a turn that never ran — it is a
+    // story with a diff and no verdict, and the facilitator's DoD one step below
+    // is the authority on whether that diff is a delivered story. This is #271's
+    // rule over a second cause, not a second rule: same `workSince` comparison,
+    // same "the DoD decides", same "the cause is recorded either way". The
+    // narrowing to a CAP death is deliberate — a spawn that never started, a
+    // timeout or a transport fault says nothing about a tree, while `Reached
+    // maximum budget` says precisely that the turn was doing work when it
+    // stopped.
     const developer = await this.spawnDeveloper(story);
+    const capDeath = developer.error !== null && diedOnCap(developer.error);
+    let budgetDeath: string | null = null;
     if (developer.error !== null) {
-      return {
-        story, cost: developer.cost, dod: [], commit: null,
-        failure: null, developerError: developer.error, before,
-      };
+      const proven = capDeath && await workSince({
+        workspaceRoot: this.workspace.root, repoDir: story.repoDir, worktree: story.worktree, since: handed,
+      });
+      if (!proven) {
+        return {
+          story, cost: developer.cost, dod: [], commit: null,
+          failure: null, developerError: developer.error, before,
+        };
+      }
+      budgetDeath = developer.error;
+      this.capDeaths.set(story.planned.story.id, developer.error);
     }
     const spent = developer.cost;
 
@@ -1303,9 +1331,14 @@ class BuildSession {
         cost: spent,
         dod,
         commit: null,
-        // A red DoD on a tree whose developer was also refused names BOTH (#271):
-        // the DoD is the verdict, the refusal is the cause a person triages first.
-        failure: developer.refused === null ? why : `${why}; and ${permissionBlockReason(developer.refused)}`,
+        // A red DoD on a tree whose developer was also refused — or was killed by
+        // its own cap (#277) — names BOTH: the DoD is the verdict, the other is
+        // the cause a person triages first.
+        failure: [
+          why,
+          ...(developer.refused === null ? [] : [permissionBlockReason(developer.refused)]),
+          ...(budgetDeath === null ? [] : [capDeathReason(budgetDeath)]),
+        ].join("; and "),
         developerError: null,
         before,
       };
@@ -2702,6 +2735,7 @@ class BuildSession {
       reviewRel,
       reason: parts.reason,
       permissionRefused: this.refusals.get(id) ?? null,
+      budgetDeath: this.capDeaths.get(id) ?? null,
       rescued,
       cost_usd: parts.cost,
     };
@@ -2759,6 +2793,9 @@ class BuildSession {
       // ADDITIVE (gh #271): the command the permission layer refused on an
       // attempt the DoD went on to decide. Omitted when there was none.
       ...(outcome.permissionRefused == null ? {} : { permission_refused: outcome.permissionRefused }),
+      // ADDITIVE (gh #277): the cap the developer died on during an attempt the
+      // DoD went on to decide. Omitted when there was none.
+      ...(outcome.budgetDeath == null ? {} : { budget_death: outcome.budgetDeath }),
     });
     // Worktrees survive a `review` on purpose: the second attempt continues in
     // the same tree rather than re-cutting the branch it just wrote. A parked
@@ -3644,6 +3681,11 @@ class BuildSession {
       agentCap: this.ctx.agentCap,
       attempts: this.attempts,
       reviewerShare: this.ctx.spec.tuning.reviewerShare,
+      // gh #277 — read at DISPATCH off the stage as it sits on disk, so a run
+      // already in flight under an older plan's prices is covered the moment
+      // this is installed.
+      storyCapMultiplier: this.ctx.spec.tuning.storyCapMultiplier,
+      storyCapFloorUsd: this.ctx.spec.tuning.storyCapFloorUsd,
     };
   }
 
@@ -4002,6 +4044,36 @@ export function permissionBlockReason(command: string): string {
     + "so this attempt was not repeated";
 }
 
+/**
+ * Did this spawn die on the ceiling the executor handed it? (gh #277)
+ *
+ * The sentence is the provider's own — `Reached maximum budget ($1.28)` — and it
+ * reaches here through `describe()` in `spawnAgent.ts`, so the match is on the
+ * framework's own transport of a provider string and never on a model's prose:
+ * a model's words go through the envelope, not through `AgentOutcome.error`.
+ * ONE implementation, because three surfaces now read it — the branch that lets
+ * the DoD decide, the reason a person triages, and the ledger row.
+ */
+export function diedOnCap(error: string): boolean {
+  return error.includes("Reached maximum budget");
+}
+
+/**
+ * Why a story's turn stopped when its own per-story cap, not the work, decided
+ * it (gh #277).
+ *
+ * The provider's sentence carries the dollar figure, so it is quoted verbatim
+ * rather than paraphrased — the reader is otherwise left doing arithmetic
+ * backwards from a `todo` status to find out what stopped a turn that had
+ * already spent money. Same shape and same purpose as
+ * `permissionBlockReason`: a CAUSE, not a verdict on the diff.
+ */
+export function capDeathReason(error: string): string {
+  return `the developer died on its per-story cap — ${error}: the ceiling is derived from `
+    + "`03-plan/budget.yml`'s price for this story, so a story that really costs more than the "
+    + "plan guessed wants a higher price there or a higher `story_cap_multiplier:` on the stage";
+}
+
 /** The reviewer reads and nothing else. */
 export const REVIEWER_TOOLS: readonly string[] = ["Read", "Grep", "Glob", "Bash(git diff *)"];
 
@@ -4079,6 +4151,7 @@ function failed(ctx: ExecutorContext, error: string, tasks: readonly ExecutorTas
 // "the same symbol, a different file" stays true for every caller.
 export { readReviewLedger, phaseCostToDate };
 export {
-  clampParallel, developerPriceDivisor,
+  clampParallel, developerAttemptDivisor, storyCeilingUsd,
   DEFAULT_PARALLEL, MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
+  STORY_CAP_MULTIPLIER, STORY_CAP_FLOOR_USD,
 };

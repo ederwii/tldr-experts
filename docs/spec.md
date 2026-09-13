@@ -270,6 +270,8 @@ attempts: 2
 fixlist_rounds: 1
 reviewer_share: 0.25
 gate_signer_share: 0.25
+story_cap_multiplier: 3
+story_cap_floor_usd: 4
 dry_run_allowed: true
 inputs: {required: ["01-what/intent.md", "01-what/scope.md"],
          optional: [".tldrx/map/{repo}/architecture.md", ".tldrx/memory/facts.yml"]}
@@ -309,7 +311,9 @@ for files whose citations §2.6 would refuse to count.
 | `timeout_s` / `dry_run_allowed` | int >0 / bool | n (7200 / `true`) | Wall clock for **ONE sub-agent turn** and for `cmd` checks `[assumption]` — never the stage as a whole and never the run: a Build stage that dispatches six stories gives each spawn its own `timeout_s`. Raised from 900 on 2026-09-09 against a week of unattended runs on three workspaces, where Opus turns on real repositories ran 15-50 minutes and the old clock killed a `how` turn and two Build developer turns; `dry_run_allowed: false` refuses `--dry-run` on this stage |
 | `attempts` | int 1..5 | n (2) | Developer attempts one unit of this stage's work gets before it blocks. **The phase ceiling is sized for this many** (§2.11, `planBudget`), so raising it raises what the phase holds rather than what one attempt may spend. Read by the executor, the `next` brake, `warn_at_pct`, `story reopen` and the dashboard's "attempt N of M". **Known gap:** `budget show` and the `budget-gate` hook still reserve against the shipped 2 — neither may open a `stage.yml` (a page render; a PreToolUse hook on a 50 ms budget with no stage spec in hand). For `attempts: 3` that under-reserves, which only refuses less often; for `attempts: 1` it OVER-reserves and can refuse a command the real arithmetic would allow. Filed as #214 (follow-up to #170) |
 | `fixlist_rounds` | int 0..3 | n (1) | Fix-list rounds one story gets. A `fixlist` verdict spends no attempt, so an unbounded supply is a story that never has to settle |
-| `reviewer_share` | number 0..1 | n (0.25) | The reviewer's share of a story's price (§5, "The Build ceilings"). Also the divisor the developer's per-attempt ceiling is derived with |
+| `reviewer_share` | number 0..1 | n (0.25) | The reviewer's share of a story's price (§5, "The Build ceilings") |
+| `story_cap_multiplier` | number 1..20 | n (3) | What `03-plan/budget.yml`'s price for a story is multiplied by to get its developer's ceiling (gh #277). The price is a planner's figure written before any code was read, so it is treated as an order of magnitude rather than a forecast; a value below 1 is **refused**, never clamped |
+| `story_cap_floor_usd` | number 0..200 | n (4) | The least a priced story's developer may be given, whatever the multiplied price says — clamped to the stage's own ceiling. The developer-side sibling of `REVIEWER_FLOOR_USD` |
 | `gate_signer_share` | number 0..1 | n (0.25) | The gate signer's share of the stage ceiling, for a stage whose `gates_policy` is `agent` |
 | `inputs.required` / `.optional` | path[] | y / n | **The only files the sub-agent gets**; `{repo}` expands per repo. A declared path that resolves to NOTHING is NAMED — one `## Inputs` entry under `### Declared, but not on disk` with its own `[src: absent:<path>]` token, and one stdout line — never silently dropped (gh #131) |
 | `inputs.seed` | bool | n (`false`) | Also give this stage **the run's seed documents**, whatever `run new --seed` recorded for it in `run.yml` (§6.1) `[assumption]` |
@@ -3885,14 +3889,28 @@ share it used before plan prices were read at all, and it says so in one line ra
 money.
 
 `03-plan/budget.yml` prices a story in its `per_phase_usd:` map — which the Plan writes and the Plan gate validates,
-and which nothing read until this date — that story's developer cap is `price ÷ developerPriceDivisor(attempt)`:
-`price ÷ (1 + REVIEWER_SHARE)` on **attempt 1**, the pass the plan priced, and
-`price ÷ (MAX_ATTEMPTS × (1 + REVIEWER_SHARE))` on the contingency attempt after it. Its reviewer's cap is a
-`REVIEWER_SHARE` of the worst-case figure, on every attempt. Both attempts used the worst-case figure until
-2026-09-02, when gh #91 measured run `260901-leaderboard-v2` dispatching a story the plan priced at $2.10 under an
-$0.84 ceiling — a deliberately-atomic large story starving on the only attempt that mattered. The change raises the
-worst case ONE priced story can be asked for from `0.8 × price` to `1.2 × price`; the phase ceiling is metered once,
-at stage entry, and `remainingWork` still clamps the brake to the stage's own price.
+and which nothing read until this date — **the price is read as a CEILING, not as a forecast** (gh #277, 2026-09-13).
+The story's ceiling is `max(price × story_cap_multiplier, story_cap_floor_usd)`, derived at DISPATCH off the price as
+it sits on disk: **attempt 1**, the pass the plan priced, gets the whole of it, and the contingency attempt after it
+gets an `attempts`-th — the 2:1 ratio gh #91 established on 2026-09-02, when it measured run
+`260901-leaderboard-v2` dispatching a story the plan priced at $2.10 under an $0.84 ceiling. Its reviewer's cap is a
+`REVIEWER_SHARE` of the worst-case figure, on every attempt, and is unchanged by all of this.
+
+Why the multiplier exists at all: the price is written by a planner BEFORE any code has been read, and until
+2026-09-13 the developer's ceiling was `price ÷ (1 + REVIEWER_SHARE)` = `0.8 × price`. That was harmless while
+nothing read the file, and it became a wall the day one did — stories died mid-change on ceilings a dollar or two
+wide, were parked `todo` having spent the money, and unattended runs stalled with nothing delivered (gh #264 made the
+prices live; gh #277 measured the consequence). The error is not symmetric: a price set too low costs a dead story
+and everything already paid for it, while one set too high costs only the difference on work that lands. So the plan's
+number now says the ORDER OF MAGNITUDE of the work and the STAGE's own budget gate — metered against real spend —
+is what stops a stage that runs out. The phase ceiling is metered once, at stage entry, and `remainingWork` still
+clamps the brake to the stage's own price.
+
+**A developer that dies on that ceiling with WORK in its tree no longer parks the story** (gh #277, the same shape
+gh #271 gave a permission refusal): the death is recorded on the story's review log, on its `task.done`
+(`budget_death:`) and in the handoff, and the facilitator's own Definition of Done decides — a green DoD is a
+delivered story, a red one blocks with both reasons named. A cap death that left NO work still parks the story
+exactly where it was, unchanged since 2026-08-30.
 Prices summing to more than the stage are scaled down proportionally, so
 the plan's ratio survives and the total cannot escape the ceiling; an unparseable or invalid file is an advisory on
 stderr and the uniform split. Measured before it: a seven-story plan pricing S1 at $4.75 and S2 at $0.75 gave both
