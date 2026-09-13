@@ -140,6 +140,24 @@ cursor → 02-how/how (ready)
 luego registra quién firmó, cuándo, y tu nota tal cual en `run.yml`. Esa nota es lo que lee
 la etapa siguiente. Después `tldrx next` otra vez, y así hasta Watch.
 
+### 5. O entrégaselo todo al motor
+
+Los cuatro pasos de arriba son contigo en el teclado. Un cambio pequeño y bien sembrado
+puede recorrer el camino entero sin nadie mirando — medido una vez: un bugfix de una sola
+story fue de la semilla al PR mergeado en 45 minutos, sin intervención humana:
+
+```bash
+tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.md \
+  --gates none --questions none --ship pr --budget 40
+nohup tldrx run auto --run <id> --until-done --max-usd 40 \
+  --wait-answers 8h --wait-gates 8h --notify-every 30m --ui plain > /tmp/<id>.log 2>&1 &
+```
+
+`--gates none` deja que cada compuerta se firme sola, `--questions none` deja que el bucle
+tome la opción `Recommended:` de cada pregunta, `--ship pr` abre el PR cuando el run termina.
+Qué significa cada bandera, cómo escribir la semilla, cómo revisarlo y cómo detenerlo:
+[Un run sin tocar nada, de principio a fin](/es/guides/unattended-operation#un-run-sin-tocar-nada-de-principio-a-fin).
+
 ## Y de aquí
 
 - Llévalo hasta la siguiente decisión de verdad con `tldrx run auto` — [Atendido o desatendido](/es/guides/driving).

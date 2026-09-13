@@ -23,6 +23,54 @@ into the prompt. Deterministic — no LLM, no network.
 applied to the merged set rather than per argument. One occurrence is byte-for-byte what it
 always was.
 
+### Writing a seed by hand
+
+A seed you write yourself is the input of an unattended run, so it has to survive two
+mechanical readers with nobody there to fix it: the importer
+(`src/core/distill/markdownClaims.ts`) that turns it into claims, and the `[src:]` grammar
+(`src/core/text/srcToken.ts`) that `claim-sources` checks every claim against. The rules,
+measured in both:
+
+- **One claim per bullet.** Consecutive prose lines are merged into ONE claim before
+  anything else happens — a hard-wrapped paragraph is one claim, not several — and a blank
+  line, a heading or a fence ends it.
+- **At most ~200 characters per bullet, citation included.** The importer clips a claim at
+  240 characters (`MAX_CLAIM_CHARS`). A clip that lands inside the citation leaves a path
+  that does not exist, and `run new` refuses the seed (#275). Stay well under.
+- **The `[src: path:line]` token is the LAST thing on the line.** A citation written
+  mid-sentence is invisible to the reader; only punctuation may follow the `]`.
+- **A `file` source is `[repo:]path:line[-line]`** — a path with no line number cites a
+  file, not a fact, and is refused; the range ascends; line numbers are 1-based.
+- **Paths are workspace-relative and must exist.** They are resolved against your checkout.
+- **Several sources in one token are joined with `"; "`**: `[src: src/a.ts:12; src/b.ts:40]`.
+- **Use the four What headings** — `# Intent`, `# Scope`, `# Success metrics`,
+  `# Open questions` — so every output is covered and none is reported as an Unknown.
+- **Give every open question a `Recommended:` line.** Under `run new --questions none` the
+  loop answers a question only when its block names one of its own options on a
+  `Recommended: <letter> — <why>` line; one without a recommendation parks the run for a
+  person. The question blocks are the What agent's — the seed's recommendation is what it
+  reads to write that line (inferred from the mechanism, not measured on a run).
+
+The conventional location is `.tldrx/seeds/<nn>-<slug>.md`, committed with the rest of
+`.tldrx/`. A seed for a session-timeout defect, every bullet under the cap:
+
+```markdown
+# Intent
+- Sessions expire after 15 idle minutes; the settings page promises 60 [src: src/auth/session.ts:42]
+
+# Scope
+- Fix the constant and its one reader; the settings copy is not in scope [src: src/auth/session.ts:42; src/auth/refresh.ts:18]
+
+# Success metrics
+- The existing idle-timeout test passes with a 59-minute idle session [src: test/auth/session.test.ts:77]
+
+# Open questions
+- Should a refresh call extend the idle window? A) yes B) no. Recommended: B — the copy promises idle minutes [src: src/auth/refresh.ts:18]
+```
+
+The run that consumes it with nobody watching is in
+[10 — Unattended mode](10-unattended-mode.md#zero-touch-the-recipe-that-worked).
+
 ### From an AI-DLC intent folder
 
 ```bash

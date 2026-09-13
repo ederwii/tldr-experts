@@ -41,6 +41,21 @@ tldrx run new payments --scope feature --seed docs/payments/ --budget 25
 tldrx run auto            # `next`, over and over, until something actually needs you
 ```
 
+Or hand a small, well-seeded change to the engine with nobody watching — measured once: a one-story
+bugfix went from seed to merged PR in 45 minutes with no human input:
+
+```bash
+tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.md \
+  --gates none --questions none --ship pr --budget 40
+nohup tldrx run auto --run <id> --until-done --max-usd 40 \
+  --wait-answers 8h --wait-gates 8h --notify-every 30m --ui plain > /tmp/<id>.log 2>&1 &
+```
+
+`--gates none` lets every gate sign itself, `--questions none` lets the loop take each question's own
+`Recommended:` pick, `--ship pr` opens the PR when the run is done. What each flag means, how to write
+the seed, how to check on it and how to stop it:
+[Zero-touch run, start to finish](https://ederwii.github.io/tldr-experts/guides/unattended-operation#zero-touch-run-start-to-finish).
+
 **To run it: Node ≥ 20, and nothing else** — the published package is a pre-built bundle with
 zero runtime dependencies, and `dist/` is a Node bundle (Bun runs it too, if you have it).
 **To build or contribute: Bun ≥ 1.3**, which compiles that bundle and runs the test suite.

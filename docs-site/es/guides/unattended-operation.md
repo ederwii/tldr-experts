@@ -14,6 +14,148 @@ techo de presupuesto, trabajo que se sale del límite que citó el What, y el me
 Todo el diseño de acá se trata de volver esas cuatro alcanzables en segundos, no de
 quitarlas.
 
+## Un run sin tocar nada, de principio a fin
+
+Medido una vez, sobre un repositorio real: un bugfix de una sola story fue de un archivo
+semilla a un pull request mergeado en 45 minutos, sin ninguna intervención humana entre el
+comando de lanzamiento y el merge. Esta es la receta exacta. Ejercita el **camino feliz**
+sin una persona: cada compuerta es una que el motor puede firmar, cada pregunta es una que
+puede responder, y la última milla es el PR. Un run donde una persona firma compuertas o
+responde preguntas es *otra* configuración de run — el resto de esta página —, no otra
+bandera sobre esta.
+
+### 1. Escribe la semilla
+
+Una semilla (*seed*) es un archivo markdown que la etapa What lee antes de gastar nada. El
+importador convierte cada viñeta bajo un encabezado en una afirmación, y la verificación
+`claim-sources` rechaza una afirmación que no puede rastrear, así que las reglas son
+mecánicas:
+
+- **Una afirmación por viñeta.** Las líneas de prosa consecutivas se fusionan en UNA
+  afirmación antes que cualquier otra cosa, así que un párrafo con saltos de línea es una
+  sola afirmación, no varias.
+- **Como mucho ~200 caracteres por viñeta, cita incluida.** El importador recorta una
+  afirmación a los 240 caracteres, y un recorte que cae dentro de la cita deja una ruta que
+  no existe — `run new` entonces rechaza la semilla (#275). Quédate bien por debajo.
+- **El token `[src: path:line]` es LO ÚLTIMO de la línea.** Una cita escrita a mitad de
+  frase es invisible para el lector. Una ruta sin número de línea cita un archivo, no un
+  hecho, y se rechaza; `path:line-line` es un rango; varias fuentes se unen con `"; "`
+  dentro de un mismo token: `[src: src/a.ts:12; src/b.ts:40]`.
+- **Las rutas son relativas al workspace y tienen que existir.** La verificación las
+  resuelve contra tu checkout.
+- **Usa los cuatro encabezados del What** — `# Intent`, `# Scope`, `# Success metrics`,
+  `# Open questions` — para que las salidas de la etapa queden cubiertas y nada se reporte
+  como una incógnita sobre la que tenga que preguntarte.
+- **Dale a cada pregunta abierta una línea `Recommended:`.** Bajo `--questions none` el
+  bucle responde una pregunta solo cuando su bloque nombra una de sus propias opciones en
+  una línea `Recommended: <letra> — <por qué>`; una pregunta sin ella detiene el run a la
+  espera de una persona. Los bloques de preguntas los escribe el agente del What — una
+  recomendación en la semilla es lo que lee para escribir esa línea. (Inferido del
+  mecanismo; el run medido no levantó ninguna pregunta.)
+
+El lugar convencional es `.tldrx/seeds/<nn>-<slug>.md`, commiteado con el resto de
+`.tldrx/`. Una semilla para un defecto de expiración de sesión, cada viñeta bajo el tope:
+
+```markdown
+# Intent
+- Sessions expire after 15 idle minutes; the settings page promises 60 [src: src/auth/session.ts:42]
+
+# Scope
+- Fix the constant and its one reader; the settings copy is not in scope [src: src/auth/session.ts:42; src/auth/refresh.ts:18]
+
+# Success metrics
+- The existing idle-timeout test passes with a 59-minute idle session [src: test/auth/session.test.ts:77]
+
+# Open questions
+- Should a refresh call extend the idle window? A) yes B) no. Recommended: B — the copy promises idle minutes [src: src/auth/refresh.ts:18]
+```
+
+### 2. Abre el run con todas las decisiones ya tomadas
+
+```bash
+tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.md \
+  --gates none --questions none --ship pr --budget 40
+```
+
+- **`--scope bugfix`** — el preset: cinco etapas, profundidad ligera, "Plan is usually a
+  single story".
+- **`--seed <file>`** — el documento de arriba, leído al crear el run; los originales se
+  citan, nunca se copian.
+- **`--gates none`** — ninguna etapa la aprueba una PERSONA, así que cada compuerta se
+  cierra sola cuando se cumplen sus siete condiciones `auto`; la política queda congelada
+  en `run.yml`.
+- **`--questions none`** — cada etapa es `recommended`: el bucle toma la opción
+  `Recommended:` de cada pregunta, la registra como `decided_by: agent-default`, y escala
+  las que no traen una o están marcadas `irreversible: true` / `money: true`.
+- **`--ship pr`** — cuando el run queda en `done`, hace push de `epic/<slug>` y abre el
+  pull request. **`--ship merge`** además arma `gh pr merge --auto --merge`, así que deciden
+  los checks del propio remoto — y en un repositorio cuya rama por defecto **no tiene
+  status checks requeridos** eso significa que el PR se mergea de inmediato, sin que nada
+  lo haya verificado (#274, abierto). Un PR que no reporta ningún check se deja abierto con
+  `merge: absent`.
+- **`--budget 40`** — el techo total del run en USD, repartido entre sus fases.
+
+`run new` imprime `created tldrx-work/<id> — …`; el id es `<yymmdd>-<slug>` y todos los
+comandos de abajo lo piden.
+
+### 3. Lanza el motor en segundo plano
+
+```bash
+nohup tldrx run auto --run <id> --until-done --max-usd 40 \
+  --wait-answers 8h --wait-gates 8h --notify-every 30m --ui plain > /tmp/<id>.log 2>&1 &
+```
+
+- **`nohup … &`** — el bucle sobrevive a la shell que lo lanzó; `> … 2>&1` conserva los
+  dos flujos, porque el progreso va a **stderr** y la línea de parada a **stdout**.
+- **`--run <id>`** — cuál run; escrito como bandera y no como posicional para que un
+  `--until-done` pelado no pueda leer el id como su número.
+- **`--until-done`** — relanza el bucle en el mismo proceso tras una salida con la que no
+  puede hacer nada más (una falla pasado el tope de reintentos, una excepción, un rechazo
+  sin dinero detrás), como mucho 5 veces; nunca sobre el `4` de una persona, nunca sobre un
+  bloqueo de presupuesto, nunca dos veces sobre la misma última línea.
+- **`--max-usd 40`** — el techo propio del bucle, que abarca todos los relanzamientos.
+- **`--wait-answers 8h` / `--wait-gates 8h`** — cuando algo sí necesita a una persona,
+  consulta durante ese rato en vez de salir con `4` de inmediato; no se gasta nada mientras
+  espera. En el camino feliz ninguna de las dos se dispara.
+- **`--notify-every 30m`** — el latido `status` a tu hook `notify:`, si
+  `.tldrx/workspace.yml` declara uno; silencioso si no.
+- **`--ui plain`** — líneas de registro en vez de una pantalla que se redibuja. Un log
+  redirigido recibe esto de todos modos (`auto` degrada sobre cualquier cosa que no sea una
+  terminal); pasarla lo deja dicho en la línea de comando.
+
+### 4. Revísalo, deténlo
+
+```bash
+tldrx run status <id>      # la vista del propio run: etapa, cursor, qué está esperando
+tail -f /tmp/<id>.log      # lo que el bucle está imprimiendo ahora mismo
+tldrx replay <id>          # el registro de eventos como relato, cuando termine
+```
+
+Si hay un hook `notify:` declarado, la misma vista te llega cada 30 minutos sin pedirla, y
+una detención — lo único de este camino que no debería pasar — llega con el comando literal
+que hay que teclear.
+
+Para detenerlo: termina primero el proceso (`kill <pid>`, o lo que sea que lo lanzó), y
+después cierra el run para siempre:
+
+```bash
+tldrx run cancel <id> --note "superseded — the fix landed by hand"
+```
+
+`run cancel` rechaza un run cuyo `.lock` todavía sostiene un proceso vivo (salida `2`) en
+vez de cerrarlo por debajo del bucle; un run cancelado es terminal, sus archivos se quedan
+en disco, y la rama epic que cortó se libera para el siguiente run de la misma feature.
+
+### El límite honesto
+
+Lo que esta receta demuestra es que el *motor* puede llevar un cambio pequeño y bien
+sembrado hasta un PR sin nadie mirando. No hace desaparecer las cuatro cosas que siguen
+siendo de una persona — una decisión de producto nueva, un techo que sube, trabajo fuera
+del límite del What, el merge final —: `--gates none` y `--questions none` son tu decisión
+registrada de que este run no tiene ninguna de ellas. Un run con una compuerta `human` o
+con una pregunta que la semilla no dejó respondida de antemano necesita el resto de esta
+página.
+
 ## Las dos maneras de conducir un run
 
 **Una sesión anfitriona — `tldrx run attend host`.** Un candado, no un motor: pone un solo
@@ -358,7 +500,7 @@ por ti exactamente como antes.
 ## Ponerlo a correr
 
 ```bash
-tldrx run auto 260907-checkout --notify-every 10m --wait-answers 4h --wait-gates 4h --retry-failed 2 --until-done
+tldrx run auto --run 260907-checkout --notify-every 10m --wait-answers 4h --wait-gates 4h --retry-failed 2 --until-done
 ```
 
 Las tres banderas toman una **duración**: `30s`, `10m`, `2h`, o un número pelado de segundos.
@@ -489,7 +631,7 @@ cosas sobre las que nunca relanza:
   relanzamiento mueva; un relanzamiento lo demuestra, y el bucle se detiene en vez de
   martillarlo.
 
-Pon el id del run antes de la bandera, o escribe `--until-done=3`: un `--until-done` sin
+Pon el id del run antes de la bandera, pásalo como `--run <id>`, o escribe `--until-done=3`: un `--until-done` sin
 valor seguido de un id de run lee el id como su número y lo rechaza, por nombre.
 
 Vale la pena nombrar las dos cosas que ganas frente al modo anfitrión, porque son justo lo

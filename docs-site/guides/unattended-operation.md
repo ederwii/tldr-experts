@@ -13,6 +13,142 @@ Four things are still a person's, always: a new product decision, a budget ceili
 up, work that leaves the boundary the What cited, and the final merge. The whole design
 here is about making those four reachable in seconds, not about removing them.
 
+## Zero-touch run, start to finish
+
+Measured once, on a real repository: a one-story bugfix went from a seed file to a merged
+pull request in 45 minutes with no human input between the launch command and the merge.
+This is the exact recipe. It exercises the **happy path** without a person: every gate is
+one the engine may sign, every question is one it may answer, and the last mile is the
+PR. A run where a person signs gates or answers questions is a *different* run
+configuration — the rest of this page — not a different flag on this one.
+
+### 1. Write the seed
+
+A seed is a markdown file the What stage reads before it spends anything. The importer
+turns every bullet under a heading into a claim, and the `claim-sources` check refuses a
+claim it cannot trace, so the rules are mechanical:
+
+- **One claim per bullet.** Consecutive prose lines are merged into ONE claim before
+  anything else happens, so a hard-wrapped paragraph is one claim, not several.
+- **At most ~200 characters per bullet, citation included.** The importer clips a claim at
+  240 characters, and a clip that lands inside the citation leaves a path that does not
+  exist — `run new` then refuses the seed (#275). Stay well under.
+- **The `[src: path:line]` token is the LAST thing on the line.** A citation written
+  mid-sentence is invisible to the reader. A path with no line number cites a file, not a
+  fact, and is refused; `path:line-line` is a range; several sources are joined with `"; "`
+  inside one token: `[src: src/a.ts:12; src/b.ts:40]`.
+- **Paths are workspace-relative and must exist.** The check resolves them against your
+  checkout.
+- **Use the four What headings** — `# Intent`, `# Scope`, `# Success metrics`,
+  `# Open questions` — so the stage's outputs are covered and nothing is reported as an
+  Unknown it has to ask you about.
+- **Give every open question a `Recommended:` line.** Under `--questions none` the loop
+  answers a question only when its block names one of its own options on a
+  `Recommended: <letter> — <why>` line; a question without one parks the run for a person.
+  The What agent writes the question blocks — a recommendation in the seed is what it
+  reads to write that line. (Inferred from the mechanism; the measured run raised no
+  question at all.)
+
+The conventional place is `.tldrx/seeds/<nn>-<slug>.md`, committed with the rest of
+`.tldrx/`. A seed for a session timeout defect, every bullet under the cap:
+
+```markdown
+# Intent
+- Sessions expire after 15 idle minutes; the settings page promises 60 [src: src/auth/session.ts:42]
+
+# Scope
+- Fix the constant and its one reader; the settings copy is not in scope [src: src/auth/session.ts:42; src/auth/refresh.ts:18]
+
+# Success metrics
+- The existing idle-timeout test passes with a 59-minute idle session [src: test/auth/session.test.ts:77]
+
+# Open questions
+- Should a refresh call extend the idle window? A) yes B) no. Recommended: B — the copy promises idle minutes [src: src/auth/refresh.ts:18]
+```
+
+### 2. Open the run with every decision pre-taken
+
+```bash
+tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.md \
+  --gates none --questions none --ship pr --budget 40
+```
+
+- **`--scope bugfix`** — the preset: five stages, light depth, "Plan is usually a single
+  story".
+- **`--seed <file>`** — the document above, read at creation; the originals are cited,
+  never copied.
+- **`--gates none`** — a PERSON approves no stage, so every gate closes itself when its
+  seven `auto` conditions hold; the policy is frozen into `run.yml`.
+- **`--questions none`** — every stage is `recommended`: the loop takes each question's
+  own `Recommended:` pick, records it as `decided_by: agent-default`, and escalates the
+  ones with no pick or tagged `irreversible: true` / `money: true`.
+- **`--ship pr`** — when the run reads `done`, push `epic/<slug>` and open the pull
+  request. **`--ship merge`** also arms `gh pr merge --auto --merge`, so the remote's own
+  checks decide — and on a repository whose default branch has **no required status
+  checks** that means the PR merges at once, with nothing checked (#274, open). A PR that
+  reports no check at all is left open with `merge: absent`.
+- **`--budget 40`** — the run's total ceiling in USD, split across its phases.
+
+`run new` prints `created tldrx-work/<id> — …`; the id is `<yymmdd>-<slug>` and every
+command below wants it.
+
+### 3. Launch the engine in the background
+
+```bash
+nohup tldrx run auto --run <id> --until-done --max-usd 40 \
+  --wait-answers 8h --wait-gates 8h --notify-every 30m --ui plain > /tmp/<id>.log 2>&1 &
+```
+
+- **`nohup … &`** — the loop outlives the shell that started it; `> … 2>&1` keeps both
+  streams, because progress goes to **stderr** and the stop line to **stdout**.
+- **`--run <id>`** — which run; written as a flag rather than a positional so a bare
+  `--until-done` cannot read the id as its number.
+- **`--until-done`** — relaunch the loop in-process after an exit it can do nothing else
+  with (a failure past the retry bound, a throw, a refusal with no money behind it), at most
+  5 times; never over a person's exit `4`, never over a budget block, never twice over the
+  same last line.
+- **`--max-usd 40`** — the loop's own ceiling, spanning every relaunch.
+- **`--wait-answers 8h` / `--wait-gates 8h`** — when something does need a person, poll for
+  that long instead of exiting `4` at once; nothing is spent while it waits. On the happy
+  path neither fires.
+- **`--notify-every 30m`** — the `status` heartbeat to your `notify:` hook, if
+  `.tldrx/workspace.yml` declares one; silent otherwise.
+- **`--ui plain`** — log lines instead of a redrawn screen. A redirected log gets this
+  anyway (`auto` degrades on anything that is not a terminal); passing it says so on the
+  command line.
+
+### 4. Check on it, stop it
+
+```bash
+tldrx run status <id>      # the run's own view: stage, cursor, what it is waiting on
+tail -f /tmp/<id>.log      # what the loop is printing right now
+tldrx replay <id>          # the event log as a narrative, once it is over
+```
+
+If a `notify:` hook is declared, the same view arrives every 30 minutes without you asking,
+and a park — the one thing on this path that should not happen — arrives with the literal
+command to type.
+
+To stop it: end the process first (`kill <pid>`, or whatever started it), then close the
+run for good:
+
+```bash
+tldrx run cancel <id> --note "superseded — the fix landed by hand"
+```
+
+`run cancel` refuses a run whose `.lock` a live process still holds (exit `2`) rather than
+closing it out from under the loop; a cancelled run is terminal, its files stay on disk,
+and the epic branch it cut is released for the next run of the same feature.
+
+### The honest boundary
+
+What this recipe proves is that the *engine* can carry one small, well-seeded change to a
+PR with nobody watching. It does not make the four things that stay a person's — a new
+product decision, a ceiling going up, work outside the What's boundary, the final merge —
+go away: `--gates none` and `--questions none` are your recorded decision that this run
+has none of them. A run with a `human` gate or a question the seed did not pre-answer needs
+the rest of this page.
+
 ## The two ways to drive a run
 
 **A host session — `tldrx run attend host`.** A lock, not an engine: it sets one field on
@@ -349,7 +485,7 @@ as before.
 ## Running it
 
 ```bash
-tldrx run auto 260907-checkout --notify-every 10m --wait-answers 4h --wait-gates 4h --retry-failed 2 --until-done
+tldrx run auto --run 260907-checkout --notify-every 10m --wait-answers 4h --wait-gates 4h --retry-failed 2 --until-done
 ```
 
 All three flags take a **duration**: `30s`, `10m`, `2h`, or a bare number of seconds. A value
@@ -474,7 +610,7 @@ over:
 - **The same last line twice.** A refusal that repeats verbatim is not one a relaunch moves;
   one relaunch proves it, and the loop stops rather than hammering it.
 
-Put the run id before the flag, or write `--until-done=3`: a bare `--until-done` followed
+Put the run id before the flag, pass it as `--run <id>`, or write `--until-done=3`: a bare `--until-done` followed
 by a run id reads the id as its number and refuses it, by name.
 
 The two things you gain over host mode are worth naming, because they are what the

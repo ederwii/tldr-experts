@@ -110,3 +110,6 @@ en adelante.
 
 El paquete se instala como `tldr-experts` y te deja dos comandos: `tldrx` (el corto) y
 `tldr-experts` (el mismo binario).
+
+Las notas de versión se publican una sola vez, en inglés, generadas del `CHANGELOG.md` del
+repositorio: [Release notes](/reference/changelog).
