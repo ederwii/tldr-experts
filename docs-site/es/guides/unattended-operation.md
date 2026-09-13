@@ -584,8 +584,8 @@ aunque el script en sí esté permitido. Desde gh #271 ese rechazo no bloquea un
 facilitador de todos modos; los archivos ignorados por git y los directorios de estado del
 framework no cuentan: queda registrado (en el log de review, en `task.done`, en
 `## Unknowns`) y decide la propia Definition of Done del facilitador — verde sigue a review, rojo
-bloquea con ambas razones. Un rechazo sin nada commiteado sigue bloqueando tras un intento,
-exactamente como arriba. El prompt del developer ahora dice que corra cada comando del DoD
+bloquea con ambas razones. Un rechazo sin ningún trabajo — un árbol que el developer dejó
+intacto — sigue bloqueando tras un intento, exactamente como arriba. El prompt del developer ahora dice que corra cada comando del DoD
 literal y solo, y por qué.
 
 **El notificador nunca se llama.** Tres causas habituales, en el orden que cuesta menos
