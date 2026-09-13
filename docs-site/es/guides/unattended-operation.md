@@ -537,7 +537,9 @@ que el aviso te devuelve:
    ```
 2. **Declara `test_fast`** en `.tldrx/workspace.yml`: el subconjunto rápido sobre el que
    itera el developer de Build. No es un comando de Definition of Done; el DoD vuelve a
-   correr `test:`.
+   correr `test:`. Junto a él, `test_scoped: "<cmd> {{paths}}"` acota el check de DoD de
+   cada story a las rutas que cambió; el `test:` completo corre después una vez por epic,
+   sobre la cabeza del epic, antes del gate.
 3. **Escribe el adaptador y decláralo** bajo `notify:`. Empieza con todos los tipos y
    angosta `events:` después, cuando ya sepas cuáles quieres que de verdad te despierten.
 4. **Prueba el adaptador a mano**, antes de que ningún run dependa de él:

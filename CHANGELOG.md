@@ -2,6 +2,30 @@
 
 ## 0.18.1 — unreleased
 
+### Added
+
+- **Per-story scoped checks, and the full suite once on the epic head (#257).** Measured on a
+  field run at 0.16.1: 99 `check.*` events on one 8-story epic — every story's Definition of Done
+  ran the whole declared list, the full suite among it, on every attempt and every fix round, and
+  the epic head that actually ships was never run at all. The DoD is a delta gate ("this story did
+  not break the tree"), proven until now by running everything because nothing narrower existed.
+  `workspace.yml` grows `commands.<slot>_scoped: "<cmd> {{paths}}"`, a template beside a declared
+  slot: a story's dod line whose command has one runs the template over the story's own paths —
+  declared `touches:` ∪ its committed diff ∪ its dirty entries, existing paths only, one derivation
+  in `build/scopedPaths.ts` — substituted at the argv level (a path with a space is ONE argument,
+  no shell), and the row says `scope: "paths"` with the paths. The moment the epic flips to `done`,
+  the deduped full commands of its stories run once in the epic worktree, after `install:` if
+  declared, as `scope: "full"` rows on the epic's `lane` attributed to the last story merged; a red
+  there blocks that story, so the `stories` gate condition refuses. The template is never a
+  command — not in the allowlist, not citable, not handed to the developer, refused at Plan time
+  by a sentence naming the suffix; the story's evidence keeps citing the DECLARED command and the
+  row's prose names what ran. A repo that declares no template runs, records and cites exactly
+  what it did before: the golden is byte-identical, and a `scope` key emitted unconditionally
+  reddens it. Pinned by a two-story fake-agent build — exactly 2 `scope: paths` rows with the
+  right paths and 1 `scope: full` row with `lane`, a red epic head blocking S2 with the gate
+  counting 1 blocked, and a control with no template emitting no `scope` key at all; skipping the
+  epic-head run or substituting nothing each reddens exactly one of those.
+
 ### Fixed
 
 - **A permission refusal on a story whose tree holds work no longer blocks it before the
