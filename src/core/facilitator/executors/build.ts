@@ -110,14 +110,15 @@ import { declaredTouchesFor } from "../../run/boundary.ts";
 const EVENTS_FILE = "events.jsonl";
 import { carriedReportFor, type CarriedReport } from "../../build/carriedRows.ts";
 import {
-  baseResultOf, PreflightCache, redBaseRefusal, runStoryDod, type BaseParts,
+  baseResultOf, PreflightCache, redBaseRefusal, runStoryDod, type BaseParts, type DodParts,
 } from "../../build/dodRunner.ts";
+import { scopedPathsFor } from "../../build/scopedPaths.ts";
 import {
-  commitIfDirty, EpicState, mergeIntoEpic, refreshStoryBase, rescueUncommitted, storyWorktreePath,
-  unreadableTouches, workSince, type EpicWorktreeParts,
+  commitIfDirty, EpicState, mergeIntoEpic, openEpicWorktree, refreshStoryBase, rescueUncommitted,
+  storyWorktreePath, unreadableTouches, workSince, type EpicWorktreeParts,
 } from "../../build/worktrees.ts";
 import {
-  installCommandFor, installFailed, installFailureReason, runWorktreeInstall, type InstallCheck,
+  INSTALL_SLOT, installCommandFor, installFailed, installFailureReason, runWorktreeInstall, type InstallCheck,
 } from "../../build/worktreeDeps.ts";
 import { entryProbeRefusal, type EntryProbeParts } from "../../build/entryProbe.ts";
 import {
@@ -2141,7 +2142,8 @@ class BuildSession {
 
   /** (e) the story's ```dod block, in the worktree, via the gate's own runner. */
   private async runDod(story: StoryContext): Promise<readonly DodResult[]> {
-    return await runStoryDod({
+    const scoped = await this.scopedParts(story);
+    const results = await runStoryDod({
       storyId: story.planned.story.id,
       repo: story.planned.story.repo,
       worktree: story.worktree,
@@ -2154,7 +2156,102 @@ class BuildSession {
       runDir: this.ctx.runDir,
       emit: (type, payload) => { this.ctx.emit(type, payload); },
       baseResult: (repo, command) => baseResultOf(this.baseParts, repo, command),
+      ...(scoped === null ? {} : { scoped }),
     });
+    // A story proven over its paths alone leaves the epic head owing a full run
+    // (#257) — remembered on the epic, where `settle` asks.
+    if (results.some((r) => r.scope === "paths")) this.epics.noteScopedRun(story.epicBranch);
+    return results;
+  }
+
+  /**
+   * The repo's `<slot>_scoped` templates and THIS story's paths (#257), or null
+   * when the repo declares no template — in which case the runner is handed
+   * nothing and is byte-for-byte what it was.
+   */
+  private async scopedParts(story: StoryContext): Promise<NonNullable<DodParts["scoped"]> | null> {
+    const templates = this.workspace.scopedCommands.get(story.planned.story.repo);
+    if (templates === undefined || templates.size === 0) return null;
+    const paths = await scopedPathsFor({
+      declared: this.declaredTouches(story),
+      repoDir: story.repoDir,
+      worktree: story.worktree,
+      // Before the merge, so the epic tip IS the base: the same range the
+      // reviewer's diff and the surface measurement read (§7, one derivation).
+      range: reviewDiffRange(null, story.epicBranch, story.branch),
+    });
+    return { templates, paths };
+  }
+
+  /**
+   * (h) the FULL Definition of Done, once, on the epic head (#257).
+   *
+   * Only for an epic on which a story was proven over its paths alone — a
+   * scoped green says the story's files pass; it says nothing about the suite
+   * against the tree every story of this epic now shares. So the moment the
+   * epic flips to `done`, the deduped full commands of its stories run in the
+   * epic worktree, whose HEAD is the epic head that ships. Once per epic per
+   * invocation (`claimHeadCheck`); an epic whose every story ran the full list
+   * already proved the tree the old way and owes nothing.
+   *
+   * A red is attributed to the LAST story merged, not to every story — the
+   * base pre-flight is the precedent for "the change that landed last owns the
+   * red" — and the caller blocks that story, so the epic is no longer `done`
+   * and the `stories` gate condition refuses. The base tree is NOT consulted
+   * for this red: Build entry already refused a red base, and the epic head is
+   * exactly the tree the base is not.
+   *
+   * Returns the one sentence to block with, or null when green or not owed.
+   */
+  private async checkEpicHead(story: StoryContext): Promise<string | null> {
+    const epicBranch = story.epicBranch;
+    if (!this.epics.hadScopedRun(epicBranch) || !this.epics.claimHeadCheck(epicBranch)) return null;
+    const id = story.planned.story.id;
+    const repo = story.planned.story.repo;
+    const commands: string[] = [];
+    for (const storyId of story.epic.epic.stories) {
+      for (const command of this.plan.stories.get(storyId)?.dod.commands ?? []) {
+        if (!commands.includes(command)) commands.push(command);
+      }
+    }
+    if (commands.length === 0) return null;
+    const worktree = await openEpicWorktree(this.epics, this.epicParts(story));
+    const timeoutMs = this.ctx.spec.planned.timeout_s * 1000;
+    // The epic worktree is a `git worktree add` nothing ever installed into —
+    // without this, the declared suite exits 127 here the way a story's did
+    // before gh #209.
+    const install = installCommandFor(this.workspace, repo);
+    if (install !== null) {
+      const check = await runWorktreeInstall({
+        storyId: id, repo, worktree, command: install,
+        workspaceCommands: this.workspace.commands, timeoutMs, phaseId: this.ctx.phaseId,
+        lane: epicBranch,
+        emit: (type, payload) => { this.ctx.emit(type, payload); },
+      });
+      if (installFailed(check)) {
+        return `the epic head (${epicBranch}) could not be checked: \`${install}\` `
+          + `(the \`${INSTALL_SLOT}:\` command for repo ${repo}) `
+          + `${check.refusedBecause === undefined
+            ? `exited ${String(check.exitCode ?? "?")}${check.timedOut ? " (timed out)" : ""}`
+            : "was REFUSED and never ran"} in the epic worktree — ${check.refusedBecause ?? check.tail}`;
+      }
+    }
+    const results = await runStoryDod({
+      storyId: id, repo, worktree, repoDir: story.repoDir, installDeclared: install !== null,
+      commands, workspaceCommands: this.workspace.commands, timeoutMs,
+      phaseId: this.ctx.phaseId, runDir: this.ctx.runDir,
+      // Every row says which tree and which proof: the epic's lane, the full command.
+      emit: (type, payload) => { this.ctx.emit(type, { ...payload, scope: "full", lane: epicBranch }); },
+      baseResult: async () => null,
+    });
+    const failing = results.find((r) => dodRefused(r) || r.exitCode !== 0 || r.timedOut);
+    this.lines.push(
+      `  · ${epicBranch}: full Definition of Done on the epic head (${String(commands.length)} command(s)) — `
+      + (failing === undefined ? "green" : `RED, ${id} blocked`),
+    );
+    if (failing === undefined) return null;
+    return `the epic head (${epicBranch}) failed the full Definition of Done once ${id} was merged — `
+      + dodFailureReason(failing, repo);
   }
 
   private async commitIfDirty(story: StoryContext): Promise<string | null> {
@@ -2578,7 +2675,7 @@ class BuildSession {
     // there is nothing to rescue from.
     const pruning = status !== "review" && parts.keepWorktree !== true && !this.ctx.keepWorktrees;
     const rescued = pruning ? await this.rescueUncommitted(story, status, parts.reason) : null;
-    const outcome: StoryOutcome = {
+    let outcome: StoryOutcome = {
       id,
       title: story.planned.story.title,
       wave: story.planned.wave,
@@ -2624,13 +2721,27 @@ class BuildSession {
     this.setStoryStatus(story.planned, status, evidence);
     // An implicit epic IS the implicit story — one file, one `status:` — so
     // writing the epic's status would immediately overwrite the story's.
-    if (!this.plan.implicit) this.updateEpicStatus(story.epic);
+    const epicStatus = this.plan.implicit ? null : this.updateEpicStatus(story.epic);
 
     // The story's work is final for the framework: the DoD has run, the merge into
     // the epic has happened or been refused, and the diff is on disk. This is the
     // last moment `epic_base` still names the epic tip the story was reviewed
     // against, which is why the measurement is taken HERE and not at the gate.
     if (status === "done") await this.measureSurface(story, parts.epicBase ?? null);
+
+    // (h) #257: the epic just flipped to `done` — if any of its stories was
+    // proven over its paths alone, the full list now runs on the epic head, and
+    // a red there is THIS story's (it merged last). Before `task.done`, so the
+    // ledger's final word on the story is the one the files carry.
+    const headRed = epicStatus === "done" ? await this.checkEpicHead(story) : null;
+    if (headRed !== null) {
+      status = "blocked";
+      outcome = { ...outcome, status, reason: headRed };
+      this.outcomes.set(id, outcome);
+      this.writeLog(outcome);
+      this.setStoryStatus(story.planned, status, evidence);
+      this.updateEpicStatus(story.epic);
+    }
 
     this.ctx.emit("task.done", {
       phase: this.ctx.phaseId,
@@ -2660,7 +2771,7 @@ class BuildSession {
     }
     this.lines.push(
       `  ${status === "done" ? "✓" : "·"} ${id} → \`${status}\`` +
-        (parts.reason === null ? "" : ` (${parts.reason})`) +
+        (outcome.reason === null ? "" : ` (${outcome.reason})`) +
         (outcome.permissionRefused == null
           ? ""
           : ` — \`${outcome.permissionRefused}\` was refused for approval; the tree held committed work, so the DoD decided`),
@@ -2881,6 +2992,18 @@ class BuildSession {
    * reviewer's `diff:` command names — so "the story's diff" has one definition
    * (AGENTS.md §7).
    */
+  /**
+   * The story's `touches:` OFF DISK, through the same reader `deriveSurface`
+   * walks — not the plan snapshot this invocation parsed at its start. `tldrx
+   * story widen` is allowed on an `in_progress` story, so a long headless run
+   * can have its surface declared out from under the snapshot; the snapshot is
+   * the fallback only when this run has no story file at all. One reading,
+   * shared by the surface measurement and the scoped DoD (#257).
+   */
+  private declaredTouches(story: StoryContext): readonly string[] {
+    return declaredTouchesFor(this.ctx.runDir, story.planned.story.id) ?? story.planned.story.touches;
+  }
+
   private async measureSurface(story: StoryContext, epicBase: string | null): Promise<void> {
     // Off DISK, through the same reader `deriveSurface` walks — not the plan
     // snapshot this invocation parsed at its start. `tldrx story widen` is
@@ -2888,8 +3011,7 @@ class BuildSession {
     // surface declared out from under the snapshot; falling back to the snapshot
     // only when this run has no story file at all keeps the measurement possible
     // for a scope that has neither.
-    const declared = declaredTouchesFor(this.ctx.runDir, story.planned.story.id)
-      ?? story.planned.story.touches;
+    const declared = this.declaredTouches(story);
     const range = reviewDiffRange(epicBase, story.epicBranch, story.branch);
     const diff = await git(["diff", "--name-only", range], story.repoDir);
     if (!diff.ok) return;
@@ -3279,7 +3401,7 @@ class BuildSession {
    * about who moves them, so the executor keeps it honest: `done` when every story
    * is, `blocked` when any is, `in_progress` otherwise.
    */
-  private updateEpicStatus(epic: PlannedEpic): void {
+  private updateEpicStatus(epic: PlannedEpic): PlanStatus {
     const statuses = epic.epic.stories.map((id) => {
       const planned = this.plan.stories.get(id);
       return planned === undefined ? "todo" : this.statusOf(planned);
@@ -3290,6 +3412,7 @@ class BuildSession {
         ? "blocked"
         : "in_progress";
     writeFileSync(epic.path, updateStoryFront(readFileSync(epic.path, "utf8"), { status }), "utf8");
+    return status;
   }
 
   private noteMerged(story: StoryContext, carried: number | null): void {

@@ -11,6 +11,7 @@
 
 import { runtime } from "../../core/runtime/index.ts";
 import { parseDodBlock } from "../../core/schemas/story.ts";
+import { isScopedTemplate, PATHS_PLACEHOLDER } from "../../core/schemas/commandAllowlist.ts";
 
 export interface StoryFacts {
   readonly setsDone: boolean;
@@ -156,6 +157,86 @@ export async function runDodCommand(
     throw new DodCommandRefused(
       `\`${command}\` needs a shell to run (it contains a metacharacter), and this gate does not open one. `
         + "Put it in a script, declare the script under the repo's `commands:`, and cite that.",
+    );
+  }
+  const head = argv[0] ?? "";
+  const { exitCode, stdout, stderr, timedOut } = await runtime.spawn(head, argv.slice(1), {
+    cwd,
+    timeoutMs,
+  });
+  const output = `${stdout}\n${stderr}`;
+  return { command, exitCode, timedOut, tail: lastMeaningfulLine(output), output };
+}
+
+/**
+ * A scoped template's argv, with `{{paths}}` expanded to N elements (#257).
+ *
+ * Substituted at the ARGV level, never as text: the template is split around
+ * the token, each side goes through the same `splitArgv` every command does,
+ * and the paths are spliced in as one element each — so a path with a space is
+ * one argument, and a path that looks like a glob or a `$var` is a literal,
+ * because no shell is opened. `null` when the token is not a whole word exactly
+ * once, or when either side needs a shell.
+ */
+export function scopedArgv(template: string, paths: readonly string[]): readonly string[] | null {
+  if (!isScopedTemplate(template)) return null;
+  const at = template.indexOf(PATHS_PLACEHOLDER);
+  const before = template.slice(0, at);
+  const after = template.slice(at + PATHS_PLACEHOLDER.length);
+  const side = (text: string): readonly string[] | null => (text.trim() === "" ? [] : splitArgv(text));
+  const head = side(before);
+  const tail = side(after);
+  if (head === null || tail === null || head.length === 0) return null;
+  return [...head, ...paths.map(pathArgument), ...tail];
+}
+
+/**
+ * One path as ONE argv element that can only ever be read as a path.
+ *
+ * A repo file named `-rf` or `--foo` spliced straight into argv is a FLAG to
+ * the runner (review finding on #257). It is not dropped — it changed, so it
+ * gets tested — and no `--` is inserted, because not every runner accepts one:
+ * a leading `-` is anchored with `./`, which names the same file to every
+ * program that takes a path. The one place the rule lives; the rendered record
+ * goes through it too, so the line re-splits to the argv that ran.
+ */
+export function pathArgument(path: string): string {
+  return path.startsWith("-") ? `./${path}` : path;
+}
+
+/**
+ * The command a scoped run is RECORDED as: the template with the paths in place
+ * of the token, a path carrying whitespace quoted so the line re-splits to the
+ * argv that ran. A record, not an instruction — the argv above is what ran.
+ */
+export function renderScopedCommand(template: string, paths: readonly string[]): string {
+  const rendered = paths
+    .map(pathArgument)
+    .map((path) => (/\s/.test(path) ? JSON.stringify(path) : path))
+    .join(" ");
+  return template.replace(PATHS_PLACEHOLDER, rendered);
+}
+
+/**
+ * Run one scoped template from `cwd` with the story's paths substituted.
+ *
+ * No allowlist lookup: the template's authority is that `workspace.yml` declared
+ * it under `<slot>_scoped`, which is the only way one reaches this function —
+ * the loader derives the map, and the runner reads the map. The refusal for a
+ * template that cannot be split is the same sentence a command gets.
+ */
+export async function runScopedDodCommand(
+  template: string,
+  paths: readonly string[],
+  cwd: string,
+  timeoutMs: number,
+): Promise<CommandResult> {
+  const argv = scopedArgv(template, paths);
+  const command = renderScopedCommand(template, paths);
+  if (argv === null) {
+    throw new DodCommandRefused(
+      `\`${template}\` cannot be run as a scoped template: \`${PATHS_PLACEHOLDER}\` must appear as a whole `
+        + "word exactly once, and the rest must split to argv without a shell (no metacharacters).",
     );
   }
   const head = argv[0] ?? "";

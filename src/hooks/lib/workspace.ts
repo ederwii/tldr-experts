@@ -14,7 +14,7 @@ import {
 import { refreshSrcIndexes } from "../../core/text/srcToken.ts";
 import type { EpicRef, EpicWorktree, SrcContext } from "../../core/text/srcToken.ts";
 import { commandProbeIssues, type CommandProbeRecord } from "../../core/schemas/workspace.ts";
-import { ITERATION_ONLY_SLOT } from "../../core/schemas/commandAllowlist.ts";
+import { ITERATION_ONLY_SLOT, isScopedTemplate, scopedSlotOf } from "../../core/schemas/commandAllowlist.ts";
 
 /** The run's own record — where `build.epic_branch` is written (issue #140). */
 const RUN_YML = "run.yml";
@@ -111,6 +111,22 @@ export interface WorkspaceContext {
    * Empty for every workspace.yml written before the slot existed.
    */
   readonly iterationCommands: ReadonlySet<string>;
+  /**
+   * repo name -> {full command -> its `<slot>_scoped` template} (#257).
+   *
+   * `commands.test_scoped: "pytest {{paths}}"` is a TEMPLATE beside `test:`, and
+   * it is NOT in `commands` or `repoCommands` above: nothing may cite it, the
+   * developer is never handed it, and a ```dod line naming it is refused at Plan
+   * time. The Build runner reads this map to narrow a story's own check to its
+   * paths; the full command then runs once on the epic head. Derived here because
+   * only the loader still has the slot keys, and kept usable only when the base
+   * slot is declared and the template carries `{{paths}}` as a whole word once.
+   *
+   * Empty for every workspace.yml written before the suffix existed.
+   */
+  readonly scopedCommands: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /** Every scoped template, flat — the set `validatePlan` refuses a dod line against. */
+  readonly scopedTemplates: ReadonlySet<string>;
   /** repo name -> `default_branch` — the base an epic branch is cut from (spec §2.1). */
   readonly defaultBranches: ReadonlyMap<string, string>;
   /**
@@ -200,11 +216,13 @@ export function loadWorkspace(root: string): WorkspaceContext {
   const commandRoles = new Map<string, ReadonlyMap<string, string>>();
   const commandProbes = new Map<string, ReadonlyMap<string, CommandProbeRecord>>();
   const iterationCommands = new Set<string>();
+  const scopedCommands = new Map<string, ReadonlyMap<string, string>>();
+  const scopedTemplates = new Set<string>();
   const defaultBranches = new Map<string, string>();
   let seedTriageThresholdTokens: number | null = null;
   const empty = (): WorkspaceContext => ({
     root, repos, commands, repoCommands, commandRoles, commandProbes, iterationCommands,
-    defaultBranches, seedTriageThresholdTokens,
+    scopedCommands, scopedTemplates, defaultBranches, seedTriageThresholdTokens,
   });
   const path = join(root, PROJECT_FRAMEWORK_DIR, "workspace.yml");
   if (!existsSync(path)) return empty();
@@ -236,12 +254,25 @@ export function loadWorkspace(root: string): WorkspaceContext {
     );
     const own: string[] = [];
     const roles = declared.get(entry.name) ?? new Map<string, string>();
-    for (const value of roles.values()) {
+    const scoped = new Map<string, string>();
+    for (const [role, value] of roles) {
+      // A `<slot>_scoped` value is a template, not a command: it never reaches
+      // the allowlist, whatever it says (#257).
+      const base = scopedSlotOf(role);
+      if (base !== null) {
+        const full = roles.get(base);
+        if (full !== undefined && scopedSlotOf(base) === null && isScopedTemplate(value)) {
+          scoped.set(full, value);
+          scopedTemplates.add(value);
+        }
+        continue;
+      }
       commands.add(value);
       if (!own.includes(value)) own.push(value);
     }
     repoCommands.set(entry.name, own);
     commandRoles.set(entry.name, roles);
+    scopedCommands.set(entry.name, scoped);
     const fast = roles.get(ITERATION_ONLY_SLOT);
     if (fast !== undefined) iterationCommands.add(fast);
     commandProbes.set(entry.name, measured.get(entry.name) ?? new Map<string, CommandProbeRecord>());

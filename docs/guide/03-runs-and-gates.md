@@ -176,6 +176,40 @@ this file — so `tldrx init` writes the slot **commented out**, with a line say
 for, and probes nothing nobody declared. Leave it out and every prompt is byte-identical to
 what it was before the slot existed.
 
+## Scoped checks: `<slot>_scoped`
+
+`test_fast` fixes the developer's loop. The gate has its own: a story's Definition of Done ran
+the whole declared list — the full suite among it — on every attempt and every fix round, and
+nothing ever ran on the epic head that actually ships. Measured on one 8-story epic: 99
+`check.*` events, N full-suite runs on N story trees, zero on the tree that merges. The DoD is
+a *delta* gate ("this story did not break the tree"), proven until now by running everything
+because nothing narrower existed.
+
+Declare a template beside the full command:
+
+```yaml
+    commands:
+      test: "npm run test"
+      test_scoped: "npx jest {{paths}}"
+```
+
+A story whose dod names `npm run test` now runs the template over **its own paths** — what it
+declared in `touches:`, what it committed on its branch, what is still dirty in its worktree,
+existing paths only — with `{{paths}}` substituted at the argv level (one element per path, no
+shell, a path with a space is one argument). The `check` row says `scope: paths` and lists
+them. A story that touched nothing the tree still has runs the full command, `scope: full`.
+
+Then, **once per epic**, the moment the epic flips to `done`, the deduped full commands of its
+stories run in the epic worktree — the epic head — after `install:` if you declared one. Those
+rows carry `scope: full` and the epic's `lane`. A red there blocks the *last* story merged, so
+the epic is no longer done and the gate refuses: a scoped green says the story's files pass;
+the epic-head run is what says the suite does.
+
+The template is **never a command**. It is not in the allowlist, nothing can cite it, the
+developer is not handed it, and a dod line naming it is refused at Plan time with a sentence
+that names the suffix — the dod names the full command, and the gate narrows it. Leave the
+template out and every row is byte-identical to what it was.
+
 ## Who closes a gate
 
 Every stage ends at a gate. What you choose is **who closes it**. Three answers:

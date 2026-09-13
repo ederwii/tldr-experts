@@ -17,7 +17,7 @@
 import { isRecord } from "../schemas/validation.ts";
 import { SRC_GRAMMAR_HEADING } from "../text/srcGrammarContract.ts";
 import { parseFixFindings, type FixFinding } from "./fixlist.ts";
-import { DOD_REFUSAL_FALLBACK, dodRefused } from "./outcome.ts";
+import { DOD_REFUSAL_FALLBACK, dodRefused, scopedNote } from "./outcome.ts";
 import type { DodResult, StoryOutcome, Verdict } from "./outcome.ts";
 import { renderReviewerProvenance } from "./reviewerProvenance.ts";
 
@@ -395,7 +395,10 @@ function dodLines(r: DodResult): readonly string[] {
   }
   // `?? "?"` — the base side's spelling, for the row only a truncated
   // `events.jsonl` can produce (`ran`, no exit code).
-  const head = `- \`${r.command}\` → exit ${String(r.exitCode ?? "?")}${r.timedOut ? " (timed out)" : ""}`
+  // A scoped row (#257) shows the line that RAN and says whose command it
+  // narrowed; the declared command is what the story's evidence cites.
+  const head = `- \`${r.rendered ?? r.command}\`${scopedNote(r)} → exit ${String(r.exitCode ?? "?")}`
+    + `${r.timedOut ? " (timed out)" : ""}`
     + (r.exitCode === 0 ? "" : ` — ${r.tail}`);
   if (r.exitCode === 0 || r.outputPath === undefined) return [head];
   const excerpt = (r.excerpt ?? r.tail).split("\n");

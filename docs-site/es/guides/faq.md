@@ -65,6 +65,14 @@ nombre se rechaza en la etapa Plan, con una frase que dice de qué slot salió. 
 por ti — ningún manifiesto dice cuál es el subconjunto rápido de tu suite — así que `tldrx
 init` deja el slot comentado y tú lo escribes, o lo dejas fuera y nada cambia.
 
+El gate también tiene una segunda velocidad. Declara `test_scoped: "<cmd> {{paths}}"` junto a
+`test:` y el check del definition of done de cada story corre esa plantilla sobre las rutas que
+la story cambió, en vez de la suite entera; el `test:` completo corre después una vez por epic,
+sobre la cabeza del epic, antes del gate — un rojo ahí bloquea la última story mergeada. La
+plantilla nunca es un comando: nada puede citarla, al developer no se le entrega, y un bloque
+`dod` que la nombre se rechaza en la etapa Plan. Déjala fuera y cada check corre exactamente
+como antes.
+
 ## ¿Mi código se manda a algún lado?
 
 `run new`, `answer`, `approve`, `status`, `cost` y `learn` son offline: nada más sistema de

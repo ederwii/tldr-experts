@@ -65,6 +65,13 @@ sentence saying which slot it came from. Nothing detects it for you — no manif
 which subset of your suite is the fast one — so `tldrx init` leaves the slot commented out
 and you write it, or you leave it out and nothing changes.
 
+The gate has a second speed too. Declare `test_scoped: "<cmd> {{paths}}"` beside `test:` and
+each story's own definition-of-done check runs that template over the story's changed paths
+instead of the whole suite; the full `test:` then runs once per epic, on the epic head, before
+the gate — a red there blocks the last story merged. The template is never a command: nothing
+can cite it, the developer is not handed it, and a `dod` block naming it is refused at plan
+time. Leave it out and every check runs exactly as before.
+
 ## Is my code sent anywhere?
 
 `run new`, `answer`, `approve`, `status`, `cost` and `learn` are offline — filesystem and

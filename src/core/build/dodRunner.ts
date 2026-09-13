@@ -13,7 +13,7 @@
  * within a process the file is opened at most once. A cache that reloaded per
  * call would make a resumed run re-pay for a `dotnet test`.
  */
-import { DodCommandRefused, runDodCommand } from "../../hooks/lib/story.ts";
+import { DodCommandRefused, runDodCommand, runScopedDodCommand } from "../../hooks/lib/story.ts";
 import { FALLBACK_DEFAULT_BRANCH, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import type { EventType } from "../events/Event.ts";
 import {
@@ -264,6 +264,20 @@ export interface DodParts {
   readonly runDir: string;
   readonly emit: (type: EventType, payload: Record<string, unknown>) => void;
   readonly baseResult: (repo: string, command: string) => Promise<BaseCommandResult | null>;
+  /**
+   * The repo's `<slot>_scoped` templates and this story's paths (#257). PRESENT
+   * means the repo declares at least one template, and every row then says
+   * which proof it was (`scope`); ABSENT means the repo declares none, and the
+   * runner is byte-for-byte what it was before the suffix existed — no key, no
+   * branch. A command with a template runs scoped only when `paths` is
+   * non-empty; a story that touched nothing the tree still has runs the full
+   * command, because "narrowed to nothing" is not a proof of anything.
+   */
+  readonly scoped?: {
+    /** full command -> template, as `loadWorkspace` derived it. */
+    readonly templates: ReadonlyMap<string, string>;
+    readonly paths: readonly string[];
+  };
 }
 
 export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]> {
@@ -273,9 +287,18 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
     // Same allowlist the hook uses, same refusal. The Build executor runs a dod
     // block in a worktree for real; an undeclared command is a failed check
     // here, not a spawn.
+    const template = parts.scoped?.templates.get(command);
+    const paths = parts.scoped?.paths ?? [];
+    const scopedRun = template !== undefined && paths.length > 0;
+    // Which proof this row is — only ever said when the repo declares a template.
+    const scope: Pick<DodResult, "scope" | "paths"> = parts.scoped === undefined
+      ? {}
+      : { scope: scopedRun ? "paths" : "full", ...(scopedRun ? { paths: [...paths] } : {}) };
     let result: DodResult;
     try {
-      const outcome = await runDodCommand(command, parts.worktree, timeoutMs, parts.workspaceCommands);
+      const outcome = scopedRun && template !== undefined
+        ? await runScopedDodCommand(template, paths, parts.worktree, timeoutMs)
+        : await runDodCommand(command, parts.worktree, timeoutMs, parts.workspaceCommands);
       const exitCode = outcome.timedOut ? 124 : outcome.exitCode;
       const output = outcome.output ?? "";
       // Only a RED check's output is kept (#211). A green one has nothing anybody
@@ -286,10 +309,14 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
         ? null
         : writeDodOutput(parts.runDir, parts.storyId, results.length, output);
       const ran: DodResult = {
+        // The DECLARED command on every row — it is what the evidence cites.
+        // A scoped row carries the line that ran beside it, as `rendered`.
         command,
         status: "ran",
         exitCode,
         timedOut: outcome.timedOut,
+        ...scope,
+        ...(scopedRun ? { rendered: outcome.command } : {}),
         // #211: the failure-looking line, not the last line of stdout+stderr.
         // `outcome.tail` is the old reading and is kept only when there is no
         // output to choose from (a record replayed through an older seam).
@@ -315,7 +342,7 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
       if (!(error instanceof DodCommandRefused)) throw error;
       // NOTHING RAN. There is no exit code, so none is written — a fabricated
       // 126 was rendered as a measurement by three documents (#165).
-      result = { command, status: "refused", refusedBecause: error.message, timedOut: false, tail: "" };
+      result = { command, status: "refused", refusedBecause: error.message, timedOut: false, tail: "", ...scope };
     }
     results.push(result);
     const green = !dodRefused(result) && result.exitCode === 0 && !result.timedOut;
@@ -323,9 +350,15 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
       phase: parts.phaseId,
       check: "dod",
       story: parts.storyId,
-      command,
+      // The ledger records what RAN: the rendered line on a scoped row.
+      command: result.rendered ?? result.command,
       ...(dodRefused(result) ? {} : { exit_code: result.exitCode }),
       ...(dodRefused(result) ? { refused: result.refusedBecause ?? "" } : {}),
+      // #257: which proof this row is, and over which paths. Both keys are
+      // ADDITIVE and absent on a repo that declares no template — the golden
+      // for such a workspace is the proof that absent is what it was.
+      ...(result.scope === undefined ? {} : { scope: result.scope }),
+      ...(result.paths === undefined ? {} : { paths: [...result.paths] }),
       // WHICH TREE (gh #209). The base pre-flight runs in the repo's checkout,
       // with its dependencies; this runs in a fresh worktree. Both wrote the same
       // command and the same shape of check, and nothing in either record said
@@ -348,6 +381,10 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
       }),
     });
     if (green) continue;
+    // A scoped red is the story's own: the base tree ran the FULL command, and
+    // a measurement of a different command over different paths answers
+    // nothing about this one (#257). No base consult, no halt — block.
+    if (scopedRun) break;
     // Issue #41, the second reader: a red command only faults the STORY if it
     // is green on the untouched base tree. The answer is normally already in
     // the run's cache — the Build-entry pre-flight put it there — and when it

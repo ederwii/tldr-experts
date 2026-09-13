@@ -518,7 +518,9 @@ notification buys back:
          test: "npm run test"
    ```
 2. **Declare `test_fast`** in `.tldrx/workspace.yml` — the fast subset the Build developer
-   iterates on. It is not a Definition of Done command; the DoD re-runs `test:`.
+   iterates on. It is not a Definition of Done command; the DoD re-runs `test:`. Beside it,
+   `test_scoped: "<cmd> {{paths}}"` narrows each story's own DoD check to the paths it
+   changed; the full `test:` then runs once per epic, on the epic head, before the gate.
 3. **Write the adapter and declare it** under `notify:`. Start with every kind — narrow
    `events:` later, once you know which ones you actually want waking you.
 4. **Dry-run the adapter by hand**, before any run depends on it:

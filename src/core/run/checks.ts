@@ -372,7 +372,9 @@ function checkPlan(ctx: CheckContext): CheckOutcome {
   }
   const planDir = join(ctx.runDir, ctx.stage.phase);
   const workspace = loadWorkspace(ctx.root);
-  const report = validatePlan(planDir, workspace.commands, workspace.iterationCommands);
+  const report = validatePlan(
+    planDir, workspace.commands, workspace.iterationCommands, workspace.scopedTemplates,
+  );
   // The fourth artefact (#264): a `budget.yml` in a shape the Build reader could
   // not price from used to pass this gate and price nothing one stage later. Its
   // check is the gate's own, not `validatePlan`'s — see `validatePlanBudget`.

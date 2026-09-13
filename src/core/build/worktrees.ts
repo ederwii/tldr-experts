@@ -44,6 +44,29 @@ export class EpicState {
   private readonly merged = new Map<string, { id: string; carried: number | null }[]>();
   /** Epic branches this run cut or adopted; `runNext` writes them to run.yml. */
   readonly claimed = new Set<string>();
+  /**
+   * Epic branches on which at least one story's DoD ran SCOPED (#257) — the
+   * only epics whose head owes a full run. An epic whose every story ran the
+   * full list already proved the tree the old way, and runs nothing extra.
+   */
+  private readonly scopedRuns = new Set<string>();
+  /** Epic branches whose head this invocation has already run the full list on. */
+  private readonly headChecked = new Set<string>();
+
+  noteScopedRun(epicBranch: string): void {
+    this.scopedRuns.add(epicBranch);
+  }
+
+  hadScopedRun(epicBranch: string): boolean {
+    return this.scopedRuns.has(epicBranch);
+  }
+
+  /** True the FIRST time only: the epic head is checked once per invocation. */
+  claimHeadCheck(epicBranch: string): boolean {
+    if (this.headChecked.has(epicBranch)) return false;
+    this.headChecked.add(epicBranch);
+    return true;
+  }
 
   /**
    * Record that this story's branch went onto its epic, and WHAT the merge
