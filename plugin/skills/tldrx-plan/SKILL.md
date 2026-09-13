@@ -53,7 +53,7 @@ Every rule below is one of two kinds, and each says which:
 - **Waves are bounded by shared files, not by a count** (craft): stories touching the
   same counted list / snapshot / registration file chain through `depends_on`;
   everything else may run in parallel.
-- **Boundaries (#268/#286):** a migration inventory test, an approved OpenAPI or
+- **Boundaries (patch for #286 — relax when it closes; measured on #268/#286):** a migration inventory test, an approved OpenAPI or
   authorization contract, an allow-list, a route registration — any file two stories
   would BOTH edit — is declared in both stories' `touches:` and the second story
   `depends_on` the first. Never the same wave: one conflicted file became four.
@@ -90,7 +90,7 @@ then `# Stories` with one `## S<n> — <title>` per story. Under each story, in 
 - **`dod` lines are byte-equal to a workspace command value, one per line** (craft):
   no `&&`, no `;`, no redirection, no flags added — the gate compares bytes and refuses
   anything else. One line per command you want re-run.
-- **Approved snapshots (#278/#285 field notes):** when the repo approves a contract by
+- **Approved snapshots (measured on #278/#285):** when the repo approves a contract by
   replacing a file (a `.approved.*`, a golden, a generated inventory), the story SAYS
   which file and how it is regenerated — "run `<command>` and commit the new
   `<file>`" — or the developer leaves it stale and the review refuses.
