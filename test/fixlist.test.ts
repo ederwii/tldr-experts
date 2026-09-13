@@ -35,9 +35,12 @@ import { REVIEW_DIR } from "../src/core/run/prepared.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { parseReview } from "../src/core/build/review.ts";
 import {
-  DISPOSITIONS, MAX_FIXLIST_ROUNDS, carriedFindings, openFindings, parseFixFindings, parseFixlistFile,
+  DISPOSITIONS, FINDING_KINDS, MAX_FIXLIST_ROUNDS, carriedFindings, isOpen, openFindings,
+  parseFixFindings, parseFixlistFile,
   renderFixlist, unevidencedClaims, type FixFinding,
 } from "../src/core/build/fixlist.ts";
+import { isFormatRejection } from "../src/core/build/review.ts";
+import { storiesView } from "../src/core/run/runOutcome.ts";
 import { readReviewLedger } from "../src/core/facilitator/executors/build.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
@@ -63,6 +66,8 @@ function finding(overrides: Partial<FixFinding>): FixFinding {
   findingSeq += 1;
   return {
     n: findingSeq,
+    kind: "correctness",
+    normalisedFrom: null,
     severity: "medium",
     finding: "a finding",
     where: "",
@@ -80,6 +85,7 @@ const THREE_DEFECTS: readonly Record<string, unknown>[] = [
   {
     n: 1,
     severity: "high",
+    kind: "correctness",
     finding: "Concurrent double-confirm mints two sessions",
     where: "`src/auth.ts:74` [src: app:s1.txt:1]",
     disposition: "fix-now",
@@ -89,6 +95,7 @@ const THREE_DEFECTS: readonly Record<string, unknown>[] = [
   {
     n: 2,
     severity: "high",
+    kind: "correctness",
     finding: "Non-atomic confirm",
     where: "`src/auth.ts:88` [src: app:s1.txt:1]",
     disposition: "fix-now",
@@ -97,6 +104,7 @@ const THREE_DEFECTS: readonly Record<string, unknown>[] = [
   {
     n: 3,
     severity: "medium",
+    kind: "correctness",
     finding: "No OTP attempt limiter",
     disposition: "defer-with-log",
     detail: "A lockout policy is a product call; logged for the owner.",
@@ -280,7 +288,7 @@ describe("the fixlist verdict, through the host handshake", () => {
     await fixlistRound(ws, "2026-08-29T10:00:00Z");
 
     const retro = readFileSync(join(ws.runDir, "retro.md"), "utf8");
-    expect(retro).toContain("reviewer finding DEFERRED (medium): No OTP attempt limiter");
+    expect(retro).toContain("reviewer finding DEFERRED (medium, correctness): No OTP attempt limiter");
     expect(retro).toContain("[src: tldrx-work/");
     // The two `fix-now` findings are work, not feedback: they go to the author.
     expect(retro).not.toContain("Concurrent double-confirm");
@@ -346,7 +354,7 @@ describe("the fixlist verdict, through the host handshake", () => {
       renderFixlist({
         storyId: "S9", title: "Other", round: 1, attempt: 1, maxAttempts: 2,
         diff: "git diff a...b", commit: "abc1234", summary: "",
-        findings: parseFixFindings([{ finding: "x", disposition: "fix-now" }]).findings,
+        findings: parseFixFindings([{ finding: "x", kind: "correctness", disposition: "fix-now" }]).findings,
       }),
       "utf8",
     );
@@ -533,7 +541,10 @@ describe("the spawned reviewer reaches the same verdict", () => {
     process.env.FAKE_BUILD_COST = "0";
     process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["fixlist"] });
     process.env.FAKE_BUILD_FIXLIST = JSON.stringify({
-      S1: [{ finding: "The compare is not constant time", disposition: "refuted", detail: "I checked" }],
+      S1: [{
+        finding: "The compare is not constant time", kind: "security",
+        disposition: "refuted", detail: "I checked",
+      }],
     });
 
     const outcome = await next(ws);
@@ -559,6 +570,7 @@ describe("parseFixFindings", () => {
     const parsed = parseFixFindings(
       DISPOSITIONS.map((disposition, i) => ({
         finding: `finding ${String(i)}`,
+        kind: "correctness",
         disposition,
         // `refuted` is the one that must cite; the others need nothing.
         ...(disposition === "refuted" ? { where: "the grep found none [src: app:s1.txt:1]" } : {}),
@@ -573,7 +585,9 @@ describe("parseFixFindings", () => {
   });
 
   test("`refuted` without a resolvable src token is refused, and named", () => {
-    const parsed = parseFixFindings([{ finding: "not a real defect", disposition: "refuted" }]);
+    const parsed = parseFixFindings([
+      { finding: "not a real defect", kind: "correctness", disposition: "refuted" },
+    ]);
     expect(parsed.findings).toEqual([]);
     expect(parsed.problems).toHaveLength(1);
     expect(parsed.problems[0]).toContain("finding 1 is `refuted` and its citation was not read");
@@ -583,7 +597,7 @@ describe("parseFixFindings", () => {
 
   test("a malformed [src: …] is not a citation, and the rule that refused it is named", () => {
     const parsed = parseFixFindings([
-      { finding: "x", disposition: "refuted", where: "checked [src: ]" },
+      { finding: "x", kind: "correctness", disposition: "refuted", where: "checked [src: ]" },
     ]);
     expect(parsed.problems).toHaveLength(1);
     expect(parsed.problems[0]).toContain("empty-token");
@@ -887,4 +901,231 @@ describe("`Resolved: yes` is gated on the fix existing on a ref (#130)", () => {
     expect(after).toContain("Resolved: claimed-unverified");
     expect(after).toContain("deadbeefdeadbeef");
   }, 90_000);
+});
+
+/**
+ * `kind` — what a finding IS, against what a disposition says about where it goes
+ * (#255).
+ *
+ * The measurement behind it: 2026-09-12, two workspaces, three stories with a
+ * green DoD, a merged commit and an APPROVING reviewer, all three settled
+ * `blocked` — every one of them on a `fix-now` finding whose whole content was a
+ * docstring or a broken citation. A blocked story is unfinished, an unfinished
+ * story holds the Build gate's `stories` condition, and the gate then went to a
+ * person on a night the run was meant to spend alone.
+ *
+ * This describe block is deliberately written from BOTH ends, because what it
+ * pins is a gate getting WEAKER. The comfortable half — a docs finding lets the
+ * story finish — is the feature; the dangerous half — a correctness or security
+ * finding still holds it, and an unclassified or uncited one holds it too — is
+ * the reason the feature is allowed to exist. A taxonomy tested only from the
+ * comfortable end is a gate that can say yes in silence, which is the one failure
+ * mode with no log line to find it by.
+ */
+describe("a finding's `kind` decides whether it holds the story (#255)", () => {
+  /** One finding, in envelope shape, with everything else held constant. */
+  function one(overrides: Record<string, unknown>): readonly Record<string, unknown>[] {
+    return [{
+      n: 1,
+      severity: "low",
+      finding: "the docstring on parseBudget says it returns cents, the code returns dollars",
+      where: "`src/money.ts:41`",
+      disposition: "fix-now",
+      detail: "The comment is stale.",
+      ...overrides,
+    }];
+  }
+
+  /** The `[src: …]` that the workspace fixture can actually resolve. */
+  const CITED = "the behaviour is correct and only the sentence is wrong [src: app:s1.txt:1]";
+
+  async function settleWith(
+    ws: BuildWorkspace, fixlist: readonly Record<string, unknown>[],
+  ): Promise<void> {
+    answerReview(ws, "S1", {
+      verdict: "fixlist",
+      summary: "signed — one defect the criteria never covered",
+      findings: [],
+      fixlist,
+    });
+    await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:00:00Z" });
+    await next(ws, { mode: "prepare", review: true, at: "2026-08-29T10:20:00Z" });
+    answerReview(ws, "S1", { verdict: "approve", summary: "re-read the diff", findings: [] });
+    await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:30:00Z" });
+  }
+
+  test("a `docs` finding submitted `fix-now`, WITH its citation, lets the story finish", async () => {
+    const ws = workspace();
+    await handOffReview(ws);
+    countSpawns(ws);
+
+    await settleWith(ws, one({ kind: "docs", detail: CITED }));
+
+    // The story the reviewer approved and the DoD passed is DONE — this is the
+    // incident, inverted.
+    expect(story(ws, "S1")).toContain("status: done");
+    // And the gate's own counter agrees: nothing is unfinished.
+    const view = storiesView(ws.runDir);
+    expect(view?.unfinished).toEqual([]);
+    expect(view?.counts.done).toBe(1);
+    expect(view?.counts.total).toBe(1);
+
+    // Nothing was lost. The finding is in the artifact, routed rather than
+    // dropped, and the record says who routed it and what it was submitted as.
+    const text = readFileSync(fixlistPath(ws, "S1", 1), "utf8");
+    expect(text).toContain("Kind: docs");
+    expect(text).toContain("Disposition: **defer-with-log**");
+    expect(text).toMatch(/^Normalised-from: fix-now —/m);
+    expect(text).not.toContain("Disposition: **fix-now**");
+    // …and it reaches a person, through the channel deferred defects already use.
+    const retro = readFileSync(join(ws.runDir, "retro.md"), "utf8");
+    expect(retro).toContain("submitted `fix-now`");
+    expect(retro).toContain("the docstring on parseBudget says it returns cents");
+
+    // No fix round was dispatched for it: with nothing open there is nothing to fix.
+    expect(spawns(ws)).toEqual([]);
+  }, 120_000);
+
+  /**
+   * The DANGEROUS direction, and the half the addendum on #255 made a condition
+   * of taking the issue at all. Both kinds that mean BEHAVIOUR get their own run:
+   * `security` was named in the issue and exercised by nothing, which is exactly
+   * the half that is most expensive to be wrong about.
+   */
+  for (const kind of ["correctness", "security"] as const) {
+    test(`a \`${kind}\` finding submitted \`fix-now\` STILL holds the story, citation or not`, async () => {
+      const ws = workspace();
+      await handOffReview(ws);
+
+      // Same finding, same citation, same disposition — only the kind differs.
+      // A citation does not buy behaviour a way out; only `refuted` does that,
+      // and this is not one.
+      await settleWith(ws, one({ kind, detail: CITED }));
+
+      expect(story(ws, "S1")).toContain("status: blocked");
+      const view = storiesView(ws.runDir);
+      expect(view?.counts.done).toBe(0);
+      expect(view?.unfinished.map((s) => s.id)).toEqual(["S1"]);
+
+      const text = readFileSync(fixlistPath(ws, "S1", 1), "utf8");
+      expect(text).toContain(`Kind: ${kind}`);
+      expect(text).toContain("Disposition: **fix-now**");
+      expect(text).not.toMatch(/^Normalised-from:/m);
+    }, 120_000);
+  }
+
+  test("a finding with NO `kind` is refused — and the refusal costs the story no attempt", () => {
+    const parsed = parseFixFindings(one({}));
+    expect(parsed.findings).toEqual([]);
+    expect(parsed.problems).toHaveLength(1);
+    expect(parsed.problems[0]).toContain("has no valid `kind`");
+    // Fail-closed WITHOUT punishing: every refusal this raises is indexed as a
+    // fault in the REPORT, which is what buys the bounded free re-prompt. A
+    // reviewer that forgot a field did not do bad work.
+    expect(parsed.format).toEqual(parsed.problems);
+
+    const review = parseReview(
+      { verdict: "fixlist", summary: "signed with one defect", findings: [], fixlist: one({}) },
+      "",
+    );
+    // Unclassified does not unblock: the verdict falls back to `changes`, which
+    // is what an unreadable review has always meant.
+    expect(review.verdict).toBe("changes");
+    expect(review.fixlist).toEqual([]);
+    expect(isFormatRejection(review)).toBe(true);
+  });
+
+  test("a kind outside the enum is not a kind — it is refused like an absent one", () => {
+    for (const kind of ["cosmetic-typo-only", "Docs", "", "docs "]) {
+      const parsed = parseFixFindings(one({ kind }));
+      expect(parsed.findings).toEqual([]);
+      expect(parsed.problems[0]).toContain("has no valid `kind`");
+    }
+    // …and the enum the prompt and the schema publish is the one the parser reads.
+    expect([...FINDING_KINDS]).toEqual(["correctness", "security", "docs", "style"]);
+  });
+
+  test("a `docs` finding submitted `fix-now` with NO citation does NOT unblock", () => {
+    const parsed = parseFixFindings(one({ kind: "docs" }));
+    expect(parsed.findings).toEqual([]);
+    expect(parsed.problems).toHaveLength(1);
+    expect(parsed.problems[0]).toContain("which asks for it to stop holding the story");
+    expect(parsed.format).toEqual(parsed.problems);
+
+    // The citation is what buys it, and the same parser reads it as `refuted`'s.
+    const cited = parseFixFindings(one({ kind: "docs", detail: CITED }));
+    expect(cited.problems).toEqual([]);
+    expect(cited.findings[0]?.disposition).toBe("defer-with-log");
+    expect(cited.findings[0]?.normalisedFrom).toBe("fix-now");
+    expect(isOpen(cited.findings[0]!)).toBe(false);
+
+    // A malformed citation is diagnosed rather than called absent (#77's rule,
+    // reused whole).
+    const broken = parseFixFindings(one({ kind: "docs", detail: "[src: app:s1.txt]" }));
+    expect(broken.findings).toEqual([]);
+    expect(broken.problems[0]).toContain("which asks for it to stop holding the story");
+  });
+
+  test("a `docs` finding the reviewer already deferred costs no citation — it was never blocking", () => {
+    const parsed = parseFixFindings(one({ kind: "docs", disposition: "defer-with-log" }));
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.findings[0]?.disposition).toBe("defer-with-log");
+    // Nothing was rewritten, so nothing claims it was.
+    expect(parsed.findings[0]?.normalisedFrom).toBeNull();
+  });
+
+  /**
+   * §7: `version: 1` formats only GROW. A run already in flight when the tool is
+   * upgraded has fix lists on disk with no `Kind:` line, and the tolerant read is
+   * what keeps them readable — the opposite rule from the envelope's, because
+   * they are different questions: "did the reviewer classify this" versus "what
+   * does this file say".
+   */
+  test("a fix list written before `Kind:` existed still reads — and still blocks", () => {
+    const old = [
+      "# Fix list — S5 · OTP confirm, round 1",
+      "",
+      "- Commit: abc1234",
+      "",
+      "## 1 · Concurrent double-confirm mints two sessions  [high]",
+      "",
+      "Where: `src/auth.ts:74`",
+      "Disposition: **fix-now**",
+      "Resolved: no",
+      "",
+      "Two requests carrying the same code both mint a session.",
+      "",
+    ].join("\n");
+
+    const findings = parseFixlistFile(old);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.finding).toBe("Concurrent double-confirm mints two sessions");
+    expect(findings[0]?.disposition).toBe("fix-now");
+    // Unclassified, said so, and holding the story — the direction a mistake is
+    // recoverable in.
+    expect(findings[0]?.kind).toBeNull();
+    expect(findings[0]?.normalisedFrom).toBeNull();
+    expect(isOpen(findings[0]!)).toBe(true);
+
+    // A `Kind:` line this cannot narrow to the enum reads the same way.
+    const junk = parseFixlistFile(old.replace("Where: `src/auth.ts:74`", "Where: x\nKind: whatever"));
+    expect(junk[0]?.kind).toBeNull();
+    expect(isOpen(junk[0]!)).toBe(true);
+  });
+
+  test("the kind survives the round trip through the artifact", () => {
+    const findings = parseFixFindings([
+      ...one({ kind: "docs", detail: CITED }),
+      { n: 2, kind: "security", finding: "the token is logged", disposition: "fix-now", detail: "" },
+    ]).findings;
+    const text = renderFixlist({
+      storyId: "S5", title: "OTP confirm", round: 1, attempt: 1, maxAttempts: 2,
+      diff: "d", commit: "c", summary: "", findings,
+    });
+    const back = parseFixlistFile(text);
+    expect(back.map((f) => f.kind)).toEqual(["docs", "security"]);
+    expect(back.map((f) => f.disposition)).toEqual(["defer-with-log", "fix-now"]);
+    expect(back.map((f) => f.normalisedFrom)).toEqual(["fix-now", null]);
+    expect(openFindings(back).map((f) => f.n)).toEqual([2]);
+  });
 });

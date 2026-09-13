@@ -166,6 +166,42 @@
   independent S4 stopped by a blocked S2) was rewritten to give S4 the `depends_on` that makes
   its assertion true for the reason the code's own comment gives — argued in the test, never
   flipped in silence.
+
+- **A fix-list finding now declares what it IS, and a documentation defect stops holding a story
+  (#255).** Measured 2026-09-12 across two workspaces at 0.16.1: three stories with a green
+  definition of done, a merged commit and an APPROVING reviewer settled `blocked` — every one of
+  them on a `fix-now` finding whose whole content was a stale docstring or an `[src: …]` line
+  that did not resolve. The reviewer was not wrong: the prompt says `fix-now` is "this story's
+  own correctness", and a stale docstring in the story's own files honestly reads that way. What
+  the record could not say was that the defect was TEXT — a disposition answers "where does this
+  go" and nothing answered "what is it" — so a blocked story held the Build gate's `stories`
+  condition and three unattended nights ended at a person. `severity` was no help and is not the
+  vehicle: it was a free string defaulted to `unrated` that NO consumer read (grep over `src`:
+  one render site), so the effect was binary, `fix-now` or nothing. Every finding now carries a
+  required `kind` — `correctness` and `security` are behaviour and hold the story exactly as
+  before, `docs` and `style` are the way the repo reads and do not — and a `docs`/`style` finding
+  submitted `fix-now` is routed to `defer-with-log`, staying in the artefact, in the PR body and
+  on `retro.md` with a `Normalised-from: fix-now` line saying what it was submitted as. Nothing
+  is lost; it just stops costing a night.
+  This makes a gate WEAKER on purpose, so both directions are priced and both are tested.
+  Unblocking is not free: declaring a `fix-now` finding `docs` costs the SAME `[src: …]` citation
+  `refuted` already costs, through the same §2.8 parser (owner decision, 2026-09-13) — one exit,
+  one rule. The sentence that forced it is "the docstring says cents, the code returns dollars":
+  its own words do not say which side is wrong, and a one-word field deciding that a money bug is
+  a typo is the one failure with no log line to find it by, so the reviewer cites the behaviour
+  that makes it harmless or leaves it `correctness`. When in doubt it blocks: a `kind` that is
+  absent, unreadable or outside the enum is refused — for FREE, indexed as a fault in the report
+  so it costs the story no attempt, because a reviewer that forgot a field did not do bad work.
+  Reading is tolerant the other way (§7): a fix list already on disk with no `Kind:` line, or one
+  whose `Kind:` does not narrow to the enum, reads as *not stated*, and not stated blocks.
+  The four reviewer-prompt goldens MOVED, and that is the change, not an accident: the schema
+  alone would have left a reviewer nobody told about the new field, so the prompt's own prose
+  explains it, and `test/build-golden.test.ts` froze that prose. The diff is exactly eleven
+  inserted lines at one insertion point in each of the four reviewer prompts and nothing else — no
+  event, no `run.yml` row, no exit code. The prose teaches only the JUDGEMENT (which of the four
+  words is true of the defect) and never spells the field name: gh #133's guard derives that list
+  from `REVIEW_SCHEMA` itself, and it caught the first version of this wording.
+
 - **The spawned developer can delete a file, and a permission refusal is now a recorded reason
   instead of two burned attempts (#261).** Measured 2026-09-12 on one workspace at 0.16.1: story
   S7, "delete an unused file", was undoable. The developer's allowance carried no verb that

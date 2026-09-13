@@ -141,6 +141,37 @@ En [`CONTRIBUTING.md`](https://github.com/ederwii/tldr-experts/blob/main/CONTRIB
 está el recorrido que hace un cambio, las cuatro compuertas y lo que CI de verdad corre, las
 reglas de prueba-en-rojo-primero, y por dónde entraría un proveedor de modelo externo.
 
+## Una story terminó `blocked` por un docstring, ¿por qué y qué cuesta?
+
+Un reviewer que firma tu story igual puede adjuntar una **lista de arreglos** con defectos que los
+criterios de aceptación nunca cubrieron, y cualquier hallazgo marcado `fix-now` deja a la story
+fuera de `done`. Una story sin terminar sostiene la compuerta de Build, así que una corrida
+desatendida se detiene y espera a una persona. Medido en dos workspaces el 2026-09-12: tres
+stories con su definition of done en verde, un commit mergeado y un reviewer que aprobó
+terminaron `blocked` — cada una por un hallazgo cuyo contenido entero era un docstring
+desactualizado o una cita que no resolvía.
+
+Ahora cada hallazgo declara además un **`kind`**, que es lo que el hallazgo ES, no a dónde va:
+
+- `correctness` y `security` son comportamiento. Sostienen la story, igual que antes.
+- `docs` y `style` son la forma en que se lee el repo. No la sostienen.
+
+Un hallazgo `docs` o `style` que el reviewer igual marcó `fix-now` se enruta a `defer-with-log`:
+queda en la lista de arreglos, en el cuerpo del pull request y en `retro.md`, con una línea
+`Normalised-from: fix-now` que dice con qué disposición se envió — sigue siendo un defecto que
+alguien tiene que atender, y ya no cuesta una noche.
+
+Desbloquear no es gratis. Declarar `docs` un hallazgo `fix-now` cuesta la **misma cita
+`[src: …]`** que ya cuesta `refuted`: hay que citar el comportamiento que lo vuelve inocuo — el
+código que ya está bien, de modo que lo único equivocado sea el texto — o la fila se rechaza y se
+le vuelve a preguntar al reviewer. La razón es la frase "el docstring dice centavos, el código
+devuelve dólares": sus propias palabras no dicen de qué lado está el defecto, y un campo de una
+palabra decidiendo que un bug de plata es un typo es la única falla que no deja ni una línea de
+log para encontrarla. Ante la duda, bloquea: un `kind` ausente, ilegible o fuera del enum se
+rechaza — gratis, sin gastarle un intento a la story — y una lista de arreglos escrita antes de
+que este campo existiera se lee como *no declarado*, que bloquea como cualquier otra cosa sin
+clasificar.
+
 ## Una story se bloqueó en su DoD, ¿dónde está la falla de verdad?
 
 En `04-build/log/dod-output/<story>-<n>.txt`: las últimas 200 líneas (o 16 KB, lo que sea

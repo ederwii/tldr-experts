@@ -344,7 +344,7 @@ describe("a card per fallthrough kind", () => {
     rel: "04-build/fixlist/S1-1.md",
     row: {
       finding: {
-        n: 1, severity: "high", finding: "the token is logged",
+        n: 1, severity: "high", finding: "the token is logged", kind: "correctness", normalisedFrom: null,
         where: "[src: api:platform/Auth.cs:3]", disposition: "defer-with-log",
         detail: "", doNot: [], resolved: false, resolvedSha: null,
       },

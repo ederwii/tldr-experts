@@ -528,6 +528,7 @@ describe("`--commit --check` validates before the turn is spent", () => {
         severity: "minor",
         finding: "the selector is said to drop places before ranking",
         where,
+        kind: "correctness",
         disposition: "refuted",
         detail: "",
       }],

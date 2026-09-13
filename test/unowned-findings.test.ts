@@ -20,6 +20,8 @@ function finding(overrides: Partial<FixFinding>): FixFinding {
   n += 1;
   return {
     n,
+    kind: "correctness",
+    normalisedFrom: null,
     severity: "medium",
     finding: "a finding",
     where: "",
