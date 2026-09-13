@@ -21,14 +21,14 @@
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { cancelRun } from "../src/core/run/rescue.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { EVENT_TYPES, validateEvent } from "../src/core/events/Event.ts";
-import { asideBranchOf, releaseRunEpics } from "../src/core/build/epicRelease.ts";
+import { asideBranchOf, describeRelease, releaseEpicBranch, releaseRunEpics, uncountedReason } from "../src/core/build/epicRelease.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
 import {
@@ -51,6 +51,9 @@ const ONE_STORY: BuildWorkspaceOptions = {
 const VERBATIM_FIRST = (runId: string) =>
   `[tldrx] build: \`epic/e1\` already exists in app and run ${runId} did not cut it — `
   + "refusing to stack this run's commits onto someone else's epic.";
+/** The fixture's first run id — literal, so the aside names below are literal too. */
+const OWNER = "260829-build";
+const ASIDE = `epic/e1@${OWNER}`;
 const VERBATIM_SECOND =
   "  either delete or rename that branch, or run `tldrx next --reuse-epic` to work on it deliberately.";
 
@@ -154,7 +157,20 @@ describe("run cancel releases the epic it claimed (#272, half 1)", () => {
     expect(events[0]!.payload).toMatchObject({
       branch: "epic/e1", repo: "app", outcome: "deleted", renamed_to: null, commits: 0, owner: ws.runId,
     });
-    expect(outcome.lines.join("\n")).toContain("deleted");
+    expect(outcome.lines).toEqual([describeRelease(outcome.released[0]!, git(ws.repoDir, ["rev-parse", "--short", "main"]))]);
+  });
+
+  test("an epic git could NOT count against its base is KEPT — an uncounted branch is never deleted", async () => {
+    const ws = workspace();
+    cutEpic(ws.repoDir, 0);
+    // A base that does not resolve: `git rev-list --count <base>..epic/e1` fails, and the
+    // dangerous reading of that failure is "0 commits beyond the base" — a delete.
+    const outcome = await releaseEpicBranch({
+      repoDir: ws.repoDir, branch: "epic/e1", base: "no-such-base", ownerRunId: ws.runId,
+    });
+    expect(outcome).toEqual({ kind: "kept", branch: "epic/e1", reason: uncountedReason("no-such-base", "epic/e1") });
+    expect(branches(ws.repoDir)).toContain("epic/e1");
+    expect(branches(ws.repoDir)).not.toContain(ASIDE);
   });
 
   test("an epic WITH commits is renamed to epic/<slug>@<run-id>, and the commits survive there", async () => {
@@ -167,7 +183,8 @@ describe("run cancel releases the epic it claimed (#272, half 1)", () => {
       root: ws.root, owner: RunStore.open(ws.runDir), actor: "alan", at: AT,
       via: "run cancel", reason: "cancelled: abandoned after the incident",
     });
-    const aside = asideBranchOf("epic/e1", ws.runId);
+    expect(ws.runId).toBe(OWNER);
+    const aside = ASIDE;
     expect(outcome.released.map((r) => r.outcome)).toEqual(["renamed"]);
     expect(branches(ws.repoDir)).not.toContain("epic/e1");
     expect(branches(ws.repoDir)).toContain(aside);
@@ -232,9 +249,11 @@ describe("Build moves a stale epic aside instead of refusing it (#272, half 2)",
     const outcome = await next(ws, { runId: retry.runId });
     const text = outcome.lines.join("\n");
     expect(text).not.toContain("did not cut it");
-    expect(outcome.code).not.toBe(2);
+    // The story built green and parked on the Build gate: awaiting a human, as every green build does.
+    expect(outcome.code).toBe(4);
 
-    const aside = asideBranchOf("epic/e1", ws.runId);
+    expect(ws.runId).toBe(OWNER);
+    const aside = ASIDE;
     expect(git(ws.repoDir, ["rev-parse", aside])).toBe(tip);
     // The retry cut its OWN `epic/e1`, from main — not on top of the leftover.
     expect(branches(ws.repoDir)).toContain("epic/e1");
@@ -286,6 +305,26 @@ describe("Build moves a stale epic aside instead of refusing it (#272, half 2)",
     expect(outcome.lines).toContain(VERBATIM_SECOND);
     expect(git(ws.repoDir, ["rev-parse", "epic/e1"])).toBe(tip);
     expect(branches(ws.repoDir)).not.toContain(asideBranchOf("epic/e1", ws.runId));
+    expect(releaseEvents(retry.runDir)).toHaveLength(0);
+  });
+
+  test("owner run.yml UNREADABLE → today's refusal verbatim, exit 2, branch untouched — unknown is not finished", async () => {
+    const ws = workspace();
+    claim(ws.runDir, "epic/e1");
+    const tip = cutEpic(ws.repoDir, 1);
+    const retry = addBuildRun(ws, { ...ONE_STORY, slug: "retry" });
+    // The claim is on disk and the file will not parse: who owns the branch is UNKNOWN,
+    // and unknown reads as "still the owner", never as a leftover.
+    writeFileSync(join(ws.runDir, "run.yml"), "version: 1\nrun: [\n", "utf8");
+    expect(() => RunStore.open(ws.runDir)).toThrow();
+
+    const outcome = await next(ws, { runId: retry.runId });
+    expect(outcome.code).toBe(2);
+    expect(outcome.lines).toContain(VERBATIM_FIRST(retry.runId));
+    expect(outcome.lines).toContain(VERBATIM_SECOND);
+    expect(outcome.lines).toContain(`  · tldrx-work/${ws.runId}/run.yml could not be read, so who owns it is unknown`);
+    expect(git(ws.repoDir, ["rev-parse", "epic/e1"])).toBe(tip);
+    expect(branches(ws.repoDir)).not.toContain(ASIDE);
     expect(releaseEvents(retry.runDir)).toHaveLength(0);
   });
 });

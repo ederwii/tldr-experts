@@ -73,6 +73,12 @@ export type EpicRelease =
   /** No such branch — nothing to release. */
   | { readonly kind: "absent"; readonly branch: string };
 
+/** The one sentence a branch git could not count is kept with — exported so a test asserts the marker, not a word. */
+export function uncountedReason(base: string, branch: string): string {
+  return `\`git rev-list --count ${base}..${branch}\` could not count what it carries, `
+    + "and an uncounted branch is never deleted";
+}
+
 export async function releaseEpicBranch(parts: ReleaseParts): Promise<EpicRelease> {
   const { repoDir, branch } = parts;
   if (!(await branchExists(repoDir, branch))) return { kind: "absent", branch };
@@ -81,13 +87,7 @@ export async function releaseEpicBranch(parts: ReleaseParts): Promise<EpicReleas
     return { kind: "kept", branch, reason: `it is checked out in ${checkout}` };
   }
   const commits = await commitsAhead(repoDir, parts.base, branch);
-  if (commits === null) {
-    return {
-      kind: "kept", branch,
-      reason: `\`git rev-list --count ${parts.base}..${branch}\` could not count what it carries, `
-        + "and an uncounted branch is never deleted",
-    };
-  }
+  if (commits === null) return { kind: "kept", branch, reason: uncountedReason(parts.base, branch) };
   const sha = await shaOf(repoDir, branch);
   if (commits === 0) {
     const deleted = await deleteBranch(repoDir, branch);
