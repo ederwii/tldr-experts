@@ -51,7 +51,7 @@ the zero-touch recipe at the end of this chapter sets every one of them at `run 
 | `economy: host-tokens` | `budget.yml`, per phase | The ceiling is not dollars, so it may not buy a metered spawn. |
 | `gates_policy: auto`, every stage | `run.yml`, via `run new --gates none` | No person approves any stage: each gate closes itself the moment its seven `auto` conditions hold. |
 | `questions_policy: recommended` | `run.yml`, via `run new --questions none` | `run auto` takes a question's own `Recommended:` pick instead of parking; one with no pick, or tagged `irreversible:` / `money:`, still parks for a person. |
-| `ship: push \| pr \| merge` | `run.yml`, via `run new --ship` | How far past the last gate the framework carries the epic: push it, open the PR, or arm `gh pr merge --auto` (#274: with no required checks on the remote, that merges at once). |
+| `ship: push \| pr \| merge` | `run.yml`, via `run new --ship` | How far past the last gate the framework carries the epic: push it, open the PR, or arm `gh pr merge --auto` — armed only over a base branch seen to require a check, since `--auto` waits on the base's requirements and not on the PR's reported ones (#274); otherwise the PR is left open for a person with the reason on the record. |
 | `commands.<slot>_scoped` | `workspace.yml`, per repo | A story's DoD runs the template over its own paths; the full command runs once, on the epic head, before the gate (#257). |
 
 ### Turning it on
@@ -855,8 +855,15 @@ nohup tldrx run auto --run <id> --until-done --max-usd 40 \
   (`decided_by: agent-default`) and escalates the ones with no pick or tagged
   `irreversible:` / `money:`.
 - `--ship pr` — push `epic/<slug>` and open the PR when the run reads `done`. `merge` also arms
-  `gh pr merge --auto --merge`, and on a repository with **no required status checks** that
-  merges at once, nothing checked (#274, open).
+  `gh pr merge --auto --merge` — but only over a base branch that was **seen to require** a
+  check (#274). GitHub's auto-merge waits on the base's requirements, not on the checks the PR
+  happens to report, so on a repository whose default branch requires none `--auto` would merge
+  at once with nothing checked. Three cases therefore arm nothing and leave the PR open for a
+  person, each named on the ship record: the PR reports no check at all
+  (`absent — no checks to wait on`), the base's rulesets and branch protection were read and
+  require none (`absent — the base branch requires no check before merge`), or that probe could
+  not be read (`absent — could not tell what the base branch requires` — for a merge, not
+  knowing has to behave like having nothing to wait on).
 - `nohup … > /tmp/<id>.log 2>&1 &` — outlives the shell; both streams, because progress is on
   stderr. `--ui plain` is log lines rather than a redrawn screen (a redirected log gets that
   anyway; the flag says so on the command line).
