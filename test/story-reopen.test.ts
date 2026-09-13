@@ -24,6 +24,8 @@ import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { readReviewLedger, MAX_ATTEMPTS } from "../src/core/facilitator/executors/build.ts";
 import { reopenStory } from "../src/core/run/reopenStory.ts";
 import { storyCommand } from "../src/cli/commands/story.ts";
+import { storyBranchOf } from "../src/core/plan/branchModel.ts";
+import { AS_IS_MARK, AS_IS_NOT_AHEAD_MARK } from "../src/core/build/outcome.ts";
 import { reject } from "../src/core/run/gates.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
@@ -764,3 +766,189 @@ function capture(): () => { stdout: string; stderr: string } {
     return { stdout, stderr };
   };
 }
+
+/**
+ * A story a person FINISHED BY HAND, settled from its branch as it stands (#279).
+ *
+ * Measured on a real unattended run (tldrx 0.18.2). S2's merge into the epic hit
+ * the #268 conflict; the facilitator rebased the branch by hand, ran the DoD
+ * green and checked `git merge-tree` clean — and then had no way to get that
+ * branch merged. `tldrx story reopen` spawns a DEVELOPER, the developer had
+ * nothing to do, and #271's rule (work is measured SINCE THE SPAWN) correctly
+ * blocked the story after one attempt: work that already exists, older than the
+ * spawn, is indistinguishable from a developer that did nothing. A second reopen
+ * buys the same outcome. The only way out was to invent a commit.
+ *
+ * `--as-is` is the case #271 could not see, and it does not weaken that rule: no
+ * developer is spawned at all, so there is no spawn to measure work since. The
+ * DoD, the review and the merge are unchanged — they run over the branch as it
+ * stands — and the record says who signed it and that no developer delivered it.
+ */
+describe("a story finished by hand, settled as it stands (#279)", () => {
+  /** What the facilitator actually typed, near enough. */
+  const HAND = "rebased onto the epic by hand after the #268 conflict; dod green, merge-tree clean";
+
+  /** The branch this run cut for a story — derived the ONE way (`storyBranchOf`). */
+  function storyBranch(ws: BuildWorkspace, id: string): string {
+    return storyBranchOf(ws.runId, id);
+  }
+
+  /**
+   * A person's commit on the story branch, made the way the field fix was made:
+   * in a scratch worktree, which is then REMOVED — so the story's own worktree
+   * does not exist when the verb runs, and the branch is all there is.
+   */
+  function handFinish(ws: BuildWorkspace, id: string, files: Record<string, string>): string {
+    const scratch = mkdtempSync(join(tmpdir(), "tldrx-hand-"));
+    git(ws, ["worktree", "add", scratch, storyBranch(ws, id)]);
+    for (const [rel, text] of Object.entries(files)) writeFileSync(join(scratch, rel), text, "utf8");
+    execFileSync("git", ["add", "-A"], { cwd: scratch, stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("git", ["commit", "-m", `hand fix for ${id}`], { cwd: scratch, stdio: ["ignore", "pipe", "pipe"] });
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratch, encoding: "utf8" }).trim();
+    git(ws, ["worktree", "remove", "--force", scratch]);
+    rmSync(scratch, { recursive: true, force: true });
+    return sha;
+  }
+
+  /** A story blocked with real committed work on its branch, and no worktree left. */
+  async function handFinished(options: BuildWorkspaceOptions = ONE): Promise<BuildWorkspace> {
+    const ws = workspace(options);
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "changes", "approve"] });
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: blocked");
+    handFinish(ws, "S1", { "hand.txt": "the person did this\n" });
+    return ws;
+  }
+
+  test("no developer is spawned, and the story settles from its branch", async () => {
+    const ws = await handFinished();
+    const spawnsBefore = events(ws).filter((e) => e.type === "agent.spawned" && e.payload.role === "developer").length;
+
+    expect(reopen(ws, "S1", HAND, { asIs: true }).code).toBe(0);
+    reenter(ws, "S1 was finished by hand");
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: done");
+    // The whole point: not one more developer turn.
+    expect(events(ws).filter((e) => e.type === "agent.spawned" && e.payload.role === "developer"))
+      .toHaveLength(spawnsBefore);
+    // And the hand commit really is on the epic.
+    expect(git(ws, ["log", "epic/e1", "--oneline"])).toContain("hand fix for S1");
+  }, 60_000);
+
+  test("the record says the branch was taken as it stands, and who signed it", async () => {
+    const ws = await handFinished();
+    reopen(ws, "S1", HAND, { asIs: true });
+    reenter(ws, "S1 was finished by hand");
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    const done = events(ws).filter((e) => e.type === "task.done" && e.payload.story === "S1").at(-1);
+    expect(done?.payload.as_is_by).toBe("alan");
+    expect(done?.payload.as_is_note).toBe(HAND);
+    const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+    expect(log).toContain(AS_IS_MARK);
+    expect(log).toContain("alan");
+    // Nothing may say a developer delivered this turn.
+    expect(log).not.toContain("Developer: **FAILED**");
+  }, 60_000);
+
+  test("a red dod REFUSES — no flag skips it, nothing merges, and no developer is bought", async () => {
+    const ws = await handFinished({
+      ...ONE,
+      // Red exactly when the hand commit is in the tree.
+      testScript: 'node -e "process.exit(require(\'fs\').existsSync(\'hand.txt\') ? 1 : 0)"',
+    });
+    const spawnsBefore = events(ws).filter((e) => e.type === "agent.spawned" && e.payload.role === "developer").length;
+    reopen(ws, "S1", HAND, { asIs: true });
+    reenter(ws, "S1 was finished by hand");
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+    expect(git(ws, ["log", "epic/e1", "--oneline"])).not.toContain("hand fix for S1");
+    // The shortcut did not buy a developer on the way to the refusal either —
+    // the refusal is structural, not a fallback.
+    expect(events(ws).filter((e) => e.type === "agent.spawned" && e.payload.role === "developer"))
+      .toHaveLength(spawnsBefore);
+    const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+    expect(log).toContain("exit 1");
+  }, 60_000);
+
+  test("a tip that is not ahead of its epic REFUSES, and says which", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "changes"] });
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: blocked");
+    // The hand fix that was not a fix: the person put the branch back where the
+    // epic is, so it carries nothing at all. This is the shape the refusal is
+    // for — a signature over an empty branch must not merge and must not settle.
+    git(ws, ["branch", "-f", storyBranch(ws, "S1"), "epic/e1"]);
+    expect(git(ws, ["rev-parse", storyBranch(ws, "S1")])).toBe(git(ws, ["rev-parse", "epic/e1"]));
+
+    expect(reopen(ws, "S1", HAND, { asIs: true }).code).toBe(0);
+    reenter(ws, "S1 was signed as-is over an empty branch");
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    // Blocked, naming the reason — NOT settled `done` over a branch with nothing
+    // on it, and not quietly handed to a developer either.
+    expect(story(ws, "S1")).toContain("status: blocked");
+    const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+    expect(log).toContain(AS_IS_NOT_AHEAD_MARK);
+  }, 60_000);
+
+  test("`story.reopened` carries reason `as_is`, the note and the actor", async () => {
+    const ws = await handFinished();
+    reopen(ws, "S1", HAND, { asIs: true });
+    const reopened = events(ws).filter((e) => e.type === "story.reopened").at(-1);
+    expect(reopened?.payload.reason).toBe("as_is");
+    expect(reopened?.payload.note).toBe(HAND);
+    expect(reopened?.actor).toBe("alan");
+    expect(validateEvent(reopened as never).ok).toBe(true);
+  }, 60_000);
+
+  /**
+   * The leak this found before it shipped: the signature is held per INVOCATION,
+   * and a reviewer that asks for changes over a hand-finished branch requeues
+   * the story to a REAL developer inside the same process. That attempt's record
+   * must not carry the as-is marker — it is the one direction in which this
+   * record must never be wrong.
+   */
+  test("a requeued attempt after an as-is settlement records a DEVELOPER, not an as-is", async () => {
+    const ws = await handFinished();
+    // The reviewer faults the hand-finished branch, so attempt 2 is a developer.
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "changes", "changes", "approve"] });
+    reopen(ws, "S1", HAND, { asIs: true });
+    reenter(ws, "S1 was finished by hand");
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    const done = events(ws).filter((e) => e.type === "task.done" && e.payload.story === "S1");
+    // The as-is turn said so; the developer turn after it must not.
+    expect(done.at(-2)?.payload.as_is).toBe(true);
+    expect(done.at(-1)?.payload.as_is).toBeUndefined();
+    expect(done.at(-1)?.payload.as_is_by).toBeUndefined();
+    const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+    expect(log).not.toContain(AS_IS_MARK);
+  }, 60_000);
+
+  test("--as-is with --for-fix is a usage error: they are different decisions", async () => {
+    const ws = await handFinished();
+    const stop = capture();
+    const code = await storyCommand.run(["reopen", "S1", "--as-is", "--for-fix", "--note", HAND, "--root", ws.root]);
+    const { stdout, stderr } = stop();
+    expect(code).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("--as-is");
+    expect(stderr).toContain("--for-fix");
+  }, 60_000);
+
+  test("from the command line: it prints what it will and will not do", async () => {
+    const ws = await handFinished();
+    const stop = capture();
+    const code = await storyCommand.run(["reopen", "S1", "--as-is", "--note", HAND, "--root", ws.root]);
+    const { stdout, stderr } = stop();
+    expect(code).toBe(0);
+    expect(stderr).toBe("");
+    expect(stdout).toContain("no developer");
+  }, 60_000);
+});

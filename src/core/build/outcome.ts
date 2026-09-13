@@ -256,11 +256,75 @@ export interface StoryOutcome {
    * ordinary case, where `commitIfDirty` already put every byte on the branch.
    */
   readonly rescued: RescuedWork | null;
+  /**
+   * Set when this story was settled from its branch AS IT STANDS (#279): a
+   * person finished the work by hand and signed `tldrx story reopen <id>
+   * --as-is`, and NO developer was spawned for this turn.
+   *
+   * Optional and absent on every record written before it existed, and on every
+   * ordinary turn — where a developer really did deliver the diff. It is the
+   * field that keeps the record from lying about who did the work: with it set,
+   * the review log says the branch was taken as it stands and names the person
+   * who asked for that; without it, the log reads exactly as it always has.
+   */
+  readonly asIs?: AsIsSettlement | null;
   readonly cost_usd: number;
 }
 
 /** What the executor records when the spawn layer had nothing else to say. */
 export const DEVELOPER_FAILED = "the developer sub-agent failed";
+
+/**
+ * The words a record uses for a story settled from its branch AS IT STANDS
+ * (#279) — `tldrx story reopen <id> --as-is`.
+ *
+ * Exported so the review log, the operator line and the tests all say the same
+ * thing, and so a test asserts THIS marker rather than a word of English prose
+ * that innocent text could carry (AGENTS.md §8). It is deliberately blunt: the
+ * one thing this record must never let a reader believe is that a developer
+ * delivered the diff, because none was spawned.
+ */
+export const AS_IS_MARK = "the branch was taken AS IT STANDS — no developer was spawned for it";
+
+/**
+ * The marker in the refusal of an as-is settlement over a branch that carries
+ * NOTHING its epic has not already got — or a branch git would not count.
+ *
+ * Its own constant for the reason every marker here is: a test must be able to
+ * assert the refusal happened without matching a word of English that innocent
+ * prose could carry, and the operator line and the story's `reason:` must not be
+ * able to drift apart.
+ */
+export const AS_IS_NOT_AHEAD_MARK = "nothing to take as it stands";
+
+/**
+ * Why an as-is settlement was refused before it ran a thing.
+ *
+ * `ahead` is `commitsBetween`'s `number | null` contract (#273) and the two
+ * values mean DIFFERENT things, so they get different sentences: `0` is "the
+ * branch really carries nothing", `null` is "git could not count, and I will not
+ * merge on a measurement I do not have". Both refuse — a verb that takes a
+ * branch without a developer may not also guess at what the branch holds.
+ */
+export function asIsNotAheadReason(branch: string, epicBranch: string, ahead: number | null): string {
+  return ahead === null
+    ? `${AS_IS_NOT_AHEAD_MARK}: git could not count what \`${branch}\` carries beyond `
+      + `\`${epicBranch}\`, and a settlement that spawns no developer will not merge on a `
+      + "measurement it does not have. Nothing was merged"
+    : `${AS_IS_NOT_AHEAD_MARK}: \`${branch}\` carries no commit \`${epicBranch}\` has not already `
+      + "got, so there is no work to settle. Commit the fix to the story branch first, then reopen it "
+      + "--as-is. Nothing was merged";
+}
+
+/** Who signed a story's as-is settlement, and why (#279). */
+export interface AsIsSettlement {
+  /** The actor on the `story.reopened` that asked for it. */
+  readonly actor: string;
+  /** The `--note` — the whole of what the next reader gets. */
+  readonly note: string;
+  /** When that reopen was signed. */
+  readonly at: string;
+}
 
 /** True when the merge that put this story on its epic moved no commits. */
 export function mergedNothing(outcome: Pick<StoryOutcome, "carried">): boolean {

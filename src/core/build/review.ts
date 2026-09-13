@@ -17,7 +17,7 @@
 import { isRecord } from "../schemas/validation.ts";
 import { SRC_GRAMMAR_HEADING } from "../text/srcGrammarContract.ts";
 import { parseFixFindings, type FixFinding } from "./fixlist.ts";
-import { DOD_REFUSAL_FALLBACK, dodRefused, scopedNote } from "./outcome.ts";
+import { AS_IS_MARK, DOD_REFUSAL_FALLBACK, dodRefused, scopedNote } from "./outcome.ts";
 import type { DodResult, StoryOutcome, Verdict } from "./outcome.ts";
 import { renderReviewerProvenance } from "./reviewerProvenance.ts";
 import { withCure } from "./refusalKind.ts";
@@ -434,6 +434,15 @@ export function renderReviewLog(outcome: StoryOutcome): string {
     `- Repo: \`${outcome.repo}\` · wave ${outcome.wave} · epic ${outcome.epic}`,
     `- Branch: \`${outcome.branch}\` → \`${outcome.epicBranch}\` (${mergeWord(outcome)})`,
     `- Commit: ${outcome.commit ?? "(none)"}`,
+    // #279: FIRST of the developer lines, because it is the one that says there
+    // was no developer. A story settled from its branch as it stands has no
+    // spawn to report, and a log that simply omitted the line would read as an
+    // ordinary turn — the record lying in the dangerous direction (AGENTS.md §7).
+    ...(outcome.asIs == null
+      ? []
+      : [`- Developer: **none** — ${AS_IS_MARK}. \`${outcome.branch}\` was settled as it stands, `
+        + `signed by ${outcome.asIs.actor}: ${outcome.asIs.note}. The Definition of Done below and `
+        + "the reviewer above judged that branch, unchanged."]),
     ...(outcome.developerError === null ? [] : [`- Developer: **FAILED** — ${outcome.developerError}`]),
     // The refusal that did NOT stop the story (gh #271): still evidence, still
     // named — and, since gh #278, with the cure the line shows, when it shows one.

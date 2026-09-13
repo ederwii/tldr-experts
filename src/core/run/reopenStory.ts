@@ -69,6 +69,25 @@ export interface ReopenOptions {
    * unchanged.
    */
   readonly forFix?: boolean;
+  /**
+   * Settle the story from its BRANCH AS IT STANDS (#279): the next Build turn
+   * runs the DoD, the review and the merge over the commits already on
+   * `story/<run>/<id>`, and spawns NO developer.
+   *
+   * The case the plain verb cannot reach. `reopen` hands the story to a
+   * developer, and a developer handed a branch whose work is already finished
+   * has nothing to do — #271 then blocks the story after one attempt, correctly,
+   * because work that predates the spawn is indistinguishable from a developer
+   * that did nothing. Measured on a real unattended run (0.18.2): the only way
+   * to merge a hand-finished branch was to invent a commit for the developer to
+   * make.
+   *
+   * It does not weaken #271. Nothing is spawned, so there is no spawn to measure
+   * work since; the DoD and the reviewer are unchanged and still decide, and the
+   * Build refuses the settlement outright when the branch carries nothing its
+   * epic has not already got or when the DoD goes red.
+   */
+  readonly asIs?: boolean;
   readonly runId?: string;
   readonly actor: string;
   readonly at: string;
@@ -104,8 +123,15 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
     return refuse(['story reopen needs a story id: `tldrx story reopen S3 --note "why"`']);
   }
   const forFix = options.forFix === true;
+  const asIs = options.asIs === true;
   if (options.note.trim() === "") {
-    return forFix
+    return asIs
+      ? refuse([
+        `story reopen --as-is needs --note: \`tldrx story reopen ${id} --as-is --note "<what you did by hand>"\``,
+        "  the note is the ONLY record of who finished this branch and how — no developer will run,",
+        "  so nothing else in the log will say where the commits came from",
+      ])
+      : forFix
       ? refuse([
         `story reopen --for-fix needs --note: \`tldrx story reopen ${id} --for-fix --note "<the defect>"\``,
         "  the note IS the defect — it is what scopes the fix round, and what the reviewer reads",
@@ -238,7 +264,7 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
     throw error;
   }
 
-  const event = reopenEvent(options, store.runId, id, row.wave, row.status, ledger.verdicts, forFix);
+  const event = reopenEvent(options, store.runId, id, row.wave, row.status, ledger.verdicts, forFix, asIs);
   const validation = validateEvent(event);
   if (!validation.ok) {
     const first = validation.issues[0];
@@ -274,6 +300,24 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
         "  the story's acceptance criteria are unchanged, and this verb did not touch them: it reopens "
           + "the story for the defect above, not for its scope",
         `  one fix round at a time — this one closes when ${id} is \`done\` again`,
+        ...kept,
+      ],
+    };
+  }
+
+  if (asIs) {
+    return {
+      code: EXIT_OK,
+      lines: [
+        `reopened ${id} in ${store.runId} — \`${row.status}\` → \`${REOPENED_TO}\` (${row.wave}), `
+          + "to be settled from its branch AS IT STANDS",
+        `  signed by ${options.actor}: ${options.note}`,
+        "  no developer will be spawned: the next Build turn runs the dod, the review and the merge "
+          + "over the commits already on the story branch",
+        "  it is not a shortcut past either gate — a red dod BLOCKS the story, and so does a branch "
+          + "that carries no commit its epic has not already got; the refusal says which",
+        "  the record will say the branch was taken as it stands and name you, so nothing reads as "
+          + "though a developer delivered it",
         ...kept,
       ],
     };
@@ -330,6 +374,7 @@ function reopenEvent(
   from: string,
   verdicts: number,
   forFix: boolean,
+  asIs: boolean,
 ): TldrxEvent {
   return {
     ts: options.at,
@@ -356,8 +401,13 @@ function reopenEvent(
        * fix-round bound has something to count. Additive: a `story.reopened`
        * with no `reason` predates this key and is an `attempts` reopen, which is
        * the only kind that existed.
+       *
+       * `as_is` was added 2026-09-13 (#279): the same reopen, settled from the
+       * branch as it stands with no developer spawned. It is what
+       * `readReviewLedger` reads to know the next Build turn must not spawn one,
+       * and it is the record of WHO decided that.
        */
-      reason: forFix ? "fix" : "attempts",
+      reason: forFix ? "fix" : asIs ? "as_is" : "attempts",
       note: options.note,
     },
   };

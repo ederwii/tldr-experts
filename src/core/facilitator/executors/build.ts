@@ -89,8 +89,8 @@ import {
   type Review,
 } from "../../build/review.ts";
 import {
-  DEVELOPER_FAILED, dodFailure, dodFailureReason, dodGreen, dodRefused,
-  type DodResult, type RescuedWork, type StoryOutcome,
+  AS_IS_MARK, asIsNotAheadReason, DEVELOPER_FAILED, dodFailure, dodFailureReason, dodGreen, dodRefused,
+  type AsIsSettlement, type DodResult, type RescuedWork, type StoryOutcome,
 } from "../../build/outcome.ts";
 import {
   CLAIMED_UNVERIFIED, canonicalizeResolutions, fixlistRel, fixlistRetroLines, latestFixlist, markUnverified,
@@ -515,6 +515,15 @@ class BuildSession {
    */
   private readonly capDeaths = new Map<string, string>();
   /**
+   * Stories this invocation settled from their BRANCH AS IT STANDS (#279), by
+   * the person who signed the reopen.
+   *
+   * Held exactly the way `refusals` and `capDeaths` are, and for the same
+   * reason: `settle` writes the record, and what it must say about WHO did the
+   * work is decided one step earlier, in the half.
+   */
+  private readonly asIsSettlements = new Map<string, AsIsSettlement>();
+  /**
    * The epic branches, worktrees and merges this invocation accumulated
    * (`build/worktrees.ts`). ONE instance, created here and passed by reference
    * everywhere the three private maps used to be read.
@@ -731,6 +740,23 @@ class BuildSession {
     // writes a bundle; who dispatches it is the host's business.
     const review = this.reviewWorkFor(planned);
     if (review !== null) return await this.prepareReview(planned, review);
+
+    // #279: the person signed "settle this branch, no developer", and
+    // `--prepare` exists to hand a host a DEVELOPER bundle. Refused rather than
+    // performed, because performing it is the exact thing that was signed
+    // against — and refused rather than silently downgraded to a review bundle,
+    // because the DoD and the merge have not run and a reviewer handed that
+    // would be judging an unproven branch. The headless command is named.
+    const asIs = this.asIsFor(planned);
+    if (asIs !== null) {
+      return refusedOnSequence(
+        this.ctx,
+        `${planned.story.id} was reopened \`--as-is\` by ${asIs.actor} (${asIs.note}) — the branch is to be `
+        + "settled as it stands, and `--prepare` dispatches a developer. `tldrx next` (headless) runs the "
+        + "dod, the review and the merge over it; to build it with a developer instead, "
+        + `\`tldrx story reopen ${planned.story.id} --note "…"\` replaces the signature.`,
+      );
+    }
 
     // The fix-list ROUTER (design §B.4). `--fixlist <path>` names one explicitly;
     // absent, the latest round on disk is carried by itself — the same courtesy
@@ -1219,8 +1245,133 @@ class BuildSession {
     return halves;
   }
 
+  /**
+   * The person's signature on this story, when there is one (#279) — read from
+   * `events.jsonl`, because the reopen that wrote it was a different process.
+   */
+  private asIsFor(planned: PlannedStory): AsIsSettlement | null {
+    return readReviewLedger(this.ctx.runDir, planned.story.id).asIs;
+  }
+
+  /**
+   * Half A for a story a PERSON finished, settled from its branch AS IT STANDS
+   * (#279): worktree → DoD → the commits that are already there. No developer.
+   *
+   * It is half A's shape with the one spawn removed, and everything after it —
+   * `settleHalf`'s base update, its merge, its reviewer — is byte-for-byte the
+   * path every other story takes. That is the whole design: the operator asked
+   * for a turn without a developer, not for a turn without gates.
+   *
+   * **Why it cannot spawn one.** `tldrx story reopen` hands the story back to a
+   * developer, and a developer handed a finished branch has nothing to commit;
+   * #271's rule — work is measured SINCE THE SPAWN — then blocks the story after
+   * one attempt, and it is right to, because work older than the spawn cannot be
+   * told apart from a developer that did nothing. This is the case that rule
+   * could not see, added beside it rather than carved out of it.
+   *
+   * **Two refusals, and neither is skippable.** The branch must carry something
+   * its epic has not already got, measured with `commitsBetween` — whose `null`
+   * is "could not count", never "did not move" (#273) — and the DoD must go
+   * green, judged by the same `dodProves` every other story is judged by. There
+   * is no flag that passes either: a verb that merges a branch nobody's agent
+   * wrote is exactly where a `--force` would be added at 3 a.m. to unstick a run.
+   *
+   * **The worktree may be gone, and usually is.** A blocked story's tree is
+   * pruned as it settles, and the person who fixed the branch by hand did it in
+   * a scratch worktree they then removed — measured on the field fix this came
+   * from. So the branch is found BY NAME and `openStory` reopens a worktree on
+   * it, with `refreshBase` false: nothing may move the branch the person signed.
+   */
+  private async asIsHalf(planned: PlannedStory, asIs: AsIsSettlement): Promise<StoryHalf> {
+    const id = planned.story.id;
+    const before = this.statusOf(planned);
+    this.refusals.delete(id);
+    this.capDeaths.delete(id);
+    // Recorded BEFORE anything can refuse, because every one of the exits below
+    // goes through `settle`, and all of them have to say a developer did not do
+    // this.
+    this.asIsSettlements.set(id, asIs);
+    // `false`: this is the one opening that must NOT move the branch. A
+    // fast-forward onto the epic here would change the tree the person proved
+    // by hand, under a verb whose entire promise is "as it stands".
+    const story = await this.writes.run(() => this.openStory(planned));
+    await this.writes.run(() => {
+      this.ctx.emit("task.started", {
+        phase: this.ctx.phaseId,
+        story: id,
+        wave: planned.wave,
+        repo: planned.story.repo,
+        branch: story.branch,
+        attempt: story.attempt,
+        // ADDITIVE: this attempt has no developer, and a reader of the log must
+        // not have to infer that from an `agent.spawned` that never arrives.
+        as_is: true,
+      });
+      this.setStoryStatus(planned, "in_progress");
+    });
+    this.lines.push(
+      `  · ${id}: settling \`${story.branch}\` as it stands — signed by ${asIs.actor}: ${asIs.note}`,
+    );
+
+    // A worktree this invocation had to re-create is a tree with no
+    // `node_modules` in it, and the DoD below would measure that rather than the
+    // person's work. Same call, same block-on-failure, as half A.
+    const install = await this.installDeps(story);
+    if (install !== null && installFailed(install)) {
+      return {
+        story, cost: 0, dod: [], commit: null,
+        failure: installFailureReason(install, planned.story.repo),
+        developerError: null, before,
+      };
+    }
+
+    // Refusal 1: there has to BE something to take.
+    const ahead = await commitsBetween(story.repoDir, story.epicBranch, story.branch);
+    if (ahead === null || ahead === 0) {
+      return {
+        story, cost: 0, dod: [], commit: null,
+        failure: asIsNotAheadReason(story.branch, story.epicBranch, ahead),
+        developerError: null, before,
+      };
+    }
+
+    // Refusal 2: the DoD, over the tree that is about to merge — the same
+    // `dodProves`, the same `dodFailureReason`, as every other story.
+    const dod = await this.runDod(story);
+    if (!this.dodProves(dod)) {
+      const failing = dodFailure(dod);
+      return {
+        story, cost: 0, dod, commit: null,
+        failure: failing === undefined
+          ? "the story declares no dod commands, so nothing could prove it"
+          : dodFailureReason(failing, planned.story.repo),
+        developerError: null, before,
+      };
+    }
+
+    // The tip, and deliberately not `commitIfDirty`: uncommitted bytes in this
+    // tree are not what the person signed, and committing them here would put
+    // work on the branch under nobody's name. What the DoD just proved is the
+    // tree as HEAD leaves it; anything else the tree is carrying is rescued by
+    // `settle` under its own record (#129) if the story does not reach `review`.
+    const commit = await headSha(story.worktree);
+    if (commit === "") {
+      return {
+        story, cost: 0, dod, commit: null,
+        failure: `\`${story.branch}\` has no HEAD to take — git could not resolve it`,
+        developerError: null, before,
+      };
+    }
+    return { story, cost: 0, dod, commit, failure: null, developerError: null, before };
+  }
+
   /** Half A for one story: worktree → developer → DoD → commit. */
   private async buildHalf(planned: PlannedStory): Promise<StoryHalf> {
+    // A story a PERSON finished takes the half that spawns nothing (#279). Here
+    // rather than in `driveStory`, because both entries into half A — the serial
+    // loop and the wave's fan-out — come through this one method.
+    const asIs = this.asIsFor(planned);
+    if (asIs !== null) return await this.asIsHalf(planned, asIs);
     // Read BEFORE `setStoryStatus` below overwrites it. A developer that dies
     // without delivering must leave the story exactly where it found it, and
     // "where it found it" stops being readable one line from here.
@@ -1230,6 +1381,11 @@ class BuildSession {
     // cannot settle with attempt 1's command on its record.
     this.refusals.delete(planned.story.id);
     this.capDeaths.delete(planned.story.id);
+    // And no as-is signature either (gh #279). A story whose reviewer asked for
+    // changes over a hand-finished branch is requeued to a REAL developer, and
+    // that attempt's record must not say the branch was taken as it stands —
+    // the one direction in which this record must never be wrong.
+    this.asIsSettlements.delete(planned.story.id);
     // (a)(b)(c) touch the SHARED repo — `git branch`, `git worktree add` — so they
     // go through the one writer even though the sub-agent below does not.
     // `true`: same reason as `prepare()` — the headless developer is dispatched
@@ -2858,6 +3014,9 @@ class BuildSession {
       reason: parts.reason,
       permissionRefused: this.refusals.get(id) ?? null,
       budgetDeath: this.capDeaths.get(id) ?? null,
+      // #279: with no developer spawned, the record must not read as though one
+      // delivered this. Absent on every ordinary settle, where one did.
+      asIs: this.asIsSettlements.get(id) ?? null,
       rescued,
       cost_usd: parts.cost,
     };
@@ -2918,6 +3077,12 @@ class BuildSession {
       // ADDITIVE (gh #277): the cap the developer died on during an attempt the
       // DoD went on to decide. Omitted when there was none.
       ...(outcome.budgetDeath == null ? {} : { budget_death: outcome.budgetDeath }),
+      // ADDITIVE (gh #279): the branch was taken AS IT STANDS and no developer
+      // was spawned for it — with the person who signed that, and their note.
+      // Omitted on every ordinary turn, where absent means what it always meant.
+      ...(outcome.asIs == null
+        ? {}
+        : { as_is: true, as_is_by: outcome.asIs.actor, as_is_note: outcome.asIs.note }),
     });
     // Worktrees survive a `review` on purpose: the second attempt continues in
     // the same tree rather than re-cutting the branch it just wrote. A parked
@@ -2931,6 +3096,7 @@ class BuildSession {
     this.lines.push(
       `  ${status === "done" ? "✓" : "·"} ${id} → \`${status}\`` +
         (outcome.reason === null ? "" : ` (${outcome.reason})`) +
+        (outcome.asIs == null ? "" : ` — ${AS_IS_MARK}; ${outcome.asIs.actor} signed it`) +
         (outcome.permissionRefused == null
           ? ""
           : ` — ${withCure(

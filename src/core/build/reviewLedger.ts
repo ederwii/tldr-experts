@@ -108,6 +108,22 @@ export interface ReviewLedger {
    */
   readonly reopened: { readonly at: string; readonly actor: string; readonly note: string } | null;
   /**
+   * The story is flagged for an AS-IS settlement (#279): a person finished the
+   * work by hand and signed `tldrx story reopen <id> --as-is`, and the next
+   * Build turn must settle the BRANCH AS IT STANDS — DoD, review and merge —
+   * with NO developer spawned.
+   *
+   * Read from the log rather than remembered, like every bound here: the reopen
+   * is its own `tldrx` invocation and the Build that acts on it is another one.
+   *
+   * It OPENS on that event and is CLOSED by the next `task.done` for the story —
+   * one signature, one settlement attempt. That is deliberate and it is the
+   * reason `--as-is` cannot quietly become a mode: a story that settled
+   * `blocked` over a red DoD needs the person to look at the tree again and sign
+   * again, not a second automatic pass over the same branch.
+   */
+  readonly asIs: { readonly at: string; readonly actor: string; readonly note: string } | null;
+  /**
    * The OPEN fix round on this story (issue #58), or null when there is none.
    *
    * A fix round is `tldrx story reopen <id> --for-fix --note "<defect>"`: a DONE
@@ -168,7 +184,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   const empty: ReviewLedger = {
     verdicts: 0, fixlistRounds: 0, erroredWith: null, commit: null, epicBase: null, dod: [],
     lastDodOutputPath: null,
-    developerErroredWith: null, blockedWithNothingRun: false, reopened: null, fixRound: null,
+    developerErroredWith: null, blockedWithNothingRun: false, reopened: null, asIs: null, fixRound: null,
     formatRetries: 0, formatRefusal: null, reviewer: null,
   };
   if (!existsSync(path)) return empty;
@@ -201,6 +217,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   // last measured.
   let lastDodOutputPath: string | null = null;
   let reopened: ReviewLedger["reopened"] = null;
+  let asIs: ReviewLedger["asIs"] = null;
   let fixRound: ReviewLedger["fixRound"] = null;
   let formatRetries = 0;
   let formatRefusal: string | null = null;
@@ -252,6 +269,11 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
       // cleared by a plain reopen either — a fix that blocked and was granted
       // more attempts is the same fix round, still owed.
       if (payload.reason === "fix") fixRound = reopened;
+      // An AS-IS settlement is a flag on the NEXT turn, and only the last
+      // signature counts: a plain reopen after an as-is one means the person
+      // changed their mind and wants a developer, so it clears the flag rather
+      // than leaving two contradictory instructions in the log.
+      asIs = payload.reason === "as_is" ? reopened : null;
       formatRetries = 0;
       formatRefusal = null;
       spawned = null;
@@ -300,6 +322,9 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
       // next named defect may open one of its own (#58). This is the ONLY thing
       // that closes one — the same handshake that closed the story the first time.
       if (payload.status === "done") fixRound = null;
+      // One signature, one settlement attempt (see the field). The turn has
+      // ended — done, blocked or parked — and the flag does not survive it.
+      asIs = null;
       // The COMPAT shape, decided at the moment the attempt ended: blocked with
       // nothing to show for itself and nothing that could have judged it.
       blockedWithNothingRun = payload.status === "blocked"
@@ -402,6 +427,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     developerErroredWith,
     blockedWithNothingRun,
     reopened,
+    asIs,
     fixRound,
     formatRetries,
     formatRefusal,

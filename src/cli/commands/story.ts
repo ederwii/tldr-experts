@@ -38,7 +38,7 @@ export const storyCommand: Command = {
   name: "story",
   summary: "Give one Build story another run of attempts, or widen the paths it declares",
   usage:
-    "tldrx story reopen <id> --note <text> [--for-fix] [--run <id>] [--root <path>]\n" +
+    "tldrx story reopen <id> --note <text> [--for-fix | --as-is] [--run <id>] [--root <path>]\n" +
     "       tldrx story widen <id> <path>… --note <text> [--run <id>] [--root <path>]",
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
@@ -58,11 +58,30 @@ export const storyCommand: Command = {
 function storyReopen(argv: readonly string[]): number {
   try {
     const args = parseArgs(argv, VALUE_FLAGS);
+    // Two different decisions, and typing both says neither of them (#279).
+    // `--for-fix` reopens FINISHED work for one named defect, and what closes
+    // that round is a developer landing the fix; `--as-is` settles UNFINISHED
+    // work a person has already finished by hand, with no developer at all.
+    // Refused rather than resolved in favour of one, for the same reason
+    // `widen` refuses `--for-fix` below: an operator who typed both believes
+    // something, and performing the other thing quietly is the CLI reporting
+    // success for work it did not do. A usage error, and it writes nothing.
+    if (boolFlag(args, "for-fix") && boolFlag(args, "as-is")) {
+      process.stderr.write(
+        "tldrx story reopen: --for-fix and --as-is answer different questions — nothing was written\n"
+        + "  --for-fix opens a fix round on a `done` story: one named defect, landed by a developer.\n"
+        + "  --as-is settles an UNFINISHED story from its branch as it stands, with no developer at all.\n"
+        + "  Type the one you mean.\n"
+        + `${storyCommand.usage}\n`,
+      );
+      return EXIT_USAGE;
+    }
     const outcome = reopenStory({
       root: workspaceRootFrom(args),
       storyId: args.positionals[0] ?? "",
       note: stringFlag(args, "note") ?? "",
       forFix: boolFlag(args, "for-fix"),
+      asIs: boolFlag(args, "as-is"),
       runId: stringFlag(args, "run"),
       actor: currentActor(),
       at: nowRfc3339(),
@@ -84,6 +103,19 @@ function storyReopen(argv: readonly string[]): number {
 function storyWiden(argv: readonly string[]): number {
   try {
     const args = parseArgs(argv, VALUE_FLAGS);
+    // `--as-is` is `reopen`'s for exactly the reason `--for-fix` is: the argv
+    // guard is COMMAND-level, so a flag scoped to the other subcommand still
+    // arrives here, and silently widening instead of settling would be the same
+    // lie (#279).
+    if (boolFlag(args, "as-is")) {
+      process.stderr.write(
+        "tldrx story widen: --as-is is a flag of `reopen`, not of `widen` — nothing was written\n"
+        + "  widening declares a path; `--as-is` settles a story from its branch as it stands.\n"
+        + `  \`tldrx story reopen <id> --as-is --note "<what you did by hand>"\` is the verb you want.\n`
+        + `${storyCommand.usage}\n`,
+      );
+      return EXIT_USAGE;
+    }
     // `--for-fix` is `reopen`'s, and `helpText.ts` scopes it there — but the argv
     // guard (`cli/index.ts`, `declaredFlags`) is COMMAND-level, so nothing
     // upstream stops it arriving here. Refused rather than ignored: an operator
