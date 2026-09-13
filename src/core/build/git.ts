@@ -409,6 +409,42 @@ export async function branchExists(cwd: string, branch: string): Promise<boolean
 }
 
 /**
+ * The worktree that has `branch` checked out, or null when none does.
+ *
+ * `git worktree list --porcelain` prints one stanza per worktree, `worktree <path>`
+ * first and `branch refs/heads/<name>` inside it. Read before a branch is deleted
+ * or renamed (gh #272): a branch a checkout sits on is somebody's working state,
+ * and the framework refuses to move it rather than move the ground under them.
+ * A listing that fails answers `null` — "no checkout found", not "none exists" —
+ * and the callers still get git's own refusal: `git branch -D` on a checked-out
+ * branch fails regardless, and that failure is reported as the reason.
+ */
+export async function worktreeOn(cwd: string, branch: string): Promise<string | null> {
+  const result = await git(["worktree", "list", "--porcelain"], cwd);
+  if (!result.ok) return null;
+  let current: string | null = null;
+  for (const line of result.stdout.split("\n")) {
+    if (line.startsWith("worktree ")) current = line.slice("worktree ".length).trim();
+    else if (line === `branch refs/heads/${branch}` && current !== null) return current;
+  }
+  return null;
+}
+
+/**
+ * `git branch -D <branch>`. `-D` and not `-d` because the CALLER has already
+ * measured what the branch carries (`commitsAhead`) — git's own "not fully
+ * merged" test is against HEAD, which is whatever the operator happens to be on.
+ */
+export async function deleteBranch(cwd: string, branch: string): Promise<GitResult> {
+  return await git(["branch", "-D", branch], cwd);
+}
+
+/** `git branch -m <from> <to>` — the name moves, the commits do not. */
+export async function renameBranch(cwd: string, from: string, to: string): Promise<GitResult> {
+  return await git(["branch", "-m", from, to], cwd);
+}
+
+/**
  * Is `path` in the tree at `ref`? `git cat-file -e <ref>:<path>`, which answers
  * for a blob and for a tree alike and needs no checkout.
  *
@@ -785,6 +821,24 @@ export async function commitsBetween(cwd: string, base: string, head: string): P
   if (!result.ok) return 0;
   const n = Number.parseInt(result.stdout.trim(), 10);
   return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * `commitsBetween`'s STRICT sibling: `null` when git could not count.
+ *
+ * The difference is which way the failure points. `commitsBetween` reads a failed
+ * `rev-list` as 0 because its caller only wants to know whether there is anything
+ * to keep, and "nothing" is the harmless answer there. Here (gh #272) the count
+ * decides whether a branch is DELETED, and a `main` that does not resolve — a
+ * repo whose default branch is named otherwise, a shallow clone — would read as
+ * "nothing beyond the base" and delete commits. `null` makes the caller keep the
+ * branch and say why, which is the only safe reading of "I could not measure".
+ */
+export async function commitsAhead(cwd: string, base: string, head: string): Promise<number | null> {
+  const result = await git(["rev-list", "--count", `${base}..${head}`], cwd);
+  if (!result.ok) return null;
+  const n = Number.parseInt(result.stdout.trim(), 10);
+  return Number.isFinite(n) ? n : null;
 }
 
 /**

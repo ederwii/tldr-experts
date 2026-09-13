@@ -15,6 +15,12 @@ import {
   classifyDirty, namePaths, NAMED_PATHS, shellQuote, stashCommand, submodulePaths,
 } from "./foreignWork.ts";
 import type { NextMode } from "../facilitator/runNext.ts";
+import { basename } from "node:path";
+import type { EventType } from "../events/Event.ts";
+import { PROJECT_WORK_DIR } from "../paths.ts";
+import { isFinished } from "../run/RunFile.ts";
+import { listRunDirs } from "../../hooks/lib/workspace.ts";
+import { releaseRunEpics } from "./epicRelease.ts";
 import type { EpicSummaryRow } from "./handoff.ts";
 import type { BuildRefusal, StoryOutcome } from "./outcome.ts";
 import type { PlannedEpic, PlannedStory } from "./plan.ts";
@@ -30,6 +36,10 @@ export interface ClaimParts {
   readonly branchModel: BranchModel;
   readonly reuseEpic: boolean;
   readonly lines: string[];
+  /** When this Build is entering, for the record a moved-aside leftover gets (gh #272). */
+  readonly at: string;
+  /** This run's own ledger: a leftover moved aside is written on it as well as on its owner's. */
+  readonly emit: (type: EventType, payload: Record<string, unknown>) => void;
 }
 
 /** `run.yml`'s whole `build:` block, or an empty one when the file will not open. */
@@ -91,6 +101,18 @@ export function resolveBranchModel(
  * `epic/leaderboard` with nothing said.
  *
  * `commit` never asks: it continues a story whose epic was claimed at prepare.
+ *
+ * **A leftover is not a claim (gh #272).** Measured 2026-09-13: a cancelled run's
+ * `epic/main-ci-green`, zero commits beyond `main`, refused the ordinary retry —
+ * the same feature, id `…-2` — after $3.70 of what/how/plan. So before refusing,
+ * this reads WHO owns the branch from the claims under `tldrx-work/`. An owner
+ * whose run.yml is explicitly finished (`cancelled` / `done`) left it behind: it
+ * is moved aside by `run cancel`'s rule (`build/epicRelease.ts`), recorded on
+ * both runs, and this run cuts its own. An open owner, an unreadable one, and a
+ * branch NO run claims keep the refusal verbatim — the last because #262's run,
+ * killed between cutting the epic and recording the claim, must find its epic
+ * where it left it on relaunch. Ownership is a RECORD, never "is a process
+ * running": a run parked at a gate has no process and is still the owner.
  */
 export async function foreignEpicRefusal(
   state: EpicState,
@@ -114,16 +136,89 @@ export async function foreignEpicRefusal(
       parts.lines.push(`  · adopting existing \`${branch}\` in ${planned.story.repo} (--reuse-epic)`);
       continue;
     }
-    return {
-      lines: [
-        `[tldrx] build: \`${branch}\` already exists in ${planned.story.repo} and run ${parts.runId} ` +
-          "did not cut it — refusing to stack this run's commits onto someone else's epic.",
-        "  either delete or rename that branch, or run `tldrx next --reuse-epic` to work on it deliberately.",
-      ],
-      error: `epic branch \`${branch}\` was not created by this run`,
-    };
+    const verbatim = [
+      `[tldrx] build: \`${branch}\` already exists in ${planned.story.repo} and run ${parts.runId} ` +
+        "did not cut it — refusing to stack this run's commits onto someone else's epic.",
+      "  either delete or rename that branch, or run `tldrx next --reuse-epic` to work on it deliberately.",
+    ];
+    const error = `epic branch \`${branch}\` was not created by this run`;
+    // Whose is it? (gh #272) Read from the CLAIMS under tldrx-work/ — never from
+    // "is a process running", because a run killed mid-Build or parked eight
+    // hours at a gate has no process and is still the owner.
+    const owners = epicClaimants(parts.root, branch, parts.runId);
+    if (owners.unreadable.length > 0) {
+      return { lines: [...verbatim, `  · ${owners.unreadable.join(", ")} could not be read, so who owns it is unknown`], error };
+    }
+    const open = owners.claimants.filter((store) => !isFinished(store.run.status));
+    if (open.length > 0) {
+      const named = open.map((store) => `${store.runId} (${store.run.status})`).join(", ");
+      return { lines: [...verbatim, `  · claimed by run ${named}, which is still open`], error };
+    }
+    const owner = owners.claimants[0];
+    if (owner === undefined) {
+      // No claim anywhere. A run killed between cutting the epic and recording
+      // the claim (#262) leaves exactly this, and its relaunch must find its
+      // epic where it left it — moving it aside would be worse than refusing.
+      return {
+        lines: [...verbatim, `  · no run under ${PROJECT_WORK_DIR}/ records cutting it, so it is nobody's leftover to move`],
+        error,
+      };
+    }
+    // The owner's run.yml says it is finished: the branch is a leftover, not a
+    // claim. Same rule as `run cancel` — delete an empty one, rename one that
+    // carries commits — recorded on the owner and on this run.
+    const status = owner.run.status;
+    const released = await releaseRunEpics({
+      root: parts.root, owner, actor: "facilitator", at: parts.at, via: "build",
+      reason: `run ${parts.runId} needs the name and ${owner.runId} is ${status}`,
+      only: { repo: planned.story.repo, branch },
+      emitAlso: parts.emit,
+    });
+    const record = released.released[0];
+    // Neither released nor kept: the branch went away between the two reads.
+    // Nothing is in the way any more, so this run cuts its own as it would have.
+    if (record === undefined && released.kept.length === 0) continue;
+    if (record === undefined) {
+      const why = released.kept[0]?.reason ?? "it could not be moved";
+      return {
+        lines: [
+          `[tldrx] build: \`${branch}\` already exists in ${planned.story.repo}, left by run ${owner.runId} ` +
+            `(${status}), and could not be moved aside — ${why}.`,
+          verbatim[1] ?? "",
+        ],
+        error,
+      };
+    }
+    state.released.push({ record, owner: owner.runId, ownerStatus: status });
+    parts.lines.push(`  · \`${branch}\` in ${planned.story.repo} was left by run ${owner.runId} (${status}) — ${
+      record.outcome === "deleted"
+        ? `deleted: no commit beyond \`${record.base}\``
+        : `renamed to \`${record.renamed_to ?? ""}\`: ${String(record.commits)} commit(s) beyond \`${record.base}\` survive there`
+    }; this run cuts its own`);
   }
   return null;
+}
+
+/** Every OTHER run under `tldrx-work/` whose `build.epic_branch` claims `branch`, newest first. */
+function epicClaimants(
+  root: string,
+  branch: string,
+  exceptRunId: string,
+): { readonly claimants: readonly RunStore[]; readonly unreadable: readonly string[] } {
+  const claimants: RunStore[] = [];
+  const unreadable: string[] = [];
+  for (const dir of listRunDirs(root)) {
+    if (basename(dir) === exceptRunId) continue;
+    let store: RunStore;
+    try {
+      store = RunStore.open(dir);
+    } catch {
+      unreadable.push(`${PROJECT_WORK_DIR}/${basename(dir)}/run.yml`);
+      continue;
+    }
+    if ((store.run.build?.epic_branch ?? []).includes(branch)) claimants.push(store);
+  }
+  return { claimants, unreadable };
 }
 
 /**

@@ -13,11 +13,27 @@ import {
 import type { GatesPolicy } from "./gatePolicy.ts";
 import type { QuestionsPolicy } from "./questionsPolicy.ts";
 import type {
-  RunFile, RunGate, RunGateAuthority, RunGateEvidence, RunGateExecutor, RunStage, RunTask,
+  EpicReleaseRecord, RunFile, RunGate, RunGateAuthority, RunGateEvidence, RunGateExecutor, RunStage, RunTask,
 } from "./RunFile.ts";
 
 function inlineList(values: readonly string[]): string {
   return `[${values.map((v) => yamlScalar(v)).join(", ")}]`;
+}
+
+/** One `build.epic_released` row (gh #272); `renamed_to` only when there is one. */
+function epicRelease(row: EpicReleaseRecord): string {
+  const parts = [
+    `branch: ${yamlScalar(row.branch)}`,
+    `repo: ${yamlScalar(row.repo)}`,
+    `outcome: ${yamlScalar(row.outcome)}`,
+    ...(row.renamed_to === undefined ? [] : [`renamed_to: ${yamlScalar(row.renamed_to)}`]),
+    `commits: ${String(row.commits)}`,
+    `base: ${yamlScalar(row.base)}`,
+    `via: ${yamlScalar(row.via)}`,
+    `at: ${yamlScalar(row.at)}`,
+    `reason: ${yamlScalar(row.reason)}`,
+  ];
+  return `{${parts.join(", ")}}`;
 }
 
 function money(n: number): string {
@@ -218,7 +234,12 @@ export function emitRunYaml(run: RunFile): string {
     const model = run.build.branch_model === undefined
       ? ""
       : `, branch_model: ${yamlScalar(run.build.branch_model)}`;
-    lines.push(`build: {epic_branch: ${inlineList(run.build.epic_branch)}${model}}`);
+    // Same rule a third time (gh #272): the release records ride on the claim
+    // line only once one exists, so every run.yml without one is byte-identical.
+    const released = run.build.epic_released === undefined || run.build.epic_released.length === 0
+      ? ""
+      : `, epic_released: [${run.build.epic_released.map(epicRelease).join(", ")}]`;
+    lines.push(`build: {epic_branch: ${inlineList(run.build.epic_branch)}${model}${released}}`);
   }
   // Same rule as `triage`: emitted only when it is there, so a run.yml written
   // before `run cancel` existed round-trips byte-for-byte through a save.

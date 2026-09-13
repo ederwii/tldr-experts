@@ -450,8 +450,48 @@ export interface RunCancellation {
  * cuts or adopts an epic branch, and every reader that never heard of it is
  * unaffected.
  */
+export const EPIC_RELEASE_OUTCOMES = ["deleted", "renamed"] as const;
+export type EpicReleaseOutcome = (typeof EPIC_RELEASE_OUTCOMES)[number];
+
+/** Which command released the branch: the run's own cancel, or a later Build entering over it. */
+export const EPIC_RELEASE_VIAS = ["run cancel", "build"] as const;
+export type EpicReleaseVia = (typeof EPIC_RELEASE_VIAS)[number];
+
+/**
+ * What became of ONE claimed epic branch after the run no longer needed it
+ * (gh #272). ADDITIVE, beside the claim it describes and never instead of it:
+ * `epic_branch` keeps saying what the run cut, and this says where that name went.
+ *
+ * `deleted` is only ever written for a branch with `commits: 0` beyond `base` —
+ * nothing to lose. `renamed` carries `renamed_to`, the `epic/<slug>@<run-id>`
+ * name the commits survive under, so a person reading the run — not only the
+ * repo's branch list — can find them.
+ */
+export interface EpicReleaseRecord {
+  readonly branch: string;
+  readonly repo: string;
+  readonly outcome: EpicReleaseOutcome;
+  /** Present iff `outcome` is `renamed`. */
+  readonly renamed_to?: string;
+  /** Commits the branch carried beyond `base` when it was released. */
+  readonly commits: number;
+  readonly base: string;
+  readonly via: EpicReleaseVia;
+  readonly at: string;
+  readonly reason: string;
+}
+
 export interface RunBuild {
   readonly epic_branch: readonly string[];
+  /**
+   * What became of each claimed branch once the run was finished (gh #272).
+   * ADDITIVE and optional: absent on every run.yml written before the key, and
+   * on every run whose epic nothing has released. Written by `tldrx run cancel`
+   * for its own claims, and by a LATER run's Build for a leftover it moved aside
+   * — in which case the record lands here, on the run that cut the branch,
+   * because that is where a person looking for the branch will look.
+   */
+  readonly epic_released?: readonly EpicReleaseRecord[];
   /**
    * Which branch model this run's Build is executing (issue #57): `per-epic`,
    * or `integration` when the plan's epics form a dependency chain and every
@@ -792,6 +832,22 @@ export function validateRunFile(input: unknown): ValidationResult {
         issues.push({
           path: "build.branch_model",
           message: `expected one of ${BRANCH_MODELS.join(" | ")}`,
+        });
+      }
+      // Optional (gh #272): absent on every run.yml written before the key existed.
+      if (requireArray(doc.build.epic_released, "build.epic_released", issues)) {
+        (doc.build.epic_released as unknown[]).forEach((row, i) => {
+          const path = `build.epic_released[${i}]`;
+          if (!isRecord(row)) {
+            issues.push({ path, message: "expected a mapping" });
+            return;
+          }
+          requireKeys(row, ["branch", "repo", "outcome", "commits", "base", "via", "at", "reason"], path, issues);
+          for (const key of ["branch", "repo", "base", "at", "reason"]) requireString(row[key], `${path}.${key}`, issues);
+          requireEnum(row.outcome, EPIC_RELEASE_OUTCOMES, `${path}.outcome`, issues);
+          requireEnum(row.via, EPIC_RELEASE_VIAS, `${path}.via`, issues);
+          requireNumber(row.commits, `${path}.commits`, issues);
+          if (row.renamed_to !== undefined) requireString(row.renamed_to, `${path}.renamed_to`, issues);
         });
       }
     } else {

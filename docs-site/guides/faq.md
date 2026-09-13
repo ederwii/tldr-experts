@@ -113,7 +113,7 @@ tldrx reject --note "…"                    # send this stage back; the note re
 tldrx reject --stage 02-how/how --note "…" # revoke an approval already given
 tldrx story reopen S3 --note "…"           # just this one build story
 tldrx story reopen S3 --for-fix --note "…" # one named defect in a story already done
-tldrx run cancel --note "superseded"       # close the run for good; nothing is deleted
+tldrx run cancel --note "superseded"       # close the run for good; its epic branch is released, its files stay
 ```
 
 ## What do the exit codes mean?

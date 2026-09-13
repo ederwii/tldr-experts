@@ -147,6 +147,19 @@ import {
  * dirty branch is warned about on stdout and changed by nothing, so it has no
  * event, because nothing happened.
  *
+ * `epic.released` was added 2026-09-13 (issue #272). It is the third event that
+ * records tldrx touching a REF on the operator's behalf: an `epic/<slug>` branch
+ * a FINISHED run claimed, released so the name is free for the next run of the
+ * same feature — deleted when it carried no commit beyond its base, renamed to
+ * `epic/<slug>@<run-id>` when it did. Written by `tldrx run cancel` on its own
+ * run, and by a later run's Build on BOTH ledgers — the owner's and its own —
+ * when it finds a leftover whose owner's run.yml says `cancelled` or `done`. Its
+ * payload carries `branch`, `repo`, `outcome` (`deleted` | `renamed`),
+ * `renamed_to` (null unless renamed), `commits` (beyond `base`), `base`, `owner`
+ * (the run that cut it), `via` (`run cancel` | `build`) and `reason`. A branch
+ * left alone — checked out somewhere, or one git would not count — has no event,
+ * because nothing happened; the operator line says why.
+ *
  * `run.relaunched` was added 2026-09-12 (issue #252), for `tldrx run auto
  * --until-done`. It is the loop being run AGAIN by its own process after an exit
  * it could do nothing else with — a stage failure past `--retry-failed`, a throw,
@@ -169,6 +182,7 @@ export const EVENT_TYPES = [
   "questions.policy_changed",
   "story.reopened", "story.base_fastforwarded", "story.review_retried", "story.work_rescued",
   "story.touches_widened",
+  "epic.released",
   "worktree.foreign_work_aside", "worktree.foreign_work_restored",
   "result.unreadable",
   "input.truncated",

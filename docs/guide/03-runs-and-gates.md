@@ -788,7 +788,11 @@ uncommitted `--prepare` bundle is not a lock).
 **`cancel`** closes a run for good: every non-terminal stage becomes `cancelled`, the
 decision is recorded on the run itself (`cancelled: {by, at, note}`) and `run.cancelled` is
 appended — which is what lets a FAILED run be closed without overwriting the failure on its
-stages. Refuses while a live lock holds the run unless `--force`. Nothing is deleted —
+stages. Refuses while a live lock holds the run unless `--force`. It also releases the epic
+branch the run claimed: `epic/<slug>` with no commit beyond the default branch is deleted,
+one with commits is renamed to `epic/<slug>@<run-id>` — so the next run for the same feature
+cuts its own instead of being refused for stacking onto "someone else's epic" (#272). Story
+branches are never touched. Nothing of the run itself is deleted —
 `tldrx replay <id>` still reads the whole thing — and a cancelled run is finished, so
 `tldrx status` and every id-less command stop seeing it.
 

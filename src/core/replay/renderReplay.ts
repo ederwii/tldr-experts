@@ -239,6 +239,17 @@ function bullet(item: NumberedEvent, trail: Map<string, ReviewerProvenance | nul
     // The other one (#129). A narrative that showed a story blocked and its
     // worktree gone, with nothing in between, would be the narrative of the
     // incident this event exists to make impossible: work destroyed in silence.
+    // The third ref tldrx moves on the operator's behalf (#272): a finished run's
+    // epic, released so the next run of the same feature can cut its own. The
+    // narrative names where the commits went, because "the branch is gone" with
+    // nothing in between is the sentence the rename exists to make untrue.
+    case "epic.released":
+      return `${prefix}epic \`${text(payload.branch) || "?"}\` of run ${text(payload.owner) || "?"} `
+        + (text(payload.outcome) === "deleted"
+          ? `deleted — no commit beyond \`${text(payload.base) || "?"}\``
+          : `renamed to \`${text(payload.renamed_to) || "?"}\` — ${String(payload.commits ?? "?")} commit(s) `
+            + `beyond \`${text(payload.base) || "?"}\` survive there`)
+        + ` (${text(payload.via) || "?"})`;
     case "story.work_rescued":
       return `${prefix}story ${text(payload.story) || "?"}'s UNCOMMITTED work rescued to`
         + ` \`${text(payload.branch) || "?"}\` as ${text(payload.sha) || "?"}`

@@ -28,6 +28,32 @@
 
 ### Fixed
 
+- **A cancelled run's epic branch no longer blocks the next run for the same feature: `run cancel`
+  releases it, and Build moves a finished run's leftover aside instead of refusing it as someone
+  else's (#272).** Measured 2026-09-13 on a headless proof run at a509dca: run A had cut
+  `epic/main-ci-green` and was cancelled; the ordinary retry after a cancelled attempt — same
+  feature, id `…-2` — reached Build and was refused, "already exists … did not cut it — refusing to
+  stack this run's commits onto someone else's epic", relaunched once under `--until-done`, got the
+  same last line and stopped as #252 designed. $3.70 of what/how/plan died on a leftover with ZERO
+  commits beyond `main` — the only work of the cancelled run sat on its story branch (#129), which
+  nothing touches. Two halves, one rule. `tldrx run cancel` now releases every branch its
+  `build.epic_branch` claims, after `closeRun` has taken the run's epic worktrees back: no commit
+  beyond the repo's default branch → deleted (it was the base under another name); commits → renamed
+  to `epic/<slug>@<run-id>` (one derivation, `build/epicRelease.ts`) so they survive under a name
+  that says whose they were; checked out somewhere → left alone and the checkout named; a base git
+  cannot count against → left alone, because a miscounted zero there deletes commits. And Build, at
+  the refusal, reads WHO owns the branch from the claims under `tldrx-work/`: an owner whose
+  `run.yml` is explicitly `cancelled` or `done` — never "no process", since a run killed mid-Build or
+  parked at a gate has no process and is still the owner — left a leftover, and Build moves it
+  aside by the same rule and cuts its own; an open owner, an unreadable owner, and a branch NO run
+  claims keep the refusal verbatim with one line naming which — the unclaimed case is what #262's
+  killed-mid-cut run leaves, and its relaunch must find its epic where it left it. Every move is
+  written where a person reads it, not only in the branch list: the owner's run.yml
+  (`build.epic_released`, additive), its `04-build/handoff.md` when it wrote one, an `epic.released`
+  event on its ledger and — from Build — on the new run's ledger and in its handoff's Decisions.
+  Pinned against a real repo: delete / rename-with-commits-surviving / worktree-kept for the cancel
+  half, and owner-cancelled → renamed + fresh epic + both records, owner-open → verbatim exit 2,
+  no-claim → verbatim exit 2 for the Build half; the golden build is byte-identical.
 - **A permission refusal on a story whose tree holds work no longer blocks it before the
   facilitator's own Definition of Done can measure it, and the developer is told why a plumbed
   DoD line is refused (#271).** Measured 2026-09-12 on a headless `run auto --until-done` at

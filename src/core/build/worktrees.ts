@@ -19,6 +19,7 @@ import { join, relative } from "node:path";
 import { PROJECT_FRAMEWORK_DIR, epicWorktreeName } from "../paths.ts";
 import { epicWorktreeSlotOf, type BranchModel } from "../plan/branchModel.ts";
 import type { EventType } from "../events/Event.ts";
+import type { EpicReleaseNote } from "./handoff.ts";
 import type { PlanStatus } from "../schemas/planCommon.ts";
 import {
   addWorktree, assertWorktreeOn, baseStateOf, commitAll, dirtyPaths, fastForward, firstLine, headSha,
@@ -44,6 +45,11 @@ export class EpicState {
   private readonly merged = new Map<string, { id: string; carried: number | null }[]>();
   /** Epic branches this run cut or adopted; `runNext` writes them to run.yml. */
   readonly claimed = new Set<string>();
+  /**
+   * Stale epics this invocation moved aside before cutting its own (gh #272) —
+   * the handoff's Decisions bullets. Empty on every ordinary Build.
+   */
+  readonly released: EpicReleaseNote[] = [];
   /**
    * Epic branches on which at least one story's DoD ran SCOPED (#257) — the
    * only epics whose head owes a full run. An epic whose every story ran the
