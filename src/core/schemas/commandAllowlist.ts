@@ -99,3 +99,52 @@ export function iterationOnlyDodMessage(command: string): string {
     + "the suite that proves the story. Name the repo's `test` command instead — the gate re-runs "
     + "what the dod block names, after the developer has stopped.";
 }
+
+/**
+ * The `<slot>_scoped` suffix — a TEMPLATE beside a declared slot, never a command
+ * (#257, measured 2026-09-12).
+ *
+ * One 8-story epic put 99 `check.*` events on its ledger: every story's Definition
+ * of Done ran the whole declared list — the full suite among it — on every attempt
+ * and every fix round, and the epic head that actually ships was never run at all.
+ * The DoD is a DELTA gate ("this story did not break the tree"), proven until now
+ * by running everything because nothing narrower existed.
+ *
+ * `commands.test_scoped: "pytest {{paths}}"` is the narrower thing. It shadows
+ * `test:` for a story's OWN check — `{{paths}}` becomes the story's changed paths,
+ * substituted at the argv level — and the full `test:` then runs once per epic, on
+ * the epic head, before the gate. The template is deliberately NOT in the
+ * allowlist: it is not citable, the developer is never handed it, and a ```dod
+ * line naming it is refused at Plan time with a sentence naming the slot — the
+ * story's dod names the FULL command, and the runner decides the scope.
+ */
+export const SCOPED_SUFFIX = "_scoped";
+
+/** The one token a scoped template must carry, as a whole word, exactly once. */
+export const PATHS_PLACEHOLDER = "{{paths}}";
+
+/** `test_scoped` → `test`; null for any key that is not a scoped slot. */
+export function scopedSlotOf(slot: string): string | null {
+  if (!slot.endsWith(SCOPED_SUFFIX)) return null;
+  const base = slot.slice(0, -SCOPED_SUFFIX.length);
+  return base === "" ? null : base;
+}
+
+/**
+ * Whether a template is usable: `{{paths}}` present as a whole word, once.
+ * `x{{paths}}` is one token to argv splitting and cannot be substituted; two
+ * tokens would run the paths twice.
+ */
+export function isScopedTemplate(value: string): boolean {
+  const words = value.split(/\s+/).filter((w) => w !== "");
+  return words.filter((w) => w === PATHS_PLACEHOLDER).length === 1
+    && !words.some((w) => w !== PATHS_PLACEHOLDER && w.includes(PATHS_PLACEHOLDER));
+}
+
+/** The refusal when a dod line names a repo's `<slot>_scoped` template. */
+export function scopedOnlyDodMessage(command: string): string {
+  return `\`${command}\` is one of this repo's \`${SCOPED_SUFFIX}\` templates, and a Definition of Done `
+    + `may not name it: a \`<slot>${SCOPED_SUFFIX}\` entry is how the gate narrows the FULL command to the `
+    + "story's own paths, not a command of its own. Name the repo's full command instead — the gate "
+    + "substitutes the template itself, and runs the full command once on the epic head.";
+}

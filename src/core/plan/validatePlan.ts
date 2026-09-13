@@ -83,6 +83,8 @@ export function validatePlan(
   planDir: string,
   allowed: ReadonlySet<string> = new Set(),
   iterationOnly: ReadonlySet<string> = new Set(),
+  /** The repos' `<slot>_scoped` templates — refused by the same rule, its own sentence (#257). */
+  scopedOnly: ReadonlySet<string> = new Set(),
 ): PlanReport {
   const issues: PlanIssue[] = [];
   const add = (file: string, list: readonly ValidationIssue[]): void => {
@@ -110,7 +112,7 @@ export function validatePlan(
   for (const name of storyFiles) {
     const rel = `${STORIES_DIR}/${name}`;
     const parsed = validateStoryFile(
-      readFileSync(join(planDir, STORIES_DIR, name), "utf8"), allowed, iterationOnly,
+      readFileSync(join(planDir, STORIES_DIR, name), "utf8"), allowed, iterationOnly, scopedOnly,
     );
     add(rel, parsed.validation.issues);
     const story = parsed.story;

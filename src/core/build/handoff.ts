@@ -12,7 +12,7 @@
  *   Unknowns        the stories that are not done, or `- none` with what was looked at
  *   Evidence ledger every dod command that ran, as `[src: $ <cmd> → exit <n>]`
  */
-import { DOD_REFUSAL_FALLBACK, dodRefused } from "./outcome.ts";
+import { DOD_REFUSAL_FALLBACK, dodRefused, scopedNote } from "./outcome.ts";
 import type { StoryOutcome } from "./outcome.ts";
 import type { CarriedRow, UnreadableStory } from "./carriedRows.ts";
 import { PLAN_STATUSES, type PlanStatus } from "../schemas/planCommon.ts";
@@ -607,7 +607,9 @@ function ledger(outcomes: readonly StoryOutcome[]): readonly string[] {
           // no exit code is only reachable from a truncated `events.jsonl`, and
           // `?` fails the `digit+` grammar CLOSED rather than printing the word
           // `undefined` as if it were a measurement.
-          : `- ${outcome.id}: \`${result.command}\` in ${outcome.repo} `
+          // A scoped row (#257) names the line that RAN in prose; the citation
+          // stays the DECLARED command, the only one the `cmd` grammar resolves.
+          : `- ${outcome.id}: \`${result.rendered ?? result.command}\`${scopedNote(result)} in ${outcome.repo} `
             + `[src: $ ${result.command} → exit ${String(result.exitCode ?? "?")}]`,
       );
     }

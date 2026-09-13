@@ -81,6 +81,13 @@ export interface InstallParts {
   readonly timeoutMs: number;
   readonly phaseId: string;
   readonly emit: (type: EventType, payload: Record<string, unknown>) => void;
+  /**
+   * The EPIC branch, when the tree being installed into is the epic worktree
+   * rather than a story's (#257): the epic-head full run needs its dependencies
+   * too, and the record has to say which tree paid for them. Absent — and the
+   * key omitted — on every per-story install.
+   */
+  readonly lane?: string;
 }
 
 /**
@@ -133,6 +140,7 @@ export async function runWorktreeInstall(parts: InstallParts): Promise<InstallCh
     duration_ms: check.durationMs,
     tree: WORKTREE_TREE,
     detail: failed ? (check.refusedBecause ?? check.tail) : "",
+    ...(parts.lane === undefined ? {} : { lane: parts.lane }),
   });
   return check;
 }

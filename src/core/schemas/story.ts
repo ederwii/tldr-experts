@@ -23,7 +23,7 @@ import {
   type PlanStatus, type StoryStakes,
 } from "./planCommon.ts";
 import { parseFrontMatter } from "./frontMatter.ts";
-import { allowlistIssue, iterationOnlyDodMessage } from "./commandAllowlist.ts";
+import { allowlistIssue, iterationOnlyDodMessage, scopedOnlyDodMessage } from "./commandAllowlist.ts";
 
 export interface Story {
   readonly version: number;
@@ -201,6 +201,7 @@ export function validateStoryDod(
   allowed: ReadonlySet<string>,
   base = "dod",
   iterationOnly: ReadonlySet<string> = new Set(),
+  scopedOnly: ReadonlySet<string> = new Set(),
 ): readonly ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   if (!dod.present) {
@@ -215,9 +216,15 @@ export function validateStoryDod(
     // Checked BEFORE the allowlist, because a `test_fast` command passes the allowlist:
     // it is declared. The narrower refusal is the true one, and the generic sentence
     // ("not one of workspace.yml's commands") would be false about it.
+    // A `<slot>_scoped` template is not in the allowlist at all (#257), so the
+    // generic refusal would fire on its own — but it would say "not one of
+    // workspace.yml's commands" about a line the file plainly carries. The
+    // sentence that names the suffix is the true one.
     const message = iterationOnly.has(command)
       ? iterationOnlyDodMessage(command)
-      : allowlistIssue(command, allowed, "story");
+      : scopedOnly.has(command)
+        ? scopedOnlyDodMessage(command)
+        : allowlistIssue(command, allowed, "story");
     if (message !== null) issues.push({ path: `${base}[${i}]`, message });
   });
   return issues;
@@ -241,6 +248,7 @@ export function validateStoryFile(
   text: string,
   allowed: ReadonlySet<string> = new Set(),
   iterationOnly: ReadonlySet<string> = new Set(),
+  scopedOnly: ReadonlySet<string> = new Set(),
 ): StoryFile {
   const parsed = parseFrontMatter(text);
   const dod = parseDodBlock(parsed.frontMatter.body);
@@ -248,7 +256,7 @@ export function validateStoryFile(
     return { story: null, dod, validation: result([parsed.issue]) };
   }
   const front = validateStory(parsed.doc);
-  const issues = [...front.issues, ...validateStoryDod(dod, allowed, "dod", iterationOnly)];
+  const issues = [...front.issues, ...validateStoryDod(dod, allowed, "dod", iterationOnly, scopedOnly)];
   return {
     story: front.ok ? asStory(parsed.doc) : null,
     dod,

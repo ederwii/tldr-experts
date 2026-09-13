@@ -55,6 +55,23 @@ export interface DodResult {
   readonly refusedBecause?: string;
   /** The measured exit. Absent — and only ever absent — when `status` is `refused`. */
   readonly exitCode?: number;
+  /**
+   * Which proof this row is (#257): `paths` ⇒ the repo's `<slot>_scoped` template
+   * ran over `paths`, and `command` is the RENDERED line; `full` ⇒ the declared
+   * command ran whole. ADDITIVE: absent means the repo declares no template, which
+   * is every record written before the suffix existed, and every one of those
+   * was a full run.
+   */
+  readonly scope?: "paths" | "full";
+  /** The paths a `scope: "paths"` row was narrowed to. Present only on that scope. */
+  readonly paths?: readonly string[];
+  /**
+   * The line that actually RAN on a `scope: "paths"` row — the template with
+   * the paths in place. `command` above stays the DECLARED command on every row,
+   * because that is what a story's evidence cites and what the `[src: $ …]`
+   * grammar can resolve; a rendered template is not citable by design.
+   */
+  readonly rendered?: string;
   readonly timedOut: boolean;
   /**
    * One line of the combined output — the operator's first clue.
@@ -243,6 +260,16 @@ export function mergedNothing(outcome: Pick<StoryOutcome, "carried">): boolean {
   return outcome.carried === 0;
 }
 
+/**
+ * ` (the story's \`npm run test\`, scoped to 2 path(s))` on a row that ran a
+ * `<slot>_scoped` template; empty on every other row (#257). One spelling, for
+ * the failure reason and the review log both.
+ */
+export function scopedNote(result: Pick<DodResult, "scope" | "paths" | "command" | "rendered">): string {
+  if (result.scope !== "paths" || result.rendered === undefined) return "";
+  return ` (the story's \`${result.command}\`, scoped to ${String(result.paths?.length ?? 0)} path(s))`;
+}
+
 export function dodGreen(outcome: Pick<StoryOutcome, "dod">): boolean {
   return outcome.dod.length > 0
     && outcome.dod.every((r) => !dodRefused(r) && r.exitCode === 0 && !r.timedOut);
@@ -268,7 +295,7 @@ export function dodFailureReason(result: DodResult, repo: string): string {
   // The kept output is CITED, not inlined: this sentence is a bullet in the
   // handoff and a line on the executor's stdout, and the whole failure report
   // belongs in the file the citation names (#211).
-  return `\`${result.command}\` exited ${String(result.exitCode ?? "?")} in repo ${repo}`
+  return `\`${result.rendered ?? result.command}\`${scopedNote(result)} exited ${String(result.exitCode ?? "?")} in repo ${repo}`
     + `${result.timedOut ? " (timed out)" : ""} — ${result.tail}`
     + (result.outputPath === undefined
       ? ""
