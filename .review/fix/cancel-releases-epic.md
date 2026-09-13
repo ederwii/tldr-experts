@@ -1,6 +1,6 @@
-verdict: fixes required
+verdict: merge
 reviewed-by: Claude Opus 5 (tldr-experts-6d) — a fresh reviewer that did not write this branch. No conflict to declare: I wrote neither `run cancel` nor `branchClaims`' refusal. I did set the three design constraints this branch implements, so the sections below say which findings are mine being checked against, and which are new.
-against: ca0f209
+against: e2cfd1b
 
 ## The three constraints I asked for are all met, measured
 
@@ -20,12 +20,14 @@ The third is the one I asked for explicitly: had it renamed, a run killed before
 
 Also verified: `asideBranchOf` is the single constructor of `epic/<slug>@<run-id>` with one consumer (§7); the three declared mutations match in count and identity (4 / 1 / 1); `build-golden` 4/4 with an empty fixtures diff; the `machine-load` row is automatic and reconciles (92→93 spawners); §2.2's new `build` row matches the real `run.yml` key for key.
 
-## Fixes required — two tests on the fail-safe path
+## Second pass — the two fail-safe tests are in, and I ran the mutation myself
 
-Both behaviours below are **correct today** and were confirmed by running them. Neither has a test: the reviewer had to exercise them by hand. They are the guards on the one path in this branch that **deletes a branch**, so leaving them unpinned is how the defect this branch carefully avoided comes back.
+Both behaviours were correct at `ca0f209` but had no test — the reviewer had to exercise them by hand. They guard the one path in this branch that **deletes a branch**, so unpinned was how the defect this branch carefully avoided would have come back. **Both are now pinned at `e2cfd1b`.**
 
-1. **`commitsAhead === null` ⇒ the branch is kept.** This is the whole reason `commitsAhead` exists separately from `commitsBetween` (which reads a failed `rev-list` as `0` — now filed as #273). If a later change "simplifies" `commitsAhead` to return `0` on failure, every test stays green and branches begin to be deleted because git could not be asked. One test.
-2. **An unreadable owner `run.yml` ⇒ the verbatim refusal, branch untouched.** The safe direction on a read failure, unpinned.
+1. **`commitsAhead === null` ⇒ the branch is kept.** **Verified by me at `e2cfd1b`, running the mutation rather than reading the claim**: rewriting `epicRelease.ts:89` to `(await commitsAhead(...)) ?? 0` — the exact "simplification" a later change might make — reddens **one** test and it is the right one, *"an epic git could NOT count against its base is KEPT — an uncounted branch is never deleted"*. Baseline 11/11 exit 0; mutated exit 1 with that single failure; file restored, tree clean. The marker is exported (`uncountedReason`), so the assertion is anchored to a symbol rather than to prose (§8).
+2. **An unreadable owner `run.yml` ⇒ the verbatim refusal, branch untouched.** Pinned: both verbatim lines plus the context line, exit 2, the branch at its own sha, no aside and no event.
+
+**The three weak assertions are fixed**, and the fix is better than a rename: `OWNER` and `ASIDE` are literals with a comment saying why (*"literal, so the aside names below are literal too"*), so `renamed_to` is compared against `epic/e1@260829-build` written out rather than against `asideBranchOf` reproducing itself. `toContain("deleted")` and `not.toBe(2)` are gone (0 occurrences each); the remaining `asideBranchOf` uses are the single format pin and three **negative** assertions, where a tautology cannot manufacture a pass.
 
 ## Non-blocking, recorded
 
