@@ -181,7 +181,11 @@ const BUDGET_FIELDS: Readonly<Record<BudgetKey, Field>> = {
     value: "{S1: 4.75}",
     rule: "`<story id>: <usd>`, one entry per scheduled story, every value a number. Keyed by STORY "
       + "despite the name (the run's own budget.yml keys the same map by phase), and it is the ONLY key "
-      + "anything prices from: a `stories:` list or an `estimate_usd` field validates nothing and prices nothing",
+      + "anything prices from: a `stories:` list or an `estimate_usd` field validates nothing and prices nothing. "
+      + "Each number is a CEILING the story's developer is dispatched under, not a forecast of what it will "
+      + "spend: budget the expensive case, not the expected one. A story that has to read unfamiliar code, "
+      + "run a real test suite and come back from one red is worth several times what a quick edit looks like "
+      + "from here, and stories priced at a couple of dollars are almost always priced too low",
   },
 };
 
@@ -367,6 +371,13 @@ export function renderPlanSchemaContract(): string {
     "not. Exactly these keys, all required:",
     "",
     ...ruleTable(["version", ...BUDGET_REQUIRED_KEYS], BUDGET_FIELDS),
+    "",
+    "Price the EXPENSIVE case. These numbers are read as ceilings, not as estimates: the Build executor",
+    "derives each story's developer ceiling from its price here, so a story priced below what it costs",
+    "dies mid-change having spent the money and delivered nothing, while one priced above it simply",
+    "costs what it costs. The error is not symmetric, so do not write the expected cost — write a high",
+    "percentile of it. You are pricing this before reading the code, which is exactly when an estimate",
+    "is least worth trusting.",
     "",
     "An optional `economy: host-tokens` at the root says the numbers are tokens, not dollars — it",
     "validates and it prices nothing, because a token figure must never become a dollar cap. Leave",

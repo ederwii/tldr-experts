@@ -24,7 +24,8 @@
  * `03-plan/budget.yml` run through the same scale/share arithmetic, the developer
  * and reviewer shares, `REVIEWER_FLOOR_USD`, and the attempts each story has left
  * — including WHICH attempts, since gh #91 prices a priced story's first turn and
- * its second differently (`developerPriceDivisor`).
+ * its second differently (`developerAttemptDivisor`), over the raised per-story
+ * ceiling gh #277 derives at dispatch.
  *
  * Three sources, all already on disk and none of them a projection:
  *
@@ -67,8 +68,9 @@
  *
  * ## Why the constants are mirrored rather than imported
  *
- * `MAX_ATTEMPTS`, `REVIEWER_SHARE`, `REVIEWER_FLOOR_USD` and
- * `developerPriceDivisor` live in `facilitator/executors/build.ts`, which drags
+ * `MAX_ATTEMPTS`, `REVIEWER_SHARE`, `REVIEWER_FLOOR_USD`,
+ * `STORY_CAP_MULTIPLIER`, `STORY_CAP_FLOOR_USD`, `developerAttemptDivisor` and
+ * `storyCeilingUsd` live in `facilitator/executors/build.ts`, which drags
  * `spawnAgent`, `RunStore` and the git seam in behind it. This module is loaded by the `budget-gate` PreToolUse
  * hook, which runs before every Bash call a session makes and must stay cheap.
  * The numbers are therefore restated here and `test/remaining-work.test.ts`
@@ -89,17 +91,18 @@ export const MAX_ATTEMPTS = STAGE_TUNING_DEFAULTS.attempts;
 export const REVIEWER_SHARE = STAGE_TUNING_DEFAULTS.reviewerShare;
 /** Mirrors `build.ts`. */
 export const REVIEWER_FLOOR_USD = 1.00;
+/** Mirrors `build/caps.ts` (gh #277). */
+export const STORY_CAP_MULTIPLIER = STAGE_TUNING_DEFAULTS.storyCapMultiplier;
+/** Mirrors `build/caps.ts` (gh #277). */
+export const STORY_CAP_FLOOR_USD = STAGE_TUNING_DEFAULTS.storyCapFloorUsd;
 
 /**
- * Mirrors `build.ts`'s `developerPriceDivisor` (gh #91). The reason for the
- * duplication, and the test that keeps it honest, are in the module header.
+ * Mirrors `build/caps.ts`'s `developerAttemptDivisor` (gh #91, gh #277). The
+ * reason for the duplication, and the test that keeps it honest, are in the
+ * module header.
  */
-export function developerPriceDivisor(
-  attempt: number,
-  attempts: number = MAX_ATTEMPTS,
-  reviewerShare: number = REVIEWER_SHARE,
-): number {
-  return attempt <= 1 ? 1 + reviewerShare : attempts * (1 + reviewerShare);
+export function developerAttemptDivisor(attempt: number, attempts: number = MAX_ATTEMPTS): number {
+  return attempt <= 1 ? 1 : attempts;
 }
 
 /** How many stories the refusal message names before it starts counting. */
@@ -196,6 +199,12 @@ export interface RemainingWorkInput {
    */
   readonly attempts?: number;
   readonly reviewerShare?: number;
+  /**
+   * The stage's `story_cap_multiplier:` and `story_cap_floor_usd:` (gh #277),
+   * passed IN for the same reason. Absent ⇒ the shipped defaults.
+   */
+  readonly storyCapMultiplier?: number;
+  readonly storyCapFloorUsd?: number;
 }
 
 /**
@@ -432,7 +441,7 @@ class CapMath {
     const price = this.priceOf(storyId);
     if (price === null) return this.agentCap(1 / this.worstCaseShares());
     return this.agentCap(this.shareOf(
-      price / developerPriceDivisor(attempt, this.attempts(), this.reviewerShare()),
+      this.storyCeiling(price) / developerAttemptDivisor(attempt, this.attempts()),
     ));
   }
 
@@ -447,6 +456,15 @@ class CapMath {
       Math.max(this.input.stageBudgetUsd - this.input.stageSpentUsd, 0),
     );
     return round2(Math.min(Math.max(derived, floor), this.maxBudgetUsd));
+  }
+
+  /** Mirrors `build/caps.ts`'s `storyCeilingUsd` (gh #277). */
+  private storyCeiling(price: number): number {
+    const declared = this.input.storyCapFloorUsd ?? STORY_CAP_FLOOR_USD;
+    const floor = this.input.stageBudgetUsd > 0
+      ? Math.min(declared, this.input.stageBudgetUsd)
+      : declared;
+    return Math.max(price * (this.input.storyCapMultiplier ?? STORY_CAP_MULTIPLIER), floor);
   }
 
   private priceOf(storyId: string): number | null {

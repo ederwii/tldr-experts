@@ -35,6 +35,58 @@
   was left alone.
 ### Fixed
 
+- **The plan's per-story price is a ceiling now, not a wall — and a story that dies on it with
+  work in its tree lets the DoD decide (#277).** We shipped this one ourselves, hours earlier:
+  #264 landed in 0.18.1 and made the Build executor actually read `03-plan/budget.yml`'s
+  per-story prices. Before it nothing did, so the number was decorative and every story got the
+  uniform stage share; from #264 on it became the hard ceiling of the developer's turn, at
+  `price ÷ (1 + reviewer_share)` = **0.8 × price** — a figure a planner writes before it has
+  read a line of the repo. The session running two live unattended runs on 0.18.1 measured the
+  consequence (their measurement, not this repo's suite): stories died mid-change on caps a
+  dollar or three wide, were left `todo` having spent real money, their dependants went
+  `blocked`, and both runs stalled with nothing delivered — the real cost of a story spanning
+  roughly an order of magnitude above what the planner had estimated. Two changes, one issue.
+  **The cap is now `max(price × story_cap_multiplier, story_cap_floor_usd)`** — defaults 3 and
+  $4.00, both new optional `stage.yml` keys alongside `attempts:` and `reviewer_share:`
+  (`schemas/stageTuning.ts`), refused by name out of range rather than clamped. 3 NARROWS
+  that gap for the low and middle of the range and does not close it: over the prices the
+  planner writes today ($1.20-$4.00) the ceiling lands at $4.00-$12.00, so a story at the
+  top of the observed spread still dies on it — **a story still dies on its cap whenever
+  its real cost exceeds `max(price x 3, $4.00)`**, which is the figure to check before
+  recalibrating. The expensive end is carried by the OTHER half below, not by the
+  multiplier: the work is committed and measured instead of lost. What neither half covers
+  — a stage still reporting `done` over a story that died — is #263, out of scope here. 3
+  is chosen against that division of labour and against keeping one story's worst case
+  legible in its stage; the floor is the developer-side sibling of
+  `REVIEWER_FLOOR_USD` ($1.00) and is a small multiple of it, because the developer reads the
+  repo, edits it, runs the story's whole DoD suite and commits where the reviewer reads one
+  diff. The error here is not symmetric — a price set too low costs a dead story plus
+  everything already paid for it, one set too high costs only the difference on work that lands
+  — so the arithmetic is deliberately allowed to over-run a single estimate and the STAGE's own
+  budget gate, metered against real spend, is what stops a stage that runs out.
+  **Derived at DISPATCH, off the price as it sits on disk, with no migration of `budget.yml`:**
+  that is load-bearing rather than tidy, because runs already in flight carry prices written by
+  an older planner and only a dispatch-time derivation covers them the moment this is installed.
+  `gh #91`'s property survives intact — attempt 1 is the pass the plan priced and gets the whole
+  ceiling, the contingency attempt after it gets an `attempts`-th — and the reviewer's share,
+  which never came out of the developer's ceiling in the first place, is untouched and now
+  visibly additive. The brake's mirror in `budget/remainingWork.ts` moves in step, pinned as
+  ever by `test/remaining-work.test.ts`. **And a developer killed by that ceiling with work in
+  its tree no longer parks the story `todo`:** it is a story with a diff and no verdict, so the
+  facilitator's own Definition of Done decides it — #271's rule over a second cause, the same
+  `workSince` tree comparison (committed or not, `tldrx-work/` and `.tldrx/` excluded), the same
+  "the cause is recorded either way". The death is named in words with its figure on the story's
+  review log, on its `task.done` (`budget_death:`, additive) and in the handoff's `## Unknowns`;
+  a red DoD blocks with both reasons on the row; a cap death that left no work still parks the
+  story exactly where it was, unchanged since 2026-08-30. The narrowing to a CAP death is
+  deliberate: a spawn that never started or a transport fault says nothing about a tree, while
+  `Reached maximum budget` says precisely that the turn was working when it stopped. The Plan
+  schema contract now tells the planner the price is a ceiling and to budget the expensive case
+  rather than the expected one — it is pricing before reading the code, which is exactly when an
+  estimate is least worth trusting. What this does NOT fix: a stage that still reports `done`
+  while a story died on its cap is #263, measured and filed separately, and is left untouched
+  here.
+
 - **`--ship merge` no longer arms an auto-merge over a base that requires nothing (#274).**
   Measured on the zero-touch proof run (a field workspace, `--gates none --ship merge`, no human
   in the loop): the PR merged at `06:20:14Z` while all four of its check runs were still pending

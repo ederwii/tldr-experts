@@ -23,8 +23,10 @@ import { buildBudgetView, renderBudget, countUnmetered } from "../src/core/budge
 import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
 import { MIN_AGENT_USD, floorOverrun } from "../src/core/facilitator/executors/watch.ts";
 import {
-  MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE, developerPriceDivisor,
+  MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
+  STORY_CAP_FLOOR_USD, STORY_CAP_MULTIPLIER, developerAttemptDivisor, storyCeilingUsd,
 } from "../src/core/facilitator/executors/build.ts";
+import type { CapParts } from "../src/core/build/caps.ts";
 import { cacheSplit, tokenSplit } from "../src/core/facilitator/runNext.ts";
 import { turnTokens } from "../src/core/budget/turnTokens.ts";
 import { validateRunFile, type RunTask } from "../src/core/run/RunFile.ts";
@@ -562,10 +564,15 @@ describe("M9 · a phase ceiling is a ceiling", () => {
     expect(total).toBe(17);
     expect(total).toBeLessThanOrEqual(stage);           // nothing is scaled down
 
-    // gh #91: attempt 1 is the pass Delivery priced, so it gets the price less
-    // the reviewer's derived quarter — not that figure halved again.
-    const dev = prices.S1 / developerPriceDivisor(1);
-    expect(dev).toBeCloseTo(3.8, 5);
+    // gh #91: attempt 1 is the pass Delivery priced, so it gets the whole of it.
+    // gh #277: "the whole of it" is the price READ AS A CEILING — `max(price x k,
+    // floor)` — because a price written before the repo was read is an order of
+    // magnitude out, and 0.8 x it was a wall stories died on.
+    const dev = storyCeilingUsd(capParts(stage), prices.S1) / developerAttemptDivisor(1);
+    expect(dev).toBeCloseTo(14.25, 5);
+    // The pre-#277 figure, for the record: what this story was dispatched under
+    // while #264 was live and the price was taken literally.
+    expect(prices.S1 / (1 + REVIEWER_SHARE)).toBeCloseTo(3.8, 5);
     // The reviewer's own share is UNTOUCHED by #91 and still derives off the
     // worst case: $0.475 — under the floor, and under what a 39-file diff costs
     // to read. The measured failure was $0.26.
@@ -586,27 +593,42 @@ describe("M9 · a phase ceiling is a ceiling", () => {
    * The phase ceiling is metered ONCE, at stage entry (`runNext.runExecutor`
    * skips the brake while a stage is `running`), so nothing checks the envelope
    * again between two story spawns of the same headless `runAll`. That is why
-   * attempt 1 may take the whole priced pass but attempt 2 may not: the worst
-   * case one priced story can be asked for goes from `0.8 x price` to
-   * `1.2 x price`, and `priceScale` still holds the sum of the prices themselves
-   * inside the stage.
+   * attempt 1 may take the whole ceiling but attempt 2 may not.
+   *
+   * gh #277 makes the trade EXPLICIT rather than removing it: one priced story's
+   * worst case is `1.5 x` its ceiling, and the ceiling is `k x price`, so a
+   * single story may now be asked for several times what the plan priced it at.
+   * That is the fix, not a side effect — the money that actually stops a run is
+   * the stage's own gate, metered against real spend, and an estimate written
+   * before the repo was read is not a thing to enforce to the cent.
    */
-  test("attempt 1 doubles, attempt 2 does not, and the sum of the prices still fits", () => {
+  test("attempt 1 takes the whole ceiling, attempt 2 an `attempts`-th of it", () => {
     const stage = 3.85;                                  // 260901-leaderboard-v2
     const prices = { S1: 1.75, S2: 2.10 };
     expect(Object.values(prices).reduce((sum, p) => sum + p, 0)).toBeCloseTo(stage, 5);
 
-    expect(prices.S2 / developerPriceDivisor(1)).toBeCloseTo(1.68, 5);
-    expect(prices.S2 / developerPriceDivisor(2)).toBeCloseTo(0.84, 5);
-    // The pre-#91 figure IS attempt 2's, so no attempt is ever handed less than
-    // it used to be.
-    for (const attempt of [1, 2, 3]) {
-      expect([attempt, developerPriceDivisor(attempt) <= MAX_ATTEMPTS * (1 + REVIEWER_SHARE)])
-        .toEqual([attempt, true]);
-    }
+    // $2.10 x 3 = $6.30, comfortably above the floor, so the multiplier decides.
+    const ceiling = storyCeilingUsd(capParts(stage), prices.S2);
+    expect(ceiling).toBeCloseTo(6.3, 5);
+    expect(ceiling / developerAttemptDivisor(1)).toBeCloseTo(6.3, 5);
+    expect(ceiling / developerAttemptDivisor(2)).toBeCloseTo(3.15, 5);
+    // The 2:1 ratio between the priced pass and the contingency attempt is gh
+    // #91's, and it survives the raise unchanged.
+    expect(developerAttemptDivisor(2) / developerAttemptDivisor(1)).toBe(MAX_ATTEMPTS);
 
-    const worstPerStory = 1 / developerPriceDivisor(1) + 1 / developerPriceDivisor(2);
-    expect(worstPerStory).toBeCloseTo(1.2, 5);
+    const worstPerStory = (1 / developerAttemptDivisor(1) + 1 / developerAttemptDivisor(2));
+    expect(worstPerStory).toBeCloseTo(1.5, 5);
+  });
+
+  /**
+   * The floor (gh #277): a story priced at pocket change is still worth
+   * attempting, and the floor never claims more than the stage it is in has.
+   */
+  test("a trivially-priced story is lifted to the floor, and the floor bows to the stage", () => {
+    expect(storyCeilingUsd(capParts(40), 0.5)).toBe(STORY_CAP_FLOOR_USD);
+    expect(storyCeilingUsd(capParts(40), 0.5)).toBeGreaterThan(0.5 * STORY_CAP_MULTIPLIER);
+    // A stage smaller than the floor never hands out more than the whole stage.
+    expect(storyCeilingUsd(capParts(2), 0.5)).toBe(2);
   });
 
   test("the OLD arithmetic is what overran — 2.5x, as measured", () => {
@@ -618,6 +640,17 @@ describe("M9 · a phase ceiling is a ceiling", () => {
     expect(oldTotal / stageCeiling).toBeCloseTo(2.5, 5);
   });
 });
+
+/** The money-shaped half of `CapParts`; the prices map is never read by `storyCeilingUsd`. */
+function capParts(stageUsd: number): CapParts {
+  return {
+    prices: new Map<string, number>(),
+    storyCount: 1,
+    budgetUsd: stageUsd,
+    maxBudgetUsd: stageUsd,
+    agentCap: (share = 1) => stageUsd * share,
+  };
+}
 
 describe("M10 · the settings backup is ignored", () => {
   test("`tldrx init` writes the pattern into .gitignore", () => {

@@ -67,7 +67,7 @@ const FAKE_KEYS = [
   "FAKE_BUILD_WRITE", "FAKE_BUILD_VERDICTS", "FAKE_BUILD_COST", "FAKE_BUILD_STATE",
   "FAKE_BUILD_ARGV_LOG", "FAKE_BUILD_PROMPT_DIR", "FAKE_BUILD_IS_ERROR",
   "FAKE_BUILD_FAIL", "FAKE_BUILD_FAIL_REASON", "FAKE_BUILD_DENIED", "FAKE_BUILD_GIT_RM",
-  "FAKE_BUILD_DENIED_WORK",
+  "FAKE_BUILD_DENIED_WORK", "FAKE_BUILD_FAIL_WORK",
 ] as const;
 
 let open: BuildWorkspace[] = [];
@@ -924,32 +924,37 @@ describe("story caps come from 03-plan/budget.yml when it has them", () => {
   }
 
   test("an expensive story gets more than a cheap one, priced by the plan", async () => {
-    const ws = workspace({ ...TWO_WAVES, budgetUsd: 8, perAgentMaxUsd: 8 });
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 8, perAgentMaxUsd: 40 });
     priceStories(ws, { S1: 5.0, S2: 1.0 });
 
-    // Attempt 1's developer = price / (1 + REVIEWER_SHARE) = price / 1.25.
-    // S1: 5.00/1.25 = $4.00. S2: 1.00/1.25 = $0.80. Both reviewers derive under a
-    // dollar and are lifted to REVIEWER_FLOOR_USD.
-    expect(await caps(ws)).toEqual(["4.00", "1.00", "0.80", "1.00"]);
+    // Attempt 1's developer = max(price x 3, $4.00). S1: $15.00. S2: 1.00 x 3 =
+    // $3.00, under the floor, so $4.00. Both reviewers derive under a dollar and
+    // are lifted to REVIEWER_FLOOR_USD — #277 did not touch their side.
+    expect(await caps(ws)).toEqual(["15.00", "1.00", "4.00", "1.00"]);
   }, 60_000);
 
   test("prices that add up to more than the stage are scaled down, keeping the ratio", async () => {
-    const ws = workspace({ ...TWO_WAVES, budgetUsd: 8, perAgentMaxUsd: 8 });
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 8, perAgentMaxUsd: 40 });
     // $24 of stories priced into an $8 stage: scale 1/3, and S1 stays 3x S2.
     priceStories(ws, { S1: 18.0, S2: 6.0 });
 
+    // $6.00 and $2.00 after the scale, x3 each. The ceiling may exceed the stage
+    // (#277): the stage's own budget gate is what stops a stage that runs out,
+    // and it meters real spend rather than an estimate.
     const seen = await caps(ws);
-    expect([seen[0], seen[2]]).toEqual(["4.80", "1.60"]);
+    expect([seen[0], seen[2]]).toEqual(["18.00", "6.00"]);
     expect(Number(seen[0]) / Number(seen[2])).toBeCloseTo(3, 5);
   }, 60_000);
 
   test("a story the plan did not price falls back to the uniform share", async () => {
-    const ws = workspace({ ...TWO_WAVES, budgetUsd: 8, perAgentMaxUsd: 8 });
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 8, perAgentMaxUsd: 40 });
     priceStories(ws, { S1: 5.0 });
     // S2 is unpriced: 8 / (2 stories x 2 attempts x 1.25) = $1.60, as before. The
-    // even split is the fallback and gh #91 did not touch it.
+    // even split is the fallback; neither gh #91 nor gh #277 touched it, because
+    // it is derived from the stage's own money and there is no estimate in it to
+    // be wrong about.
     const seen = await caps(ws);
-    expect([seen[0], seen[2]]).toEqual(["4.00", "1.60"]);
+    expect([seen[0], seen[2]]).toEqual(["15.00", "1.60"]);
   }, 60_000);
 
   test("a budget.yml that does not validate is an advisory, never a refusal", async () => {
@@ -975,30 +980,31 @@ describe("story caps come from 03-plan/budget.yml when it has them", () => {
    * arithmetic done to it before anyone tried to spend it.
    */
   test("the leaderboard-v2 shape: the atomic story is dispatched at what it was priced", async () => {
-    const ws = workspace({ ...TWO_WAVES, budgetUsd: 3.85, perAgentMaxUsd: 3.85 });
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 3.85, perAgentMaxUsd: 40 });
     priceStories(ws, { S1: 1.75, S2: 2.10 });
 
-    // 2.10 / 1.25 = $1.68 for S2, 1.75 / 1.25 = $1.40 for S1. Before this fix
-    // both were halved again: $0.84 and $0.70.
+    // 1.75 x 3 = $5.25 for S1 and 2.10 x 3 = $6.30 for S2. Under #91 alone these
+    // were $1.40 and $1.68; before #91, $0.70 and $0.84. The plan's ratio is the
+    // half that survives every one of those changes.
     const seen = await caps(ws);
-    expect([seen[0], seen[2]]).toEqual(["1.40", "1.68"]);
+    expect([seen[0], seen[2]]).toEqual(["5.25", "6.30"]);
   }, 60_000);
 
   /**
-   * A second attempt is a CONTINGENCY the plan did not price, so it keeps the
-   * figure the pre-#91 formula gave it — `price / (MAX_ATTEMPTS x 1.25)`. Handing
-   * it the first attempt's ceiling again would double this stage's worst case,
-   * which is the "Build 2.5x su fase" overrun `worstCaseShares` exists to stop.
+   * A second attempt is a CONTINGENCY the plan did not price, so it gets an
+   * `attempts`-th of the story's ceiling. Handing it the first attempt's ceiling
+   * again would double this stage's worst case, which is the "Build 2.5x su fase"
+   * overrun `worstCaseShares` exists to stop.
    */
-  test("a second attempt keeps the pre-fix per-attempt figure, not attempt 1's", async () => {
-    const ws = workspace({ ...TWO_WAVES, budgetUsd: 8, perAgentMaxUsd: 8 });
+  test("a second attempt gets an `attempts`-th of the ceiling, not attempt 1's whole", async () => {
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 8, perAgentMaxUsd: 40 });
     priceStories(ws, { S1: 5.0, S2: 1.0 });
     process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "approve"] });
 
     // S1 dev (attempt 1), S1 reviewer, S1 dev (attempt 2), S1 reviewer.
-    // 5.00/1.25 = $4.00, then 5.00/2.5 = $2.00.
+    // max(5.00 x 3, 4.00) = $15.00, then $15.00 / 2 = $7.50.
     const seen = await caps(ws);
-    expect(seen.slice(0, 4)).toEqual(["4.00", "1.00", "2.00", "1.00"]);
+    expect(seen.slice(0, 4)).toEqual(["15.00", "1.00", "7.50", "1.00"]);
   }, 60_000);
 });
 
@@ -3899,5 +3905,169 @@ describe("a refusal after the developer committed (gh #271)", () => {
     expect(dones[0]?.payload.permission_refused).toBe(PLUMBED);
     expect(dones[1]?.payload.permission_refused).toBeUndefined();
     expect(readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8")).not.toContain("refused for approval");
+  }, 60_000);
+});
+
+/**
+ * gh #277 — the planner's price is a CEILING, not an estimate, and it is derived
+ * at DISPATCH.
+ *
+ * We shipped this one ourselves. #264 made the Build executor actually read
+ * `03-plan/budget.yml`'s per-story prices; before it, nothing did, so every story
+ * got the uniform stage share and a planner's guess cost nothing. From #264 on,
+ * the plan's number became the wall: attempt 1 was dispatched at `price / (1 +
+ * REVIEWER_SHARE)` = 0.8 x price, and a planner writes that number before it has
+ * read a line of the repo. Stories died mid-flight on caps a dollar or two wide,
+ * were parked `todo` having spent real money, and the run stalled with nothing
+ * delivered.
+ *
+ * The fix, in two halves, both tested here:
+ *
+ *  - the developer's ceiling is `max(price x STORY_CAP_MULTIPLIER,
+ *    STORY_CAP_FLOOR_USD)`, derived at dispatch off the price as it sits on disk
+ *    — no migration, so a run already in flight under an old `budget.yml` is
+ *    covered the moment this is installed;
+ *  - a developer that dies on that ceiling having left WORK no longer parks the
+ *    story: the Definition of Done decides, exactly as gh #271 made it decide
+ *    after a permission refusal.
+ */
+describe("the plan's price is a ceiling, not a wall (gh #277)", () => {
+  const ONE: BuildWorkspaceOptions = {
+    stories: [{ id: "S1", epic: "E1", title: "First story" }],
+    epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+    waves: [["S1"]],
+  };
+
+  function priceStories(ws: BuildWorkspace, prices: Record<string, number>): void {
+    writeFileSync(join(ws.planDir, "budget.yml"), [
+      "version: 1",
+      `run: "${ws.runId}"`,
+      "ceiling_usd: 40.00",
+      "spent_usd: 0.00",
+      "per_phase_usd:",
+      ...Object.entries(prices).map(([id, usd]) => `  ${id}: ${usd.toFixed(2)}`),
+      "",
+    ].join("\n"), "utf8");
+  }
+
+  /** Every `--max-budget-usd` the fake `claude` was called with, in order. */
+  async function caps(ws: BuildWorkspace, overrides: Partial<NextOptions> = {}): Promise<string[]> {
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_BUILD_ARGV_LOG = argvLog;
+    await next(ws, overrides);
+    return readFileSync(argvLog, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as string[])
+      .map((argv) => argv[argv.indexOf("--max-budget-usd") + 1] ?? "");
+  }
+
+  /**
+   * The live shape: a planner that priced a story at $1.60 and a developer
+   * dispatched under $1.28 — a figure nobody chose, arrived at by dividing an
+   * estimate written before the repo was read.
+   */
+  test("a story priced at $1.60 is dispatched at 3x that, not at 0.8x", async () => {
+    const ws = workspace({ ...ONE, budgetUsd: 40, perAgentMaxUsd: 40 });
+    priceStories(ws, { S1: 1.6 });
+
+    expect((await caps(ws))[0]).toBe("4.80");
+  }, 60_000);
+
+  test("a price below the floor is lifted to it — a trivially-priced story is still attempted", async () => {
+    const ws = workspace({ ...ONE, budgetUsd: 40, perAgentMaxUsd: 40 });
+    priceStories(ws, { S1: 0.5 });
+
+    expect((await caps(ws))[0]).toBe("4.00");
+  }, 60_000);
+
+  test("`per_agent_max_usd` still clamps the raised ceiling", async () => {
+    const ws = workspace({ ...ONE, budgetUsd: 40, perAgentMaxUsd: 2 });
+    priceStories(ws, { S1: 1.6 });
+
+    expect((await caps(ws))[0]).toBe("2.00");
+  }, 60_000);
+
+  /**
+   * gh #91's property survives the raise: attempt 1 is the pass the plan priced
+   * and attempt 2 is a contingency nobody priced, so it gets the ceiling divided
+   * by the stage's `attempts`.
+   */
+  test("the contingency attempt gets half the ceiling, not the whole of it", async () => {
+    const ws = workspace({ ...ONE, budgetUsd: 40, perAgentMaxUsd: 40 });
+    priceStories(ws, { S1: 1.6 });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "approve"] });
+
+    const seen = await caps(ws);
+    expect([seen[0], seen[2]]).toEqual(["4.80", "2.40"]);
+  }, 60_000);
+
+  /**
+   * The other half. A developer killed by `--max-budget-usd` that had already
+   * committed its story is not "a spawn that produced no work" — it is a story
+   * with a diff and no verdict, and the facilitator's own DoD is the authority
+   * on it (gh #271's shape, one derivation, not a second one).
+   */
+  test("a developer that dies on its cap having COMMITTED work lets the DoD decide", async () => {
+    const ws = workspace({ ...ONE, budgetUsd: 40, perAgentMaxUsd: 40 });
+    process.env.FAKE_BUILD_FAIL = "developer:S1#1";
+    process.env.FAKE_BUILD_FAIL_REASON = "Reached maximum budget ($4.80)";
+    process.env.FAKE_BUILD_FAIL_WORK = JSON.stringify({ S1: "committed" });
+
+    const outcome = await next(ws);
+
+    // The DoD RAN — the whole point — and it decided.
+    expect(events(ws).some((e) => e.type.startsWith("check.") && e.payload.story === "S1"
+      && e.payload.command === "npm run test")).toBe(true);
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(git(ws, ["ls-tree", "--name-only", "epic/e1"]).split("\n")).toContain("s1.txt");
+    expect(outcome.code).toBe(4);
+    // The death is still on record, in words, with the figure — a reader must
+    // not have to do the arithmetic to learn why the turn stopped.
+    const done = events(ws).find((e) => e.type === "task.done" && e.payload.story === "S1");
+    expect(done?.payload.budget_death)
+      .toBe("claude exited 1 with is_error=true: Reached maximum budget ($4.80)");
+    const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+    expect(log).toContain("died on its per-story cap");
+  }, 60_000);
+
+  test("uncommitted work counts too: the facilitator commits what the dead turn left", async () => {
+    const ws = workspace({ ...ONE, budgetUsd: 40, perAgentMaxUsd: 40 });
+    process.env.FAKE_BUILD_FAIL = "developer:S1#1";
+    process.env.FAKE_BUILD_FAIL_WORK = JSON.stringify({ S1: "uncommitted" });
+
+    await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(git(ws, ["ls-tree", "--name-only", "epic/e1"]).split("\n")).toContain("s1.txt");
+  }, 60_000);
+
+  test("work the DoD FAULTS blocks, and the row names the cap death beside the red", async () => {
+    const ws = workspace({ ...ONE, budgetUsd: 40, perAgentMaxUsd: 40, testScript: RED_ONLY_AFTER_DEVELOPER });
+    process.env.FAKE_BUILD_FAIL = "developer:S1#1";
+    process.env.FAKE_BUILD_FAIL_REASON = "Reached maximum budget ($4.80)";
+    process.env.FAKE_BUILD_FAIL_WORK = JSON.stringify({ S1: "committed" });
+
+    await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+    const gate = events(ws).find((e) => e.type === "gate.requested");
+    const reason = String(gate?.payload.blocked_reason ?? "");
+    expect(reason).toContain("`npm run test` exited 1");
+    expect(reason).toContain("died on its per-story cap");
+  }, 60_000);
+
+  /**
+   * GUARD, not a proof: the 2026-08-30 case — a spawn that died having written
+   * nothing — must keep parking the story exactly where it found it. This passed
+   * before the change and must keep passing after it.
+   */
+  test("a cap death with NO work still parks the story where it was", async () => {
+    const ws = workspace({ ...ONE, budgetUsd: 40, perAgentMaxUsd: 40 });
+    process.env.FAKE_BUILD_FAIL = "developer:S1#1";
+    process.env.FAKE_BUILD_FAIL_REASON = "Reached maximum budget ($4.80)";
+
+    const outcome = await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: todo");
+    expect(outcome.lines.join("\n")).toContain("the developer FAILED and produced no work");
   }, 60_000);
 });

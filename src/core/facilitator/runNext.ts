@@ -1207,6 +1207,8 @@ function stageRemainingWork(
     // safe direction, and the one `remainingWork`'s clamp already guarantees.
     attempts: spec.tuning.attempts,
     reviewerShare: spec.tuning.reviewerShare,
+    storyCapMultiplier: spec.tuning.storyCapMultiplier,
+    storyCapFloorUsd: spec.tuning.storyCapFloorUsd,
   });
 }
 

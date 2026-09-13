@@ -144,6 +144,9 @@ describe("the shipped defaults", () => {
     expect(PRECONDITION_TIMEOUT_S).toBe(60);
     expect(STAGE_TUNING_DEFAULTS).toEqual({
       attempts: 2, fixlistRounds: 1, reviewerShare: 0.25, gateSignerShare: 0.25,
+      // gh #277: the planner's price is a CEILING, so it is multiplied before it
+      // caps anything, and a story is never dispatched under the floor.
+      storyCapMultiplier: 3, storyCapFloorUsd: 4,
     });
   });
 
@@ -166,7 +169,7 @@ describe("the shipped defaults", () => {
    * A stage that declares nothing gets the constants — the property every
    * workspace on disk today depends on.
    */
-  test("a stage file that declares none of the four keys gets the defaults", () => {
+  test("a stage file that declares none of the keys gets the defaults", () => {
     const ws = workspace();
     const spec = loadStageSpec(ws.root, "demo", "alpha");
     expect(spec.tuning).toEqual(STAGE_TUNING_DEFAULTS);
@@ -176,7 +179,7 @@ describe("the shipped defaults", () => {
   });
 });
 
-describe("the four calibration keys", () => {
+describe("the calibration keys", () => {
   test("a value in range is read; the same key out of range is REFUSED by name", () => {
     for (const [field, range] of Object.entries(STAGE_TUNING_RANGES)) {
       const inRange = range.integer ? range.max : range.max;
@@ -204,12 +207,14 @@ describe("the four calibration keys", () => {
     const path = join(ws.root, ".tldrx", "stages", "alpha", "stage.yml");
     writeFileSync(
       path,
-      `${readFileSync(path, "utf8")}attempts: 3\nfixlist_rounds: 0\nreviewer_share: 0.5\ngate_signer_share: 0.1\n`,
+      `${readFileSync(path, "utf8")}attempts: 3\nfixlist_rounds: 0\nreviewer_share: 0.5\ngate_signer_share: 0.1\n`
+        + "story_cap_multiplier: 5\nstory_cap_floor_usd: 9\n",
       "utf8",
     );
     const spec = loadStageSpec(ws.root, "demo", "alpha");
     expect(spec.tuning).toEqual({
       attempts: 3, fixlistRounds: 0, reviewerShare: 0.5, gateSignerShare: 0.1,
+      storyCapMultiplier: 5, storyCapFloorUsd: 9,
     });
     // `attempts` reaches the money split through `PlannedStage`, which is the one
     // place that turns the key into a value.

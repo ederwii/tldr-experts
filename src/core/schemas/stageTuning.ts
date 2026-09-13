@@ -59,6 +59,18 @@ export interface StageTuning {
   readonly reviewerShare: number;
   /** The gate signer's share of the stage ceiling. Default 0.25. */
   readonly gateSignerShare: number;
+  /**
+   * What a story's PLANNED price is multiplied by to get the developer's
+   * ceiling (gh #277). Default 3 — see `build/caps.ts STORY_CAP_MULTIPLIER`,
+   * where the number is argued next to the arithmetic it governs.
+   */
+  readonly storyCapMultiplier: number;
+  /**
+   * The least a priced story's developer may be given, whatever the multiplied
+   * price says (gh #277). Default 4. Argued in `build/caps.ts
+   * STORY_CAP_FLOOR_USD`.
+   */
+  readonly storyCapFloorUsd: number;
 }
 
 export const STAGE_TUNING_DEFAULTS: StageTuning = {
@@ -66,6 +78,8 @@ export const STAGE_TUNING_DEFAULTS: StageTuning = {
   fixlistRounds: 1,
   reviewerShare: 0.25,
   gateSignerShare: 0.25,
+  storyCapMultiplier: 3,
+  storyCapFloorUsd: 4,
 };
 
 /** One key: its `stage.yml` spelling, its bounds, and whether it counts things. */
@@ -83,6 +97,12 @@ export const STAGE_TUNING_RANGES: Readonly<Record<keyof StageTuning, TuningRange
   fixlistRounds: { key: "fixlist_rounds", min: 0, max: 3, integer: true },
   reviewerShare: { key: "reviewer_share", min: 0, max: 1, integer: false },
   gateSignerShare: { key: "gate_signer_share", min: 0, max: 1, integer: false },
+  // Min 1, not 0: a multiplier below 1 spends LESS than the plan asked for,
+  // which is the shape gh #277 was filed about. An operator who wants the
+  // price taken literally writes 1; nothing here lets them write 0.8 by
+  // accident and rediscover the wall.
+  storyCapMultiplier: { key: "story_cap_multiplier", min: 1, max: 20, integer: false },
+  storyCapFloorUsd: { key: "story_cap_floor_usd", min: 0, max: 200, integer: false },
 };
 
 const FIELDS = Object.keys(STAGE_TUNING_RANGES) as readonly (keyof StageTuning)[];

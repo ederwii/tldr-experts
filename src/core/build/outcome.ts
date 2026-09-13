@@ -245,6 +245,13 @@ export interface StoryOutcome {
    */
   readonly permissionRefused?: string | null;
   /**
+   * The `Reached maximum budget (…)` the developer died on this attempt, when
+   * the story went on anyway because its tree held work and the DoD decided
+   * (gh #277). Optional and absent on every record written before it existed; a
+   * story the DoD then FAULTED carries the same sentence inside `reason`.
+   */
+  readonly budgetDeath?: string | null;
+  /**
    * Uncommitted work found in the worktree as the story settled — null on the
    * ordinary case, where `commitIfDirty` already put every byte on the branch.
    */
