@@ -1,6 +1,6 @@
-verdict: fixes required
+verdict: merge
 reviewed-by: Claude Opus 5 (tldr-experts-6d) — NOT the author of this branch, but the author of #261, the change this branch corrects. Declared conflict: see "On my standing in this review".
-against: 20475e7
+against: a5053d7
 
 ## On my standing in this review
 
@@ -36,7 +36,7 @@ The fifth row is the one I asked for: the facilitator writes state during the tu
 
 Also verified: the prompt names all ten separators including **`2>&1`**, the one from the incident that produced this branch, asserted literally; the goldens are exactly the same 6 prompts (`+4/−3` against `4131016`, `+5/−0` against main) with **no** `*-events.txt`, `*-run-tasks.txt`, `*-exit-codes.txt` or reviewer prompt moved; the tautological assertion is gone (`grep -c permissionBlockReason` in the test = 0); the detector is untouched (`agentEvents.ts` does not appear in the delta); and the +9 reconciles against the two changed test files (171 vs 162).
 
-## Fixes required — one item, and it is a sentence that is now false
+## Third pass — the sentence is fixed, and this is the merge
 
 `docs-site/guides/unattended-operation.md:565` says:
 
@@ -44,9 +44,9 @@ Also verified: the prompt names all ten separators including **`2>&1`**, the one
 
 That was true at `4131016` and this branch makes it **false**: a refusal with nothing committed but a dirty tree now passes to the DoD. It sits in the same paragraph that correctly explains the state dirs do not count, so the paragraph contradicts itself about the exact behaviour this branch changes. The Spanish mirror has it at `docs-site/es/guides/unattended-operation.md:587` ("sin nada commiteado").
 
-The fix is one word in each language — "committed" → "work", "commiteado" → "trabajo" — and §5 makes the docs part of the change, EN and ES in lockstep. I am holding this to the same bar I used to refuse the previous head over a false measured claim in the CHANGELOG; a false sentence in the published guide is the same class, on the surface a user actually reads.
+I held this to the same bar I used to refuse `4131016` over a false measured claim in the CHANGELOG: a false sentence in the published guide is the same class, on the surface a user actually reads. Applying a softer rule because the second error was smaller is how a rule erodes.
 
-While there: the inserted EN line breaks the paragraph's wrap.
+**Fixed at `a5053d7`, verified by me.** The sentence now reads "A refusal with no work at all — a tree the developer left untouched — still blocks after one attempt", the Spanish mirror matches ("sin ningún trabajo — un árbol que el developer dejó intacto"), and `grep -c` for the old wording returns **0** in both files. The paragraph is re-wrapped. The commit is docs-only: its own numstat is the two guide files and nothing else (`5/4` EN, `2/2` ES) — the `.review/` file in the `20475e7..a5053d7` range is this record, which sits between the two commits.
 
 ## Non-blocking, recorded for whoever reads this later
 
