@@ -920,7 +920,7 @@ Carry an edited `workspace.yml` into the dod blocks of stories that are already 
 
 ```
 tldrx plan sync-dod [--dry-run] [--run <id>] [--root <path>]
-tldrx plan schema   [--story | --epic | --waves]
+tldrx plan schema   [--story | --epic | --waves | --budget]
 ```
 
 A story's dod command must equal a `workspace.yml` command verbatim, so editing
@@ -940,13 +940,13 @@ byte-identical, the previous version is kept at `<story>.md.bak`, and the result
 by the same plan check the drift came from. `--dry-run` prints the same per-story diff summary
 and writes nothing. It runs no agent, spends nothing and moves no cursor.
 
-`tldrx plan schema` prints the story, epic and `waves.yml` contract for a human to write to:
-the front-matter keys in order, what the check enforces for each, the caps at the values it
+`tldrx plan schema` prints the story, epic, `waves.yml` and `budget.yml` contract for a human to write
+to: the front-matter keys in order, what the check enforces for each, the caps at the values it
 currently uses, and one example of each file that the check accepts as it stands. These are the
 SAME bytes the Plan agent is given, generated from the validators themselves, so they cannot
 drift from what will be accepted — which is why `templates/story.md` and `templates/epic.md`
-were deleted rather than kept up to date. Pass at most one of `--story`, `--epic` or `--waves`
-to print just that example; passing two is a usage error, and passing none prints the whole
+were deleted rather than kept up to date. Pass at most one of `--story`, `--epic`, `--waves` or
+`--budget` to print just that example; passing two is a usage error, and passing none prints the whole
 contract. Alone among these verbs it resolves no workspace and no run, reads no disk and spends
 nothing, because the question comes before any of that exists. Exits: `0` `1` `2` `3`.
 

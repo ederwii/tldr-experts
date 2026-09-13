@@ -34,6 +34,15 @@ export interface BudgetFile {
   readonly economy?: Economy;
 }
 
+/**
+ * The keys `validateBudget` requires at the root, beside `version`. Exported so
+ * the Plan schema contract (`plan/schemaContract.ts`) is GENERATED from this list
+ * rather than copied: for as long as the shape lived only inside this call, no
+ * Plan agent was ever shown it, and a field run priced every story in a shape
+ * nothing could read (#264).
+ */
+export const BUDGET_REQUIRED_KEYS = ["run", "ceiling_usd", "spent_usd", "per_phase_usd"] as const;
+
 export function validateBudget(input: unknown): ValidationResult {
   const issues: ValidationIssue[] = [];
   const deprecations: string[] = [];
@@ -41,7 +50,7 @@ export function validateBudget(input: unknown): ValidationResult {
   if (!doc) return result(issues);
 
   requireVersion(doc, issues, deprecations);
-  requireKeys(doc, ["run", "ceiling_usd", "spent_usd", "per_phase_usd"], "", issues);
+  requireKeys(doc, BUDGET_REQUIRED_KEYS, "", issues);
   requireString(doc.run, "run", issues);
   requireNumber(doc.ceiling_usd, "ceiling_usd", issues);
   requireNumber(doc.spent_usd, "spent_usd", issues);

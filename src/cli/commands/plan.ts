@@ -41,7 +41,7 @@ const VALUE_FLAGS = ["run", "root"];
 export const planCommand: Command = {
   name: "plan",
   summary: "Resync approved story dod blocks with workspace.yml, or print the plan schema",
-  usage: "tldrx plan sync-dod [--dry-run] [--run <id>] [--root <path>]\ntldrx plan schema [--story | --epic | --waves]",
+  usage: "tldrx plan sync-dod [--dry-run] [--run <id>] [--root <path>]\ntldrx plan schema [--story | --epic | --waves | --budget]",
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;
@@ -52,8 +52,8 @@ export const planCommand: Command = {
   },
 };
 
-/** The three things `--story`, `--epic` and `--waves` select, in usage order. */
-const EXAMPLES = ["story", "epic", "waves"] as const;
+/** The four things `--story`, `--epic`, `--waves` and `--budget` select, in usage order. */
+const EXAMPLES = ["story", "epic", "waves", "budget"] as const;
 
 /**
  * Print the contract, or one example from it. Exit 0, or 1 for an ambiguous ask.

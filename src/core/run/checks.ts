@@ -24,7 +24,7 @@ import {
 import { srcRule, type SrcRuleId } from "../text/srcToken.ts";
 import { validateRunBudget } from "../budget/RunBudget.ts";
 import { loadWorkspace, repoPath, toSrcContext } from "../../hooks/lib/workspace.ts";
-import { describePlanIssues, validatePlan, writesPlanArtefacts } from "../plan/validatePlan.ts";
+import { describePlanIssues, validatePlan, writesPlanArtefacts, validatePlanBudget } from "../plan/validatePlan.ts";
 import { branchModelFor, describeBranchModel } from "../plan/branchModel.ts";
 import { validateRunFile } from "./RunFile.ts";
 import { resolveMany, type PathContext } from "../facilitator/paths.ts";
@@ -373,8 +373,12 @@ function checkPlan(ctx: CheckContext): CheckOutcome {
   const planDir = join(ctx.runDir, ctx.stage.phase);
   const workspace = loadWorkspace(ctx.root);
   const report = validatePlan(planDir, workspace.commands, workspace.iterationCommands);
-  if (!report.ok) {
-    return { id: "plan", status: "failed", detail: describePlanIssues(report.issues) };
+  // The fourth artefact (#264): a `budget.yml` in a shape the Build reader could
+  // not price from used to pass this gate and price nothing one stage later. Its
+  // check is the gate's own, not `validatePlan`'s — see `validatePlanBudget`.
+  const issues = [...report.issues, ...validatePlanBudget(planDir)];
+  if (issues.length > 0) {
+    return { id: "plan", status: "failed", detail: describePlanIssues(issues) };
   }
   const model = branchModelFor(basename(ctx.runDir), report.epicChain);
   return {

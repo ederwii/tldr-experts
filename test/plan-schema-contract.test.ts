@@ -27,9 +27,10 @@ import { EPIC_KEYS, validateEpicFile } from "../src/core/schemas/epic.ts";
 import { validateWaves } from "../src/core/schemas/waves.ts";
 import {
   MAX_ITEM_CHARS, MAX_LIST_ITEMS, MAX_PLAN_STORIES, MAX_STORIES_PER_WAVE,
-  MAX_TOUCHES, MAX_WAVES, PLAN_STATUSES,
+  MAX_TOUCHES, MAX_WAVES, PLAN_STATUSES, STORY_ID_RE,
 } from "../src/core/schemas/planCommon.ts";
-import { STORIES_DIR, validatePlan } from "../src/core/plan/validatePlan.ts";
+import { PLAN_BUDGET_FILE, STORIES_DIR, validatePlan, validatePlanBudget } from "../src/core/plan/validatePlan.ts";
+import { BUDGET_REQUIRED_KEYS, validateBudget } from "../src/core/schemas/budget.ts";
 import { updateStoryFront } from "../src/core/build/storyFile.ts";
 import { FRAMEWORK_ROOT, TEMPLATES_DIR } from "../src/core/paths.ts";
 import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
@@ -70,6 +71,33 @@ describe("the contract's examples are what the check accepts", () => {
 
   test("the waves example validates", () => {
     expect(validateWaves(parseYaml(planContractExamples().waves)).issues).toEqual([]);
+  });
+
+  /**
+   * The fourth artefact, and the one whose shape reached nobody (#264): the
+   * prompt listed `budget.yml` as a filename and the Build reader accepted only
+   * `validateBudget`'s shape, so a field run's Plan wrote `stories[].estimate_usd`
+   * and every story got the uniform cap. The example goes through the SAME
+   * validator `loadPlanPrices` runs before it prices anything.
+   */
+  test("the budget example validates through `validateBudget` — the reader every price goes through", () => {
+    expect(validateBudget(parseYaml(planContractExamples().budget)).issues).toEqual([]);
+  });
+
+  test("the four together pass the `plan` check's two halves — the plan AND its budget", () => {
+    const examples = planContractExamples();
+    const story = parseFrontMatter(examples.story).doc as { id: string };
+    const epic = parseFrontMatter(examples.epic).doc as { id: string };
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-contract-"));
+    dirs.push(dir);
+    mkdirSync(join(dir, "stories"), { recursive: true });
+    mkdirSync(join(dir, "epics"), { recursive: true });
+    writeFileSync(join(dir, "stories", `${story.id}.md`), examples.story, "utf8");
+    writeFileSync(join(dir, "epics", `${epic.id}.md`), examples.epic, "utf8");
+    writeFileSync(join(dir, "waves.yml"), examples.waves, "utf8");
+    writeFileSync(join(dir, PLAN_BUDGET_FILE), examples.budget, "utf8");
+    expect(validatePlan(dir, new Set(examples.dodCommands)).issues).toEqual([]);
+    expect(validatePlanBudget(dir)).toEqual([]);
   });
 
   test("the three together pass `validatePlan` — the check that gates the stage", () => {
@@ -121,6 +149,32 @@ describe("the contract cannot drift from the schema", () => {
 
   test("the epic example's keys ARE `EPIC_KEYS`, in order", () => {
     expect(keysOf(planContractExamples().epic)).toEqual([...EPIC_KEYS]);
+  });
+
+  test("the budget example's keys ARE `version` + `BUDGET_REQUIRED_KEYS`, in order (#264)", () => {
+    const doc = parseYaml(planContractExamples().budget) as Record<string, unknown>;
+    expect(Object.keys(doc)).toEqual(["version", ...BUDGET_REQUIRED_KEYS]);
+  });
+
+  test("the rendered section names `budget.yml` and carries the example verbatim (#264)", () => {
+    const contract = renderPlanSchemaContract();
+    expect(contract).toContain(`### \`${PLAN_BUDGET_FILE}\``);
+    expect(contract).toContain(planContractExamples().budget.trimEnd());
+  });
+
+  /**
+   * `per_phase_usd` is the run-root file's name for a map keyed by PHASE; in the
+   * plan's copy the Build reader prices only keys that are STORY ids
+   * (`STORY_ID_RE`, `build/plan.ts`). An example keyed any other way would teach
+   * the one shape that validates and prices nothing.
+   */
+  test("the budget example prices the story example, under `per_phase_usd`, keyed by story id", () => {
+    const examples = planContractExamples();
+    const story = parseFrontMatter(examples.story).doc as { id: string };
+    const doc = parseYaml(examples.budget) as { per_phase_usd: Record<string, unknown> };
+    const keys = Object.keys(doc.per_phase_usd);
+    expect(keys).toContain(story.id);
+    for (const key of keys) expect(`${key}: ${STORY_ID_RE.test(key) ? "story id" : "NOT A STORY ID"}`).toBe(`${key}: story id`);
   });
 
   test("every cap the Plan schemas enforce is stated, at its current value", () => {
@@ -417,11 +471,12 @@ describe("`tldrx plan schema` prints the contract a human has to write to (#71)"
     expect(stdout).toBe(`${renderPlanSchemaContract()}\n`);
   });
 
-  test("all three schemas are in it — story, epic and the wave file", async () => {
+  test("all four schemas are in it — story, epic, the wave file and the budget", async () => {
     const { stdout } = await tldrxIn(bare(), "plan", "schema");
     expect(stdout).toContain("stories/<id>.md");
     expect(stdout).toContain("epics/<id>.md");
     expect(stdout).toContain("waves.yml");
+    expect(stdout).toContain(`### \`${PLAN_BUDGET_FILE}\``);
     // The caps a file is refused for, at the value the check currently uses.
     expect(stdout).toContain("### Caps");
     // What it must NOT carry: the `## ` heading, which is `checkContracts.ts`'s to
@@ -429,7 +484,7 @@ describe("`tldrx plan schema` prints the contract a human has to write to (#71)"
     expect(stdout).not.toContain(`## ${PLAN_CONTRACT_HEADING}`);
   });
 
-  for (const [flag, key] of [["--story", "story"], ["--epic", "epic"], ["--waves", "waves"]] as const) {
+  for (const [flag, key] of [["--story", "story"], ["--epic", "epic"], ["--waves", "waves"], ["--budget", "budget"]] as const) {
     test(`${flag} prints just that example — the file, not the essay`, async () => {
       const { code, stdout } = await tldrxIn(bare(), "plan", "schema", flag);
       expect(code).toBe(0);

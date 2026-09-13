@@ -1007,6 +1007,12 @@ const ENTRIES: readonly CommandHelp[] = [
         meaning: "plan schema: print only the waves.yml example.",
         sub: "schema",
       },
+      {
+        name: "budget",
+        arg: null,
+        meaning: "plan schema: print only the budget.yml example \u2014 the per-story prices, in the one shape the Build executor reads.",
+        sub: "schema",
+      },
       runFlag(),
       root(),
     ],
@@ -1017,7 +1023,7 @@ const ENTRIES: readonly CommandHelp[] = [
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
     notes: [
-      "`plan schema` prints the story/epic/waves contract \u2014 the SAME bytes the Plan agent is given, generated from the validators the `plan` check runs, so it cannot drift from what will be accepted. At most one of --story/--epic/--waves; without one the whole contract is printed. It resolves no workspace and no run, touches no disk and spends nothing, because the question comes before any of those exist.",
+      "`plan schema` prints the story/epic/waves/budget contract \u2014 the SAME bytes the Plan agent is given, generated from the validators the `plan` check runs, so it cannot drift from what will be accepted. At most one of --story/--epic/--waves/--budget; without one the whole contract is printed. It resolves no workspace and no run, touches no disk and spends nothing, because the question comes before any of those exist.",
       "A story dod command must equal a `workspace.yml` command verbatim, so editing workspace.yml orphans every approved story that cited the old string. This is the mechanical repair, and it does not weaken that rule by a byte.",
       "Four outcomes per line, and only the first three write anything: a line the current workspace still declares is left alone; a line a PREVIOUS version declared under a role the current file still has becomes that role's command; a line whose role is gone is dropped; and a line no version of workspace.yml ever declared is FLAGGED and its story is left untouched \u2014 that is real drift, not a rename, and guessing at it is the one thing this must not do.",
       "The ancestry comes from git's history of `.tldrx/workspace.yml`. In a workspace with no history there are no ancestors, so every non-current line is flagged rather than rewritten.",

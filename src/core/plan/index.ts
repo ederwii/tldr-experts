@@ -1,5 +1,6 @@
 export {
-  validatePlan, describePlanIssues, writesPlanArtefacts, WAVES_FILE, STORIES_DIR, EPICS_DIR,
+  validatePlan, validatePlanBudget, describePlanIssues, writesPlanArtefacts,
+  WAVES_FILE, STORIES_DIR, EPICS_DIR, PLAN_BUDGET_FILE,
 } from "./validatePlan.ts";
 export {
   PLAN_CONTRACT_HEADING, planContractExamples, renderPlanSchemaContract,
