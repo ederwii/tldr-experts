@@ -3822,7 +3822,8 @@ handoff, the metrics and the answers as they stand NOW; and prepares a fresh bun
 branch and story worktree are REUSED, not re-cut and not refused: `run.yml`'s `build.epic_branch` says this run
 claimed them. It re-derives only while nothing has been built off the plan — `evidence: []`, a `status:` that is not
 `done`/`blocked`, and `git rev-list --count <epic>..<story>` = 0 — and when one of those fails it keeps the file and
-prints which one.
+prints which one. A count git could not TAKE is not a zero (#273): if that `rev-list` fails — a ref that does not
+resolve, a repo dir that moved — the file is kept too, with the command that could not answer named in the line.
 
 The file is also the story's STATE: its top-level `status:` and `evidence:` are what the executor writes back, patched
 by the same two surgical edits a `stories/<id>.md` gets. The story then runs the ordinary pipeline — worktree,

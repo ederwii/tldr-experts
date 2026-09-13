@@ -23,7 +23,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
-import { baseStateOf, commitsBetween, fastForward, shaOf } from "../src/core/build/git.ts";
+import { baseStateOf, commitsBetween, fastForward, shaOf, uncountedCount } from "../src/core/build/git.ts";
+import { refreshStoryBase } from "../src/core/build/worktrees.ts";
 import { reopenStory } from "../src/core/run/reopenStory.ts";
 import { reject } from "../src/core/run/gates.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
@@ -145,6 +146,39 @@ describe("baseStateOf — where a story branch stands against its epic", () => {
 
     expect(state.branchSha).toBe("");
     expect(state.state).toBe("current");
+    // Unchanged by gh #273 — `current` is still what makes the caller do
+    // nothing — but the zero now carries the reason it is not a measurement.
+    expect(state.uncounted).toBe(uncountedCount("main", "story/nope"));
+  });
+
+  test("a branch git could not measure is left alone, and the line says so (#273)", async () => {
+    const { dir, git } = bareRepo();
+    git("branch", "story");
+    git("checkout", "-q", "story");
+    git("commit", "-q", "--allow-empty", "-m", "a developer's work");
+    git("checkout", "-q", "main");
+    const at = await shaOf(dir, "story");
+    const lines: string[] = [];
+
+    // The epic side does not resolve, so neither count can be taken. Before
+    // gh #273 that read as `current` and this path was SILENT — a dispatch on a
+    // base nobody had looked at.
+    await refreshStoryBase({
+      storyId: "S1", root: dir, workspaceRoot: dir, repoDir: dir, worktree: join(dir, "wt"),
+      branch: "story", epicBranch: "epic/gone", repo: "app", phaseId: "04-build", lines,
+      emit: () => undefined,
+    });
+
+    expect(lines.join("\n")).toContain(uncountedCount("epic/gone", "story"));
+    expect(lines.join("\n")).toContain("left exactly as it is");
+    expect(await shaOf(dir, "story")).toBe(at);
+  });
+
+  test("a count both ways taken is not `uncounted` (#273)", async () => {
+    const { dir, git } = bareRepo();
+    git("branch", "story");
+
+    expect((await baseStateOf(dir, "story", "main")).uncounted).toBeNull();
   });
 });
 
@@ -323,7 +357,10 @@ async function s1BlockedThenReopened(overrides: Partial<NextOptions> = {}): Prom
   const branch = `story/${ws.runId}/S1`;
   const stale = git(ws, "rev-parse", "--short", branch);
   const behind = await commitsBetween(ws.repoDir, branch, "epic/e1");
-  // The premise: behind, and behind ONLY.
+  // The premise: behind, and behind ONLY. `null` is git failing to count at all
+  // (gh #273) — not a premise this fixture may be built on, so it throws here
+  // rather than reading as some number further down.
+  if (behind === null) throw new Error(`git could not count ${branch}..epic/e1`);
   expect(behind).toBeGreaterThan(0);
   expect(await commitsBetween(ws.repoDir, "epic/e1", branch)).toBe(0);
 

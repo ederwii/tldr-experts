@@ -1363,6 +1363,36 @@ describe("re-preparing an implicit plan", () => {
     expect(said).toContain("prepared S1");
   }, 60_000);
 
+  /**
+   * gh #273: a `rev-list` that FAILED read as "0 commits carried", and 0 is the
+   * value this guard DELETES on. The story branch here carries a real commit;
+   * the base it is counted against no longer resolves, so git cannot answer at
+   * all — and "I could not count" must keep the plan, not re-derive over it.
+   */
+  test("a count git could not take keeps the plan — a failed rev-list is not `nothing built` (#273)", async () => {
+    const ws = zonesWorkspace();
+    await next(ws, { mode: "prepare" });
+
+    // The developer's commit, on the story branch, before the session died.
+    const worktree = join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`);
+    writeFileSync(join(worktree, "docs", "adr", "ADR-D008-AUTH.md"), "Status: Accepted\n", "utf8");
+    execFileSync("git", ["add", "-A", "docs"], { cwd: worktree, stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("git", ["commit", "-m", "wip"], { cwd: worktree, stdio: ["ignore", "pipe", "pipe"] });
+    const before = plan(ws);
+
+    // The base of the count stops resolving, so `git rev-list --count
+    // <base>..<story>` FAILS. The commit above is still on the branch.
+    git(ws, ["update-ref", "-d", `refs/heads/epic/${ws.runId}`]);
+
+    const again = await next(ws, { mode: "prepare", discardPending: true });
+    const said = again.lines.join("\n");
+
+    expect(said).toContain("kept 04-build/implicit-plan.yml (--discard-pending re-derives only an unbuilt plan):");
+    expect(said).toContain("could not count what it carries");
+    expect(said).not.toContain("re-derived 04-build/implicit-plan.yml");
+    expect(plan(ws)).toBe(before);
+  }, 60_000);
+
   test("evidence, or a settled story, is the other half of the guard", () => {
     expect(implicitPlanIsStale("status: todo\nevidence: []\n")).toBeNull();
     expect(implicitPlanIsStale("status: in_progress\nevidence: []\n")).toBeNull();
