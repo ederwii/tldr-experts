@@ -483,7 +483,7 @@ async function runStage(
   // BEFORE the executor, before the prompt, before the budget arithmetic: the
   // first thing checked about a headless invocation is whether the ceiling it is
   // about to spawn under is denominated in money at all.
-  const mismatch = economyRefusal(store, options, phaseId, notes);
+  const mismatch = economyRefusal(store, options, phaseId, stageId, notes);
   if (mismatch !== null) return mismatch;
 
   // --- preconditions (design §F.1) -----------------------------------------
@@ -1066,12 +1066,27 @@ function economyRefusal(
   store: RunStore,
   options: NextOptions,
   phaseId: string,
+  stageId: string,
   notes: string[],
 ): NextOutcome | null {
   if (options.mode !== "headless") return null;
   if (!isHostTokens(store.budget, phaseId)) return null;
   const phase = store.budget.phases.find((entry) => entry.id === phaseId);
   const ceiling = phase?.ceiling_usd ?? store.budget.ceiling_usd;
+  // The row before the exit (#266). This was the one money-family exit 2 that
+  // wrote nothing: `budgetRefusal` and `hostTokensNote` both append a
+  // `budget.blocked` before returning EXIT_REFUSED, and the `--until-done`
+  // supervisor keys its money guard on that row among the attempt's fresh
+  // events — a refusal it could not see read as "no money behind it" and was
+  // relaunched, to be refused again a byte later. Same shape as the
+  // `hostTokensNote` row: the ceiling is a TOKEN allowance under this economy,
+  // so it goes out as `ceiling_tokens`, never as a dollar figure.
+  store.append(event(options, store.runId, stageId, "budget.blocked", {
+    phase: phaseId,
+    economy: "host-tokens",
+    ceiling_tokens: ceiling,
+    reason: "headless invocation under a host-tokens ceiling — that ceiling is not dollars a spawn may spend",
+  }));
   return out(EXIT_REFUSED, [
     ...notes,
     `refusing to spawn — ${phaseId} is priced in \`host-tokens\` `

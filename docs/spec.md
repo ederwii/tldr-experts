@@ -1627,7 +1627,7 @@ single scalar with no unit on it and had no way to say *"this number is not doll
 |---|---|---|
 | the number means | dollars a spawn may spend | a host-billed budget in units nobody here meters |
 | `--max-budget-usd` on a spawn | the cap, as today | **never derived from it** |
-| `tldrx next` headless | spawns | **refuses, exit 2, before spending** (§5) |
+| `tldrx next` headless | spawns | **refuses, exit 2, before spending** (§5), and appends one `budget.blocked` (`economy: host-tokens`, `ceiling_tokens`, a `reason` naming the headless invocation) so the ledger states why the run stopped (gh #266) |
 | `tldrx next --prepare` / `--commit` (incl. `--review`) | runs | runs — this is where a host-billed turn belongs |
 | budget-gate hook | denies on `spent + estimate > ceiling` | never denies; says so on stderr, **with the token spend** |
 | auto-gate condition 3 | as today | `n/a (host-tokens economy)`, recorded in the note |
@@ -2652,7 +2652,7 @@ next(run, dry_run):
   sy = load_validate(.tldrx/stages/<st.id>/stage.yml)
   if sy.skip_if holds: append(stage.skipped); advance_cursor(); return next(run, dry_run)
   if r.attended_by == host and mode == headless: exit 4   # §2.2; FIRST, before every line below
-  if b.economy(st.phase) == host-tokens and mode == headless: exit 2   # §2.11: that ceiling is not dollars
+  if b.economy(st.phase) == host-tokens and mode == headless: append(budget.blocked); exit 2   # §2.11: that ceiling is not dollars; the row is what `run auto --until-done` reads (gh #266)
   for p in sy.preconditions:                       # §2.3; skipped entirely on --commit
      res = sh(argv(p.command), cwd=repo(p.repo), timeout=p.timeout_s or 60)
                                                    # allowlisted verbatim, never a shell;

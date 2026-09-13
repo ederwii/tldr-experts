@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.18.1 — unreleased
+
+### Fixed
+
+- **The headless refusal under a `host-tokens` ceiling now writes its `budget.blocked` — it was
+  the one money-family exit 2 the ledger could not see (#266).** Measured 2026-09-12 on
+  `runNext.ts`: `budgetRefusal` and `hostTokensNote` both append a `budget.blocked` before
+  returning exit 2; `economyRefusal` — the §E.2 gate that refuses a headless spawn on a phase
+  priced in host tokens — returned the same exit with only its CLI lines and no
+  `store.append` at all. The `--until-done` supervisor (#252) keys its money guard on a
+  `budget.blocked` among the attempt's fresh events, so a refusal that wrote nothing read as
+  "a refusal with no money behind it" and was relaunched into the same refusal — harmless to
+  the wallet, since the gate fires before any spawn, but a relaunch that could never do
+  anything, and a run whose own audit trail never states why it stopped (the same
+  blind-instrument shape as #248). The gate now appends one row of the `hostTokensNote` shape
+  (`phase`, `economy: host-tokens`, `ceiling_tokens`, a `reason` naming the headless
+  invocation) before the exit; the refusal text is byte-for-byte what it was. Pinned by a
+  headless run on a host-tokens phase → exit 2 AND exactly one `budget.blocked` on the ledger,
+  with `stage.started` still at zero (the row records a refusal, not a stage); removing the
+  append reddens exactly that test.
+
 ## 0.18.0 — 2026-09-13
 
 ### Added
