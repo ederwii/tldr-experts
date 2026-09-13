@@ -606,6 +606,33 @@ type RequiredProbe =
   | { readonly kind: "read"; readonly required: boolean }
   | { readonly kind: "unreadable"; readonly detail: string };
 
+/**
+ * ENFORCEMENT_NOTE — measured 2026-09-13 against the official
+ * github/rest-api-description (dereferenced `api.github.com.deref.json`), not
+ * from memory. `repos/{owner}/{repo}/rules/branches/{branch}` says, verbatim:
+ * "Rules in rulesets with \"evaluate\" or \"disabled\" enforcement statuses are not
+ * returned." GitHub filters them SERVER-SIDE, and the response element carries no
+ * `enforcement` field at all: it is the rule object ∪ "repository ruleset data for
+ * rule" = `{ruleset_source_type, ruleset_source, ruleset_id}` — `"enforcement"`
+ * does not occur anywhere in that response schema. The field lives on the RULESET
+ * (`GET /repos/{owner}/{repo}/rulesets/{id}`), enum `["disabled","active","evaluate"]`.
+ *
+ * So the check below is belt-and-braces, and its ABSENT case is deliberately NOT
+ * read as "I could not tell": the documented contract is that a non-active rule
+ * never arrives, and reading its absence as unknown would refuse to arm on every
+ * real repo — the feature would never fire once. What the check does buy, for the
+ * price of one comparison: if the field ever does arrive (a schema addition, a
+ * GHES build), anything but `active` stops counting as a requirement, on the side
+ * that arms nothing. We do NOT fetch the ruleset by `ruleset_id` to read its
+ * enforcement directly: an ORGANIZATION-level ruleset's id is not reliably
+ * readable through the repo's own `/rulesets/{id}`, so that probe would turn the
+ * commonest legitimate case into "could not tell" and arm nothing, buying no
+ * safety the server-side filter does not already give.
+ */
+const ENFORCEMENT_ACTIVE = "active";
+/** The one 404 body that means "no classic protection here", not "no such base". */
+const BRANCH_NOT_PROTECTED = "Branch not protected";
+
 /** `{owner}`/`{repo}` are `gh api`'s own placeholders, filled from the cwd's repo. */
 export const RULES_ENDPOINT = (base: string) => `repos/{owner}/{repo}/rules/branches/${base}`;
 export const PROTECTION_ENDPOINT = (base: string) => `repos/{owner}/{repo}/branches/${base}/protection`;
@@ -629,8 +656,17 @@ async function rulesRequireChecks(options: ShipOptions, repo: ShipRepo, base: st
   }
   if (!Array.isArray(doc)) return { kind: "unreadable", detail: "`gh api …/rules/branches` did not print an array" };
   const required = doc.some((rule) => {
-    const row = rule as { type?: unknown; parameters?: { required_status_checks?: unknown } } | null;
+    const row = rule as {
+      type?: unknown; enforcement?: unknown; parameters?: { required_status_checks?: unknown };
+    } | null;
     if (row?.type !== "required_status_checks") return false;
+    // A ruleset in `evaluate` is a DRY RUN: GitHub reports it and does not block
+    // the merge. Counting one would reproduce this very bug a level down — our own
+    // probe telling `--auto` there is something to wait on when there is not.
+    // See ENFORCEMENT_NOTE: the field is not in the response today, so absent is
+    // the ONLY shape that reaches this in practice and is read as the server's
+    // documented filter; a value that does arrive must be exactly `active`.
+    if (row.enforcement !== undefined && row.enforcement !== ENFORCEMENT_ACTIVE) return false;
     const contexts = row.parameters?.required_status_checks;
     return Array.isArray(contexts) && contexts.length > 0;
   });
@@ -649,8 +685,12 @@ async function protectionRequiresChecks(options: ShipOptions, repo: ShipRepo, ba
     // The ONE non-zero exit that is an answer rather than a failure: the branch
     // carries no classic protection. Anything else — 403 on a token without
     // admin, a network error — is "I could not tell".
+    // The ONE 404 body that says what we need. A 404 alone does not: a branch
+    // that is not there and a repo that is gone answer 404 too, and reading
+    // those as "requires nothing" would arm a merge against a base nobody
+    // identified. The distinguishing cost is a string comparison.
     const body = doc as { status?: unknown; message?: unknown } | null;
-    const notProtected = String(body?.status ?? "") === "404" || /\(HTTP 404\)/.test(seen.stderr);
+    const notProtected = String(body?.status ?? "") === "404" && body?.message === BRANCH_NOT_PROTECTED;
     if (notProtected) return { kind: "read", required: false };
     return { kind: "unreadable", detail: firstLine(seen.stderr) || `gh exited ${String(seen.exitCode)}` };
   }

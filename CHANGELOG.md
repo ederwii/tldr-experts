@@ -55,7 +55,14 @@
   can see (a merge queue, an org policy this token cannot read) reads as "requires nothing" and so
   arms NOTHING: the residual gap can only ever cost a merge that was not armed, never a merge that
   should not have happened. The `queued` sentence now says what `--auto` actually waits on — the
-  base's REQUIRED checks.
+  base's REQUIRED checks. Two edges of the probe are closed on the same side: a rule that arrives
+  carrying an `enforcement` other than `active` is a dry run and is not counted as a requirement
+  (GitHub already filters `evaluate`/`disabled` server-side and the response carries no such field
+  — measured against the official REST description — so this is belt-and-braces, and its absence is
+  read as that documented filter rather than as "unknown", which would refuse to arm on every real
+  repo); and only a 404 whose body reads `Branch not protected` means "no classic protection" — a
+  branch or a repo that is not there answers 404 too, and reading that as "requires nothing" would
+  arm a merge against a base nobody identified.
 
 ## 0.18.1 — 2026-09-13
 

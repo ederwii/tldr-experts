@@ -198,6 +198,28 @@ const RULES_REQUIRING_CI = JSON.stringify([
 ]);
 /** What a branch with no ruleset answers: 200, empty array. */
 const RULES_NONE = "[]";
+/**
+ * A rule that carries an `enforcement` OTHER than `active`. No such field exists
+ * in the response schema today (measured against github/rest-api-description:
+ * the element is the rule ∪ `{ruleset_source_type, ruleset_source, ruleset_id}`,
+ * and `enforcement` appears nowhere) — GitHub filters `evaluate`/`disabled`
+ * server-side. This pins the belt-and-braces read: if the field ever DOES arrive,
+ * anything but `active` does not count as a requirement.
+ */
+const RULES_EVALUATE_ONLY = JSON.stringify([
+  {
+    type: "required_status_checks",
+    enforcement: "evaluate",
+    ruleset_source_type: "Organization",
+    parameters: { required_status_checks: [{ context: "ci" }] },
+  },
+]);
+/** A 404 that is NOT "this branch carries no protection" — a base that is not there. */
+const PROTECTION_404_NO_SUCH_BRANCH: Answer = {
+  exitCode: 1,
+  stdout: JSON.stringify({ message: "Not Found", status: "404" }),
+  stderr: "gh: Not Found (HTTP 404)",
+};
 /** What classic branch protection answers when there is none — exit 1, measured 2026-09-13. */
 const PROTECTION_404: Answer = {
   exitCode: 1,
@@ -393,6 +415,36 @@ describe("`tldrx ship` under `ship: {push, pr, auto_merge: checks}`", () => {
     expect(out.lines.join("\n")).toContain(NO_REQUIRED_CHECKS);
     // ...and never the sentence that was false in the dangerous direction.
     expect(out.lines.join("\n")).not.toContain("GitHub merges when its checks pass");
+  });
+
+  test("a rule that arrives NOT `active` is not a requirement — `evaluate` is a dry run", async () => {
+    const ws = shippable({ push: true, pr: true, auto_merge: "checks" });
+    const transport = fakeTransport({
+      ...answersWithChecks(),
+      [RULES_KEY]: { stdout: RULES_EVALUATE_ONLY },
+      [PROTECTION_KEY]: PROTECTION_404,
+    });
+
+    await ship(ws, transport);
+
+    expect(shape(transport.calls)).toEqual(["git push -u", "gh pr create", "gh pr view"]);
+    expect(RunStore.open(ws.runDir).run.ship?.merge).toBe(NO_REQUIRED_CHECKS);
+  });
+
+  test("only `Branch not protected` is the 404 that means `requires nothing` — any other is unreadable", async () => {
+    const ws = shippable({ push: true, pr: true, auto_merge: "checks" });
+    const transport = fakeTransport({
+      ...answersWithChecks(),
+      [RULES_KEY]: { stdout: RULES_NONE },
+      [PROTECTION_KEY]: PROTECTION_404_NO_SUCH_BRANCH,
+    });
+
+    await ship(ws, transport);
+
+    expect(shape(transport.calls)).toEqual(["git push -u", "gh pr create", "gh pr view"]);
+    // A base that is not there is "I do not know what base this is", never "it
+    // holds nothing back" — the two would arm the same today, and must not.
+    expect(RunStore.open(ws.runDir).run.ship?.merge).toBe(REQUIREMENTS_UNREADABLE);
   });
 
   test("both mechanisms are asked, and a RULESET alone is enough to arm", async () => {
