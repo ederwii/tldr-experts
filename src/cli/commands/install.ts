@@ -1,5 +1,6 @@
 /**
- * `tldrx install --claude` — the third way to get the facilitator into Claude Code.
+ * `tldrx install --claude` — the third way to get the facilitator (and, since
+ * #291, the planner) into Claude Code.
  *
  * The other two stay: `claude --plugin-dir ./plugin` for a one-off session out of a
  * checkout, and plain Bash with nothing installed at all (every hook is a script
@@ -7,13 +8,12 @@
  * project, or a machine, that should just have it, in files Claude Code already
  * reads and that a team can commit.
  *
- * Deliberately narrow. It writes one skill file and merges two keys into
+ * Deliberately narrow. It writes two skill files and merges two keys into
  * `settings.json`. It never touches `permissions` — pre-approving tools is a
  * decision about someone's blast radius and is not ours to make from a subcommand —
  * and it installs nothing else.
  */
 import { homedir } from "node:os";
-import { join } from "node:path";
 import type { Command } from "../Command.ts";
 import { EXIT_FAILED, EXIT_OK } from "../exitCodes.ts";
 import { boolFlag, parseArgs, UsageError } from "../argv.ts";
@@ -24,11 +24,10 @@ import {
   applyInstall, chainStatusLineHint, planInstall, renderInstallSummary,
   type InstallOptions, type InstallScope,
 } from "../../core/install/installClaude.ts";
-import { SKILL_RELATIVE } from "../../core/install/skillFile.ts";
 
 export const installCommand: Command = {
   name: "install",
-  summary: "Install the tldrx skill, hooks and status line into .claude/",
+  summary: "Install the tldrx skills, hooks and status line into .claude/",
   usage:
     "tldrx install --claude [--project | --user] [--skill-only] [--no-hooks] [--no-statusline]\n"
     + "               [--force-statusline] [--uninstall] [--dry-run]",
@@ -53,7 +52,7 @@ export const installCommand: Command = {
         statusline: !skillOnly && !boolFlag(args, "no-statusline"),
         forceStatusline: boolFlag(args, "force-statusline"),
         uninstall: boolFlag(args, "uninstall"),
-        pluginSkill: join(PLUGIN_DIR, ...SKILL_RELATIVE.split("/")),
+        pluginDir: PLUGIN_DIR,
         at: nowRfc3339(),
       };
 

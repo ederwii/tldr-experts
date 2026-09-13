@@ -843,12 +843,18 @@ and `--ship` for the last mile. A run where a person signs or answers is the res
 not a flag on this one.
 
 ```bash
+tldrx seed check .tldrx/seeds/01-login-timeout.md --scope bugfix --budget 40
 tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.md \
   --gates none --questions none --ship pr --budget 40
 nohup tldrx run auto --run <id> --until-done --max-usd 40 \
   --wait-answers 8h --wait-gates 8h --notify-every 30m --ui plain > /tmp/<id>.log 2>&1 &
 ```
 
+- `tldrx seed check` — the seed through the same importer `run new` uses plus the authoring
+  rules in [5 — Seeds and triage](05-seeds-and-triage.md#writing-a-seed-by-hand), read-only,
+  no run created; with `--budget` it prints the stage split and per-story caps the run would
+  get. Writing the seed itself, from "I want X" to a file that passes this, is what the
+  `/tldrx-plan` skill (`tldrx install --claude`) is for.
 - `--gates none` — a person approves no stage; every gate closes itself on its seven `auto`
   conditions, frozen into `run.yml`.
 - `--questions none` — the loop takes each question's own `Recommended:` pick
@@ -907,6 +913,7 @@ tldrx approve --as-agent                    # sign it; 2 = broken note, 4 = a pe
 tldrx approve --note "…"                    # overrule, as yourself
 
 # zero-touch: every decision pre-taken, the engine in the background
+tldrx seed check .tldrx/seeds/01-login-timeout.md   # read-only; creates no run
 tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.md \
   --gates none --questions none --ship pr --budget 40
 nohup tldrx run auto --run <id> --until-done --max-usd 40 \

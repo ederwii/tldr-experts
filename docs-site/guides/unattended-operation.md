@@ -51,6 +51,14 @@ claim it cannot trace, so the rules are mechanical:
   reads to write that line. (Inferred from the mechanism; the measured run raised no
   question at all.)
 
+Before `run new`, `tldrx seed check <file>` runs the seed through the same importer the run
+uses plus the authoring rules — the stories, their `touches:` and `depends_on:`, the `dod`
+lines, the size the framework carries today — read-only, creating nothing; `--budget <usd>`
+also prints the stage split and per-story caps the run would get. In Claude Code,
+`/tldrx-plan` (the second skill `tldrx install --claude` writes) goes from "I want X" to
+seeds that pass it. The full rule list lives in the repo guide,
+[Writing a seed by hand](https://github.com/ederwii/tldr-experts/blob/main/docs/guide/05-seeds-and-triage.md#writing-a-seed-by-hand).
+
 The conventional place is `.tldrx/seeds/<nn>-<slug>.md`, committed with the rest of
 `.tldrx/`. A seed for a session timeout defect, every bullet under the cap:
 

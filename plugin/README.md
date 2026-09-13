@@ -18,7 +18,7 @@ tldrx install --claude          # ./.claude/   (this project; needs a git repo)
 tldrx install --claude --user   # ~/.claude/   (this machine)
 ```
 
-That writes the same skill and the same six hooks into a real `.claude/`, plus the
+That writes the same two skills and the same six hooks into a real `.claude/`, plus the
 status line this plugin cannot install (see below). It is idempotent, it never
 touches `permissions`, and `--uninstall` takes exactly it back out. The README's
 [Claude Code integration](../README.md#claude-code-integration) section has the
@@ -38,6 +38,7 @@ Same scripts, same matchers, same timeouts, same decisions.
 |---|---|
 | `.claude-plugin/plugin.json` | Manifest: `name`, `description`, `version`, `author`. |
 | `skills/tldrx/SKILL.md` | The facilitator. `disable-model-invocation: true` — only you can invoke it, and its body costs nothing until you do. |
+| `skills/tldrx-plan/SKILL.md` | The planner (#291): from "I want X" to seed files `tldrx seed check` passes and an unattended run can finish. Same invocation rule. |
 | `hooks/hooks.json` | Eight handlers over six hook scripts on four events. **All live** — see the table below. |
 | `agents/` | Deliberately empty — experts are generated per project. |
 

@@ -546,14 +546,28 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "seed",
-    subcommands: ["triage", "answer", "apply"],
-    description: "Triage a seed too big for one run into several, then create them.",
+    subcommands: ["check", "triage", "answer", "apply"],
+    description: "Check a hand-written seed against the rules an unattended run needs, or triage a seed too big for one run into several, then create them.",
     args: [
+      { name: "<file|dir>", meaning: "seed check: the seed to validate — the same path `run new --seed` would take." },
       { name: "<path>", meaning: "seed triage: the document or directory to inventory." },
       { name: "<split.yml>", meaning: "seed answer / seed apply: the proposal to act on." },
       { name: "<Qid> <text>", meaning: "seed answer: the question to answer, and the answer." },
     ],
     flags: [
+      {
+        name: "scope",
+        arg: "<s>",
+        meaning: "seed check: the workflow preset the run would open with — it names the importer's first stage and is what --budget is split over. Default: feature.",
+        values: () => scopeValues(),
+        sub: "check",
+      },
+      {
+        name: "budget",
+        arg: "<usd>",
+        meaning: "seed check: also print the stage split `run new --budget` would write for this ceiling — every stage's per-attempt share and the phase ceiling holding its attempts — plus the per-story developer and reviewer caps for the seed's story count, off the same arithmetic the run uses (#244/#289). Absent: no budget block.",
+        sub: "check",
+      },
       { name: "out", arg: "<dir>", meaning: "Where to write the triage folder. Default: .tldrx/triage/<yymmdd>-<name>/.", sub: "triage" },
       json("the inventory", "triage"),
       { name: "threshold-tokens", arg: "<n>", meaning: "Size above which a seed is called big enough to split.", sub: "triage" },
@@ -569,11 +583,16 @@ const ENTRIES: readonly CommandHelp[] = [
       root(),
     ],
     examples: [
+      "tldrx seed check .tldrx/seeds/01-login-timeout.md",
+      "tldrx seed check .tldrx/seeds/01-login-timeout.md --scope feature --budget 60",
       "tldrx seed triage docs/",
       "tldrx seed triage docs/ --propose --max-usd 2",
       "tldrx seed apply .tldrx/triage/260101-docs/split.yml --dry-run",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_AGENT_FAILED],
+    notes: [
+      "`seed check` is READ-ONLY and free: it runs the seed through the same importer `run new --seed` uses, then the authoring rules four unattended runs paid to learn \u2014 bullets under 200 characters, `[src:]` last on its line and resolving to a real line, every `dod` line byte-equal to a workspace `commands:` value with no shell separator, a `Recommended:` on every open question, `touches:` + `depends_on:` + a ```dod fence on every story, and no two stories sharing a touched file in one wave. Exit 0 with no finding; exit 1 with one `file:line rule \u2014 text` line per finding. An `advisory:` line (more than 4 stories or 2 waves \u2014 the framework's CURRENT limit, patch for #286/#244/#280 \u2014 or a missing What heading) is printed and never changes the exit code. It creates no run. The grammar it enforces is written once, in docs/guide/05-seeds-and-triage.md.",
+    ],
   },
   {
     name: "next",

@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { FRAMEWORK_ROOT, PLUGIN_DIR } from "../src/core/paths.ts";
 import { EXIT_FAILED, EXIT_OK } from "../src/cli/exitCodes.ts";
 import { HOOK_SCRIPTS, MANAGED_HOOKS, STATUSLINE_COMMAND } from "../src/core/install/managedEntries.ts";
-import { SKILL_MARKER } from "../src/core/install/skillFile.ts";
+import { PLAN_SKILL_RELATIVE, SKILL_MARKER } from "../src/core/install/skillFile.ts";
 import { handlersOf, type ClaudeSettings } from "../src/core/install/ClaudeSettings.ts";
 import { makeWorkspace, type TempWorkspace } from "./fixtures/tempWorkspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
@@ -66,6 +66,9 @@ function settingsPath(root: string): string {
 }
 function skillPath(root: string): string {
   return join(root, ".claude", "skills", "tldrx", "SKILL.md");
+}
+function planSkillPath(root: string): string {
+  return join(root, ".claude", ...PLAN_SKILL_RELATIVE.split("/"));
 }
 function readSettings(root: string): ClaudeSettings {
   return JSON.parse(readFileSync(settingsPath(root), "utf8")) as ClaudeSettings;
@@ -306,12 +309,12 @@ describe("tldrx install --claude --project", () => {
     expect(both.stderr).toContain("alternatives");
   });
 
-  test("the summary is four to six lines", async () => {
+  test("the summary is five to seven lines", async () => {
     const root = repo();
     const run = await tldrx(root, ["install", "--claude"]);
     const lines = run.stdout.trimEnd().split("\n");
-    expect(lines.length).toBeGreaterThanOrEqual(4);
-    expect(lines.length).toBeLessThanOrEqual(6);
+    expect(lines.length).toBeGreaterThanOrEqual(5);
+    expect(lines.length).toBeLessThanOrEqual(7);
   });
 
   test("refuses a settings.json that is not valid JSON rather than replacing it", async () => {
@@ -322,6 +325,77 @@ describe("tldrx install --claude --project", () => {
     expect(run.code).toBe(EXIT_FAILED);
     expect(run.stderr).toContain("not valid JSON");
     expect(readFileSync(settingsPath(root), "utf8")).toBe("{ not json");
+  });
+});
+
+/**
+ * The second managed skill (#291): `tldrx-plan`, the planner, installed beside the
+ * facilitator with the same marker, the same foreign-file protection and the same
+ * uninstall — so the two cannot drift into different ownership rules.
+ */
+describe("tldrx install --claude writes the plan skill beside the facilitator", () => {
+  test("writes skills/tldrx-plan/SKILL.md with our marker, from plugin/skills/tldrx-plan/SKILL.md", async () => {
+    const root = repo();
+    const run = await tldrx(root, ["install", "--claude"]);
+    expect(run.code).toBe(EXIT_OK);
+    const installed = readFileSync(planSkillPath(root), "utf8");
+    expect(installed).toContain(SKILL_MARKER);
+    expect(installed).toContain("disable-model-invocation: true");
+    const source = readFileSync(join(PLUGIN_DIR, ...PLAN_SKILL_RELATIVE.split("/")), "utf8");
+    const body = source.slice(source.indexOf("---", 3) + 3);
+    const heading = body.split("\n").find((line) => line.startsWith("# ")) ?? "";
+    expect(heading).toStartWith("# tldrx-plan");
+    expect(installed).toContain(heading);
+    expect(installed.length).toBeGreaterThan(source.length);
+    // Both skills, both marked: the facilitator did not stop being installed.
+    expect(readFileSync(skillPath(root), "utf8")).toContain(SKILL_MARKER);
+  });
+
+  test("the summary and --dry-run list it as its own row, and --dry-run writes nothing", async () => {
+    const root = repo();
+    const dry = await tldrx(root, ["install", "--claude", "--dry-run"]);
+    expect(dry.code).toBe(EXIT_OK);
+    expect(dry.stdout).toContain(PLAN_SKILL_RELATIVE);
+    expect(existsSync(join(root, ".claude"))).toBe(false);
+    const real = await tldrx(root, ["install", "--claude"]);
+    expect(real.stdout.split("\n").filter((line) => line.includes(PLAN_SKILL_RELATIVE))).toHaveLength(1);
+  });
+
+  test("running twice leaves it byte-identical and reports it as already current", async () => {
+    const root = repo();
+    await tldrx(root, ["install", "--claude"]);
+    const first = readFileSync(planSkillPath(root), "utf8");
+    const again = await tldrx(root, ["install", "--claude"]);
+    expect(readFileSync(planSkillPath(root), "utf8")).toBe(first);
+    expect(again.stdout).toMatch(new RegExp(`${PLAN_SKILL_RELATIVE.replace(/[./]/g, "\\$&")} — already current`));
+  });
+
+  test("--uninstall removes it, and leaves one it does not own", async () => {
+    const root = repo();
+    await tldrx(root, ["install", "--claude"]);
+    const removed = await tldrx(root, ["install", "--claude", "--uninstall"]);
+    expect(removed.code).toBe(EXIT_OK);
+    expect(existsSync(planSkillPath(root))).toBe(false);
+    expect(existsSync(join(root, ".claude", "skills", "tldrx-plan"))).toBe(false);
+
+    mkdirSync(join(root, ".claude", "skills", "tldrx-plan"), { recursive: true });
+    writeFileSync(planSkillPath(root), "# mine\n", "utf8");
+    const kept = await tldrx(root, ["install", "--claude", "--uninstall"]);
+    expect(kept.code).toBe(EXIT_OK);
+    expect(readFileSync(planSkillPath(root), "utf8")).toBe("# mine\n");
+  });
+
+  test("refuses a tldrx-plan/SKILL.md without our marker, and writes nothing — not even the facilitator", async () => {
+    const root = repo();
+    mkdirSync(join(root, ".claude", "skills", "tldrx-plan"), { recursive: true });
+    writeFileSync(planSkillPath(root), "# my own planner\n", "utf8");
+    const run = await tldrx(root, ["install", "--claude"]);
+    expect(run.code).toBe(EXIT_FAILED);
+    expect(run.stderr).toContain("not tldrx-managed");
+    expect(run.stderr).toContain("tldrx-plan");
+    expect(readFileSync(planSkillPath(root), "utf8")).toBe("# my own planner\n");
+    expect(existsSync(skillPath(root))).toBe(false);
+    expect(existsSync(settingsPath(root))).toBe(false);
   });
 });
 

@@ -1,6 +1,7 @@
 /**
- * `tldrx install --claude` — put the facilitator skill, the six hooks and the
- * status line into a real `.claude/`, without a plugin and without `init`.
+ * `tldrx install --claude` — put the facilitator skill, the planning skill, the
+ * six hooks and the status line into a real `.claude/`, without a plugin and
+ * without `init`.
  *
  * Why this exists (Alan, 2026-08-29): the skill must be installable independently
  * of `tldrx init`. `--plugin-dir ./plugin` is a per-session flag and needs the
@@ -24,7 +25,7 @@ import {
 } from "./ClaudeSettings.ts";
 import { mergeSettings, unmergeSettings, type StatusLineOutcome } from "./mergeSettings.ts";
 import { HOOK_SCRIPTS, MANAGED_HOOKS, STATUSLINE_COMMAND } from "./managedEntries.ts";
-import { isManagedSkill, managedSkill, SKILL_RELATIVE } from "./skillFile.ts";
+import { isManagedSkill, managedSkill, MANAGED_SKILLS, type ManagedSkill } from "./skillFile.ts";
 
 export class InstallError extends Error {}
 
@@ -40,8 +41,11 @@ export interface InstallOptions {
   readonly statusline: boolean;
   readonly forceStatusline: boolean;
   readonly uninstall: boolean;
-  /** Absolute path of `plugin/skills/tldrx/SKILL.md` — the source of truth. */
-  readonly pluginSkill: string;
+  /**
+   * Absolute path of the `plugin/` directory — every managed skill's source is
+   * `<pluginDir>/<relative>`, the same relative path it is installed under.
+   */
+  readonly pluginDir: string;
   /** Stamp for the backup filename, so a test can pin it. */
   readonly at: string;
 }
@@ -55,13 +59,20 @@ export interface FileChange {
   readonly content?: string;
 }
 
+/** What happens to one managed skill under this plan. */
+export interface SkillChange {
+  readonly skill: ManagedSkill;
+  readonly action: ChangeAction;
+}
+
 export interface InstallPlan {
   readonly claudeDir: string;
   readonly options: InstallOptions;
   readonly changes: readonly FileChange[];
   /** `settings.json.bak-tldrx-<ts>` when settings.json exists and will change. */
   readonly backup: { readonly path: string; readonly content: string } | null;
-  readonly skill: ChangeAction;
+  /** One entry per `MANAGED_SKILLS` row, in that order — the facilitator first. */
+  readonly skills: readonly SkillChange[];
   readonly addedHooks: readonly string[];
   readonly keptHooks: readonly string[];
   readonly removedHooks: readonly string[];
@@ -94,12 +105,18 @@ export function planInstall(options: InstallOptions): InstallPlan {
   }
   const claudeDir = claudeDirFor(options);
   const settingsPath = join(claudeDir, "settings.json");
-  const skillPath = join(claudeDir, SKILL_RELATIVE);
 
   const changes: FileChange[] = [];
-  const skill = options.skill
-    ? (options.uninstall ? planSkillRemoval(skillPath, changes) : planSkillWrite(options, skillPath, changes))
-    : "absent";
+  // Every skill is PLANNED before anything is written, so a foreign file at the
+  // second path refuses the whole install with the first path untouched — the
+  // plan/apply split is what makes that free.
+  const skills: SkillChange[] = MANAGED_SKILLS.map((skill) => {
+    const skillPath = join(claudeDir, ...skill.relative.split("/"));
+    const action: ChangeAction = options.skill
+      ? (options.uninstall ? planSkillRemoval(skillPath, changes) : planSkillWrite(options, skill, skillPath, changes))
+      : "absent";
+    return { skill, action };
+  });
 
   const before = existsSync(settingsPath) ? readFileSync(settingsPath, "utf8") : null;
   const loaded = parseSettings(before, settingsPath);
@@ -146,7 +163,7 @@ export function planInstall(options: InstallOptions): InstallPlan {
   }
 
   return {
-    claudeDir, options, changes, backup, skill,
+    claudeDir, options, changes, backup, skills,
     addedHooks, keptHooks, removedHooks, statusLine, foreignStatusLine,
   };
 }
@@ -173,7 +190,7 @@ export function applyInstall(plan: InstallPlan): readonly string[] {
   return touched;
 }
 
-/** The 4–6 line report. Same text for `--dry-run`, which simply does not apply. */
+/** The 5–7 line report. Same text for `--dry-run`, which simply does not apply. */
 export function renderInstallSummary(plan: InstallPlan, dryRun: boolean): string {
   const { options } = plan;
   const mode = options.uninstall ? " --uninstall" : "";
@@ -181,7 +198,9 @@ export function renderInstallSummary(plan: InstallPlan, dryRun: boolean): string
   const lines = [`tldrx install --claude --${options.scope}${mode}${dry} → ${plan.claudeDir}`];
 
   if (options.skill) {
-    lines.push(`  skill       ${SKILL_RELATIVE} — ${skillWord(plan.skill)}`);
+    for (const { skill, action } of plan.skills) {
+      lines.push(`  ${skill.label.padEnd(11)} ${skill.relative} — ${skillWord(action)}`);
+    }
   }
   if (options.hooks) lines.push(`  hooks       settings.json — ${hooksWord(plan)}`);
   if (options.statusline) lines.push(`  statusline  settings.json — ${statusWord(plan)}`);
@@ -206,11 +225,14 @@ export function chainStatusLineHint(foreign: string | null): string {
   ].join("\n");
 }
 
-function planSkillWrite(options: InstallOptions, skillPath: string, changes: FileChange[]): ChangeAction {
-  if (!existsSync(options.pluginSkill)) {
-    throw new InstallError(`no skill to install at ${options.pluginSkill} — is this a complete tldrx install?`);
+function planSkillWrite(
+  options: InstallOptions, skill: ManagedSkill, skillPath: string, changes: FileChange[],
+): ChangeAction {
+  const source = join(options.pluginDir, ...skill.relative.split("/"));
+  if (!existsSync(source)) {
+    throw new InstallError(`no skill to install at ${source} — is this a complete tldrx install?`);
   }
-  const wanted = managedSkill(readFileSync(options.pluginSkill, "utf8"));
+  const wanted = managedSkill(readFileSync(source, "utf8"));
   if (existsSync(skillPath)) {
     const current = readFileSync(skillPath, "utf8");
     if (!isManagedSkill(current)) {

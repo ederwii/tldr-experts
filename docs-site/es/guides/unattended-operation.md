@@ -55,6 +55,14 @@ mecánicas:
   recomendación en la semilla es lo que lee para escribir esa línea. (Inferido del
   mecanismo; el run medido no levantó ninguna pregunta.)
 
+Antes de `run new`, `tldrx seed check <file>` pasa la semilla por el mismo importador que
+usa el run más las reglas de autoría — las historias, sus `touches:` y `depends_on:`, las
+líneas `dod`, el tamaño que el framework soporta hoy — en solo lectura, sin crear nada;
+`--budget <usd>` imprime además el reparto por etapas y los topes por historia que tendría el
+run. En Claude Code, `/tldrx-plan` (la segunda skill que escribe `tldrx install --claude`)
+va de "quiero X" a semillas que lo pasan. La lista completa de reglas vive en la guía del
+repo, [Writing a seed by hand](https://github.com/ederwii/tldr-experts/blob/main/docs/guide/05-seeds-and-triage.md#writing-a-seed-by-hand).
+
 El lugar convencional es `.tldrx/seeds/<nn>-<slug>.md`, commiteado con el resto de
 `.tldrx/`. Una semilla para un defecto de expiración de sesión, cada viñeta bajo el tope:
 

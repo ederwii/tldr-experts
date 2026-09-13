@@ -3,7 +3,7 @@ export {
   renderInstallSummary,
 } from "./installClaude.ts";
 export type {
-  ChangeAction, FileChange, InstallOptions, InstallPlan, InstallScope,
+  ChangeAction, FileChange, InstallOptions, InstallPlan, InstallScope, SkillChange,
 } from "./installClaude.ts";
 export { mergeSettings, unmergeSettings } from "./mergeSettings.ts";
 export type { MergeOptions, MergeResult, StatusLineOutcome, UnmergeResult } from "./mergeSettings.ts";
@@ -12,7 +12,10 @@ export {
   STATUSLINE_SCRIPT, entryFor, hookCommand, isManagedCommand, statusLineValue,
 } from "./managedEntries.ts";
 export type { HookScript, ManagedHook } from "./managedEntries.ts";
-export { isManagedSkill, managedSkill, SKILL_MARKER, SKILL_RELATIVE } from "./skillFile.ts";
+export {
+  isManagedSkill, managedSkill, MANAGED_SKILLS, PLAN_SKILL_RELATIVE, SKILL_MARKER, SKILL_RELATIVE,
+} from "./skillFile.ts";
+export type { ManagedSkill } from "./skillFile.ts";
 export {
   DEFAULT_FORMAT, detectFormat, handlersOf, parseSettings, serializeSettings, SettingsError,
 } from "./ClaudeSettings.ts";

@@ -38,3 +38,8 @@ export {
 export {
   answerSplitQuestion, type AnswerSplitOptions, type AnswerSplitOutcome,
 } from "./answerSplitQuestion.ts";
+export {
+  checkSeed, renderSeedCheck, MAX_SEED_BULLET_CHARS, MAX_STORIES_PER_SEED, MAX_WAVES_PER_SEED,
+  type SeedCheckReport, type SeedCheckOptions, type SeedFinding, type SeedStory, type BudgetView,
+  type SeedCheckRule, type SeedCheckAdvisory,
+} from "./checkSeed.ts";

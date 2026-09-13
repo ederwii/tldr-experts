@@ -60,7 +60,7 @@ hurry, not one an agent gets to pass on their behalf.
 ### From Claude Code
 
 ```bash
-tldrx install --claude     # writes .claude/skills/tldrx/SKILL.md + merges hooks + statusLine
+tldrx install --claude     # writes .claude/skills/{tldrx,tldrx-plan}/SKILL.md + merges hooks + statusLine
 ```
 
 Then open Claude Code in that project and type **`/tldrx`**. It runs `tldrx status`,

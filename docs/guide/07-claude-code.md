@@ -25,8 +25,9 @@ tldrx install --claude --dry-run     # show the plan, write nothing
 tldrx install --claude --uninstall   # take exactly it back out
 ```
 
-It writes one skill file — `.claude/skills/tldrx/SKILL.md`, a copy of
-`plugin/skills/tldrx/SKILL.md` with `disable-model-invocation: true` intact, stamped
+It writes two skill files — `.claude/skills/tldrx/SKILL.md` (the facilitator, `/tldrx`) and
+`.claude/skills/tldrx-plan/SKILL.md` (the planner, `/tldrx-plan`, #291), each a copy of its
+`plugin/skills/<name>/SKILL.md` with `disable-model-invocation: true` intact and stamped
 `<!-- tldrx-managed -->` — and **merges** two keys into `.claude/settings.json`:
 
 ```jsonc
@@ -57,7 +58,8 @@ onto a machine whose checkout is somewhere else. `tldrx hook` resolves `dist/hoo
 code straight through.
 
 **What it will not do:** touch `permissions`, edit an entry it did not write, overwrite a
-`SKILL.md` that has no `<!-- tldrx-managed -->` marker (exit `1`), or replace a `statusLine`
+`SKILL.md` at either path that has no `<!-- tldrx-managed -->` marker (exit `1`, and then
+nothing at all is written), or replace a `statusLine`
 that is somebody else's — it prints how to chain the two instead, and `--force-statusline` is
 the override. `settings.json` is copied to `settings.json.bak-tldrx-<ts>` before the first
 write. Running it twice changes nothing, and `--uninstall` puts the file back byte-for-byte.

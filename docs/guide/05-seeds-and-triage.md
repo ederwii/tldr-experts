@@ -56,10 +56,65 @@ measured in both:
   person. The question blocks are the What agent's — the seed's recommendation is what it
   reads to write that line (inferred from the mechanism, not measured on a run).
 
+The rules above are the grammar. The rules below are what four unattended runs in one week
+taught about the WORK a seed describes — the seeds that finished alone followed them, the one
+that needed four rescues broke most of them (#291). Two kinds, and each says which: a
+**craft** rule holds for any version; a **patch for #N** exists because of an OPEN framework
+bug and is deleted when it closes. `tldrx seed check <file>` enforces every one below that a
+machine can read, as findings (exit `1`) or advisories (printed, exit unchanged).
+
+- **Declare the stories** (craft): a `# Stories` heading, then one `## S<n> — <title>` per
+  story with, in order, `- touches: <path>, <path>`, `- depends_on: none` (or `S1, S2`),
+  the acceptance bullets with their citations, and a fenced ```` ```dod ```` block. The Plan
+  stage still writes the real `03-plan/stories/<id>.md`; the seed is what it plans FROM.
+- **A story is one agent's turn under one cap** (craft): ≤ ~$15 of work, one repo, one
+  branch, one Definition of Done a hook can re-run. If you cannot say which files it
+  touches, it is two stories or it is not ready.
+- **Size (patch for #286/#244/#280 — raise when they close):** today plan runs of 3–4
+  stories and ≤2 waves; the framework's measured limit, not a design preference. 1/1 and
+  3/3 runs finished alone; the 8-story run needed four human rescues, and every story that
+  waited for a person lost the race against siblings merging into the epic. Over the limit
+  is an `advisory:` from `seed check`, never a refusal — read the CHANGELOG's latest
+  released section for the current number before planning.
+- **Waves are bounded by shared files, not by a count** (craft): stories touching the same
+  counted list / snapshot / registration file chain through `depends_on`; everything else
+  may run in parallel.
+- **Boundaries (#268/#286):** a migration inventory test, an approved OpenAPI or
+  authorization contract, an allow-list, a route registration — any file two stories would
+  BOTH edit — is in both stories' `touches:` and the second story `depends_on` the first.
+  Never the same wave: one conflicted file became four. Two stories naming the same touched
+  path with no dependency between them is a `wave-boundary` finding.
+- **`dod` lines are byte-equal to a workspace `commands:` value, one per line** (craft): no
+  `&&`, no `;`, no redirection, no added flag — `dod-gate` compares bytes
+  (`src/core/schemas/story.ts`, `validateStoryDod`) and refuses a line that needs a shell
+  (`unquotedShellSeparator`). Measured on #271/#278: a chained line was refused by the
+  permission layer before the gate ever ran.
+- **Tools (patch for #290 — the planner checks this by hand until Plan can):** an
+  acceptance criterion may only demand a command the workspace declares in `commands:`.
+  Need one that is not there? Add the slot to `workspace.yml` first — measured on #285, an
+  undeclared tool cost four developers on one story, and the cure names the tool and its
+  subcommand only (add `sha256sum`, not a pipeline). A `git` line is never a `commands:`
+  slot: git verbs are a separate grant.
+- **Approved snapshots (#278/#285 field notes):** when the repo approves a contract by
+  replacing a file (a `.approved.*`, a golden, a generated inventory), the story SAYS which
+  file and how it is regenerated — "run `<command>` and commit the new `<file>`" — or the
+  developer leaves it stale and the review refuses.
+- **Budget (patch for #244/#289 — delete when closed):** `run new --budget` is split into
+  stage shares by the preset's ratios, weighted by `attempts` (`planBudget`,
+  `src/core/run/newRun.ts`); a feature run at `--budget 60` gives Build $10.80 per attempt
+  and a story's developer cap is a share of THAT. `tldrx seed check <file> --scope <s>
+  --budget <usd>` prints the split and the per-story caps off the same arithmetic — pick a
+  ceiling whose per-story cap covers the largest story.
+
+Run `tldrx seed check <file>` before `run new`: it is the same importer plus every rule on
+this page, read-only, and it creates no run. In Claude Code, `/tldrx-plan` — the second skill
+`tldrx install --claude` writes — walks from "I want X" to seeds that pass it, and ends with
+the exact `run new` line.
+
 The conventional location is `.tldrx/seeds/<nn>-<slug>.md`, committed with the rest of
 `.tldrx/`. A seed for a session-timeout defect, every bullet under the cap:
 
-```markdown
+````markdown
 # Intent
 - Sessions expire after 15 idle minutes; the settings page promises 60 [src: src/auth/session.ts:42]
 
@@ -71,9 +126,21 @@ The conventional location is `.tldrx/seeds/<nn>-<slug>.md`, committed with the r
 
 # Open questions
 - Should a refresh call extend the idle window? A) yes B) no. Recommended: B — the copy promises idle minutes [src: src/auth/refresh.ts:18]
-```
 
-The run that consumes it with nobody watching is in
+# Stories
+
+## S1 — Fix the idle constant and its reader
+- touches: src/auth/session.ts, src/auth/refresh.ts
+- depends_on: none
+- Acceptance: a 59-minute idle session is still valid [src: test/auth/session.test.ts:77]
+
+```dod
+npm test
+```
+````
+
+(`npm test` here stands for whatever `commands:` value the workspace declares — the line
+is compared byte for byte.) The run that consumes it with nobody watching is in
 [10 — Unattended mode](10-unattended-mode.md#zero-touch-the-recipe-that-worked).
 
 ### From an AI-DLC intent folder
