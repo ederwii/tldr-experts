@@ -136,6 +136,8 @@ import {
   RecurringFocus, ReviewCounters, type RoundParts,
 } from "../../build/reviewRound.ts";
 import { readReviewLedger } from "../../build/reviewLedger.ts";
+import { classifyRefusal, MAX_SEPARATOR_RETRIES, separatorCurePrefix, withCure } from "../../build/refusalKind.ts";
+import { developerGitGrants } from "../../build/developerGrants.ts";
 import type { ReviewerProvenance } from "../../build/reviewerProvenance.ts";
 import {
   resolveReviewer, reviewerOverrideLine, type ReviewerResolution,
@@ -1275,53 +1277,73 @@ class BuildSession {
     // timeout or a transport fault says nothing about a tree, while `Reached
     // maximum budget` says precisely that the turn was doing work when it
     // stopped.
-    const developer = await this.spawnDeveloper(story);
-    const capDeath = developer.error !== null && diedOnCap(developer.error);
+    let developer = await this.spawnDeveloper(story);
     let budgetDeath: string | null = null;
-    if (developer.error !== null) {
-      const proven = capDeath && await workSince({
-        workspaceRoot: this.workspace.root, repoDir: story.repoDir, worktree: story.worktree, since: handed,
-      });
-      if (!proven) {
-        return {
-          story, cost: developer.cost, dod: [], commit: null,
-          failure: null, developerError: developer.error, before,
-        };
+    // Every turn's money, whether one spawn or two (gh #278) — never hidden.
+    let spent = 0;
+    // gh #278: how many re-spawns this attempt has bought on a chained refusal.
+    let separatorRetries = 0;
+    for (;;) {
+      spent = round2(spent + developer.cost);
+      const capDeath = developer.error !== null && diedOnCap(developer.error);
+      if (developer.error !== null) {
+        const proven = capDeath && await workSince({
+          workspaceRoot: this.workspace.root, repoDir: story.repoDir, worktree: story.worktree, since: handed,
+        });
+        if (!proven) {
+          return {
+            story, cost: spent, dod: [], commit: null,
+            failure: null, developerError: developer.error, before,
+          };
+        }
+        budgetDeath = developer.error;
+        this.capDeaths.set(story.planned.story.id, developer.error);
       }
-      budgetDeath = developer.error;
-      this.capDeaths.set(story.planned.story.id, developer.error);
-    }
-    const spent = developer.cost;
 
-    // (d½) gh #261: the turn asked for something this run's permission layer
-    // refused, and in headless mode there is nobody to approve it. With NO
-    // committed work, BLOCK, with the command named — do not let the story walk
-    // on to a DoD that is green on an untouched tree, an empty commit and a
-    // reviewer who faults a diff that was never written. `blocked` is where the
-    // attempt stops (`driveStory` returns on any status that is not `review`),
-    // which is the point: the same allowance would refuse the same command on
-    // attempt 2.
-    //
-    // gh #271: with WORK in the tree — committed or not — the refusal is
-    // RECORDED and the Definition of Done decides. Measured on a field run, the
-    // refused call was the developer's own DoD command wrapped in shell plumbing,
-    // and the block landed on a story the DoD one step below would have
-    // measured. Uncommitted work counts because the normal path already says so:
-    // `runDod` runs before `commitIfDirty`, and a developer refused while
-    // VERIFYING never reaches its commit. "Work" is `workSince` — the tree
-    // against the one handed, state dirs excluded, untracked-but-ignored files
-    // not counted — so an empty commit and an untouched tree still block.
-    if (developer.refused !== null) {
+      // (d½) gh #261: the turn asked for something this run's permission layer
+      // refused, and in headless mode there is nobody to approve it. With NO
+      // committed work, BLOCK, with the command named — do not let the story walk
+      // on to a DoD that is green on an untouched tree, an empty commit and a
+      // reviewer who faults a diff that was never written. `blocked` is where the
+      // attempt stops (`driveStory` returns on any status that is not `review`),
+      // which is the point: the same allowance would refuse the same command on
+      // attempt 2.
+      //
+      // gh #271: with WORK in the tree — committed or not — the refusal is
+      // RECORDED and the Definition of Done decides. Measured on a field run, the
+      // refused call was the developer's own DoD command wrapped in shell plumbing,
+      // and the block landed on a story the DoD one step below would have
+      // measured. Uncommitted work counts because the normal path already says so:
+      // `runDod` runs before `commitIfDirty`, and a developer refused while
+      // VERIFYING never reaches its commit. "Work" is `workSince` — the tree
+      // against the one handed, state dirs excluded, untracked-but-ignored files
+      // not counted — so an empty commit and an untouched tree still block.
+      if (developer.refused === null) break;
       const proven = await workSince({
         workspaceRoot: this.workspace.root, repoDir: story.repoDir, worktree: story.worktree, since: handed,
       });
-      if (!proven) {
-        return {
-          story, cost: spent, dod: [], commit: null,
-          failure: permissionBlockReason(developer.refused), developerError: null, before,
-        };
+      if (proven) {
+        this.refusals.set(story.planned.story.id, developer.refused);
+        break;
       }
-      this.refusals.set(story.planned.story.id, developer.refused);
+      // gh #278: no work, and the refused line CHAINS commands — measured six
+      // times in one day with #271's rule already in `## Rules`, on sonnet and
+      // opus alike. Once, within this attempt, the developer is spawned again
+      // with the cure as the prompt's first lines; the tree it is handed is the
+      // same one (nothing was written), so `handed` still holds. ONLY a positive
+      // `separator` classification: an ungranted verb will be ungranted again,
+      // and a cause the line does not show cannot be cured by restating it —
+      // both block as before, the verb with its cure named.
+      if (classifyRefusal(developer.refused).kind === "separator" && separatorRetries < MAX_SEPARATOR_RETRIES) {
+        separatorRetries += 1;
+        developer = await this.spawnDeveloper(story, { after: developer.refused });
+        continue;
+      }
+      return {
+        story, cost: spent, dod: [], commit: null,
+        failure: permissionBlockReason(developer.refused, { retried: separatorRetries > 0 }),
+        developerError: null, before,
+      };
     }
 
     // (e) the Definition of Done, re-run in the story's own worktree.
@@ -2116,6 +2138,10 @@ class BuildSession {
    */
   private async spawnDeveloper(
     story: StoryContext,
+    // gh #278: the one re-spawn after a CHAINED refusal with no work — the cure
+    // goes in front of the same prompt, and the spawn event says which refused
+    // line it is the retry for. Additive on `agent.spawned`; absent otherwise.
+    retry: { readonly after: string } | null = null,
   ): Promise<{ cost: number; error: string | null; refused: string | null }> {
     const cap = developerCap(this.capParts, story.planned.story.id, story.attempt);
     const commands = this.repoCommands(story.planned.story.repo);
@@ -2126,10 +2152,11 @@ class BuildSession {
       model: this.model(),
       effort: this.ctx.effort,
       max_budget_usd: cap,
+      ...(retry === null ? {} : { retry: "separator-cure", retry_after: retry.after }),
     }, 0, "developer");
 
     const agent = await spawnAgent({
-      prompt: this.developerPrompt(story),
+      prompt: (retry === null ? "" : separatorCurePrefix(retry.after)) + this.developerPrompt(story),
       model: this.model(),
       effort: this.ctx.effort,
       maxBudgetUsd: cap,
@@ -2827,7 +2854,10 @@ class BuildSession {
         (outcome.reason === null ? "" : ` (${outcome.reason})`) +
         (outcome.permissionRefused == null
           ? ""
-          : ` — \`${outcome.permissionRefused}\` was refused for approval; the tree held committed work, so the DoD decided`),
+          : ` — ${withCure(
+            `\`${outcome.permissionRefused}\` was refused for approval; the tree held committed work, so the DoD decided`,
+            outcome.permissionRefused,
+          )}`),
     );
   }
 
@@ -4034,13 +4064,11 @@ export function developerTools(
     // developer granted only `Bash(npm run test)` had `npm run test -- <file>`
     // denied and never ran its own Definition of Done.
     ...repoCommands.flatMap((command) => bashGrantsFor(command)),
-    "Bash(git add *)",
-    "Bash(git commit *)",
-    // The file-lifecycle verbs (#261). Space form, not `:*` — one spelling per
-    // grammar, the same one `bashGrantsFor` writes.
-    "Bash(git rm *)",
-    "Bash(git mv *)",
-    "Bash(git restore *)",
+    // `add`, `commit`, and the file-lifecycle verbs (#261) — from the ONE
+    // constant the developer prompt lists and the refusal classifier reads
+    // (gh #278, `build/developerGrants.ts`), so the grant, the sentence that
+    // tells the agent what it holds, and the cure a refusal names cannot drift.
+    ...developerGitGrants(),
   ];
 }
 
@@ -4053,11 +4081,21 @@ export function developerTools(
  * why re-running cannot supply it, and therefore why no second attempt was
  * bought. One implementation, so the block reason, the story file, the handoff's
  * `## Unknowns` and `gate.requested`'s `blocked_reason` cannot drift.
+ *
+ * gh #278: the CURE follows, when the line shows one — `withCure` appends
+ * "run each command alone …" for a chained line and "`git <verb>` is not
+ * granted; use `git <equivalent>`" for an ungranted verb, and nothing at all
+ * for a refusal the line does not explain, which keeps #261's sentence
+ * byte-identical there. `retried` is the block AFTER the one re-spawn with the
+ * cure in front of the prompt: "not repeated" would be false of it, so it says
+ * what was done instead.
  */
-export function permissionBlockReason(command: string): string {
-  return `permission — \`${command}\` was refused for approval by the agent's own permission layer, `
+export function permissionBlockReason(command: string, options: { readonly retried?: boolean } = {}): string {
+  const base = `permission — \`${command}\` was refused for approval by the agent's own permission layer, `
     + "and a headless turn has nobody to approve it: the same allowance would refuse it again, "
-    + "so this attempt was not repeated";
+    + "so this attempt was not repeated"
+    + (options.retried === true ? " beyond the one re-spawn with the cure stated, which was refused too" : "");
+  return withCure(base, command);
 }
 
 /**

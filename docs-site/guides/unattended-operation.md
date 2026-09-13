@@ -715,6 +715,21 @@ review, red blocks with both reasons. A refusal with no work at all — a tree t
 left untouched — still blocks after one attempt, exactly as above. The developer prompt now
 says to run each DoD command verbatim and alone, and why.
 
+**The block names the cure, and a chained line gets one retry.** Since gh #278 — measured on
+two real runs in one day: six refusals, every one a shell chain (`a && b`, `cmd; echo …`,
+`> log 2>&1`) or a git verb the developer does not hold (`git checkout --`, `git status`,
+`git log`), every one blocked after one attempt and refused again when a person reopened it —
+the recorded reason keeps the sentence above and appends `The cure: …`: "run each command
+alone — shell separators split a line into subcommands that each need their own grant" for a
+chain, "`git checkout` is not granted; use `git restore <path>`" for a verb with a granted
+equivalent, "`git status` is not granted" for one without. A chained line with no work in the
+tree is re-spawned ONCE within the same attempt, the refused line and the rule as the first
+lines of the prompt; that turn is on `run.yml` and `events.jsonl` like any other (`agent.spawned`
+carries `retry: "separator-cure"` and `retry_after`), and a second refusal blocks with the
+reason saying so. An ungranted verb is never retried — it would be ungranted again. The
+developer prompt now lists the exact git verbs it holds and names `git restore <path>` as the
+way to put a file back.
+
 **The notifier is never called.** Three usual causes, in the order they cost the least to
 check. The `events:` list does not name the kind you were expecting — remove the key
 entirely to subscribe to everything. The command is not executable, or is not on the path

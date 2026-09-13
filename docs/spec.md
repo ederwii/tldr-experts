@@ -3474,6 +3474,30 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    `task.done`, a bullet in the handoff's `## Unknowns` — and the DoD decides: green goes on to review, red blocks
    with both reasons on one row, the DoD's first. The developer prompt's `## Rules` also says to run each DoD
    command verbatim and alone, and why.
+
+   **A refusal with NO work names its cure, and a chained line is retried once with the cure in front (gh #278).**
+   Measured on two real runs in one day, six refusals across sonnet and opus developers with #271's rule in every
+   prompt: each was a shell chain or an ungranted git verb, each had no work since spawn, each blocked after one
+   attempt, and a person reopening it got the same refusal — the ledger had recorded both causes with the one
+   sentence above. The refused line is now CLASSIFIED (`build/refusalKind.ts`, a leaf: data in, data out) as
+   `separator` — it chains commands, read through the SAME tokenizer `splitArgv` runs every DoD command through, so
+   a `;` inside quotes is an argument and not a separator (a reading of the line; whether the host's permission
+   layer reads quotes the same way is measured on the host, gh #215, not asserted here) — or `verb` — `git <verb>`
+   alone with the verb outside the developer's allowance, the granted equivalent named where one exists
+   (`checkout --`/`checkout <path>` → `git restore <path>`, `reset -- <path>`/`reset HEAD <path>` → `git restore
+   --staged <path>`; none is invented for a branch switch or a mode reset) — or `unknown`, which appends nothing and
+   keeps the sentence above byte-identical. The recorded reason keeps that sentence as its base and appends
+   `The cure: …` on every surface that writes the refusal (`blocked_reason`, the review log's `- Developer:` line,
+   the handoff's `## Unknowns` bullet), through one joiner. ONLY a positive `separator` classification with no work
+   buys a retry: the developer is spawned again within the SAME attempt, the refused line and the rule as the
+   prompt's first lines, at most `MAX_SEPARATOR_RETRIES` (= 1) times; the retry is a `run.yml` task row and an
+   `agent.spawned` like any turn, carrying additive `retry: "separator-cure"` and `retry_after: <the refused line>`,
+   and the story's cost is both turns. Work on the retry goes on to the DoD as normal; a second refusal blocks with
+   the reason saying the cure was stated and refused too. `verb` and `unknown` are never retried — a verb the
+   allowance lacks will be lacking again, and a cause the line does not show cannot be cured by restating it. The
+   allowance itself, the verb list the developer prompt now states (`git add`, `git commit`, `git rm`, `git mv`,
+   `git restore`, with `git restore <path>` named as the way to put a file back) and the classifier all read ONE
+   constant (`build/developerGrants.ts`), so none of the three can drift from the others.
 3. **The Definition of Done, re-run by the facilitator** in that worktree, through the same runner `dod-gate` uses. All
    commands must exit 0.
 

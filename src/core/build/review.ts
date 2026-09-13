@@ -20,6 +20,7 @@ import { parseFixFindings, type FixFinding } from "./fixlist.ts";
 import { DOD_REFUSAL_FALLBACK, dodRefused, scopedNote } from "./outcome.ts";
 import type { DodResult, StoryOutcome, Verdict } from "./outcome.ts";
 import { renderReviewerProvenance } from "./reviewerProvenance.ts";
+import { withCure } from "./refusalKind.ts";
 
 export interface Review {
   readonly verdict: Verdict;
@@ -434,11 +435,15 @@ export function renderReviewLog(outcome: StoryOutcome): string {
     `- Branch: \`${outcome.branch}\` → \`${outcome.epicBranch}\` (${mergeWord(outcome)})`,
     `- Commit: ${outcome.commit ?? "(none)"}`,
     ...(outcome.developerError === null ? [] : [`- Developer: **FAILED** — ${outcome.developerError}`]),
-    // The refusal that did NOT stop the story (gh #271): still evidence, still named.
+    // The refusal that did NOT stop the story (gh #271): still evidence, still
+    // named — and, since gh #278, with the cure the line shows, when it shows one.
     ...(outcome.permissionRefused == null
       ? []
-      : [`- Developer: \`${outcome.permissionRefused}\` was refused for approval by the agent's own `
-        + "permission layer; the tree held committed work, so the Definition of Done below decided"]),
+      : [withCure(
+        `- Developer: \`${outcome.permissionRefused}\` was refused for approval by the agent's own `
+        + "permission layer; the tree held committed work, so the Definition of Done below decided",
+        outcome.permissionRefused,
+      )]),
     // The cap death that did NOT stop the story (gh #277): same rule, same record.
     ...(outcome.budgetDeath == null
       ? []

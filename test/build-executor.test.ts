@@ -3856,6 +3856,14 @@ describe("a refusal after the developer committed (gh #271)", () => {
   // in a `root_is_repo` workspace, where the worktree carries `tldrx-work/` and
   // a `.gitignore` covering `*.log` — the two ways a no-work turn could look
   // dirty by accident.
+  //
+  // gh #278: `PLUMBED` chains (`>`), so a no-work refusal on it is re-spawned
+  // ONCE with the cure in front of the prompt; the fake refuses the retry too
+  // (its `S1` key is every spawn), so the story still blocks on ONE attempt —
+  // two spawns, and the reason says the cure was stated and refused.
+  const BLOCKED_AFTER_RETRY = `${BLOCKED_WITH_PLUMBED} beyond the one re-spawn with the cure stated, which was `
+    + "refused too. The cure: run each command alone — shell separators split a line into subcommands that "
+    + "each need their own grant";
   for (const [work, why, rootIsRepo] of [
     ["empty-commit", "HEAD moved but the tree is identical to the base", false],
     ["state-only", "only the framework's own state dir was written", true],
@@ -3868,10 +3876,11 @@ describe("a refusal after the developer committed (gh #271)", () => {
       const outcome = await next(ws);
 
       expect(story(ws, "S1")).toContain("status: blocked");
+      expect(events(ws).find((e) => e.type === "task.done" && e.payload.story === "S1")?.payload.attempt).toBe(1);
       expect(dodRanFor(ws, "S1")).toBe(false);
       const gate = events(ws).find((e) => e.type === "gate.requested");
-      expect(String(gate?.payload.blocked_reason ?? "")).toBe(BLOCKED_WITH_PLUMBED);
-      expect(developerSpawns(ws)).toBe(1);
+      expect(String(gate?.payload.blocked_reason ?? "")).toBe(BLOCKED_AFTER_RETRY);
+      expect(developerSpawns(ws)).toBe(2);
       expect(outcome.code).toBe(4);
       expect(git(ws, ["ls-tree", "--name-only", "epic/e1"]).split("\n")).not.toContain(S1_FILE);
     }, 60_000);
@@ -3921,6 +3930,168 @@ describe("a refusal after the developer committed (gh #271)", () => {
     expect(dones[0]?.payload.permission_refused).toBe(PLUMBED);
     expect(dones[1]?.payload.permission_refused).toBeUndefined();
     expect(readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8")).not.toContain("refused for approval");
+  }, 60_000);
+});
+
+/**
+ * gh #278 — a refusal with NO work is classified, the record names the cure,
+ * and a CHAINED line is retried once with the cure in front of the prompt.
+ *
+ * Measured on two real runs in one day: six refusals, sonnet and opus
+ * developers, every one a shell chain (`a && b`, `cmd; echo …`, `> log 2>&1`)
+ * or an ungranted git verb (`git checkout --`, `git status`, `git log`), every
+ * one with no work since spawn, every one blocked after one attempt with the
+ * SAME sentence — and a person reopening it got the same refusal again. The
+ * #271 prompt sentence was in front of all six; prose lost to habit.
+ *
+ * The rule: `separator` + no work → ONE re-spawn within the same attempt, the
+ * cure as the prompt's first lines, cost on the ledger like any turn, `retry:
+ * "separator-cure"` on that spawn's `agent.spawned`. `verb` and `unknown` never
+ * retry — a verb the allowance lacks will be lacking again — and block as
+ * before, with the cure appended where one is known. The second refusal blocks.
+ */
+describe("a chained refusal with no work is retried once with the cure (gh #278)", () => {
+  const S1_FILE = "s1.txt";
+  const CHAINED = `git checkout -- ${S1_FILE} && sha256sum ${S1_FILE} && git status`;
+  const VERB_ONLY = `git checkout -- ${S1_FILE}`;
+  const UNGRANTED_PLAIN = "sha256sum s1.txt";
+  const ONE: BuildWorkspaceOptions = {
+    stories: [{ id: "S1", epic: "E1", title: "Write a file", touches: [S1_FILE] }],
+    epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+    waves: [["S1"]],
+  };
+
+  function developerSpawnEvents(ws: BuildWorkspace): readonly { type: string; payload: Record<string, unknown> }[] {
+    return events(ws).filter((e) => e.type === "agent.spawned" && e.payload.role === "developer");
+  }
+  function developerTaskRows(ws: BuildWorkspace): readonly Record<string, unknown>[] {
+    // The same read `test/fixtures/build/golden.ts` freezes: `phases[].stages[].tasks[]`.
+    return RunStore.open(ws.runDir).run.phases
+      .flatMap((phase) => phase.stages)
+      .flatMap((stage) => stage.tasks as unknown as Record<string, unknown>[])
+      .filter((task) => task.role === "developer");
+  }
+  function promptDir(ws: BuildWorkspace): string {
+    const dir = join(ws.root, "prompts");
+    mkdirSync(dir, { recursive: true });
+    process.env.FAKE_BUILD_PROMPT_DIR = dir;
+    return dir;
+  }
+
+  test("separator + no work: re-spawned ONCE with the cure first, the retry's work lands, both turns on the ledger", async () => {
+    const ws = workspace(ONE);
+    const prompts = promptDir(ws);
+    // Refused on the FIRST spawn only; the fake's second spawn falls to its
+    // ordinary write path, which is the retry doing the story.
+    process.env.FAKE_BUILD_DENIED = JSON.stringify({ "S1#1": CHAINED });
+
+    const outcome = await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(outcome.code).toBe(4);
+    expect(git(ws, ["ls-tree", "--name-only", "epic/e1"]).split("\n")).toContain(S1_FILE);
+    // Two spawns on ONE attempt, and the second says it is the retry — and why.
+    const spawns = developerSpawnEvents(ws);
+    expect(spawns.length).toBe(2);
+    expect(spawns[0]?.payload.retry).toBeUndefined();
+    expect(spawns[1]?.payload.retry).toBe("separator-cure");
+    expect(spawns[1]?.payload.retry_after).toBe(CHAINED);
+    // Same attempt: the retry is not a second attempt, and `task.done` says so.
+    const done = events(ws).find((e) => e.type === "task.done" && e.payload.story === "S1");
+    expect(done?.payload.attempt).toBe(1);
+    // The retry's prompt: the cure is its FIRST line, and the rest is the same prompt.
+    const first = readFileSync(join(prompts, "developer-S1-1.md"), "utf8");
+    const second = readFileSync(join(prompts, "developer-S1-2.md"), "utf8");
+    expect(second.split("\n")[0]).toBe(
+      `Your previous command \`${CHAINED}\` was refused because it chains commands. Run each command alone.`,
+    );
+    expect(second.endsWith(first)).toBe(true);
+    // Never hidden: two developer rows in run.yml, each with the turn's own cost
+    // (the fake charges 0.10 a spawn), so the ledger's sum is both turns.
+    const rows = developerTaskRows(ws);
+    expect(rows.length).toBe(2);
+    expect(rows.map((r) => r.cost_usd)).toEqual([0.1, 0.1]);
+  }, 60_000);
+
+  test("separator + no work, refused AGAIN on the retry: blocked, two spawns and not three, the cure on the reason", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_DENIED = JSON.stringify({ S1: CHAINED });
+
+    const outcome = await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+    expect(outcome.code).toBe(4);
+    // MAX_SEPARATOR_RETRIES = 1: the second refusal is the end of it.
+    expect(developerSpawnEvents(ws).length).toBe(2);
+    const gate = events(ws).find((e) => e.type === "gate.requested");
+    const reason = String(gate?.payload.blocked_reason ?? "");
+    expect(reason).toContain(`permission — \`${CHAINED}\``);
+    expect(reason).toContain("beyond the one re-spawn with the cure stated, which was refused too");
+    expect(reason).toContain("The cure: run each command alone");
+    expect(git(ws, ["ls-tree", "--name-only", "epic/e1"]).split("\n")).not.toContain(S1_FILE);
+  }, 60_000);
+
+  test("the retry runs the first fragment alone and is refused for the VERB: blocked with the verb's cure", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_DENIED = JSON.stringify({ "S1#1": CHAINED, "S1#2": VERB_ONLY });
+
+    await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+    expect(developerSpawnEvents(ws).length).toBe(2);
+    const gate = events(ws).find((e) => e.type === "gate.requested");
+    const reason = String(gate?.payload.blocked_reason ?? "");
+    expect(reason).toContain(`permission — \`${VERB_ONLY}\``);
+    expect(reason).toContain("The cure: `git checkout` is not granted; use `git restore <path>`");
+  }, 60_000);
+
+  test("verb + no work: NEVER retried — one spawn, blocked, the equivalent named", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_DENIED = JSON.stringify({ S1: VERB_ONLY });
+
+    const outcome = await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+    expect(outcome.code).toBe(4);
+    expect(developerSpawnEvents(ws).length).toBe(1);
+    const gate = events(ws).find((e) => e.type === "gate.requested");
+    const reason = String(gate?.payload.blocked_reason ?? "");
+    expect(reason).toContain("so this attempt was not repeated. The cure: `git checkout` is not granted; use `git restore <path>`");
+    expect(reason).not.toContain("re-spawn");
+    const handoff = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    expect(handoff).toContain("use `git restore <path>`");
+  }, 60_000);
+
+  test("unknown + no work: NEVER retried — blocked exactly as #261 wrote it, byte for byte", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_DENIED = JSON.stringify({ S1: UNGRANTED_PLAIN });
+
+    await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+    expect(developerSpawnEvents(ws).length).toBe(1);
+    const gate = events(ws).find((e) => e.type === "gate.requested");
+    expect(String(gate?.payload.blocked_reason ?? "")).toBe(
+      `permission — \`${UNGRANTED_PLAIN}\` was refused for approval by the agent's own permission layer, `
+      + "and a headless turn has nobody to approve it: the same allowance would refuse it again, "
+      + "so this attempt was not repeated",
+    );
+  }, 60_000);
+
+  test("separator WITH work: no retry — #271's rule stands, the DoD decides, and the with-work record names the cure", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_DENIED = JSON.stringify({ S1: CHAINED });
+    process.env.FAKE_BUILD_DENIED_WORK = JSON.stringify({ S1: "committed" });
+
+    await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(developerSpawnEvents(ws).length).toBe(1);
+    const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+    expect(log).toContain("refused for approval");
+    expect(log).toContain("run each command alone — shell separators split a line");
+    const handoff = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    expect(handoff).toContain("run each command alone — shell separators split a line");
   }, 60_000);
 });
 

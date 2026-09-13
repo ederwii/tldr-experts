@@ -743,6 +743,22 @@ bloquea con ambas razones. Un rechazo sin ningún trabajo — un árbol que el d
 intacto — sigue bloqueando tras un intento, exactamente como arriba. El prompt del developer ahora dice que corra cada comando del DoD
 literal y solo, y por qué.
 
+**El bloqueo nombra la cura, y una línea encadenada recibe un reintento.** Desde gh #278 —
+medido en dos runs reales en un día: seis rechazos, cada uno una cadena de shell (`a && b`,
+`cmd; echo …`, `> log 2>&1`) o un verbo de git que el developer no tiene (`git checkout --`,
+`git status`, `git log`), cada uno bloqueado tras un intento y rechazado otra vez cuando una
+persona lo reabrió — la razón registrada conserva la oración de arriba y le agrega
+`The cure: …`: "run each command alone — shell separators split a line into subcommands that
+each need their own grant" para una cadena, "`git checkout` is not granted; use
+`git restore <path>`" para un verbo con equivalente permitido, "`git status` is not granted"
+para uno sin equivalente. Una línea encadenada sin trabajo en el árbol se vuelve a lanzar UNA vez dentro
+del mismo intento, con la línea rechazada y la regla como primeras líneas del prompt; ese turno
+queda en `run.yml` y en `events.jsonl` como cualquier otro (`agent.spawned` lleva
+`retry: "separator-cure"` y `retry_after`), y un segundo rechazo bloquea con la razón
+diciéndolo. Un verbo no permitido nunca se reintenta — seguiría sin estar permitido. El prompt
+del developer ahora lista los verbos exactos de git que tiene y nombra `git restore <path>`
+como la forma de restaurar un archivo.
+
 **El notificador nunca se llama.** Tres causas habituales, en el orden que cuesta menos
 revisar. La lista `events:` no nombra el tipo que esperabas: quita la clave por completo para
 suscribirte a todo. El comando no es ejecutable, o no está en la ruta desde la que el run lo
