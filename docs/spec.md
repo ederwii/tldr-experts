@@ -3849,8 +3849,9 @@ clamped at the CLI when it is not a whole number ≥ 1, and clamped in the execu
 framework's opinion, since three real workspaces measured runs of 34-43 h wall clock over per-story medians of
 0.6-1.35 h, and one of them hit OOM kills at a wider fan-out. The last resort behind every spelling is still 1.
 
-At **N = 1 the executor takes the path it always did**, story by story — measured byte-identical on the event
-sequence, because "the default does not change" is not a claim to make loosely. Above 1 the wave runs in two halves:
+At **N = 1 the executor drives one story at a time**, in order, and its event sequence is the one it always had —
+what it no longer does is fan out over a dependency that did not land (the frontier below is asked on every N, #263).
+Above 1 the wave runs in two halves:
 
 - **A, concurrently, ≤ N at a time**: worktree → developer → DoD → commit. A story that goes red does NOT cancel its
   siblings — killing four running sub-agents because a fifth failed throws away turns already paid for.
@@ -3873,8 +3874,12 @@ the rule the old wave-wide stop existed for; it simply stops applying to a story
 `done`, and reported the stage `done`. The count the stage reports is over every story `waves.yml` schedules, and
 `04-build/handoff.md` names every scheduled story with no outcome of its own in `## Unknowns`, so the
 `none — every scheduled story reached done` sentence is decided against the plan rather than against the rows the
-executor happens to hold. **N = 1 is unchanged**: the sequential path never stopped a later story, a story whose
-dependency blocked is still attempted there, and this frontier replaces the parallel path's stop only.
+executor happens to hold. **The frontier is asked on every N (#263).** #260 switched it on for the parallel path
+alone; the sequential path is the DEFAULT and is what `run auto` runs, and there a story parked `todo` by a developer
+that died on its own cap was followed one second later by the dependent of the next wave, which then reached `done`
+over an epic branch its dependency had put nothing on — the audit record lying in the dangerous direction (§2.13).
+Any dependency that is not `done` holds a story, whatever parked it; a story that depends on nothing still runs after
+one, which is #260's own direction and unchanged.
 
 **The budget does not change.** `worstCaseShares` is already `stories × MAX_ATTEMPTS × (1 + REVIEWER_SHARE)` across
 the whole plan, so the sum of every cap the executor can hand out is ≤ the stage ceiling however the attempts fall —
