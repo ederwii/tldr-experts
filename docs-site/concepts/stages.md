@@ -46,6 +46,14 @@ the epic in the wave's listed order however the two finish. `tldrx next --parall
 `.tldrx/stages/build/stage.yml`, or `build: {parallel: N}` in a workflow, changes it for
 good. Two rather than more because a wider fan-out is what a laptop notices first.
 
+When a story ends `blocked`, what happens next is decided **per story**, from `depends_on`.
+A later story whose dependencies all reached `done` runs — being in a wave behind a blocked
+story holds nothing back on its own. A story that really does depend on the blocked one is
+not attempted, and it is written `blocked` with the reason (`dependency S7 blocked`) rather
+than left quietly at `todo`: that reason is what `tldrx status` shows you and what the next
+turn acts on. Nothing is ever built on top of code that did not land, and nothing that never
+needed that code is stopped by it.
+
 One branch per epic assumes the epics are independent. When a story `depends_on` a story in
 **another** epic, the epics form a chain and the run cuts a single **integration branch**,
 `epic/<run-id>`, with the epics staying in the plan as labels. That is decided at Plan time

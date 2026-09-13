@@ -3799,10 +3799,22 @@ sequence, because "the default does not change" is not a claim to make loosely. 
   into that epic, so two concurrent reviewers would be judging diffs that changed under them.
 
 Consequences the implementation commits to: the epic's commit order is the file's order, not the finish order; a
-conflict takes the existing `--abort` path and blocks that story alone; a wave with any blocked story ends `failed`
-and the NEXT WAVE IS NOT STARTED, since its stories may depend on what this one did not land (the sequential path is
-unchanged here and still carries on — N = 1 is v1's behaviour, not a new rule); Ctrl-C/SIGTERM kills every live child,
-because `killAllChildren` signals the whole registry and each spawn registers its own pid.
+conflict takes the existing `--abort` path and blocks that story alone; a wave with any blocked story ends `failed`,
+and **what a later story does about that is decided PER STORY, from `depends_on` (#260)**; Ctrl-C/SIGTERM kills every
+live child, because `killAllChildren` signals the whole registry and each spawn registers its own pid.
+
+**The wave boundary asks per story, not per wave (#260).** A story runs when every id in its `depends_on` is `done`;
+a story with a dependency that is not `done` is NOT attempted, and is written `status: blocked` with the reason
+`dependency <id> blocked` — absent-with-reason, never a silent `todo` — which is what reaches `blocked_reason` on
+`gate.requested` and the continue note (§2.13, §4.3). It is transitive by construction: a story behind a story blocked
+this way reads `dependency <that id> blocked` in its turn. Nothing fans out over code that was not landed, which is
+the rule the old wave-wide stop existed for; it simply stops applying to a story that never needed that code — until
+#260 ANY blocked story ended the loop, so a run built 5 of 8 stories, left three `todo` whose only dependency was
+`done`, and reported the stage `done`. The count the stage reports is over every story `waves.yml` schedules, and
+`04-build/handoff.md` names every scheduled story with no outcome of its own in `## Unknowns`, so the
+`none — every scheduled story reached done` sentence is decided against the plan rather than against the rows the
+executor happens to hold. **N = 1 is unchanged**: the sequential path never stopped a later story, a story whose
+dependency blocked is still attempted there, and this frontier replaces the parallel path's stop only.
 
 **The budget does not change.** `worstCaseShares` is already `stories × MAX_ATTEMPTS × (1 + REVIEWER_SHARE)` across
 the whole plan, so the sum of every cap the executor can hand out is ≤ the stage ceiling however the attempts fall —

@@ -97,7 +97,7 @@ import {
   openFindings, readFixlistAt, renderFixlistSection, writeFixlist,
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
-import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
+import { renderBuildHandoff, type EpicSummaryRow, type NotStartedStory } from "../../build/handoff.ts";
 import {
   asidePayload, FOREIGN_ASIDE_EVENT, FOREIGN_RESTORED_EVENT, namePaths, notRestoredLine, pendingAsides,
   restoreForeignWork, restoredLine, restoredPayload, setAsideForeignWork, unrestored,
@@ -615,6 +615,25 @@ class BuildSession {
           this.lines.push(`  · ${planned.story.id} is already \`${status}\` — left alone`);
           continue;
         }
+        // THE WAVE BOUNDARY ASKS PER STORY (#260). A dependency lives in an
+        // EARLIER wave by construction (`plan/validatePlan.ts`, spec §5), so its
+        // status is final and readable right here.
+        //
+        // ON THE PARALLEL PATH ONLY, and that is deliberate. This frontier REPLACES
+        // the wave-wide `break` below, which is the only thing that has ever held a
+        // later story back — and it only ever existed on this path. The sequential
+        // path has always carried on, a story that depends on a blocked one gets
+        // attempted there today, and some of them reach `done`; turning those into
+        // `blocked` would be a second change, in the opposite direction to the one
+        // #260 asks for (build MORE of what can be built), on a path that has no
+        // defect to fix. `test/build-executor.test.ts`'s "a failed dod is written
+        // with its command and exit code" measures exactly that behaviour on
+        // `lanes === 1` and is left standing.
+        const held = this.lanes === 1 ? null : this.blockingDependency(planned);
+        if (held !== null) {
+          this.blockOnDependency(planned, held);
+          continue;
+        }
         this.noteIfReopened(planned, status);
         pending.push(planned);
       }
@@ -629,15 +648,19 @@ class BuildSession {
         `  · ${wave.id}: ${String(pending.length)} story(ies), ${String(Math.min(this.lanes, pending.length))} at a time`,
       );
       await this.driveWave(wave, pending);
-      // Only the parallel path stops here. Wave N+1 fanning out over code wave N
-      // failed to produce is how one red story becomes N of them; the sequential
-      // path has always carried on and is left exactly as it was.
+      // Wave N+1 fanning out over code wave N failed to produce is how one red
+      // story becomes N of them — and that rule is kept, per story, by the
+      // `blockingDependency` frontier above. It used to be kept by BREAKING out
+      // of the loop here, which also stopped every later story that never needed
+      // the blocked one's code: a run told to build 8 built 5, left three stories
+      // `todo` with their only dependency `done`, and reported the stage `done`
+      // (#260). What is left here is the LINE, which names what happened; the
+      // stories it holds back name themselves, with the dependency each waits on.
       if (this.waveFailed(wave)) {
         this.lines.push(
-          `  · ${wave.id} ended \`failed\` — the next wave was not started ` +
-          "(its stories may depend on what this one did not land)",
+          `  · ${wave.id} ended \`failed\` — later stories that depend on its blocked work ` +
+          "are recorded `blocked`; the rest carry on",
         );
-        break;
       }
     }
     return await this.finish();
@@ -1722,9 +1745,111 @@ class BuildSession {
     );
   }
 
-  /** True when any story of this wave settled at `blocked`. */
+  /**
+   * True when any story of this wave settled at `blocked`.
+   *
+   * It decides ONE line of the report now, and nothing about what runs next: a
+   * wave-wide answer to a per-story question is exactly the defect #260 was filed
+   * for. `blockingDependency` is what the frontier asks.
+   */
   private waveFailed(wave: BuildWave): boolean {
     return wave.stories.some((planned) => this.statusOf(planned) === "blocked");
+  }
+
+  /**
+   * The dependency that holds this story back, or null when every one of them is
+   * `done` (#260).
+   *
+   * `waves.yml` guarantees a dependency lands in an EARLIER wave
+   * (`plan/validatePlan.ts`), so at the moment this is asked every dependency has
+   * already had its turn and its status is final. Anything but `done` holds the
+   * story: `blocked` is the case #260 is about, and a dependency left at `todo`,
+   * `in_progress` or `review` is work that did not land either — a story fanning
+   * out over it is the same false start, and a frontier that let it through
+   * because the status was not the one word it checked for would be reading a
+   * label rather than the fact.
+   *
+   * A `depends_on` id no story answers to is NOT treated as a hold: `validatePlan`
+   * already refuses a plan with a dangling dependency, so inventing a reason here
+   * would be this file's second opinion about that (§7).
+   */
+  private blockingDependency(planned: PlannedStory): { id: string; status: PlanStatus } | null {
+    for (const id of planned.story.depends_on) {
+      const dependency = this.plan.stories.get(id);
+      if (dependency === undefined) continue;
+      const status = this.statusOf(dependency);
+      if (status !== "done") return { id, status };
+    }
+    return null;
+  }
+
+  /**
+   * A story whose dependency did not land: `blocked` WITH the reason, never a
+   * silent `todo` (#260).
+   *
+   * It does not go through `settle`. Every field `settle` writes describes an
+   * attempt — a worktree to prune, a rescue to attempt, an `epic_base` to measure,
+   * a `task.done` to close a `task.started` that was never emitted — and this
+   * story had no attempt: `attempts: 0` is the truth about it, and so is a review
+   * log that says no reviewer judged anything. What it DOES share with `settle` is
+   * everything a reader downstream depends on: the status on the story file, the
+   * epic's rolled-up status, an outcome row (so `## Findings` and `## Unknowns`
+   * name it), and the review log those bullets cite. That row is what
+   * `blockedReasons` parses back out of the handoff, which is how the reason
+   * reaches `blocked_reason` on `gate.requested` and `continueNote`
+   * (`run/runOutcome.ts`) — the whole point of recording a reason instead of
+   * leaving the gate held by a `todo` nobody can act on (#239).
+   */
+  private blockOnDependency(
+    planned: PlannedStory,
+    held: { id: string; status: PlanStatus },
+  ): void {
+    const id = planned.story.id;
+    // ONE sentence, and the `blocked` case is the one the issue's shape names, so
+    // it reads exactly as specified rather than through a status-substituting
+    // template that would say `dependency S7 is blocked`.
+    const reason = held.status === "blocked"
+      ? `dependency ${held.id} blocked`
+      : `dependency ${held.id} is \`${held.status}\`, not \`done\``;
+    const epic = this.plan.epics.get(planned.story.epic);
+    const outcome: StoryOutcome = {
+      id,
+      title: planned.story.title,
+      wave: planned.wave,
+      repo: planned.story.repo,
+      epic: planned.story.epic,
+      epicBranch: epic === undefined ? "" : epicBranchOf(this.branchModel, epic.epic.branch),
+      // The name the cut WOULD have used, derived the one way (#134). Nothing has
+      // created it — the row says `attempts: 0`, which is what says so.
+      branch: storyBranchOf(this.ctx.runId, id),
+      status: "blocked",
+      attempts: 0,
+      dod: [],
+      // Its declared commands exist and NONE of them ran. Empty beside an empty
+      // list would read as "this story declares no Definition of Done", which is
+      // a different fact (#137).
+      dodUnrecovered: planned.dod.commands,
+      commit: null,
+      merged: false,
+      carried: null,
+      conflicts: [],
+      verdict: "n-a",
+      reviewer: null,
+      developerError: null,
+      reviewSummary: "not attempted — a dependency did not land",
+      reviewFindings: [],
+      reviewRel: `${BUILD_PHASE}/${LOG_DIR}/${id}.md`,
+      reason,
+      rescued: null,
+      cost_usd: 0,
+    };
+    this.outcomes.set(id, outcome);
+    this.writeLog(outcome);
+    this.setStoryStatus(planned, "blocked");
+    if (!this.plan.implicit && epic !== undefined) this.updateEpicStatus(epic);
+    this.lines.push(
+      `  · ${id} was not started — ${reason}; recorded \`blocked\` so the reason reaches the gate`,
+    );
   }
 
   /** DoD → commit → merge → review → done/blocked, for the `--commit` cycle. */
@@ -2557,7 +2682,8 @@ class BuildSession {
     // still on disk. `cleanUpRunEpicWorktrees` takes them at run close instead.
     const outcomes = this.orderedOutcomes();
     const done = outcomes.filter((o) => o.status === "done").length;
-    this.writeHandoff(outcomes);
+    const notStarted = this.scheduledWithoutOutcome(outcomes);
+    this.writeHandoff(outcomes, notStarted);
     return {
       ok: true,
       awaiting: false,
@@ -2568,7 +2694,13 @@ class BuildSession {
       // branch, so somebody has to.
       gate: "approve",
       lines: [
-        `${this.ctx.phaseId}/${this.ctx.stageId}: ${String(done)} of ${String(outcomes.length)} story(ies) done ` +
+        // Over every SCHEDULED story, which is what `waves.yml` says — not over
+        // the rows this process happens to hold. `orderedOutcomes` drops a `todo`
+        // story, so the old denominator shrank to hide exactly the stories that
+        // were never started: `5 of 8` was reported as `5 of 5` on the run #260
+        // came from (#260).
+        `${this.ctx.phaseId}/${this.ctx.stageId}: ${String(done)} of ` +
+          `${String(outcomes.length + notStarted.length)} story(ies) done ` +
           `across ${String(this.plan.waves.length)} wave(s)`,
         ...this.lines,
         `wrote ${HANDOFF_REL}`,
@@ -2581,7 +2713,39 @@ class BuildSession {
     };
   }
 
-  private writeHandoff(outcomes: readonly StoryOutcome[]): void {
+  /**
+   * Every story `waves.yml` scheduled that has NO outcome row — named with why,
+   * so the handoff's `none — every scheduled story reached done` sentence is
+   * decided against the plan rather than against this process's memory (#260).
+   *
+   * With the dependency frontier in place this is normally empty: a story held
+   * back by a dependency settles `blocked` and HAS a row. It is the residue — a
+   * story the phase never reached for any other reason — and the point is that
+   * the residue is nameable at all. Silence about it is what let a stage report
+   * `done` over three stories it never started.
+   */
+  private scheduledWithoutOutcome(outcomes: readonly StoryOutcome[]): readonly NotStartedStory[] {
+    const named = new Set(outcomes.map((o) => o.id));
+    const rows: NotStartedStory[] = [];
+    for (const wave of this.plan.waves) {
+      for (const planned of wave.stories) {
+        if (named.has(planned.story.id)) continue;
+        rows.push({
+          id: planned.story.id,
+          rel: this.plan.implicit ? IMPLICIT_PLAN_REL : planned.rel,
+          status: this.statusOf(planned),
+          reason: "this stage recorded no attempt and no reason for it — "
+            + "nothing here says the work was done, and nothing says why it was not",
+        });
+      }
+    }
+    return rows;
+  }
+
+  private writeHandoff(
+    outcomes: readonly StoryOutcome[],
+    notStarted: readonly NotStartedStory[],
+  ): void {
     const path = join(this.ctx.runDir, HANDOFF_REL);
     mkdirSync(join(path, ".."), { recursive: true });
     // The PHASE's spend, not this process's — the header sits on a document whose
@@ -2616,6 +2780,7 @@ class BuildSession {
       epics: this.epicRows(outcomes),
       storiesRel: this.plan.implicit ? IMPLICIT_PLAN_REL : null,
       carried: carried.rows,
+      notStarted,
       unreadableStories: carried.unreadable,
       widenings: this.wideningRows(),
       // The failed restores only. A stash that came back is not an unknown.
