@@ -187,7 +187,21 @@ export function scopedArgv(template: string, paths: readonly string[]): readonly
   const head = side(before);
   const tail = side(after);
   if (head === null || tail === null || head.length === 0) return null;
-  return [...head, ...paths, ...tail];
+  return [...head, ...paths.map(pathArgument), ...tail];
+}
+
+/**
+ * One path as ONE argv element that can only ever be read as a path.
+ *
+ * A repo file named `-rf` or `--foo` spliced straight into argv is a FLAG to
+ * the runner (review finding on #257). It is not dropped — it changed, so it
+ * gets tested — and no `--` is inserted, because not every runner accepts one:
+ * a leading `-` is anchored with `./`, which names the same file to every
+ * program that takes a path. The one place the rule lives; the rendered record
+ * goes through it too, so the line re-splits to the argv that ran.
+ */
+export function pathArgument(path: string): string {
+  return path.startsWith("-") ? `./${path}` : path;
 }
 
 /**
@@ -196,7 +210,10 @@ export function scopedArgv(template: string, paths: readonly string[]): readonly
  * argv that ran. A record, not an instruction — the argv above is what ran.
  */
 export function renderScopedCommand(template: string, paths: readonly string[]): string {
-  const rendered = paths.map((path) => (/\s/.test(path) ? JSON.stringify(path) : path)).join(" ");
+  const rendered = paths
+    .map(pathArgument)
+    .map((path) => (/\s/.test(path) ? JSON.stringify(path) : path))
+    .join(" ");
   return template.replace(PATHS_PLACEHOLDER, rendered);
 }
 

@@ -202,6 +202,15 @@ describe("commands.<slot>_scoped is a template, kept out of the allowlist", () =
     expect(scopedArgv(`pytest ${PATHS_PLACEHOLDER} | tee`, ["a"])).toBeNull();
     expect(renderScopedCommand(TEMPLATE, ["s1.txt", "we ird.txt"])).toBe('node scripts/scoped.js s1.txt "we ird.txt"');
   });
+
+  test("a path that starts with `-` is rendered as ./<path> — still a path, still tested, never a flag", () => {
+    // A repo file named `-rf` or `--foo` spliced straight into argv is a FLAG to
+    // the runner. Not dropped (it changed, it gets tested) and no `--` (not every
+    // runner accepts one): the one renderer prefixes `./`.
+    expect(scopedArgv(`pytest ${PATHS_PLACEHOLDER}`, ["-rf", "--foo", "-", "src/a.py"]))
+      .toEqual(["pytest", "./-rf", "./--foo", "./-", "src/a.py"]);
+    expect(renderScopedCommand(`pytest ${PATHS_PLACEHOLDER}`, ["-rf", "src/a.py"])).toBe("pytest ./-rf src/a.py");
+  });
 });
 
 const STORY_TEXT = (command: string): string => [
