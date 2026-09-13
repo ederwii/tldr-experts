@@ -86,10 +86,12 @@ function testFastPart(
 }
 import {
   MAX_FORMAT_RETRIES, parseReview, renderPreviousAttempt, renderReviewLog, reviewerFailed,
+  reviewerUnfunded, reviewerUnfundedReason, REVIEWER_UNFUNDED_MARK,
   type Review,
 } from "../../build/review.ts";
 import {
   AS_IS_MARK, asIsNotAheadReason, DEVELOPER_FAILED, dodFailure, dodFailureReason, dodGreen, dodRefused,
+  reviewStillOwed,
   type AsIsSettlement, type DodResult, type RescuedWork, type StoryOutcome,
 } from "../../build/outcome.ts";
 import {
@@ -146,11 +148,13 @@ import {
 import { phaseCostToDate, storySpendToDate } from "../../build/phaseCost.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
 import {
-  clampParallel, developerAttemptDivisor, developerCap, reviewerCap, round2, storyCeilingUsd,
+  clampParallel, developerAttemptDivisor, developerCap, reviewerCap, reviewerUnderfunded,
+  round2, stageRemainderUsd, storyCeilingUsd,
   DEFAULT_PARALLEL, MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
   STORY_CAP_MULTIPLIER, STORY_CAP_FLOOR_USD,
   type CapParts,
 } from "../../build/caps.ts";
+import { shortBy, stageRaiseCommand } from "../../budget/budgetView.ts";
 import type { PlanStatus } from "../../schemas/planCommon.ts";
 import type { ExecutorContext, ExecutorOutcome, ExecutorTask } from "./index.ts";
 
@@ -514,6 +518,13 @@ class BuildSession {
    * and same lifetime as `refusals` above, for the same reason.
    */
   private readonly capDeaths = new Map<string, string>();
+  /**
+   * Per story, WHY no reviewer was spawned for it (gh #289) — the stage had less
+   * left than a review costs. Same shape and same lifetime as the two maps above,
+   * for the same reason: `settle` writes the record, the decision is taken one
+   * step earlier, and no settle path grows an argument for it.
+   */
+  private readonly unfundedReviews = new Map<string, string>();
   /**
    * Stories this invocation settled from their BRANCH AS IT STANDS (#279), by
    * the person who signed the reopen.
@@ -1159,7 +1170,11 @@ class BuildSession {
       // review leaves the story parked for the NEXT invocation's review-only
       // path — retrying the same reviewer under the same ceiling in the same
       // process would just buy the same error twice.
-      if (outcome.verdict === "error") return;
+      // ... and a review that was never funded leaves it parked in exactly the
+      // same place, for a stronger reason: the next spawn would be refused
+      // before it happened (gh #289). `reviewStillOwed` is the one place the two
+      // shapes are one question.
+      if (reviewStillOwed(outcome)) return;
       // A fix list is a SIGNATURE with findings attached, not a fault: nothing
       // about the diff was rejected, so a second developer attempt is not owed —
       // and the routing it IS owed needs a host (`--prepare --fixlist`), which a
@@ -1287,6 +1302,7 @@ class BuildSession {
     const before = this.statusOf(planned);
     this.refusals.delete(id);
     this.capDeaths.delete(id);
+    this.unfundedReviews.delete(id);
     // Recorded BEFORE anything can refuse, because every one of the exits below
     // goes through `settle`, and all of them have to say a developer did not do
     // this.
@@ -1381,6 +1397,7 @@ class BuildSession {
     // cannot settle with attempt 1's command on its record.
     this.refusals.delete(planned.story.id);
     this.capDeaths.delete(planned.story.id);
+    this.unfundedReviews.delete(planned.story.id);
     // And no as-is signature either (gh #279). A story whose reviewer asked for
     // changes over a hand-finished branch is requeued to a REAL developer, and
     // that attempt's record must not say the branch was taken as it stands —
@@ -1711,6 +1728,20 @@ class BuildSession {
     if (supplied === undefined && this.ctx.attendedByHost) {
       await this.handOffReview(story, dod, commit, priorCost, carried, epicBase);
       return "handed-off";
+    }
+    // gh #289, and it happens BEFORE the spawn because that is the whole fix: a
+    // reviewer capped under `REVIEWER_FLOOR_USD` is a turn that provably cannot
+    // read the diff, and paying for it spends the money AND loses the story.
+    // `supplied` is the HOST's review — it costs this stage nothing, so the
+    // stage's remainder has no say over it.
+    if (supplied === undefined && reviewerUnderfunded(this.capParts, this.spent())) {
+      const review = this.refuseUnfundedReview(story);
+      await this.settle(story, "review", {
+        dod, commit, merged: true, carried, epicBase, verdict: "n-a", review,
+        cost: round2(priorCost),
+        reason: review.summary,
+      });
+      return "settled";
     }
     const outcome = supplied === undefined
       ? await this.spawnReviewer(story, dod, epicBase)
@@ -2049,8 +2080,15 @@ class BuildSession {
     // `null`, not `0`: this invocation did not watch the merge happen, so it
     // knows the story merged and does not know what the merge carried.
     this.noteMerged(story, null);
+    // WHICH of the two ways the last review left no verdict — a reviewer that
+    // died, or one that was never funded (gh #289). Saying "FAILED" over a turn
+    // that was deliberately not spawned is the same mislabel this pair of issues
+    // is about, one layer up.
+    const failed = resume.error.includes(REVIEWER_UNFUNDED_MARK)
+      ? `the previous review was refused for want of money (${resume.error})`
+      : `the previous reviewer FAILED (${resume.error})`;
     this.lines.push(
-      `  · ${planned.story.id}: the previous reviewer FAILED (${resume.error}) — `
+      `  · ${planned.story.id}: ${failed} — `
       + `re-running the REVIEW only; \`${resume.commit}\` is already merged into \`${story.epicBranch}\``,
     );
     this.noteUnrecordedBase(planned.story.id, story.epicBranch, resume.epicBase);
@@ -2593,6 +2631,43 @@ class BuildSession {
     });
   }
 
+  /**
+   * The review this stage cannot afford to spawn (gh #289) — recorded, not paid
+   * for.
+   *
+   * It writes NO task row: a `$0.00` row is a claim that a turn happened, and
+   * none did. What it writes is the same `check.failed` every review writes, so
+   * one reader answers "what became of this story's review" — with
+   * `verdict: "n-a"`, because nothing judged anything, and `unfunded_usd` so a
+   * ledger can tell this refusal from the four verdicts without parsing English.
+   */
+  private refuseUnfundedReview(story: StoryContext): Review {
+    const id = story.planned.story.id;
+    const left = stageRemainderUsd(this.capParts, this.spent()) ?? 0;
+    const review = reviewerUnfunded(reviewerUnfundedReason({
+      remainingUsd: left,
+      floorUsd: REVIEWER_FLOOR_USD,
+      fix: `\`${stageRaiseCommand(
+        this.ctx.runId, this.ctx.phaseId, this.ctx.stageId, shortBy(REVIEWER_FLOOR_USD, left),
+      )}\``,
+    }));
+    this.unfundedReviews.set(id, review.summary);
+    this.ctx.emit("check.failed", {
+      phase: this.ctx.phaseId,
+      check: "review",
+      story: id,
+      verdict: review.verdict,
+      attempt: story.attempt,
+      unfunded_usd: left,
+      floor_usd: REVIEWER_FLOOR_USD,
+      detail: review.summary,
+    });
+    // No reviewer ran, so nothing may claim one did — `settle` renders a null
+    // provenance as `not recorded`, which is the truth about this story.
+    this.reviewers.set(id, null);
+    return review;
+  }
+
   /** (g) the reviewer, read-only, judging the story diff. */
   private async spawnReviewer(
     story: StoryContext,
@@ -3022,6 +3097,9 @@ class BuildSession {
       // refused — the pair is what names the operator's cure.
       declaredCommands: this.repoCommands(story.planned.story.repo),
       budgetDeath: this.capDeaths.get(id) ?? null,
+      // gh #289: no reviewer was spawned for this story, and why. `verdict` is
+      // `n-a` beside it — the record must not say something judged this diff.
+      reviewerUnfunded: this.unfundedReviews.get(id) ?? null,
       // #279: with no developer spawned, the record must not read as though one
       // delivered this. Absent on every ordinary settle, where one did.
       asIs: this.asIsSettlements.get(id) ?? null,
@@ -3085,6 +3163,9 @@ class BuildSession {
       // ADDITIVE (gh #277): the cap the developer died on during an attempt the
       // DoD went on to decide. Omitted when there was none.
       ...(outcome.budgetDeath == null ? {} : { budget_death: outcome.budgetDeath }),
+      // ADDITIVE (gh #289): no reviewer was spawned because the stage could not
+      // fund one. Omitted on every turn where one was.
+      ...(outcome.reviewerUnfunded == null ? {} : { reviewer_unfunded: outcome.reviewerUnfunded }),
       // ADDITIVE (gh #279): the branch was taken AS IT STANDS and no developer
       // was spawned for it — with the person who signed that, and their note.
       // Omitted on every ordinary turn, where absent means what it always meant.

@@ -28,7 +28,7 @@ import { MAX_ATTEMPTS } from "./caps.ts";
 import { reviewDiffCommand } from "./git.ts";
 import { REVIEW_SCHEMA } from "./prompts.ts";
 import { readReviewLedger } from "./reviewLedger.ts";
-import { DOD_REFUSAL_FALLBACK, dodRefused } from "./outcome.ts";
+import { DOD_REFUSAL_FALLBACK, dodRefused, reviewStillOwed } from "./outcome.ts";
 import type { DodResult, StoryOutcome } from "./outcome.ts";
 import type { PlannedStory } from "./plan.ts";
 import type { PlanStatus } from "../schemas/planCommon.ts";
@@ -365,7 +365,7 @@ export function resumableReview(
 ): ResumableReview | null {
   if (status !== "review" && status !== "in_progress") return null;
   // Once THIS process has settled the story, its own outcome is the truth.
-  if (fresh !== undefined && fresh.verdict !== "error") return null;
+  if (fresh !== undefined && !reviewStillOwed(fresh)) return null;
   const ledger = readReviewLedger(runDir, storyId);
   if (ledger.erroredWith === null || ledger.commit === null) return null;
   return {

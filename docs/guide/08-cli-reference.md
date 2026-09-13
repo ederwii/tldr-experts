@@ -1001,13 +1001,23 @@ nothing, because the question comes before any of that exists. Exits: `0` `1` `2
 
 ```
 tldrx budget show  [--run <id>] [--json]
-tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>]
+tldrx budget raise <phase> <usd> [--stage <id>] [--run <id>] [--take-from <phase>] [--note <text>]
 tldrx budget grant <usd> --fact <F> [--phase <p>] [--on-exceed <warn|block>] [--note <text>] [--run <id>]
 ```
 
 `--take-from <phase>` moves the money out of that phase instead of raising the run's total,
 refusing to cut a donor below what it has already spent. `--note` is recorded on the
 `budget.raised` event beside the before/after and the actor.
+
+`--stage <id>` adds the same amount to that stage's own `budget_usd` in `run.yml`, and it is
+the flag to reach for when a sub-agent died on its ceiling. **Three knobs, three jobs, and
+only one of them caps a spawn.** The stage's `budget_usd` decides the price scale and
+therefore every per-story developer ceiling and the reviewer's; the phase ceiling decides only
+whether a stage may START (`remaining work > what is left`); `per_agent_max_usd` only caps a
+ceiling from above. Measured on two live unattended runs: the stage figure alone, 16.20 → 60,
+moved a developer ceiling 5.97 → 22.11 on the next spawn, while raising the other two without
+it moved the ceiling by nothing. A raise that names no stage says so in its own output, and an
+unknown stage id is a usage error (`1`) that writes neither file.
 
 `grant` records what the owner AUTHORIZED as a number in `budget.yml`, so a ceiling has
 something to answer to. `<usd>` here is a total, not a delta, and nothing is spent or moved.

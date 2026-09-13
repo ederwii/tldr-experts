@@ -38,7 +38,11 @@ export interface ReviewLedger {
    * and a fresh fix-list round with them.
    */
   readonly fixlistRounds: number;
-  /** The error of the LAST review, when it errored and nothing judged it since. */
+  /**
+   * Why the LAST review left no verdict, when it left none and nothing has
+   * judged the story since — the error a spawned reviewer died with, or (gh #289)
+   * the reason no reviewer was spawned at all.
+   */
   readonly erroredWith: string | null;
   /** The story commit the last `task.done` recorded — the diff already merged. */
   readonly commit: string | null;
@@ -436,13 +440,19 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
 }
 
 /**
- * Did this recorded review event describe a reviewer that FAILED?
+ * Did this recorded review event leave the diff UNJUDGED — so the review is
+ * still owed?
  *
- * Two shapes, because two eras. A run written by this code says so:
- * `verdict: "error"`. A run written before it existed said `verdict: "changes"`
+ * Three shapes now. A reviewer that was never spawned because the stage could
+ * not fund one (gh #289) carries `unfunded_usd` and `verdict: "n-a"`: no verdict
+ * exists, the review is owed exactly as it is after a crash, and the number is
+ * on the event so this never has to read English to tell the case apart. Then
+ * the two eras of a reviewer that DIED: a run written by this code says
+ * `verdict: "error"`; a run written before that existed said `verdict: "changes"`
  * and put the spawn layer's error in `detail` — see `looksLikeReviewerError`.
  */
 function reviewEventErrored(payload: Record<string, unknown>): boolean {
+  if (typeof payload.unfunded_usd === "number") return true;
   if (payload.verdict === "error") return true;
   if (payload.verdict !== "changes") return false;
   return typeof payload.detail === "string" && looksLikeReviewerError(payload.detail);

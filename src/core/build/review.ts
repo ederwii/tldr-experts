@@ -314,6 +314,57 @@ function text(value: unknown): string | null {
 export const REVIEWER_FAILED = "the reviewer sub-agent failed";
 
 /**
+ * The words a record uses for a review that was REFUSED BEFORE IT WAS PAID FOR
+ * (gh #289) — the stage had less left than `REVIEWER_FLOOR_USD`, so no reviewer
+ * was spawned at all.
+ *
+ * Exported so the refusal line, the review log and the tests all say the same
+ * thing, and so a test asserts THIS marker instead of a word of English that
+ * innocent prose could carry (AGENTS.md §8).
+ */
+export const REVIEWER_UNFUNDED_MARK = "no reviewer was spawned: the stage cannot fund one";
+
+/**
+ * The sentence a refused review carries — what was left, what a review costs,
+ * and the ONE command that moves the ceiling a spawn is capped by.
+ *
+ * The lever matters more than the arithmetic here. `tldrx budget raise <phase>`
+ * moves the phase ceiling, which takes part in the economy refusal and caps no
+ * spawn at all (gh #244); the knob every per-story and per-reviewer ceiling is
+ * derived from is the STAGE's own `budget_usd`. An operator told "raise the
+ * budget" by a refusal that names the wrong one raises it, changes nothing, and
+ * buys one more turn per `reject --and-continue` — which is exactly the loop
+ * gh #289 measured.
+ */
+export function reviewerUnfundedReason(
+  parts: { readonly remainingUsd: number; readonly floorUsd: number; readonly fix: string },
+): string {
+  return `${REVIEWER_UNFUNDED_MARK} — $${parts.remainingUsd.toFixed(2)} left, and a review `
+    + `costs at least $${parts.floorUsd.toFixed(2)}. Nothing was spent on a turn that could not `
+    + `read the diff. Raise the stage's own budget_usd — the phase ceiling caps no spawn: ${parts.fix}`;
+}
+
+/**
+ * A review that never happened because the stage could not fund it.
+ *
+ * `verdict: "n-a"` — "no reviewer ran for this story" — and NOT `error`, which
+ * this file reserves for a reviewer that was spawned and died. Nothing was
+ * spawned, nothing died and nothing judged: `reviewerFailed` would record a
+ * corpse where there is no body.
+ */
+export function reviewerUnfunded(reason: string): Review {
+  return {
+    verdict: "n-a",
+    summary: reason,
+    findings: [],
+    fixlist: [],
+    fixlistProblems: [],
+    formatProblems: [],
+    verdictProblem: null,
+  };
+}
+
+/**
  * The reviewer FAILED: a spawn error, a timeout, an exhausted budget, a killed
  * process. There is no verdict here to record, so none is invented.
  *
@@ -562,6 +613,16 @@ function summaryLines(outcome: StoryOutcome): readonly string[] {
       "nothing to review. The error it died with:",
       "",
       `> ${outcome.developerError}`,
+    ];
+  }
+  // Refused BEFORE the spawn (gh #289): there is no corpse to report, and the
+  // operator's next move is a number, not a retry.
+  if ((outcome.reviewerUnfunded ?? null) !== null) {
+    return [
+      "**No reviewer was spawned: the stage could not fund one.** This is not a verdict and not",
+      "a failure of the diff — nothing read it, and nothing was spent trying. Why:",
+      "",
+      `> ${outcome.reviewerUnfunded ?? ""}`,
     ];
   }
   if (outcome.verdict === "error") {

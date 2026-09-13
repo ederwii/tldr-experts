@@ -28,6 +28,8 @@ import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { isResolved, resolveRunOrExplain, type RunOrExit } from "../resolveRun.ts";
 import { buildBudgetView, renderBudget } from "../../core/budget/budgetView.ts";
+import { round2 } from "../../core/build/caps.ts";
+import type { RunFile } from "../../core/run/RunFile.ts";
 import { describeRaise, raiseBudget } from "../../core/budget/raiseBudget.ts";
 import { grantFor, wouldExceedGrant } from "../../core/budget/grant.ts";
 import { ON_GRANT_EXCEED, type OnGrantExceed } from "../../core/budget/RunBudget.ts";
@@ -36,14 +38,14 @@ import { isLive } from "../../core/facts/Fact.ts";
 import { factsPath } from "../../hooks/lib/workspace.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 
-const VALUE_FLAGS = ["run", "root", "take-from", "note", "fact", "phase", "on-exceed"];
+const VALUE_FLAGS = ["run", "root", "take-from", "note", "fact", "phase", "on-exceed", "stage"];
 
 export const budgetCommand: Command = {
   name: "budget",
   summary: "Show what the run may still spend, raise a phase ceiling, or record what the owner authorized",
   usage:
     "tldrx budget show [<run>] [--run <id>] [--json] [--root <path>]\n" +
-    "       tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>] [--root <path>]\n" +
+    "       tldrx budget raise <phase> <usd> [--stage <id>] [--run <id>] [--take-from <phase>] [--note <text>] [--root <path>]\n" +
     "       tldrx budget grant <usd> --fact <F> [--phase <p>] [--on-exceed <warn|block>] [--note <text>] [--run <id>] [--root <path>]",
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
@@ -75,6 +77,25 @@ export const budgetCommand: Command = {
  */
 const GRANT_ONLY_FLAGS = ["fact", "phase", "on-exceed"] as const;
 
+/**
+ * `--stage` belongs to `raise` and to nothing else, for the reason
+ * `GRANT_ONLY_FLAGS` exists: `flagRefusal` judges flags per COMMAND, so without
+ * this `budget show --stage build` would parse, exit 0 and mean nothing. A flag
+ * that names the one knob an operator came here to move, and moves it silently
+ * nowhere, is worse than an unknown flag.
+ */
+const RAISE_ONLY_FLAGS = ["stage"] as const;
+
+function refuseRaiseFlags(args: ParsedArgs, verb: string): void {
+  for (const flag of RAISE_ONLY_FLAGS) {
+    if (!boolFlag(args, flag)) continue;
+    throw new UsageError(
+      `--${flag} is \`budget raise\`'s flag, not \`budget ${verb}\`'s — ` +
+        "raise a stage's own ceiling with `tldrx budget raise <phase> <usd> --stage <id>`",
+    );
+  }
+}
+
 function refuseGrantFlags(args: ParsedArgs, verb: string): void {
   for (const flag of GRANT_ONLY_FLAGS) {
     if (!boolFlag(args, flag)) continue;
@@ -90,6 +111,7 @@ function budgetShow(argv: readonly string[]): number {
   try {
     const args = parseArgs(argv, VALUE_FLAGS);
     refuseGrantFlags(args, "show");
+    refuseRaiseFlags(args, "show");
     const resolved = openRun(args.positionals[0] ?? stringFlag(args, "run"), workspaceRootFrom(args));
     if (!isResolved(resolved)) return resolved.exit;
     const store = resolved.store;
@@ -120,6 +142,11 @@ function budgetRaise(argv: readonly string[]): number {
     const resolved = openRun(stringFlag(args, "run"), workspaceRootFrom(args));
     if (!isResolved(resolved)) return resolved.exit;
     const store = resolved.store;
+
+    // Resolved BEFORE anything is computed, so an unknown stage refuses with both
+    // files byte-identical (the usage family: exit 1, nothing behind it).
+    const stageId = stringFlag(args, "stage") ?? null;
+    if (stageId !== null) requireStageBudget(store.run, phaseId, stageId);
 
     const outcome = raiseBudget(store.budget, {
       phaseId,
@@ -157,6 +184,25 @@ function budgetRaise(argv: readonly string[]): number {
     // implementation per derivation; the answer is one COPY, not a better sync.
     store.mutateBudget(() => outcome.budget);
 
+    // gh #244: the STAGE's own `budget_usd` — the only one of the three knobs
+    // that sets a spawn ceiling. Written here and nowhere else, because run.yml
+    // OWNS this figure: #236's lesson was about a second copy of a number whose
+    // owner was budget.yml, and this is the opposite case — mirroring it into
+    // budget.yml is what would repeat that mistake.
+    const stageBefore = stageId === null ? null : requireStageBudget(store.run, phaseId, stageId);
+    if (stageId !== null) {
+      store.mutate((run) => ({
+        ...run,
+        phases: run.phases.map((phase) => phase.id !== phaseId ? phase : {
+          ...phase,
+          stages: phase.stages.map((stage) => stage.id !== stageId ? stage : {
+            ...stage,
+            budget_usd: round2(stage.budget_usd + amountUsd),
+          }),
+        }),
+      }));
+    }
+
     // Before/after, who, and why — appended BEFORE the save, so a raise that
     // fails validation leaves no event claiming it happened. Until 2026-08-29
     // `budget raise` rewrote budget.yml and appended nothing at all (audit §E):
@@ -176,13 +222,20 @@ function budgetRaise(argv: readonly string[]): number {
         phase_ceiling_after: outcome.phaseCeilingAfter,
         run_ceiling_before: outcome.runCeilingBefore,
         run_ceiling_after: outcome.runCeilingAfter,
+        // ADDITIVE (gh #244), and omitted on every raise that named no stage —
+        // absent means what it has always meant: no spawn ceiling moved.
+        ...(stageId === null || stageBefore === null ? {} : {
+          stage: stageId,
+          stage_budget_before: stageBefore,
+          stage_budget_after: round2(stageBefore + amountUsd),
+        }),
         note: stringFlag(args, "note") ?? "",
       },
     });
     store.save();
 
     const view = buildBudgetView(store.run, store.budget, store.runDir);
-    const lines = [describeRaise(outcome)];
+    const lines = [describeRaise(outcome), ...stageRaiseLines(phaseId, stageId, stageBefore, amountUsd)];
     // The `warn` half of #170: the ceiling was written, and the sentence names
     // the grant, the fact behind it and the figure — so the operator reads what
     // they just went past rather than finding out in a retro.
@@ -217,6 +270,7 @@ function budgetRaise(argv: readonly string[]): number {
 function budgetGrant(argv: readonly string[]): number {
   try {
     const args = parseArgs(argv, VALUE_FLAGS);
+    refuseRaiseFlags(args, "grant");
     const amountText = args.positionals[0];
     if (amountText === undefined) {
       throw new UsageError("budget grant needs an amount: `tldrx budget grant 20 --fact F031`");
@@ -362,4 +416,57 @@ function money(amount: number): string {
 /** The store, or the exit code to return — 3 for no run, 2 when several are open. */
 function openRun(wanted: string | undefined, root: string): RunOrExit {
   return resolveRunOrExplain("tldrx budget", root, wanted);
+}
+
+/**
+ * The stage's `budget_usd` as it stands, or a usage refusal naming what the
+ * phase actually has (gh #244).
+ *
+ * A stage id nobody can resolve is the same family as an unknown phase — "you
+ * asked for something impossible", exit 1, nothing written — and the refusal
+ * lists the stages rather than saying no, because the operator typing this has
+ * just been told by another refusal to move a ceiling and does not have run.yml
+ * open.
+ */
+function requireStageBudget(run: RunFile, phaseId: string, stageId: string): number {
+  const phase = run.phases.find((entry) => entry.id === phaseId);
+  if (phase === undefined) throw new UsageError(`no phase \`${phaseId}\` in this run`);
+  const stage = phase.stages.find((entry) => entry.id === stageId);
+  if (stage === undefined) {
+    const known = phase.stages.map((entry) => entry.id).join(", ");
+    throw new UsageError(
+      `no stage \`${stageId}\` in ${phaseId} — this phase has: ${known === "" ? "none" : known}`,
+    );
+  }
+  return stage.budget_usd;
+}
+
+/**
+ * What the raise did — or did NOT do — to the knob that caps a spawn (gh #244).
+ *
+ * The measurement behind this sentence (the session running two live unattended
+ * runs; their measurement, not this file's): raising the stage `budget_usd`
+ * alone, 16.20 → 60, moved a developer ceiling 5.97 → 22.11 on the next spawn,
+ * while raising `per_agent_max_usd` AND the phase ceiling without touching the
+ * stage moved it by nothing. A phase ceiling takes part in the economy refusal
+ * ("remaining work > left") and sets no cap; `per_agent_max_usd` only caps from
+ * above. So a raise that named no stage has to SAY that every sub-agent will be
+ * dispatched under exactly the ceiling it had before — otherwise the operator
+ * raises, re-runs, dies on the same cap, and buys one turn per retry, which is
+ * the loop gh #244 and gh #289 were both filed out of.
+ */
+function stageRaiseLines(
+  phaseId: string, stageId: string | null, before: number | null, amountUsd: number,
+): readonly string[] {
+  if (stageId === null || before === null) {
+    return [
+      "No spawn ceiling moved: per-story and reviewer caps come from the STAGE's own "
+        + `budget_usd, not from this phase ceiling. Move that too with \`--stage <id>\` `
+        + `(\`tldrx budget show\` names the stage ${phaseId} would run next).`,
+    ];
+  }
+  return [
+    `${phaseId}/${stageId} budget_usd $${before.toFixed(2)} → $${round2(before + amountUsd).toFixed(2)} `
+      + `(+$${amountUsd.toFixed(2)}) — every per-story and reviewer cap is derived from this figure.`,
+  ];
 }

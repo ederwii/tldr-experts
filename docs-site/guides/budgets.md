@@ -81,6 +81,29 @@ never mixed into `ceiling_usd`; see [Budgets](/concepts/budgets).
 log keeps who raised it, by how much, and why. Raising a ceiling mid-stage is also one of
 the things that stops an [agent gate](/concepts/gates) from signing itself.
 
+## The three knobs, and which one caps a sub-agent
+
+A raise like the one above moves the **phase ceiling**, and a phase ceiling decides one thing:
+whether the next stage may start at all. It caps no sub-agent. The ceiling a developer or a
+reviewer is actually dispatched under comes from the **stage's own `budget_usd`** in `run.yml`,
+and `per_agent_max_usd` only trims that from above. Measured on two live unattended runs:
+raising the stage figure alone, 16.20 → 60, moved a developer ceiling 5.97 → 22.11 on the next
+spawn, while raising the other two without it moved nothing.
+
+```bash
+tldrx budget raise 04-build 25 --stage build
+```
+
+`--stage` adds the same amount to that stage's `budget_usd` as well, and it is what to reach
+for when a sub-agent died on its cap rather than the run running out of money. A raise that
+names no stage says, in its own output, that no spawn ceiling moved.
+
+A reviewer is the one turn the framework will not under-fund: when what the stage has left is
+below what a review costs, no reviewer is spawned at all. The story parks with its diff merged
+and its review still owed, nothing is spent on a turn that could not read the diff, and the
+record says *no reviewer ran* — never that one asked for changes or failed. The line it prints
+carries the `--stage` command sized to the shortfall.
+
 ## Writing down what was authorized
 
 ```bash

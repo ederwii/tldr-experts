@@ -86,6 +86,16 @@ export function storyRetroLines(outcome: StoryOutcome, runId: string): readonly 
     );
   }
 
+  // A review REFUSED for want of money is push-back of the same kind, minus the
+  // corpse: the developer's turn is paid for, nothing judged it, and the cure is
+  // a number an operator moves rather than a retry (gh #289).
+  if ((outcome.reviewerUnfunded ?? null) !== null) {
+    lines.push(
+      `- \`${outcome.id}\` — no reviewer was spawned on attempt `
+      + `${String(outcome.attempts)}: ${oneLine(outcome.reviewerUnfunded ?? "")} ${src}`,
+    );
+  }
+
   // A reviewer that FAILED is push-back too, and of the most expensive kind: the
   // developer's turn is already paid for and nothing has judged it.
   if (outcome.verdict === "error") {
