@@ -15,8 +15,9 @@
   failed `run new` on the 240-character claim clip (#275), and the rules a seed must follow to
   survive the importer and the `[src:]` grammar existed only in the source. So: a "Zero-touch
   run, start to finish" section at the top of the site's unattended-operation guide (EN + ES)
-  with the copyable block, one line per flag — including that `--ship merge` on a repository
-  with no required status checks merges at once (#274) — how to check on the run, how to stop
+  with the copyable block, one line per flag — including that `--ship merge` over a base
+  branch seen to require no check arms nothing and leaves the PR open for a person (#274) —
+  how to check on the run, how to stop
   it (`run cancel` after the process, never before), and the honest boundary: this is the
   happy path without a person, and a run a person signs is a different configuration. The
   same block, six lines, in the README quick start and both quickstarts; `docs/guide/10` has
