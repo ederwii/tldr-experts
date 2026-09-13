@@ -245,6 +245,17 @@ export interface StoryOutcome {
    */
   readonly permissionRefused?: string | null;
   /**
+   * The repo's declared `commands:` AS THE REFUSED DEVELOPER HELD THEM (gh #285).
+   *
+   * Recorded at the moment the story settles, so the three surfaces that write a
+   * refusal — the session log, `renderReviewLog`, the handoff's `## Unknowns` —
+   * all name the same cure without re-deriving it, and a record read later is
+   * not re-judged against a `workspace.yml` somebody edited since. Optional and
+   * absent on every record written before it existed, where the refusal keeps
+   * #278's wording exactly.
+   */
+  readonly declaredCommands?: readonly string[];
+  /**
    * The `Reached maximum budget (…)` the developer died on this attempt, when
    * the story went on anyway because its tree held work and the DoD decided
    * (gh #277). Optional and absent on every record written before it existed; a

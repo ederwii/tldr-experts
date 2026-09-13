@@ -23,13 +23,20 @@
  * and not as anything more confident.
  */
 import { unquotedShellSeparator } from "../../hooks/lib/story.ts";
-import { isDeveloperGitVerb } from "./developerGrants.ts";
+import { grantsCommand, isDeveloperGitVerb, slotForCommand } from "./developerGrants.ts";
 
 export type RefusalKind =
   /** The line chains commands: the named separator is the first bare one found. */
   | { readonly kind: "separator"; readonly separator: string }
   /** `git <verb>` alone, and `verb` is not in the developer's allowance. `equivalent` is the granted form, when one exists. */
   | { readonly kind: "verb"; readonly verb: string; readonly equivalent: string | null }
+  /**
+   * A non-git line no `commands:` slot grants (gh #285). Only reachable when the
+   * caller PASSED the declared commands: without them, nobody knows whether the
+   * line was grantable, and guessing would blame `workspace.yml` for a refusal it
+   * had nothing to do with. `slot` is the value to add — see `slotForCommand`.
+   */
+  | { readonly kind: "undeclared"; readonly slot: string }
   /** Nothing about the line explains the refusal — a granted verb, a non-git command, an empty line. */
   | { readonly kind: "unknown" };
 
@@ -43,18 +50,40 @@ export type RefusalKind =
  */
 export const MAX_SEPARATOR_RETRIES = 1;
 
-export function classifyRefusal(command: string): RefusalKind {
+/**
+ * `declared` is `.tldrx/workspace.yml`'s `commands:` AS THE DEVELOPER HELD THEM.
+ * `undefined` — every caller before gh #285 — classifies exactly as it did then:
+ * the `undeclared` kind is unreachable and a non-git line is `unknown`. An empty
+ * but PRESENT set is not the same thing: it says the workspace grants nothing, so
+ * the line really is undeclared.
+ */
+export function classifyRefusal(command: string, declared?: Iterable<string>): RefusalKind {
   const separator = unquotedShellSeparator(command);
   if (separator !== null) return { kind: "separator", separator };
   const argv = command.trim().split(/\s+/);
-  if (argv[0] !== "git") return { kind: "unknown" };
+  if (argv[0] !== "git") return undeclaredKind(command, declared);
   const verb = argv[1] ?? "";
   // A global option before the verb (`git -C <dir> rm …`) is refused because the
   // grant is a PREFIX match on `git <verb>` and the second word is `-C`, which
   // is neither a verb this list knows nor one it can name a cure for.
+  // A `git` line is NEVER blamed on `commands:`: the developer's git allowance is
+  // `DEVELOPER_GIT_VERBS`, not a workspace slot, so "add a slot" would be a false
+  // cure — and a false cure is worse than none (gh #285).
   if (verb === "" || verb.startsWith("-")) return { kind: "unknown" };
   if (isDeveloperGitVerb(verb)) return { kind: "unknown" };
   return { kind: "verb", verb, equivalent: grantedEquivalent(verb, argv.slice(2)) };
+}
+
+/**
+ * A line the workspace could grant and does not — or `unknown` when the caller
+ * did not say what the workspace declares, or when the line is not an invocation
+ * anything could be a slot for (an empty line, a bare `$(…)` the splitter left).
+ */
+function undeclaredKind(command: string, declared: Iterable<string> | undefined): RefusalKind {
+  if (declared === undefined) return { kind: "unknown" };
+  if (grantsCommand(declared, command)) return { kind: "unknown" };
+  const slot = slotForCommand(command);
+  return slot === "" ? { kind: "unknown" } : { kind: "undeclared", slot };
 }
 
 /**
@@ -97,14 +126,25 @@ export function refusalCure(kind: RefusalKind): string {
       return kind.equivalent === null
         ? `\`git ${kind.verb}\` is not granted`
         : `\`git ${kind.verb}\` is not granted; use \`${kind.equivalent}\``;
+    case "undeclared":
+      return `nothing in .tldrx/workspace.yml's \`commands:\` grants \`${kind.slot}\` — a developer's `
+        + "grant is built from the declared commands, so no re-run and no reopen note can make this "
+        + `line runnable. The operator's cure: add a \`commands:\` slot whose value is exactly `
+        + `\`${kind.slot}\` (a slot grants that string plus any arguments), or a longer prefix of the `
+        + "refused line if less should be granted";
     case "unknown":
       return "";
   }
 }
 
-/** #261's sentence plus the cure, when there is one to name. The ONE joiner. */
-export function withCure(sentence: string, command: string): string {
-  const cure = refusalCure(classifyRefusal(command));
+/**
+ * #261's sentence plus the cure, when there is one to name. The ONE joiner.
+ *
+ * `declared` (gh #285) is the workspace's `commands:` as the refused developer
+ * held them; omitted, every sentence is byte-identical to what #278 shipped.
+ */
+export function withCure(sentence: string, command: string, declared?: Iterable<string>): string {
+  const cure = refusalCure(classifyRefusal(command, declared));
   return cure === "" ? sentence : `${sentence}. The cure: ${cure}`;
 }
 

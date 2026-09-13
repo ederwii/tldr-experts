@@ -759,6 +759,22 @@ diciéndolo. Un verbo no permitido nunca se reintenta — seguiría sin estar pe
 del developer ahora lista los verbos exactos de git que tiene y nombra `git restore <path>`
 como la forma de restaurar un archivo.
 
+**Una historia necesita un comando que tu workspace nunca declaró.** Medido en una ejecución real
+sin supervisión: una historia cuyo criterio de aceptación exigía que la migración fuera *generada por
+`dotnet ef`*, en un workspace que declaraba `dotnet build` y `dotnet test`. Murieron cuatro
+desarrolladores y corrieron dos rondas de revisión a lo largo de unas 3 h; el cuarto desarrollador
+escribió, con todas las letras, que `dotnet ef` no era otorgable y no hizo ningún cambio de código —
+y la ejecución pagó otro intento igualmente. El permiso de un desarrollador se construye a partir de
+tus `commands:` declarados, exactos y con argumentos al final, así que un comando que no sea uno de
+ellos (o uno de ellos más argumentos) no puede ejecutarse, y ni reintentar, ni reabrir con una nota,
+ni relanzar cambia eso. Desde gh #285 el PRIMER rechazo lo dice en los términos del operador: donde
+la razón registrada terminaba en "un turno sin humano no tiene a quién pedirle aprobación", ahora
+nombra la cura — agregá un slot de `commands:` cuyo valor sea exactamente `dotnet ef`, la herramienta
+y su subcomando, nunca los argumentos de esa historia. Está en la razón del bloqueo, en el log de
+revisión y en `## Unknowns` del handoff, así que el primer desarrollador muerto te da la edición
+exacta en lugar del cuarto. Una línea `git` nunca se le achaca a `commands:`: el permiso de git del
+desarrollador es su propia lista, y ahí "agregá un slot" sería una cura falsa.
+
 **El notificador nunca se llama.** Tres causas habituales, en el orden que cuesta menos
 revisar. La lista `events:` no nombra el tipo que esperabas: quita la clave por completo para
 suscribirte a todo. El comando no es ejecutable, o no está en la ruta desde la que el run lo

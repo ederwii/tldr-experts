@@ -1498,7 +1498,10 @@ class BuildSession {
       }
       return {
         story, cost: spent, dod: [], commit: null,
-        failure: permissionBlockReason(developer.refused, { retried: separatorRetries > 0 }),
+        failure: permissionBlockReason(developer.refused, {
+          retried: separatorRetries > 0,
+          declared: this.repoCommands(story.planned.story.repo),
+        }),
         developerError: null, before,
       };
     }
@@ -1525,7 +1528,9 @@ class BuildSession {
         // the cause a person triages first.
         failure: [
           why,
-          ...(developer.refused === null ? [] : [permissionBlockReason(developer.refused)]),
+          ...(developer.refused === null
+          ? []
+          : [permissionBlockReason(developer.refused, { declared: this.repoCommands(story.planned.story.repo) })]),
           ...(budgetDeath === null ? [] : [capDeathReason(budgetDeath)]),
         ].join("; and "),
         developerError: null,
@@ -3013,6 +3018,9 @@ class BuildSession {
       reviewRel,
       reason: parts.reason,
       permissionRefused: this.refusals.get(id) ?? null,
+      // gh #285: what the workspace granted this developer, beside what it
+      // refused — the pair is what names the operator's cure.
+      declaredCommands: this.repoCommands(story.planned.story.repo),
       budgetDeath: this.capDeaths.get(id) ?? null,
       // #279: with no developer spawned, the record must not read as though one
       // delivered this. Absent on every ordinary settle, where one did.
@@ -3102,6 +3110,7 @@ class BuildSession {
           : ` — ${withCure(
             `\`${outcome.permissionRefused}\` was refused for approval; the tree held committed work, so the DoD decided`,
             outcome.permissionRefused,
+            outcome.declaredCommands,
           )}`),
     );
   }
@@ -4335,12 +4344,17 @@ export function developerTools(
  * cure in front of the prompt: "not repeated" would be false of it, so it says
  * what was done instead.
  */
-export function permissionBlockReason(command: string, options: { readonly retried?: boolean } = {}): string {
+export function permissionBlockReason(
+  command: string,
+  // `declared` (gh #285): the repo's `commands:`. Omitted, the sentence is
+  // byte-identical to #278's — which is what every caller outside Build gets.
+  options: { readonly retried?: boolean; readonly declared?: readonly string[] } = {},
+): string {
   const base = `permission — \`${command}\` was refused for approval by the agent's own permission layer, `
     + "and a headless turn has nobody to approve it: the same allowance would refuse it again, "
     + "so this attempt was not repeated"
     + (options.retried === true ? " beyond the one re-spawn with the cure stated, which was refused too" : "");
-  return withCure(base, command);
+  return withCure(base, command, options.declared);
 }
 
 /**
