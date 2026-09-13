@@ -15,8 +15,9 @@
   failed `run new` on the 240-character claim clip (#275), and the rules a seed must follow to
   survive the importer and the `[src:]` grammar existed only in the source. So: a "Zero-touch
   run, start to finish" section at the top of the site's unattended-operation guide (EN + ES)
-  with the copyable block, one line per flag — including that `--ship merge` on a repository
-  with no required status checks merges at once (#274) — how to check on the run, how to stop
+  with the copyable block, one line per flag — including that `--ship merge` over a base
+  branch seen to require no check arms nothing and leaves the PR open for a person (#274) —
+  how to check on the run, how to stop
   it (`run cancel` after the process, never before), and the honest boundary: this is the
   happy path without a person, and a run a person signs is a different configuration. The
   same block, six lines, in the README quick start and both quickstarts; `docs/guide/10` has
@@ -32,6 +33,37 @@
   would be the second copy `gen-changelog.ts` exists to prevent); the untranslated `TLDRX_UI`
   row on the ES flags page is generated from `gen-cli.ts`'s English-by-design env table and
   was left alone.
+### Fixed
+
+- **`--ship merge` no longer arms an auto-merge over a base that requires nothing (#274).**
+  Measured on the zero-touch proof run (a field workspace, `--gates none --ship merge`, no human
+  in the loop): the PR merged at `06:20:14Z` while all four of its check runs were still pending
+  — they had started at 06:20:12/06:20:16/06:20:28 and completed between 06:21:38 and 06:24:56,
+  every one of them AFTER the merge — and the ship record said `queued — GitHub merges when its
+  checks pass`. The mechanism is a gap between two different sets: the guard counted the checks
+  the PR REPORTED (`gh pr view --json statusCheckRollup`), while `gh pr merge --auto` hands the
+  wait to GitHub's auto-merge, which waits on the base branch's REQUIREMENTS. That workspace's
+  `main` had none (`gh api …/branches/main/protection` → 404 `Branch not protected`), so `--auto`
+  did not mean "merge when green", it meant "merge now", and the ledger recorded a red-eligible
+  suite as merged on green — a record lying in the dangerous direction (§7). `ship` now asks the
+  BASE what it requires before arming anything: `repos/{owner}/{repo}/rules/branches/<base>` for
+  rulesets (repository and organization level) and, when that finds none,
+  `repos/{owner}/{repo}/branches/<base>/protection` for classic branch protection. Nothing is
+  armed without a requirement actually SEEN — `merge: absent — the base branch requires no check
+  before merge` when both were read and hold nothing back, and `absent — could not tell what the
+  base branch requires` when a probe could not be read, because for a merge "I could not tell" has
+  to behave like "there is nothing to wait on". A requirement imposed by a mechanism neither probe
+  can see (a merge queue, an org policy this token cannot read) reads as "requires nothing" and so
+  arms NOTHING: the residual gap can only ever cost a merge that was not armed, never a merge that
+  should not have happened. The `queued` sentence now says what `--auto` actually waits on — the
+  base's REQUIRED checks. Two edges of the probe are closed on the same side: a rule that arrives
+  carrying an `enforcement` other than `active` is a dry run and is not counted as a requirement
+  (GitHub already filters `evaluate`/`disabled` server-side and the response carries no such field
+  — measured against the official REST description — so this is belt-and-braces, and its absence is
+  read as that documented filter rather than as "unknown", which would refuse to arm on every real
+  repo); and only a 404 whose body reads `Branch not protected` means "no classic protection" — a
+  branch or a repo that is not there answers 404 too, and reading that as "requires nothing" would
+  arm a merge against a base nobody identified.
 
 ## 0.18.1 — 2026-09-13
 

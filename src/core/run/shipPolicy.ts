@@ -18,8 +18,11 @@
  *            person to open the PR from.
  *   `pr`     push, then open the PR `tldrx ship` already knows how to open.
  *   `merge`  push, open, then `gh pr merge --auto` — GitHub merges when ITS
- *            requirements are met, and the framework arms nothing when the PR
- *            reports no check at all (`NO_CHECKS_TO_WAIT_ON`), because an
+ *            requirements are met, and the framework arms nothing unless it has
+ *            SEEN a requirement: a PR that reports no check at all
+ *            (`NO_CHECKS_TO_WAIT_ON`), a base that requires none
+ *            (`NO_REQUIRED_CHECKS`, gh #274) and a base it could not interrogate
+ *            (`REQUIREMENTS_UNREADABLE`) are all left for a person, because an
  *            auto-merge with nothing to wait on merges at once.
  *
  * The block is the CLI flag's three words spelled out, so a reader of `run.yml`
@@ -59,6 +62,23 @@ export interface ShipPolicy {
  * read as the policy the run was opened with.
  */
 export const NO_CHECKS_TO_WAIT_ON = "absent — no checks to wait on";
+/**
+ * The base branch REQUIRES nothing before a merge (gh #274). A PR that REPORTS
+ * checks is not a base that REQUIRES them: `gh pr merge --auto` waits on the
+ * PR's requirements, and over a base with none it merges at once — measured in
+ * the field, where all four of a PR's checks completed AFTER the merge whose
+ * record said `queued`. Absent-with-reason (§7), and a state of its own because
+ * the two absences are different facts: nothing REPORTED versus nothing REQUIRED.
+ */
+export const NO_REQUIRED_CHECKS = "absent — the base branch requires no check before merge";
+/**
+ * The requirements probe could not answer (gh #274) — `gh` failed, or printed
+ * something that is not the JSON it was asked for. "I could not tell" is never
+ * "none": for a merge it BEHAVES like `NO_REQUIRED_CHECKS` (nothing is armed)
+ * and the record says which of the two it was, so a permission error is never
+ * read back as a base that was checked and found bare.
+ */
+export const REQUIREMENTS_UNREADABLE = "absent — could not tell what the base branch requires";
 /** `gh pr merge --auto` accepted: GitHub merges when its own requirements are met. */
 export const MERGE_QUEUED = "queued";
 

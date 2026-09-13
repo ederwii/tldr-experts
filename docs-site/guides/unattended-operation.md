@@ -83,10 +83,13 @@ tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.
   own `Recommended:` pick, records it as `decided_by: agent-default`, and escalates the
   ones with no pick or tagged `irreversible: true` / `money: true`.
 - **`--ship pr`** — when the run reads `done`, push `epic/<slug>` and open the pull
-  request. **`--ship merge`** also arms `gh pr merge --auto --merge`, so the remote's own
-  checks decide — and on a repository whose default branch has **no required status
-  checks** that means the PR merges at once, with nothing checked (#274, open). A PR that
-  reports no check at all is left open with `merge: absent`.
+  request. **`--ship merge`** also arms `gh pr merge --auto --merge`, so the base branch's
+  own **required** checks decide — and it is armed only over a base that was SEEN to
+  require one (#274): auto-merge waits on the base's requirements, not on the checks the
+  PR happens to report, so on a repository whose default branch requires none `--auto`
+  would merge at once. A PR that reports no check, a base that requires none, and a base
+  the probe could not read are all left open with an `merge: absent — …` reason naming
+  which it was.
 - **`--budget 40`** — the run's total ceiling in USD, split across its phases.
 
 `run new` prints `created tldrx-work/<id> — …`; the id is `<yymmdd>-<slug>` and every
@@ -335,9 +338,15 @@ whose "What shipped" section is empty.
 **And a run can end in the PR itself.** Open it with `--ship merge` (or `pr`, or `push`) and
 the moment `run auto` sees the run read `done` it runs `tldrx ship` for you: the epic branch is
 pushed, the PR opens with the body above, and under `merge` GitHub's auto-merge is armed so the
-repo's own checks decide — a PR that reports no check at all is left open, and `run.finished`
-then reads `merge: absent — no checks to wait on` beside the `pr_url`. Absent the flag, the
-loop ends where it always did. The gates are unchanged by it: a run that goes from `run new` to
+base branch's own REQUIRED checks decide. It is armed only over a base that was SEEN to require
+one: GitHub's auto-merge waits on the base's requirements, not on the checks the PR happens to
+report, so over a base that requires nothing `--auto` does not mean "merge when green", it means
+"merge now". Three absences leave the PR open for a person instead, and `run.finished` names
+which one beside the `pr_url` — `absent — no checks to wait on` (the PR reported none),
+`absent — the base branch requires no check before merge` (its rulesets and branch protection
+were read and hold nothing back), `absent — could not tell what the base branch requires` (that
+probe could not be read; for a merge, not knowing behaves like nothing to wait on). Absent the
+flag, the loop ends where it always did. The gates are unchanged by it: a run that goes from `run new` to
 a merged PR with nobody in the loop is `--gates none --ship merge`, said in full, and
 `run.yml` carries both decisions.
 

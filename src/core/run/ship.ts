@@ -110,7 +110,9 @@ import type { PlanStatus } from "../schemas/planCommon.ts";
 // refusal in the CLI exits with, and one spelling is what keeps it that way.
 import { EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../../cli/exitCodes.ts";
 import { pushBranch } from "../build/git.ts";
-import { MERGE_QUEUED, NO_CHECKS_TO_WAIT_ON } from "./shipPolicy.ts";
+import {
+  MERGE_QUEUED, NO_CHECKS_TO_WAIT_ON, NO_REQUIRED_CHECKS, REQUIREMENTS_UNREADABLE,
+} from "./shipPolicy.ts";
 import type { RunShip } from "./RunFile.ts";
 import {
   deliveredPhrase, deriveRunOutcome, describeRunOutcome, storiesView,
@@ -400,7 +402,7 @@ async function shipOne(
   // probe still never runs, and the one-repo path stays byte-identical.
   const existing = policy === null ? null : await openPrFor(options, repo, branch);
   if (existing !== null && policy !== null) {
-    const merge = await armOrKeep(options, repo, existing, policy, previousMerges(store));
+    const merge = await armOrKeep(options, repo, existing, policy, previousMerges(store), base);
     const record = writeShipRecord(store, policy, [existing], { [repo.name]: merge }, options.at);
     return {
       code: merge.startsWith("failed") ? EXIT_GATE_REFUSED : EXIT_OK,
@@ -434,7 +436,7 @@ async function shipOne(
   // (`test/ship-multi-repo.test.ts` asserts them) and nothing is written.
   if (policy === null) return { code: EXIT_OK, lines };
 
-  const merge = await armMerge(options, repo, url, policy);
+  const merge = await armMerge(options, repo, url, policy, base);
   const record = writeShipRecord(store, policy, url === null ? [] : [url], { [repo.name]: merge }, options.at);
   return {
     code: merge.startsWith("failed") ? EXIT_GATE_REFUSED : EXIT_OK,
@@ -452,8 +454,19 @@ function policyLines(prepared: Prepared, branch: string, merge: string): readonl
 }
 
 function describeMerge(merge: string): string {
-  if (merge === MERGE_QUEUED) return `${MERGE_QUEUED} — \`gh pr merge --auto --merge\`; GitHub merges when its checks pass`;
+  // The sentence for `queued` names what `--auto` actually waits on. It used to
+  // say "when its checks pass", which over a base requiring nothing was false in
+  // the dangerous direction (gh #274) — the merge had already happened.
+  if (merge === MERGE_QUEUED) {
+    return `${MERGE_QUEUED} — \`gh pr merge --auto --merge\`; GitHub merges when the base's REQUIRED checks pass`;
+  }
   if (merge === NO_CHECKS_TO_WAIT_ON) return `${NO_CHECKS_TO_WAIT_ON} — the PR stays open for a person`;
+  if (merge === NO_REQUIRED_CHECKS) {
+    return `${NO_REQUIRED_CHECKS} — \`--auto\` would merge at once; the PR stays open for a person`;
+  }
+  if (merge === REQUIREMENTS_UNREADABLE) {
+    return `${REQUIREMENTS_UNREADABLE} — nothing was armed; the PR stays open for a person`;
+  }
   if (merge === "never") return "never (ship.auto_merge)";
   return merge;
 }
@@ -477,12 +490,18 @@ async function armMerge(
   repo: ShipRepo,
   url: string | null,
   policy: RunShip,
+  base: string,
 ): Promise<string> {
   if (policy.auto_merge !== "checks") return "never";
   if (url === null) return "failed — gh printed no PR URL to merge";
   const checks = await checksReported(options, repo, url);
   if (checks.kind === "unreadable") return `failed — could not read the PR's checks: ${checks.detail}`;
   if (checks.count === 0) return NO_CHECKS_TO_WAIT_ON;
+  // #274: the rollup answers "has anything RUN", which is not the question
+  // `--auto` asks. Ask the base what it REQUIRES before arming anything.
+  const required = await requiredChecks(options, repo, base);
+  if (required.kind === "unreadable") return REQUIREMENTS_UNREADABLE;
+  if (!required.required) return NO_REQUIRED_CHECKS;
   const armed = await options.transport.run(GH_BIN, ["pr", "merge", url, "--auto", "--merge"], repo.dir);
   if (armed.exitCode !== 0) {
     return `failed — \`gh pr merge --auto\` exited ${String(armed.exitCode)}`
@@ -504,9 +523,10 @@ async function armOrKeep(
   url: string,
   policy: RunShip,
   previous: Readonly<Record<string, string>>,
+  base: string,
 ): Promise<string> {
   if (policy.auto_merge === "checks" && previous[repo.name] === MERGE_QUEUED) return MERGE_QUEUED;
-  return await armMerge(options, repo, url, policy);
+  return await armMerge(options, repo, url, policy, base);
 }
 
 function previousMerges(store: RunStore): Readonly<Record<string, string>> {
@@ -536,6 +556,151 @@ async function checksReported(options: ShipOptions, repo: ShipRepo, url: string)
     if (count > 0 || Date.now() - started >= grace) return { kind: "counted", count };
     await new Promise((resolve) => setTimeout(resolve, Math.min(SHIP_CHECKS_POLL_MS, grace)));
   }
+}
+
+/**
+ * Does `base` REQUIRE a check before a merge (gh #274)?
+ *
+ * ## Why this is a different question from `checksReported`
+ *
+ * `gh pr merge --auto` hands the wait to GitHub's auto-merge, and GitHub's
+ * auto-merge waits on the PR's REQUIREMENTS — not on the checks the PR happens to
+ * report. Over a base that requires nothing, `--auto` is not "merge when green",
+ * it is "merge now". Measured (dev/whatsapp-agent PR #34, 2026-09-13): the PR
+ * merged at 06:20:14Z with four checks reported and PENDING — they had started at
+ * 06:20:12 and completed between 06:21:38 and 06:24:56, every one of them AFTER
+ * the merge the record called `queued`. `branches/main/protection` → 404,
+ * "Branch not protected". The old `count > 0` guard passed because checks had
+ * been REPORTED two seconds earlier.
+ *
+ * ## The two mechanisms, and the one that is not covered
+ *
+ * Required status checks reach a branch by two routes and a 404 on one is no
+ * evidence at all about the other:
+ *
+ *   RULESETS   `repos/{owner}/{repo}/rules/branches/<base>` — every active rule
+ *              that applies, "regardless of the level at which they are
+ *              configured (e.g. repository or organization)" (REST docs, read
+ *              2026-09-13). 200 with `[]` when nothing applies; a
+ *              `required_status_checks` rule carries its contexts in
+ *              `parameters.required_status_checks`.
+ *   CLASSIC    `repos/{owner}/{repo}/branches/<base>/protection` — 404 "Branch
+ *              not protected" when there is none (measured: `gh` exits 1 and
+ *              prints the body on stdout), and `required_status_checks.checks`
+ *              / `.contexts` when there is.
+ *
+ * Asked in that order, and the second is not asked when the first already found a
+ * requirement. NOT covered: a merge queue, an org policy this token cannot see,
+ * or a required check some other mechanism imposes. That gap only ever costs a
+ * merge that was not armed — a base whose requirement is invisible to us reads as
+ * `NO_REQUIRED_CHECKS` and the PR stays open for a person. The reverse, arming
+ * over a requirement that does not exist, is the failure this function was
+ * written for, and it cannot happen: nothing is armed without a requirement SEEN.
+ *
+ * Anything the probe cannot read — a non-zero exit that is not the 404, a body
+ * that is not the JSON asked for — is "I could not tell", which for a merge has
+ * to behave like "there is nothing to wait on" (§7): nothing armed, and the
+ * record says which of the two it was.
+ */
+type RequiredProbe =
+  | { readonly kind: "read"; readonly required: boolean }
+  | { readonly kind: "unreadable"; readonly detail: string };
+
+/**
+ * ENFORCEMENT_NOTE — measured 2026-09-13 against the official
+ * github/rest-api-description (dereferenced `api.github.com.deref.json`), not
+ * from memory. `repos/{owner}/{repo}/rules/branches/{branch}` says, verbatim:
+ * "Rules in rulesets with \"evaluate\" or \"disabled\" enforcement statuses are not
+ * returned." GitHub filters them SERVER-SIDE, and the response element carries no
+ * `enforcement` field at all: it is the rule object ∪ "repository ruleset data for
+ * rule" = `{ruleset_source_type, ruleset_source, ruleset_id}` — `"enforcement"`
+ * does not occur anywhere in that response schema. The field lives on the RULESET
+ * (`GET /repos/{owner}/{repo}/rulesets/{id}`), enum `["disabled","active","evaluate"]`.
+ *
+ * So the check below is belt-and-braces, and its ABSENT case is deliberately NOT
+ * read as "I could not tell": the documented contract is that a non-active rule
+ * never arrives, and reading its absence as unknown would refuse to arm on every
+ * real repo — the feature would never fire once. What the check does buy, for the
+ * price of one comparison: if the field ever does arrive (a schema addition, a
+ * GHES build), anything but `active` stops counting as a requirement, on the side
+ * that arms nothing. We do NOT fetch the ruleset by `ruleset_id` to read its
+ * enforcement directly: an ORGANIZATION-level ruleset's id is not reliably
+ * readable through the repo's own `/rulesets/{id}`, so that probe would turn the
+ * commonest legitimate case into "could not tell" and arm nothing, buying no
+ * safety the server-side filter does not already give.
+ */
+const ENFORCEMENT_ACTIVE = "active";
+/** The one 404 body that means "no classic protection here", not "no such base". */
+const BRANCH_NOT_PROTECTED = "Branch not protected";
+
+/** `{owner}`/`{repo}` are `gh api`'s own placeholders, filled from the cwd's repo. */
+export const RULES_ENDPOINT = (base: string) => `repos/{owner}/{repo}/rules/branches/${base}`;
+export const PROTECTION_ENDPOINT = (base: string) => `repos/{owner}/{repo}/branches/${base}/protection`;
+
+async function requiredChecks(options: ShipOptions, repo: ShipRepo, base: string): Promise<RequiredProbe> {
+  const rules = await rulesRequireChecks(options, repo, base);
+  if (rules.kind === "unreadable" || rules.required) return rules;
+  return await protectionRequiresChecks(options, repo, base);
+}
+
+async function rulesRequireChecks(options: ShipOptions, repo: ShipRepo, base: string): Promise<RequiredProbe> {
+  const seen = await options.transport.run(GH_BIN, ["api", RULES_ENDPOINT(base)], repo.dir);
+  if (seen.exitCode !== 0) {
+    return { kind: "unreadable", detail: firstLine(seen.stderr) || `gh exited ${String(seen.exitCode)}` };
+  }
+  let doc: unknown;
+  try {
+    doc = JSON.parse(seen.stdout);
+  } catch {
+    return { kind: "unreadable", detail: "`gh api …/rules/branches` printed something that is not JSON" };
+  }
+  if (!Array.isArray(doc)) return { kind: "unreadable", detail: "`gh api …/rules/branches` did not print an array" };
+  const required = doc.some((rule) => {
+    const row = rule as {
+      type?: unknown; enforcement?: unknown; parameters?: { required_status_checks?: unknown };
+    } | null;
+    if (row?.type !== "required_status_checks") return false;
+    // A ruleset in `evaluate` is a DRY RUN: GitHub reports it and does not block
+    // the merge. Counting one would reproduce this very bug a level down — our own
+    // probe telling `--auto` there is something to wait on when there is not.
+    // See ENFORCEMENT_NOTE: the field is not in the response today, so absent is
+    // the ONLY shape that reaches this in practice and is read as the server's
+    // documented filter; a value that does arrive must be exactly `active`.
+    if (row.enforcement !== undefined && row.enforcement !== ENFORCEMENT_ACTIVE) return false;
+    const contexts = row.parameters?.required_status_checks;
+    return Array.isArray(contexts) && contexts.length > 0;
+  });
+  return { kind: "read", required };
+}
+
+async function protectionRequiresChecks(options: ShipOptions, repo: ShipRepo, base: string): Promise<RequiredProbe> {
+  const seen = await options.transport.run(GH_BIN, ["api", PROTECTION_ENDPOINT(base)], repo.dir);
+  let doc: unknown;
+  try {
+    doc = JSON.parse(seen.stdout);
+  } catch {
+    doc = null;
+  }
+  if (seen.exitCode !== 0) {
+    // The ONE non-zero exit that is an answer rather than a failure: the branch
+    // carries no classic protection. Anything else — 403 on a token without
+    // admin, a network error — is "I could not tell".
+    // The ONE 404 body that says what we need. A 404 alone does not: a branch
+    // that is not there and a repo that is gone answer 404 too, and reading
+    // those as "requires nothing" would arm a merge against a base nobody
+    // identified. The distinguishing cost is a string comparison.
+    const body = doc as { status?: unknown; message?: unknown } | null;
+    const notProtected = String(body?.status ?? "") === "404" && body?.message === BRANCH_NOT_PROTECTED;
+    if (notProtected) return { kind: "read", required: false };
+    return { kind: "unreadable", detail: firstLine(seen.stderr) || `gh exited ${String(seen.exitCode)}` };
+  }
+  if (doc === null) {
+    return { kind: "unreadable", detail: "`gh api …/branches/…/protection` printed something that is not JSON" };
+  }
+  const rule = (doc as { required_status_checks?: { contexts?: unknown; checks?: unknown } }).required_status_checks;
+  const contexts = Array.isArray(rule?.contexts) ? rule.contexts.length : 0;
+  const checks = Array.isArray(rule?.checks) ? rule.checks.length : 0;
+  return { kind: "read", required: contexts + checks > 0 };
 }
 
 /**
@@ -631,7 +796,7 @@ async function shipMany(
       // still owes its merge unless the record says it is queued.
       results.push({
         repo, kind: "existing", url: already, base: prepared.base,
-        ...(policy === null ? {} : { merge: await armOrKeep(options, repo, already, policy, previousMerges(store)) }),
+        ...(policy === null ? {} : { merge: await armOrKeep(options, repo, already, policy, previousMerges(store), prepared.base) }),
       });
       continue;
     }
@@ -656,7 +821,7 @@ async function shipMany(
       kind: "opened",
       base: prepared.base,
       url,
-      ...(policy === null ? {} : { merge: await armMerge(options, repo, url ?? null, policy) }),
+      ...(policy === null ? {} : { merge: await armMerge(options, repo, url ?? null, policy, prepared.base) }),
     });
   }
   const rendered = renderMany(store, branch, body, results, options.dryRun === true);
