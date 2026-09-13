@@ -452,6 +452,7 @@ export function renderReviewLog(outcome: StoryOutcome): string {
         `- Developer: \`${outcome.permissionRefused}\` was refused for approval by the agent's own `
         + "permission layer; the tree held committed work, so the Definition of Done below decided",
         outcome.permissionRefused,
+        outcome.declaredCommands,
       )]),
     // The cap death that did NOT stop the story (gh #277): same rule, same record.
     ...(outcome.budgetDeath == null

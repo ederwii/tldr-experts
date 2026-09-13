@@ -4071,10 +4071,23 @@ describe("a chained refusal with no work is retried once with the cure (gh #278)
     expect(story(ws, "S1")).toContain("status: blocked");
     expect(developerSpawnEvents(ws).length).toBe(1);
     const gate = events(ws).find((e) => e.type === "gate.requested");
+    // gh #285 CHANGED this record deliberately, and the test with it. #261's
+    // sentence is still the base, byte for byte — what follows is the half it was
+    // missing: `sha256sum` is a command this workspace could have DECLARED, and
+    // the operator's cure is the `commands:` slot that would grant it. The field
+    // case it comes from cost four dead developers and two reviewer rounds on one
+    // story, and the fourth developer had already said in prose why it could not
+    // proceed. The slot names the tool, not the line: `s1.txt` is an argument, and
+    // a slot carrying it would grant only that one file.
     expect(String(gate?.payload.blocked_reason ?? "")).toBe(
       `permission — \`${UNGRANTED_PLAIN}\` was refused for approval by the agent's own permission layer, `
       + "and a headless turn has nobody to approve it: the same allowance would refuse it again, "
-      + "so this attempt was not repeated",
+      + "so this attempt was not repeated"
+      + ". The cure: nothing in .tldrx/workspace.yml's `commands:` grants `sha256sum` — a developer's "
+      + "grant is built from the declared commands, so no re-run and no reopen note can make this line "
+      + "runnable. The operator's cure: add a `commands:` slot whose value is exactly `sha256sum` "
+      + "(a slot grants that string plus any arguments), or a longer prefix of the refused line if less "
+      + "should be granted",
     );
   }, 60_000);
 

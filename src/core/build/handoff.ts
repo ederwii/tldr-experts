@@ -308,6 +308,7 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
           `permission layer; its tree held committed work, so the Definition of Done decided and the story is ` +
           `\`${o.status}\` — a person may still want to know the command it could not run`,
           o.permissionRefused ?? "",
+          o.declaredCommands,
         ) + ` [src: ${o.reviewRel}:1]`,
     ),
     ...diedButMeasured.map(
