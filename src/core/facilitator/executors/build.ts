@@ -2935,6 +2935,7 @@ class BuildSession {
       notStarted,
       unreadableStories: carried.unreadable,
       widenings: this.wideningRows(),
+      epicReleases: this.epics.released,
       // The failed restores only. A stash that came back is not an unknown.
       foreignWork: unrestored(this.restores).map((outcome) => ({
         repo: outcome.stash.repo,
@@ -3147,6 +3148,8 @@ class BuildSession {
       branchModel: this.branchModel,
       reuseEpic: this.ctx.reuseEpic,
       lines: this.lines,
+      at: this.ctx.at,
+      emit: (type, payload) => { this.ctx.emit(type, payload); },
     };
   }
 

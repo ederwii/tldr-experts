@@ -210,6 +210,7 @@ stage at `cursor`, or `done` when every phase is terminal.
 | `triage` | {split, depends_on, budget_basis?} | n | **Additive.** Where this run came from, written by `tldrx seed apply` alone (§6.2) — `split` is the workspace-relative path of the `split.yml` that proposed it and `depends_on` names the sibling SLUGS it was proposed to follow. Absent on every run `run new` creates, and `run status` does not mention it. `budget_basis` is a further optional key inside the block: WHERE the `--budget` figure came from, one of `model-guess` \| `owner-grant` \| `preset`. `apply` writes `model-guess`, because that is measurably what produced the number — the propose prompt tells the model `budget_usd` is a guess and `split.yml` validation accepts anything finite and `> 0`. Absent means what every run.yml written before this key means: nothing recorded, never "a person set it". A value outside the closed set is a schema error, not a silent default |
 | `outcome` | {kind, why?, stories_done?, stories_total?, stories_blocked?, first_blocked?} | n | **Additive.** What the run DELIVERED, written ONCE when it closes — by `tldrx next` closing the last stage, `tldrx approve` signing the last gate, or `tldrx run cancel` (gh #210). `kind` is `delivered` (every story `done`) \| `partial` \| `nothing-delivered` (no story reached `done`) \| `n/a`, and `n/a` carries `why` — the run has no Build phase, or no plan on disk — because a docs-scope run had nothing to deliver and `stories_total: 0` there would be a confident zero about a plan that never existed. The three counts and `first_blocked` (`<story id> — <the handoff's own reason>`) are emitted only when there was a plan to count. It exists because run STATUS is a roll-up of the execution path and nothing else: every stage of a run whose stories all blocked is terminal, so the run is correctly `done` — and two real runs read `done` while delivering zero stories, with the reason sitting unread in `04-build/handoff.md`. Absent on every run.yml written before this key, and on every run still open; every reader prints `not recorded` for the first and nothing for the second, never a delivery nobody measured |
 | `ship` | {push, pr, auto_merge, pr_urls?, merge?, shipped_at?} | n | **Additive** (gh #253). How far past the LAST gate the framework may carry the epic, and what it did. The policy half — `push` bool, `pr` bool, `auto_merge` `never\|checks` — is frozen at `run new --ship <push\|pr\|merge>` (`push` ⇒ `{true,false,never}`, `pr` ⇒ `{true,true,never}`, `merge` ⇒ `{true,true,checks}`) the way `gates_policy` is, and is not a stage: shipping spends nothing, produces a URL, and is gated by every earlier gate. The record half is written ONCE by `tldrx ship` — from `run auto` when the run reads `done` under it, or typed by a person: `pr_urls` (one per repo the PR was opened in, `[]` under `pr: false`), `merge` (`queued` = `gh pr merge --auto --merge` accepted; `never`; `absent — no checks to wait on` = the PR reported no check and the merge was deliberately NOT armed, §7; `failed — <gh's sentence>`), `merges` (repo name → that repo's state in the same words — the per-repo truth `merge` summarises), `shipped_at`. `shipped_at` present ⇒ `run auto` ships nothing again; `tldrx ship` typed again is the recovery after a partial failure: a repo whose `merges` entry says `failed — …` is armed again, one saying `queued` is left alone, and the record written is the UNION over the previous one, so a recorded failure is never erased by the command meant to fix it. Absent on every run.yml written before this key and on every run opened without `--ship`: nothing is pushed, nothing is opened, and `ship` refuses an unpushed branch as it always did |
+| `build` | {epic_branch, branch_model?, epic_released?} | n | **Additive.** What the Build phase CLAIMED on the repo, written by the Build executor alone (§5). `epic_branch` lists every `epic/<slug>` this run cut or adopted with `--reuse-epic` — a list, because a plan can hold several epics — and is what lets the next Build tell "I cut this" from "this was already here"; `branch_model` (`per-epic` \| `integration`, issue #57) is written once and never rewritten. `epic_released` (gh #272) is what BECAME of a claim once the run was finished: one row per branch, `{branch, repo, outcome: deleted \| renamed, renamed_to?, commits, base, via: run cancel \| build, at, reason}`. `deleted` is only ever written for `commits: 0` beyond `base`; `renamed` carries the `epic/<slug>@<run-id>` name the commits survive under. Written by `tldrx run cancel` for its own claims and by a LATER run's Build for a leftover it moved aside — onto the run that cut it, because that is where a person looking for the branch looks. `epic_branch` is never edited by a release: the claim says what was cut, the record says where it went. Absent on every run.yml written before each key existed |
 | `gates_policy` | {stage: `human\|auto\|agent`} | n | **Who** closes each gate. Resolved from §2.4 `gates:` and `run new --gates` at creation and frozen here, so the run keeps the policy it was opened with. `tldrx run gates set <stage>:<policy> --note <text>` is the ONLY sanctioned way to move it afterwards — one stage, a required note, one `gate.policy_changed` event carrying actor, moment, note and old→new. Absent, or a stage it does not name ⇒ `human`. `agent` (§5) is the third value: every `auto` condition PLUS a §2.17 evidence note that signs |
 | `questions_policy` | {stage: `human\|recommended`} | n | **Additive** (gh #251). **Who** answers each stage's open questions when `run auto` parks on them. Resolved from `run new --questions` alone (there is no workflow-file half) and frozen here beside `gates_policy`; `tldrx run questions set <stage>:<policy> --note <text>` is the ONLY sanctioned way to move it afterwards — one stage, a required note, one `questions.policy_changed` event carrying actor, moment, note and old→new. Absent — every run.yml written before this key, and every run opened without the flag — or a stage it does not name ⇒ `human`, which is exactly the behaviour every run had: park, `question.raised`, wait for `tldrx answer`. `recommended` lets the loop take a block's own `Recommended:` option (§2.7) through `tldrx answer`'s own path, recorded as `source.decided_by: agent-default` (§2.5) with `alternatives` and `recommended_why` on the fact and one `question.auto_answered` (§2.18) to the owner; a block with no recommendation, a recommendation naming no option, or one tagged `irreversible: true` / `money: true` (§2.7) is escalated exactly as under `human` |
 | `stages[].stale` | bool | n | **Additive.** `true` when an EARLIER stage's gate was revoked after this one ran (§5). Its outputs stay on disk; nothing may treat them as current. Cleared when the stage runs again; emitted only when `true` |
@@ -1231,7 +1232,7 @@ Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with
 **Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `run.attended` `run.relaunched` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
 `gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `gate.policy_changed` `questions.policy_changed` `story.reopened` `story.base_fastforwarded` `story.review_retried` `story.work_rescued`
-`story.touches_widened` `worktree.foreign_work_aside` `worktree.foreign_work_restored` `result.unreadable` `input.truncated` `operator_note` `check.passed` `check.failed` `budget.warned`
+`story.touches_widened` `epic.released` `worktree.foreign_work_aside` `worktree.foreign_work_restored` `result.unreadable` `input.truncated` `operator_note` `check.passed` `check.failed` `budget.warned`
 `budget.blocked` `budget.raised` `budget.granted` `fact.added` `fact.retired` `fact.superseded` `fact.conflict_raised` `doc.superseded` `notify.sent` `notify.failed` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
 
@@ -1302,6 +1303,22 @@ before the worktree was pruned. Its payload carries `phase`, `story`, `repo`, `b
 the status the story settled at. It is appended ONLY when a commit was really made; a rescue that could not commit
 keeps the worktree instead and appends nothing, because nothing happened to git. See §5, "Uncommitted work is never
 pruned".
+
+**`epic.released` was added 2026-09-13 (gh #272).** It is the THIRD event in the enum that records tldrx touching a
+ref on the operator's behalf: an `epic/<slug>` branch a FINISHED run claimed, released so the name is free for the
+next run of the same feature. Two writers, one rule. `tldrx run cancel` writes it on its own run for every branch its
+`build.epic_branch` claims; a later run's Build writes it on BOTH ledgers — the owner's and its own — when it finds
+`epic/<slug>` already there and the owner's `run.yml` reads `cancelled` or `done` (§5, "Resolve and cut"). The rule:
+a branch with NO commit beyond the repo's `default_branch` is **deleted** (`outcome: deleted`, nothing to lose); one
+that carries commits is **renamed to `epic/<slug>@<run-id>`** (`outcome: renamed`, `renamed_to`), the run id being the
+OWNER's, so the commits survive under a name that says whose they were. Its payload carries `branch`, `repo`,
+`outcome`, `renamed_to` (null unless renamed), `commits` (beyond `base`), `base`, `owner` (the run that cut it), `via`
+(`run cancel` \| `build`) and `reason`; the same record is written to the owner's `build.epic_released` (§2.2) and,
+when the owner wrote a `04-build/handoff.md`, appended to it under its own heading. It is NEVER written for a branch
+left alone — one checked out in a worktree, or one git could not count against its base — because nothing happened;
+the operator line names why. Story branches (`story/<run>/<story>`, #129) are never touched: that is where a cancelled
+run's work lives. Measured reason: a cancelled run's leftover `epic/main-ci-green`, zero commits beyond `main`, refused
+the ordinary retry at Build after $3.70 of what/how/plan.
 
 **`worktree.foreign_work_aside` and `worktree.foreign_work_restored` were added 2026-09-09 (#164).** They are the
 THIRD and fourth events in the enum that record tldrx touching git on the operator's behalf, and they are the pair that
@@ -4145,7 +4162,16 @@ another's branch — and the fourth walked into the third's LIVE worktree, two s
 in its name would be worse. Collision there is made DELIBERATE instead: a Build stage refuses to start when
 `epic/<slug>` already exists and this run's `run.yml` `build.epic_branch` (optional, additive, §2.2) does not claim
 it — `--reuse-epic` is the word that says "stack on it anyway", and either way the branch is recorded as claimed from
-then on, so the run's own second invocation is never refused its own branch. The story branch name has exactly ONE
+then on, so the run's own second invocation is never refused its own branch. **A leftover is not a claim (gh #272):**
+before refusing, Build reads WHO owns the branch from the claims under `tldrx-work/` — every run whose
+`build.epic_branch` names it. An owner whose `run.yml` is explicitly finished (`cancelled` or `done` — never "no
+process", since a run killed mid-Build or parked at a gate has no process and is still the owner) left the branch
+behind, and Build moves it aside by `run cancel`'s rule — deleted with no commit beyond the default branch, renamed to
+`epic/<slug>@<owner-run-id>` otherwise — records it on the owner (`build.epic_released`, its handoff, `epic.released`)
+and on its own ledger and handoff, and cuts its own epic fresh. An owner that is still open, an owner whose `run.yml`
+cannot be read, and a branch NO run claims all keep the refusal above verbatim, with one line naming which: the
+unclaimed case is what a run killed between cutting the epic and recording the claim (#262) leaves, and its relaunch
+must find its epic where it left it. The story branch name has exactly ONE
 derivation in the source (`storyBranchOf`), because it had two: the handoff's row for a story settled by an EARLIER
 `tldrx next` built `story/<story-id>` without the run id, so a multi-invocation Build wrote a ref no repo had into an
 audit document (#134, fixed 2026-09-02).
@@ -4182,8 +4208,16 @@ purpose — that work is waiting for a human, not for a process. And a command t
   and `run.cancelled` is appended. It refuses while a live lock holds the run unless `--force`. The run-level field is
   what makes the status `cancelled` even when every stage is already terminal — the run people most want to close is
   one whose stage FAILED, and there is no way to say "cancelled" through its stages without overwriting that failure.
-  Nothing is deleted: stages, outputs, events and money spent stay on disk and `tldrx replay <id>` still reads them.
-  A `cancelled` run is finished (§3.1), so `tldrx status` and every id-less command stop seeing it.
+  Nothing of the RUN is deleted: stages, outputs, events and money spent stay on disk and `tldrx replay <id>` still
+  reads them. A `cancelled` run is finished (§3.1), so `tldrx status` and every id-less command stop seeing it.
+  **It releases the epic branch the run claimed (gh #272)**, after the run's epic worktrees are taken back: an
+  `epic/<slug>` in `build.epic_branch` with no commit beyond the repo's `default_branch` is deleted — it was the base
+  under another name — and one that carries commits is renamed to `epic/<slug>@<run-id>` so the commits survive and
+  the name is free for the next run of the same feature, which is the ordinary retry after a cancelled attempt and
+  used to be refused at Build for stacking onto "someone else's epic". Each move is recorded on the run
+  (`build.epic_released`, §2.2), on its `04-build/handoff.md` when it wrote one, and as `epic.released` (§2.9). A
+  branch checked out in a worktree (`--keep-worktrees`, or any checkout of it) is left alone and the checkout named;
+  story branches are never touched (#129).
 
 **Resume path.** State lives only in files, so resume = run `next` again: the cursor points at the first non-terminal
 stage, a `running` left by a crash is demoted to `ready` when `.lock` holds a dead pid, and partial outputs are

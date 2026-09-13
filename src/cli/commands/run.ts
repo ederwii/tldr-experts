@@ -21,6 +21,7 @@ import { attendRun } from "../../core/run/attend.ts";
 import { ATTENDED_BY, type AttendedBy } from "../../core/run/RunFile.ts";
 import { parallelFlag } from "./next.ts";
 import { cancelRun, unlockRun } from "../../core/run/rescue.ts";
+import { releaseRunEpics } from "../../core/build/epicRelease.ts";
 import { closeRun, describeOpenQuestions, describeStateCommit } from "../../core/run/closeRun.ts";
 import { withRunOutcome } from "../../core/run/runOutcome.ts";
 import { describeDecidedTally } from "../../core/facts/decidedTally.ts";
@@ -566,6 +567,18 @@ async function runCancel(argv: readonly string[]): Promise<number> {
         if (decided !== null) process.stdout.write(`run cancel: ${decided}\n`);
         const said = describeStateCommit(closed.state);
         if (said !== null) process.stdout.write(`run cancel: ${said}\n`);
+        // Cancelling IS closing, so the epic branch this run claimed is released
+        // here too (#272): deleted when it carries nothing beyond its base,
+        // renamed to `epic/<slug>@<run-id>` when it does — AFTER `closeRun` has
+        // taken the run's own epic worktrees back, since a branch still checked
+        // out is left alone by name. The next run for the same feature — the
+        // ordinary retry after a cancelled attempt — used to collide with it.
+        const note = stringFlag(args, "note") ?? "";
+        const released = await releaseRunEpics({
+          root, owner: resolved.store, actor: currentActor(), at: nowRfc3339(),
+          via: "run cancel", reason: `run ${resolved.store.runId} was cancelled: ${note}`,
+        });
+        for (const line of released.lines) process.stdout.write(`run cancel: ${line}\n`);
       }
     }
     return report("run cancel", outcome);

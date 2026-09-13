@@ -14,6 +14,7 @@
  */
 import { DOD_REFUSAL_FALLBACK, dodRefused, scopedNote } from "./outcome.ts";
 import type { StoryOutcome } from "./outcome.ts";
+import type { EpicReleaseRecord } from "../run/RunFile.ts";
 import type { CarriedRow, UnreadableStory } from "./carriedRows.ts";
 import { PLAN_STATUSES, type PlanStatus } from "../schemas/planCommon.ts";
 import { withoutSrcToken } from "../text/srcToken.ts";
@@ -176,6 +177,14 @@ export interface BuildHandoffParts {
    */
   readonly foreignWork?: readonly ForeignWorkNote[];
   /**
+   * Epic branches this Build found already there, left by a FINISHED run, and
+   * moved aside before cutting its own (gh #272). A Decisions bullet each: the
+   * name and the fate of the leftover are things a reader of this document has
+   * to be able to find without the repo's branch list. Absent or empty on every
+   * ordinary Build, so the golden is byte-identical.
+   */
+  readonly epicReleases?: readonly EpicReleaseNote[];
+  /**
    * Stories `waves.yml` SCHEDULED that this phase never started and never settled
    * — no outcome row exists for them at all (#260).
    *
@@ -205,6 +214,14 @@ export interface NotStartedStory {
 }
 
 /** One repo's failed restore, as the handoff names it. */
+/** One stale epic a Build moved aside (gh #272): the record, and whose it was. */
+export interface EpicReleaseNote {
+  readonly record: EpicReleaseRecord;
+  /** The run that cut the branch, and what its run.yml said when it was moved. */
+  readonly owner: string;
+  readonly ownerStatus: string;
+}
+
 export interface ForeignWorkNote {
   readonly repo: string;
   readonly paths: readonly string[];
@@ -515,6 +532,17 @@ function decisions(parts: BuildHandoffParts): readonly string[] {
     );
   }
   rows.push(...wideningBullets(parts.widenings ?? []));
+  for (const note of parts.epicReleases ?? []) {
+    const r = note.record;
+    rows.push(
+      `- \`${r.branch}\` in ${r.repo} already existed, left by run ${note.owner} (\`${note.ownerStatus}\`) with `
+      + (r.outcome === "deleted"
+        ? `no commit beyond \`${r.base}\`: deleted, and this run cut its own`
+        : `${String(r.commits)} commit(s) beyond \`${r.base}\`: renamed to \`${r.renamed_to ?? ""}\`, `
+          + "where they survive, and this run cut its own — nothing was deleted")
+      + ` [src: absent:04-build/log]`,
+    );
+  }
   if (anchor !== null) {
     rows.push(
       "- Nothing was pushed and no epic was merged into a default branch — the phase " +
