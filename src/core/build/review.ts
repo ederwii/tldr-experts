@@ -431,6 +431,11 @@ export function renderReviewLog(outcome: StoryOutcome): string {
     `- Branch: \`${outcome.branch}\` → \`${outcome.epicBranch}\` (${mergeWord(outcome)})`,
     `- Commit: ${outcome.commit ?? "(none)"}`,
     ...(outcome.developerError === null ? [] : [`- Developer: **FAILED** — ${outcome.developerError}`]),
+    // The refusal that did NOT stop the story (gh #271): still evidence, still named.
+    ...(outcome.permissionRefused == null
+      ? []
+      : [`- Developer: \`${outcome.permissionRefused}\` was refused for approval by the agent's own `
+        + "permission layer; the tree held committed work, so the Definition of Done below decided"]),
     "",
     "## Definition of done",
     "",

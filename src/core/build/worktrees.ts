@@ -23,6 +23,7 @@ import type { PlanStatus } from "../schemas/planCommon.ts";
 import {
   addWorktree, assertWorktreeOn, baseStateOf, commitAll, dirtyPaths, fastForward, firstLine, headSha,
   isDirty, mergeNoFf, partitionDirty, pathAtRef, stateDirPrefixes,
+  treesDiffer,
 } from "./git.ts";
 import type { RescuedWork, SerialWrite, StoryOutcome } from "./outcome.ts";
 import { WORKTREES } from "./plan.ts";
@@ -290,6 +291,31 @@ export async function commitIfDirty(parts: CommitParts): Promise<string | null> 
   }
   const sha = await headSha(parts.worktree);
   return sha === "" ? null : sha;
+}
+
+/** What `committedWork` compares: the story tree against the tree the developer was handed. */
+export interface CommittedWorkParts {
+  readonly workspaceRoot: string;
+  readonly repoDir: string;
+  readonly worktree: string;
+  /** HEAD of the worktree BEFORE the developer was spawned. */
+  readonly since: string;
+}
+
+/**
+ * Did the developer COMMIT work — is the tree at the branch tip different from
+ * the tree it was handed, outside the framework's own state dirs? (gh #271)
+ *
+ * A tree comparison and not a proxy, because every proxy has a false positive
+ * that matters here: "HEAD moved" is true of an empty commit, `commitIfDirty`
+ * returns HEAD when it committed nothing, and a dirty working copy is work the
+ * developer did not stand behind — it is rescued by the block path (#129), not
+ * measured by the DoD. `null` from the comparison — a sha that no longer
+ * resolves — is read as `false`: a refusal is blocked unless the work is PROVEN.
+ */
+export async function committedWork(parts: CommittedWorkParts): Promise<boolean> {
+  const state = stateDirPrefixes(parts.workspaceRoot, parts.repoDir);
+  return (await treesDiffer(parts.worktree, parts.since, "HEAD", state)) === true;
 }
 
 /** What an epic worktree is opened — or merged into — from, as data. */

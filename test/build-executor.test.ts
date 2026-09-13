@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { executorFor, EXECUTORS } from "../src/core/facilitator/executors/index.ts";
 import {
-  buildExecutor, developerTools, phaseCostToDate, readReviewLedger, REVIEWER_TOOLS,
+  buildExecutor, developerTools, permissionBlockReason, phaseCostToDate, readReviewLedger, REVIEWER_TOOLS,
 } from "../src/core/facilitator/executors/build.ts";
 import { looksLikeReviewerError, renderReviewLog, reviewerFailed } from "../src/core/build/review.ts";
 import { renderBuildHandoff, type BuildHandoffParts } from "../src/core/build/handoff.ts";
@@ -67,6 +67,7 @@ const FAKE_KEYS = [
   "FAKE_BUILD_WRITE", "FAKE_BUILD_VERDICTS", "FAKE_BUILD_COST", "FAKE_BUILD_STATE",
   "FAKE_BUILD_ARGV_LOG", "FAKE_BUILD_PROMPT_DIR", "FAKE_BUILD_IS_ERROR",
   "FAKE_BUILD_FAIL", "FAKE_BUILD_FAIL_REASON", "FAKE_BUILD_DENIED", "FAKE_BUILD_GIT_RM",
+  "FAKE_BUILD_DENIED_WORK",
 ] as const;
 
 let open: BuildWorkspace[] = [];
@@ -3716,4 +3717,110 @@ describe("a file the developer must remove (gh #261)", () => {
     expect(outcome.code).toBe(4);
     expect(git(ws, ["ls-tree", "--name-only", "epic/e1"]).split("\n")).toContain(UNUSED);
   }, 60_000);
+});
+
+/**
+ * gh #271 — the refusal that came AFTER the work.
+ *
+ * #261's block reads a refusal as "the turn did nothing", which was true of the
+ * turn it was measured on. Measured 2026-09-12 on a field run: the developer
+ * committed its story and was then refused for its OWN run of a DoD command
+ * wrapped in shell plumbing (`cmd > log 2>&1; echo …`), and the block landed on
+ * a committed story the facilitator's DoD was one step away from measuring —
+ * $8.12 to reach a committed, unverified story and stop.
+ *
+ * The rule now: with COMMITTED work in the tree the refusal is recorded and the
+ * Definition of Done decides; with none, #261's block stands unchanged. What
+ * "committed work" means is a tree comparison — the branch tip's tree against
+ * the tree the developer was handed — so an empty commit, an unmoved HEAD and
+ * an uncommitted tree all fall on the block side.
+ */
+describe("a refusal after the developer committed (gh #271)", () => {
+  const S1_FILE = "s1.txt";
+  const PLUMBED = "npm run test > /tmp/s1.log 2>&1; echo EXIT:$? >> /tmp/s1.log";
+  const ONE: BuildWorkspaceOptions = {
+    stories: [{ id: "S1", epic: "E1", title: "Write a file", touches: [S1_FILE] }],
+    epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+    waves: [["S1"]],
+  };
+
+  function developerSpawns(ws: BuildWorkspace): number {
+    return events(ws).filter((e) => e.type === "agent.spawned" && e.payload.role === "developer").length;
+  }
+  function dodRanFor(ws: BuildWorkspace, id: string): boolean {
+    return events(ws).some((e) => e.type.startsWith("check.") && e.payload.story === id
+      && e.payload.command === "npm run test");
+  }
+  function refusedWith(work: string): void {
+    process.env.FAKE_BUILD_DENIED = JSON.stringify({ S1: PLUMBED });
+    process.env.FAKE_BUILD_DENIED_WORK = JSON.stringify({ S1: work });
+  }
+
+  test("committed work + a green DoD: the story is measured and lands, and the refusal is still on record", async () => {
+    const ws = workspace(ONE);
+    refusedWith("committed");
+
+    const outcome = await next(ws);
+
+    // The DoD RAN — the whole point — and decided.
+    expect(dodRanFor(ws, "S1")).toBe(true);
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(git(ws, ["ls-tree", "--name-only", "epic/e1"]).split("\n")).toContain(S1_FILE);
+    // Exit 4 is the stage parked at its HUMAN gate with the story done — not a
+    // block: the gate payload names no blocked story.
+    expect(outcome.code).toBe(4);
+    const gate = events(ws).find((e) => e.type === "gate.requested");
+    expect(gate?.payload.blocked_story).toBeUndefined();
+    expect(developerSpawns(ws)).toBe(1);
+    // NOT blocking never means NOT recording. The refusal is on the story's
+    // review log, on its `task.done`, and in the handoff — the surfaces #261
+    // chose — with the command named on each.
+    const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+    expect(log).toContain(PLUMBED);
+    expect(log).toContain("refused for approval");
+    const done = events(ws).find((e) => e.type === "task.done" && e.payload.story === "S1");
+    expect(done?.payload.permission_refused).toBe(PLUMBED);
+    const handoff = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    expect(handoff).toContain(PLUMBED);
+    expect(handoff).toContain("refused for approval");
+  }, 60_000);
+
+  test("committed work + a red DoD: blocked, and the row carries BOTH reasons", async () => {
+    const ws = workspace({ ...ONE, testScript: RED_ONLY_AFTER_DEVELOPER });
+    refusedWith("committed");
+
+    const outcome = await next(ws);
+
+    expect(dodRanFor(ws, "S1")).toBe(true);
+    expect(story(ws, "S1")).toContain("status: blocked");
+    expect(outcome.code).toBe(4);
+    const gate = events(ws).find((e) => e.type === "gate.requested");
+    const reason = String(gate?.payload.blocked_reason ?? "");
+    expect(reason).toContain("`npm run test` exited 1");
+    expect(reason).toContain("permission — ");
+    expect(reason).toContain(PLUMBED);
+    expect(developerSpawns(ws)).toBe(1);
+  }, 60_000);
+
+  // The three shapes that MUST still block after one attempt, each with #261's
+  // exact wording: no commit means the refusal is the whole story of the turn.
+  for (const [work, why] of [
+    ["empty-commit", "HEAD moved but the tree is identical to the base"],
+    ["uncommitted", "the tree is dirty and nothing was committed"],
+  ] as const) {
+    test(`${work} (${why}): blocked with \`permission — <command>\` after ONE attempt, no DoD spent`, async () => {
+      const ws = workspace(ONE);
+      refusedWith(work);
+
+      const outcome = await next(ws);
+
+      expect(story(ws, "S1")).toContain("status: blocked");
+      expect(dodRanFor(ws, "S1")).toBe(false);
+      const gate = events(ws).find((e) => e.type === "gate.requested");
+      expect(String(gate?.payload.blocked_reason ?? "")).toBe(permissionBlockReason(PLUMBED));
+      expect(developerSpawns(ws)).toBe(1);
+      expect(outcome.code).toBe(4);
+      expect(git(ws, ["ls-tree", "--name-only", "epic/e1"]).split("\n")).not.toContain(S1_FILE);
+    }, 60_000);
+  }
 });

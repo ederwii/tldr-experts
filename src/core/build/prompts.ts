@@ -288,6 +288,14 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     `- Stay inside the $${parts.budgetUsd.toFixed(2)} ceiling for this story.`,
     "- Done means proven: the Definition of Done is re-run after you stop, and every",
     "  command in it must exit 0. Your own \"it works\" is not evidence.",
+    // gh #271: the refusal that stopped a committed story was the developer's own
+    // DoD run wrapped in `> log 2>&1; echo …`. The permission layer splits a line
+    // at every separator and each fragment must match a grant on its own, so the
+    // mechanism is stated rather than the rule alone.
+    "- Run each Definition of Done command verbatim and alone: no redirection, pipes or chaining.",
+    "  Shell separators (`>`, `|`, `;`, `&&`) split a line into subcommands, and each subcommand",
+    "  must match its own grant, so a compound line is refused even when the script itself is",
+    "  allowed. The facilitator re-runs the Definition of Done after you anyway.",
     "",
     "### Conventions",
     "",

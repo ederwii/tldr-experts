@@ -576,6 +576,16 @@ enterarse dos veces: el primer rechazo bloquea la historia con `permission — <
 archivo de la historia, en `## Unknowns` del handoff y en el gate, porque la misma lista va a
 rechazar el mismo comando en el segundo intento.
 
+**El developer hizo commit y después le rechazaron su propia corrida del DoD.** La forma
+habitual es un comando del DoD envuelto en `> log 2>&1; echo …` — la capa de permisos parte la
+línea en cada separador y la rechaza porque los fragmentos no coinciden cada uno con un permiso,
+aunque el script en sí esté permitido. Desde gh #271 ese rechazo no bloquea una historia cuyo
+árbol tiene trabajo commiteado: queda registrado (en el log de review, en `task.done`, en
+`## Unknowns`) y decide la propia Definition of Done del facilitador — verde sigue a review, rojo
+bloquea con ambas razones. Un rechazo sin nada commiteado sigue bloqueando tras un intento,
+exactamente como arriba. El prompt del developer ahora dice que corra cada comando del DoD
+literal y solo, y por qué.
+
 **El notificador nunca se llama.** Tres causas habituales, en el orden que cuesta menos
 revisar. La lista `events:` no nombra el tipo que esperabas: quita la clave por completo para
 suscribirte a todo. El comando no es ejecutable, o no está en la ruta desde la que el run lo

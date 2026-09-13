@@ -221,6 +221,13 @@ export interface StoryOutcome {
   /** One line saying why, when the story did not reach `done`. */
   readonly reason: string | null;
   /**
+   * The command the agent's own permission layer refused this attempt, when the
+   * story went on anyway because its tree held committed work and the DoD
+   * decided (gh #271). Optional and absent on every record written before it
+   * existed; a blocked story carries the same command inside `reason` instead.
+   */
+  readonly permissionRefused?: string | null;
+  /**
    * Uncommitted work found in the worktree as the story settled — null on the
    * ordinary case, where `commitIfDirty` already put every byte on the branch.
    */

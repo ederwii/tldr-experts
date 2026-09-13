@@ -87,7 +87,32 @@ const extraTools: FakeTool[] = [];
 const deniedCommand = perStory("FAKE_BUILD_DENIED");
 const gitRmPath = perStory("FAKE_BUILD_GIT_RM");
 
+/**
+ * gh #271 — what the tree holds WHEN the refusal comes. `FAKE_BUILD_DENIED_WORK`
+ * = `{"S1": "committed" | "uncommitted" | "empty-commit"}`, read only beside
+ * `FAKE_BUILD_DENIED`; absent means the #261 shape, a developer that touched
+ * nothing. `committed` writes the story's default file and commits it itself —
+ * the field case, a developer that finished and then asked for a DoD command
+ * wrapped in shell plumbing. `uncommitted` writes and stops. `empty-commit`
+ * moves HEAD without changing the tree, which is the case a "HEAD moved" proxy
+ * would misread as work.
+ */
+const deniedWork = perStory("FAKE_BUILD_DENIED_WORK");
+
 if (role === "developer" && !failing && deniedCommand !== null) {
+  if (deniedWork === "committed" || deniedWork === "uncommitted") {
+    const rel = `${storyId.toLowerCase()}.txt`;
+    writeFileSync(join(process.cwd(), rel), `${storyId} was here\n`, "utf8");
+    written.push(rel);
+    if (deniedWork === "committed") {
+      execFileSync("git", ["add", "-A"], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+      execFileSync("git", ["commit", "-m", `feat(${storyId}): fake developer commit`],
+        { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+    }
+  } else if (deniedWork === "empty-commit") {
+    execFileSync("git", ["commit", "--allow-empty", "-m", `chore(${storyId}): nothing`],
+      { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+  }
   extraTools.push({
     name: "Bash",
     input: { command: deniedCommand },

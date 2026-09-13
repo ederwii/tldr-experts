@@ -3426,6 +3426,19 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    and before the commit, so a wrong reading discards work the developer really did and spends the attempt — so a
    refusal carrying neither signal is a MISS this takes deliberately. The fallback depends on prose the HOST writes
    and can change with no warning; the structural field is the one to trust.
+
+   **A refusal on a tree that holds COMMITTED work is recorded, and the Definition of Done decides (gh #271).**
+   Measured on a headless run: the refused call was the developer's own DoD command wrapped in shell plumbing
+   (`cmd > log 2>&1; echo …`), AFTER it had committed — the permission layer splits a line at every separator and
+   each fragment must match a grant on its own — and the block above landed on a story the facilitator's own DoD, one
+   step below, would have measured. So the block applies only when the tree holds no committed work, and "committed
+   work" is a tree comparison — `git diff --quiet <handed> HEAD` outside the framework's state dirs — not a proxy:
+   an empty commit, a HEAD that never moved and a dirty uncommitted tree all still block with the wording above after
+   one attempt (the uncommitted tree is rescued by #129, not measured). With committed work the refusal is still
+   written — `- Developer: … was refused for approval …` on the review log, `permission_refused` (additive) on
+   `task.done`, a bullet in the handoff's `## Unknowns` — and the DoD decides: green goes on to review, red blocks
+   with both reasons on one row, the DoD's first. The developer prompt's `## Rules` also says to run each DoD
+   command verbatim and alone, and why.
 3. **The Definition of Done, re-run by the facilitator** in that worktree, through the same runner `dod-gate` uses. All
    commands must exit 0.
 

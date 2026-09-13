@@ -422,6 +422,31 @@ export async function pathAtRef(cwd: string, ref: string, path: string): Promise
   return (await git(["cat-file", "-e", `${ref}:${path}`], cwd)).ok;
 }
 
+/**
+ * Do the TREES at `a` and `b` differ, outside `exclude`? `git diff --quiet a b`,
+ * which compares what the two commits recorded and nothing about HEAD, the index
+ * or the working copy (gh #271).
+ *
+ * Exit 1 is "they differ" and exit 0 is "identical"; anything else — a ref that
+ * does not resolve — is `null`, because "I could not compare" must not read as
+ * either answer. An empty commit, a HEAD that moved and came back, and a HEAD
+ * that never moved are all `false` here, which is what makes this the
+ * measurement and `commitsBetween` the proxy.
+ */
+export async function treesDiffer(
+  cwd: string,
+  a: string,
+  b: string,
+  exclude: readonly string[] = [],
+): Promise<boolean | null> {
+  const pathspec = exclude.length === 0 ? [] : ["--", ".", ...exclude.map((path) => `:(exclude)${path}`)];
+  const result = await git(["diff", "--quiet", a, b, ...pathspec], cwd);
+  if (result.timedOut) return null;
+  if (result.exitCode === 0) return false;
+  if (result.exitCode === 1) return true;
+  return null;
+}
+
 export async function currentBranch(cwd: string): Promise<string> {
   const result = await git(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
   return result.ok ? result.stdout.trim() : "";
