@@ -432,7 +432,7 @@ export async function worktreeOn(cwd: string, branch: string): Promise<string | 
 
 /**
  * `git branch -D <branch>`. `-D` and not `-d` because the CALLER has already
- * measured what the branch carries (`commitsAhead`) — git's own "not fully
+ * measured what the branch carries (`commitsBetween`) — git's own "not fully
  * merged" test is against HEAD, which is whatever the operator happens to be on.
  */
 export async function deleteBranch(cwd: string, branch: string): Promise<GitResult> {
@@ -495,9 +495,8 @@ export async function headSha(cwd: string): Promise<string> {
 /**
  * The short sha `ref` resolves to, or `""` when it resolves to nothing.
  *
- * `""` rather than a throw for the same reason `commitsBetween` returns 0: every
- * caller here is composing an operator line, and a branch that is not there yet
- * has no sha to name. A caller that needs the difference asks `branchExists`.
+ * `""` rather than a throw: every caller here is composing an operator line, and
+ * a branch that is not there yet has no sha to name. A caller that needs the difference asks `branchExists`.
  */
 export async function shaOf(cwd: string, ref: string): Promise<string> {
   const result = await git(["rev-parse", "--short", ref], cwd);
@@ -807,34 +806,32 @@ export async function mergeNoFf(cwd: string, branch: string, message: string): P
   };
 }
 
-/** The diff a reviewer is asked to read: everything the story branch adds. */
 /**
- * How many commits `head` carries that `base` does not.
- *
- * Used to answer one question — "has anything been built on this story branch
- * yet?" — before a `--discard-pending` re-derives the plan the branch was cut
- * for. A branch that does not exist has no commits on it, which is the same
- * answer for the caller's purposes, so a failed `rev-list` is 0 and not a throw.
+ * The half-sentence a count that could not be taken is named with, so every
+ * caller says the same thing about the same failure and none of them invents a
+ * number. Exported so tests assert the marker rather than a word of prose.
  */
-export async function commitsBetween(cwd: string, base: string, head: string): Promise<number> {
-  const result = await git(["rev-list", "--count", `${base}..${head}`], cwd);
-  if (!result.ok) return 0;
-  const n = Number.parseInt(result.stdout.trim(), 10);
-  return Number.isFinite(n) ? n : 0;
+export function uncountedCount(base: string, head: string): string {
+  return `\`git rev-list --count ${base}..${head}\` could not count what it carries`;
 }
 
+/** The diff a reviewer is asked to read: everything the story branch adds. */
 /**
- * `commitsBetween`'s STRICT sibling: `null` when git could not count.
+ * How many commits `head` carries that `base` does not — or `null` when git
+ * could not answer.
  *
- * The difference is which way the failure points. `commitsBetween` reads a failed
- * `rev-list` as 0 because its caller only wants to know whether there is anything
- * to keep, and "nothing" is the harmless answer there. Here (gh #272) the count
- * decides whether a branch is DELETED, and a `main` that does not resolve — a
- * repo whose default branch is named otherwise, a shallow clone — would read as
- * "nothing beyond the base" and delete commits. `null` makes the caller keep the
- * branch and say why, which is the only safe reading of "I could not measure".
+ * `null` and not 0 (gh #273): a failed `rev-list` — a ref that does not resolve,
+ * a repo dir that moved, git not on PATH for that one call — used to return the
+ * same value as a successful count of nothing, and the callers that act on 0 act
+ * DESTRUCTIVELY. `--discard-pending` deleted the implicit plan of a branch whose
+ * commits it had simply failed to count, and #272's branch release would have
+ * deleted the branch itself; that is why #272 opened a strict sibling rather
+ * than inherit this. The sibling is gone and this is the one implementation
+ * (§7): there is exactly one way this repo counts commits, and it distinguishes
+ * "I could not count" from "there is nothing to count". Every caller decides
+ * what `null` means for it, and says so where it decides.
  */
-export async function commitsAhead(cwd: string, base: string, head: string): Promise<number | null> {
+export async function commitsBetween(cwd: string, base: string, head: string): Promise<number | null> {
   const result = await git(["rev-list", "--count", `${base}..${head}`], cwd);
   if (!result.ok) return null;
   const n = Number.parseInt(result.stdout.trim(), 10);
@@ -852,10 +849,22 @@ export type BaseStaleness = "current" | "behind" | "diverged";
 
 export interface BaseState {
   readonly state: BaseStaleness;
-  /** Commits `branch` carries that `base` does not. */
+  /** Commits `branch` carries that `base` does not. 0 when git could not count — see `uncounted`. */
   readonly ahead: number;
-  /** Commits `base` carries that `branch` does not. */
+  /** Commits `base` carries that `branch` does not. 0 when git could not count — see `uncounted`. */
   readonly behind: number;
+  /**
+   * Why a count here is not a measurement, or `null` when both were taken.
+   *
+   * `state`, `ahead` and `behind` keep reading exactly as they did before gh
+   * #273 — an uncounted side is 0, which lands on `current`, which is the answer
+   * that makes the one caller do NOTHING. That is the safe direction here (the
+   * ordinary uncountable case is a story branch that does not exist yet, pinned
+   * in `story-base.test.ts`), but "nothing to pick up" and "I could not look"
+   * are not the same sentence, and this field is the difference so the caller
+   * can say which one it is holding.
+   */
+  readonly uncounted: string | null;
   /** Short shas, for the operator line. `""` when the ref does not resolve. */
   readonly branchSha: string;
   readonly baseSha: string;
@@ -871,12 +880,22 @@ export interface BaseState {
  * ancestry enters the codebase.
  */
 export async function baseStateOf(cwd: string, branch: string, base: string): Promise<BaseState> {
-  const ahead = await commitsBetween(cwd, base, branch);
-  const behind = await commitsBetween(cwd, branch, base);
+  const counted = await commitsBetween(cwd, base, branch);
+  const countedBack = await commitsBetween(cwd, branch, base);
+  // A count git could not take is 0 HERE, deliberately: it lands on `current`,
+  // and `current` is the state whose handling is "change nothing". Inaction is
+  // the safe reading of an unmeasurable branch, and it is what this code already
+  // did (gh #273 changed the counter, not this answer) — but the reason travels
+  // with it in `uncounted` instead of being lost in the zero.
+  const ahead = counted ?? 0;
+  const behind = countedBack ?? 0;
   return {
     state: behind === 0 ? "current" : ahead === 0 ? "behind" : "diverged",
     ahead,
     behind,
+    uncounted: counted === null
+      ? uncountedCount(base, branch)
+      : countedBack === null ? uncountedCount(branch, base) : null,
     branchSha: await shaOf(cwd, branch),
     baseSha: await shaOf(cwd, base),
   };

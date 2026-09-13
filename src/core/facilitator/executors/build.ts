@@ -62,7 +62,7 @@ import {
 } from "../pending.ts";
 import {
   addWorktree, commitsBetween, ensureBranch, fullShaOf, git, GitError, headSha, removeWorktree, repoDirOf,
-  reviewDiffCommand, reviewDiffRange, shaReachability,
+  reviewDiffCommand, reviewDiffRange, shaReachability, uncountedCount,
 } from "../../build/git.ts";
 import { BaseGateFailure, baseRefusalLines } from "../../build/preflight.ts";
 import {
@@ -408,6 +408,16 @@ async function rederiveImplicitPlan(
   const content = implicitPlanContent(parts);
   const storyBranch = storyBranchOf(ctx.runId, IMPLICIT_STORY_ID);
   const commits = await commitsBetween(repoDirOf(workspace, content.repo), content.branch, storyBranch);
+  // A count git could not take is NOT "nothing was built" (gh #273). This guard
+  // deletes the plan on a zero, so the failure used to land on the destructive
+  // side: a branch carrying a developer's commits, counted against a base that
+  // did not resolve, re-derived the plan out from under them. `null` keeps it,
+  // the same direction #272 chose where the same zero would have deleted a
+  // branch — the only safe reading of "I could not measure" is "leave it".
+  if (commits === null) {
+    kept(uncountedCount(content.branch, storyBranch));
+    return;
+  }
   if (commits > 0) {
     kept(`\`${storyBranch}\` carries ${String(commits)} commit(s) beyond \`${content.branch}\``);
     return;
@@ -1389,6 +1399,11 @@ class BuildSession {
     // How much the merge is about to MOVE is measured first, because afterwards
     // it cannot be: once the story branch is an ancestor of the epic, `git diff
     // <epic>...<story>` is empty whether it carried thirty commits or none.
+    // `null` when git could not count, and it travels as `null` all the way to
+    // the epic row: an uncounted merge is `mergedEarlier` ("what it carried is
+    // not recoverable"), never `emptyMerges` (gh #273). Before, a failed
+    // `rev-list` read as 0 and printed a merge that moved real commits as one
+    // that moved nothing — the 2026-08-30 empty-merge trap, in reverse.
     const carried = await commitsBetween(story.repoDir, story.epicBranch, story.branch);
     // The epic AS IT WAS. Captured here and nowhere else: after the merge the
     // story branch is an ancestor, and `git diff <epic>...<story>` — the command

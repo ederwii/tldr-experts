@@ -23,6 +23,28 @@
   rather than guessing. Where a string ends mid-citation is a question for the `[src:]` grammar
   and only for it: `unclosedSrcMarker` and `foldsUnclosedSrcMarker` are new leaves in
   `src/core/text/srcToken.ts`, and neither caller carries a regex of its own.
+- **A `git rev-list --count` that FAILED counted as zero commits, and `--discard-pending`
+  deleted the implicit plan on that zero (#273).** `commitsBetween` returned `0` both when it
+  counted nothing and when git could not answer at all, so "there is nothing built on this
+  branch" and "I could not look" were one number — and the caller that reads it,
+  `rederiveImplicitPlan`, keeps the plan only when the count is ABOVE zero. The failure
+  therefore landed on the destructive side: measured here on a story branch carrying a real
+  developer commit, with the base ref removed so the count could not be taken, `tldrx next
+  --prepare --discard-pending` printed "re-derived 04-build/implicit-plan.yml (--discard-pending;
+  no evidence, and no commit on story/… beyond epic/…)" and wrote a new plan over the one the
+  work was done against.
+  `commitsBetween` now returns `number | null` and every caller decides what `null` means for
+  it: the plan is KEPT with the command that could not answer named, which is the direction
+  #272 already chose where the same zero would have deleted a branch. That strict sibling
+  `commitsAhead`, opened by #272 precisely to route around this, is collapsed back in — one
+  implementation per derivation (§7), so there is a single way this repo counts commits and it
+  is the safe one. The other two callers: a merge whose count failed is now reported as
+  `mergedEarlier` ("what it carried is not recoverable") instead of as an EMPTY merge, the
+  2026-08-30 "four stories merged" trap read backwards; and `baseStateOf` keeps answering
+  `current` — inaction is the right reading of a branch that cannot be measured, and the
+  ordinary case is a story branch that does not exist yet — but carries the reason in a new
+  `uncounted` field, so a branch that IS there and could not be placed says so in the dispatch
+  line instead of being silently treated as up to date.
 
 ## 0.18.2 — 2026-09-13
 

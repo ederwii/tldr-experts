@@ -18,7 +18,7 @@
  *     delete: "recoverable" has to mean recoverable by name, not by reflog.
  *   - **checked out somewhere → left alone, with the checkout named.** A branch a
  *     worktree sits on is somebody's working state.
- *   - **could not be counted → left alone, with git's sentence.** `commitsAhead`
+ *   - **could not be counted → left alone, with git's sentence.** `commitsBetween`
  *     answers `null` rather than 0 for a base that does not resolve, because a
  *     miscounted 0 here deletes commits.
  *
@@ -37,7 +37,7 @@ import type { EventType, TldrxEvent } from "../events/Event.ts";
 import type { EpicReleaseRecord, EpicReleaseVia } from "../run/RunFile.ts";
 import type { RunStore } from "../run/RunStore.ts";
 import {
-  branchExists, commitsAhead, deleteBranch, firstLine, renameBranch, repoDirOf, shaOf, worktreeOn,
+  branchExists, commitsBetween, deleteBranch, firstLine, renameBranch, repoDirOf, shaOf, uncountedCount, worktreeOn,
 } from "./git.ts";
 import { BUILD_PHASE } from "./plan.ts";
 
@@ -75,8 +75,7 @@ export type EpicRelease =
 
 /** The one sentence a branch git could not count is kept with — exported so a test asserts the marker, not a word. */
 export function uncountedReason(base: string, branch: string): string {
-  return `\`git rev-list --count ${base}..${branch}\` could not count what it carries, `
-    + "and an uncounted branch is never deleted";
+  return `${uncountedCount(base, branch)}, and an uncounted branch is never deleted`;
 }
 
 export async function releaseEpicBranch(parts: ReleaseParts): Promise<EpicRelease> {
@@ -86,7 +85,7 @@ export async function releaseEpicBranch(parts: ReleaseParts): Promise<EpicReleas
   if (checkout !== null) {
     return { kind: "kept", branch, reason: `it is checked out in ${checkout}` };
   }
-  const commits = await commitsAhead(repoDir, parts.base, branch);
+  const commits = await commitsBetween(repoDir, parts.base, branch);
   if (commits === null) return { kind: "kept", branch, reason: uncountedReason(parts.base, branch) };
   const sha = await shaOf(repoDir, branch);
   if (commits === 0) {

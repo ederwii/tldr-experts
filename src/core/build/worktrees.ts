@@ -194,6 +194,19 @@ export interface RefreshParts {
 export async function refreshStoryBase(parts: RefreshParts): Promise<void> {
   const id = parts.storyId;
   const base = await baseStateOf(parts.repoDir, parts.branch, parts.epicBranch);
+  // A branch git could not measure is left alone — the same inaction `current`
+  // gets — but it is SAID when there is a branch to say it about (gh #273).
+  // Silence here is right for the ordinary uncountable case, a story branch that
+  // does not exist yet (`branchSha` is `""` then); it is wrong for a branch that
+  // is there and whose position could not be read, because the dispatch below
+  // then proceeds on a base nobody checked.
+  if (base.uncounted !== null && base.branchSha !== "") {
+    parts.lines.push(
+      `  · ${id}: ${base.uncounted} — \`${parts.branch}\` was left exactly as it is, `
+      + `and the dispatch below is on its current tip`,
+    );
+    return;
+  }
   if (base.state === "current") return;
 
   const where = relative(parts.root, parts.worktree) || parts.worktree;
