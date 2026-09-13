@@ -175,6 +175,33 @@ export interface BuildHandoffParts {
    * failed restore in it.
    */
   readonly foreignWork?: readonly ForeignWorkNote[];
+  /**
+   * Stories `waves.yml` SCHEDULED that this phase never started and never settled
+   * — no outcome row exists for them at all (#260).
+   *
+   * The section is built from `outcomes`, and `orderedOutcomes` drops a `todo`
+   * story on the floor, so until this field existed a story the executor never
+   * reached could not appear in this document by construction — and the
+   * `none — every scheduled story reached done` sentence below was the record
+   * lying in the dangerous direction (§7): on the run #260 was filed from, three
+   * stories stayed `todo` and the handoff said every scheduled story was `done`.
+   * The sentence is now decided against `waves.yml`, which is what "scheduled"
+   * means, and not against the rows the executor happened to hold.
+   *
+   * Absent behaves exactly as empty and changes no byte of a document whose
+   * every scheduled story reached an outcome.
+   */
+  readonly notStarted?: readonly NotStartedStory[];
+}
+
+/** A scheduled story with no outcome at all — named with WHY, never dropped. */
+export interface NotStartedStory {
+  readonly id: string;
+  /** Run-relative path of the story file, for the citation. */
+  readonly rel: string;
+  /** The status it is still at on disk — `todo`, or whatever it was left at. */
+  readonly status: string;
+  readonly reason: string;
 }
 
 /** One repo's failed restore, as the handoff names it. */
@@ -238,6 +265,7 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
     // would be worse than one that said neither.
     ...(notDone.length === 0 && (parts.carried ?? []).length === 0
       && (parts.unreadableStories ?? []).length === 0 && (parts.foreignWork ?? []).length === 0
+      && (parts.notStarted ?? []).length === 0
       ? [`- none — every scheduled story reached \`done\` and no carried finding is unowned `
         + `[src: absent:04-build/log]`]
       : []),
@@ -245,6 +273,11 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
       (o) =>
         `- ${o.id} is \`${o.status}\` and needs a human: ${o.reason ?? "see the review"} ` +
         `[src: ${o.reviewRel}:1]`,
+    ),
+    ...(parts.notStarted ?? []).map(
+      (row) =>
+        `- ${row.id} was scheduled and never started, and is still \`${row.status}\` — ` +
+        `${row.reason} [src: ${row.rel}:1]`,
     ),
     ...carriedBullets(parts.carried ?? []),
     ...(parts.unreadableStories ?? []).map((row) =>

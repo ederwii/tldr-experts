@@ -132,6 +132,40 @@
 
 ### Fixed
 
+- **One blocked story no longer stops every later wave — the boundary asks per STORY, from
+  `depends_on` (#260).** Measured 2026-09-12 on one workspace at 0.16.1: a loop told to build 8
+  stories built 5, never started 3, and reported the stage `done`. `03-plan/waves.yml` scheduled
+  W1=[S1] W2=[S2,S5,S6,S7,S8] W3=[S3] W4=[S4]; S7 blocked in W2 and the build skipped W3 and W4
+  outright, leaving S3 and S4 at `todo` while S2 — the only thing S3 depends on — was `done`. It
+  happened twice on the same run, the second time after a `story reopen S7` and a relaunch. The
+  mechanism was one line: after each wave the parallel path asked `waveFailed`, which is
+  `stories.some(status === "blocked")`, and broke out of the loop — `depends_on` appeared **zero
+  times** in `executors/build.ts`, so the one fact that could tell "a story that needs the
+  blocked code" from "a story that never did" was never read, though `validatePlan` already
+  guarantees every dependency sits in an earlier wave and is therefore settled at that moment.
+  The rule the `break` defended is kept, and it is the reason this is a frontier and not a
+  deletion: **a story runs when every one of its `depends_on` is `done`**, and a story whose
+  dependency did not land is NOT attempted — nothing fans out over code that was not landed,
+  which is how one red story becomes N of them. What changes is that the rule stops applying to
+  stories that never needed that code. A story held back is now `blocked` WITH the reason,
+  `dependency S7 blocked` — absent-with-reason, never a silent `todo` — and that sentence is
+  what `blocked_reason` on `gate.requested` and the continue note read, so the gate stops being
+  "held by stories" with nothing a person or a turn can act on (the #239 shape, one layer down).
+  It is transitive for free: S4 behind a blocked S3 reads `dependency S3 blocked`. The documents
+  stop hiding it too — the stage line counts every story `waves.yml` scheduled instead of the
+  rows the executor happened to hold (`5 of 8`, never `5 of 5`), the skipped stories are named
+  on stdout with the dependency each waits on instead of one line that said the next wave "may"
+  have depended on something, and the handoff's `none — every scheduled story reached done` is
+  now decided against `waves.yml`: a scheduled story with no outcome at all is named in
+  `## Unknowns` rather than dropped, which is the record that was lying in the dangerous
+  direction (§7). **`--parallel 1` is untouched**: the sequential path never stopped a later
+  story, a story whose dependency blocked is still attempted there, and this frontier replaces
+  the parallel path's stop only — turning today's finished stories into blocked ones would be a
+  second change, in the opposite direction. Both directions are pinned by tests that are the
+  same fixture with one field moved, and the existing test that froze the defect as correct (an
+  independent S4 stopped by a blocked S2) was rewritten to give S4 the `depends_on` that makes
+  its assertion true for the reason the code's own comment gives — argued in the test, never
+  flipped in silence.
 - **The spawned developer can delete a file, and a permission refusal is now a recorded reason
   instead of two burned attempts (#261).** Measured 2026-09-12 on one workspace at 0.16.1: story
   S7, "delete an unused file", was undoable. The developer's allowance carried no verb that

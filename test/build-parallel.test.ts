@@ -366,14 +366,29 @@ describe("N = 2 over three stories in one wave", () => {
 });
 
 describe("a story that fails inside a parallel wave", () => {
-  test("its siblings finish, the wave ends failed, and the next wave does not start", async () => {
+  /**
+   * **THIS CASE CHANGED WITH #260 — read this before "fixing" it back.**
+   *
+   * Until #260 `S4` carried NO `depends_on` and this test asserted it stayed
+   * `todo`: it froze "a blocked story with no dependents stops an independent
+   * story" as correct behaviour, which is the defect #260 was filed for (a run
+   * built 5 of 8 stories and reported the stage `done`). What the `break` it
+   * pinned actually defends is the 1-of-N rule in the executor's own comment —
+   * "Wave N+1 fanning out over code wave N failed to produce is how one red story
+   * becomes N of them" — and that rule is about a story that DEPENDS on the
+   * blocked one. So `S4` now declares `depends_on: [S2]`, and the assertion below
+   * is true for the reason the comment gives. The case where the later story
+   * depends on nothing that blocked is the first test in the describe below, and
+   * it asserts the opposite. Do not drop the `dependsOn` to make a diff close.
+   */
+  test("its siblings finish, the wave ends failed, and a story that DEPENDS on the red one does not start", async () => {
     const ws = workspace({
       stories: [
         { id: "S1", epic: "E1", title: "First" },
         // Its own dod command, and that command goes red once its developer has run.
         { id: "S2", epic: "E1", title: "Second, red", dod: ["npm run lint"] },
         { id: "S3", epic: "E1", title: "Third" },
-        { id: "S4", epic: "E1", title: "Fourth, in the next wave" },
+        { id: "S4", epic: "E1", title: "Fourth, in the next wave", dependsOn: ["S2"] },
       ],
       epics: [{ id: "E1", stories: ["S1", "S2", "S3", "S4"], branch: "epic/e1" }],
       waves: [["S1", "S2", "S3"], ["S4"]],
@@ -410,11 +425,114 @@ describe("a story that fails inside a parallel wave", () => {
     expect(story("S3")).toContain("status: done");
     expect(story("S2")).toContain("status: blocked");
 
-    // The wave ended failed, and S4 never started.
-    expect(said).toContain("W1 ended `failed` — the next wave was not started");
-    expect(story("S4")).toContain("status: todo");
+    // The wave ended failed, and S4 — which depends on S2 — never started. It is
+    // `blocked` WITH the reason rather than silently `todo` (#260): the reason is
+    // what `run status` and the next turn read.
+    expect(said).toContain("S4 was not started");
+    expect(said).toContain("dependency S2 blocked");
+    expect(story("S4")).toContain("status: blocked");
     expect(events(ws).some((e) => e.type === "task.started" && e.payload.story === "S4")).toBe(false);
     expect(git(ws, ["log", "epic/e1", "--oneline"])).not.toContain("merge(S2)");
+  }, 90_000);
+});
+
+/**
+ * The wave boundary asks per STORY, not per wave (#260).
+ *
+ * A blocked story used to end the loop for everything behind it: a run told to
+ * build 8 stories built 5, left S3 and S4 `todo` while the only thing S3 depended
+ * on was `done`, and reported the stage `done` with nothing written anywhere
+ * saying which stories it never started. The rule the old `break` defended is
+ * kept — nothing fans out over code that was not landed — it just stops applying
+ * to a story that never needed that code.
+ *
+ * Both directions are pinned here, and they are the same fixture with ONE field
+ * moved, so neither can be satisfied by a rule that ignores `depends_on`:
+ * mutate `waveFailed`/the frontier back to a wave-wide `some(...)` and the first
+ * goes red; drop the `dependency <id> blocked` write and the second does.
+ */
+describe("a later wave whose dependencies are settled (#260)", () => {
+  /**
+   * W1 = [S1, S2] with S2 red on its own `dod`, W2 = [S3]. `dependsOn` is the
+   * only thing the two cases below disagree about.
+   */
+  function twoWaves(dependsOn: readonly string[]): BuildWorkspace {
+    return workspace({
+      stories: [
+        { id: "S1", epic: "E1", title: "First" },
+        // Its own dod command, and that command goes red once its developer has run.
+        { id: "S2", epic: "E1", title: "Second, red", dod: ["npm run lint"] },
+        { id: "S3", epic: "E1", title: "Third, in the next wave", dependsOn },
+      ],
+      epics: [{ id: "E1", stories: ["S1", "S2", "S3"], branch: "epic/e1" }],
+      waves: [["S1", "S2"], ["S3"]],
+      commands: { build: null, test: "npm run test", lint: "npm run lint", typecheck: null, run: null },
+      repoFiles: {
+        "package.json": `${JSON.stringify({
+          name: "app",
+          version: "0.0.0",
+          private: true,
+          scripts: {
+            test: 'node -e "process.exit(0)"',
+            // Green on the untouched base tree, red in a worktree a developer has
+            // written its story file into — the same trick the describe above uses.
+            lint: 'node -e "process.exit(require(\'fs\').readdirSync(\'.\').some(function (f) { return f.endsWith(\'.txt\'); }) ? 1 : 0)"',
+          },
+        }, null, 2)}\n`,
+      },
+    });
+  }
+
+  function storyFile(ws: BuildWorkspace, id: string): string {
+    return readFileSync(join(ws.planDir, "stories", `${id}.md`), "utf8");
+  }
+
+  /** The bullets of one `## ` section of the Build handoff, in file order. */
+  function handoffSection(ws: BuildWorkspace, name: string): readonly string[] {
+    const text = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    const lines = text.split("\n");
+    const start = lines.indexOf(`## ${name}`);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const rest = lines.slice(start + 1);
+    const end = rest.findIndex((line) => line.startsWith("## "));
+    return (end === -1 ? rest : rest.slice(0, end)).filter((line) => line.startsWith("- "));
+  }
+
+  test("S3 depends on the story that PASSED, so it runs and the stage counts it", async () => {
+    const ws = twoWaves(["S1"]);
+    process.env.FAKE_BUILD_SLEEP_MS = "80";
+
+    const outcome = await next(ws, { parallel: 2 });
+    const said = outcome.lines.join("\n");
+
+    // The whole point: S3's dependency is `done`, so S3 is attempted.
+    expect(events(ws).some((e) => e.type === "task.started" && e.payload.story === "S3")).toBe(true);
+    expect(storyFile(ws, "S3")).toContain("status: done");
+    expect(storyFile(ws, "S2")).toContain("status: blocked");
+    // The count is over every SCHEDULED story, not over the rows the executor
+    // happened to hold: 2 of 3, never 2 of 2.
+    expect(said).toContain("2 of 3 story(ies) done");
+    // `## Unknowns` needs a human for S2 and for nothing else.
+    const unknowns = handoffSection(ws, "Unknowns").filter((b) => b.includes("needs a human"));
+    expect(unknowns.length).toBe(1);
+    expect(unknowns[0]).toContain("S2 is `blocked`");
+  }, 90_000);
+
+  test("S3 depends on the story that BLOCKED, so it is not run — `blocked` with the reason, never a silent `todo`", async () => {
+    const ws = twoWaves(["S2"]);
+    process.env.FAKE_BUILD_SLEEP_MS = "80";
+
+    const outcome = await next(ws, { parallel: 2 });
+    const said = outcome.lines.join("\n");
+
+    // The dangerous direction, and the reason the `break` existed at all: nothing
+    // fans out over code S2 did not land.
+    expect(events(ws).some((e) => e.type === "task.started" && e.payload.story === "S3")).toBe(false);
+    expect(storyFile(ws, "S3")).toContain("status: blocked");
+    expect(said).toContain("S3 was not started");
+    const unknowns = handoffSection(ws, "Unknowns").filter((b) => b.includes("needs a human"));
+    expect(unknowns.map((b) => b.includes("S3") && b.includes("dependency S2 blocked"))).toContain(true);
+    expect(unknowns.length).toBe(2);
   }, 90_000);
 });
 

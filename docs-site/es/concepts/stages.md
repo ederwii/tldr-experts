@@ -48,6 +48,14 @@ tu propio `.tldrx/stages/build/stage.yml`, o `build: {parallel: N}` en un workfl
 cambia de forma permanente. Dos y no más porque un abanico más ancho es lo primero que
 sufre una laptop.
 
+Cuando una story queda `blocked`, lo que pasa después se decide **story por story**, a
+partir de `depends_on`. Una story posterior cuyas dependencias llegaron todas a `done`
+corre: estar en una ola detrás de una story bloqueada no frena nada por sí solo. Una story
+que sí depende de la bloqueada no se intenta, y queda escrita como `blocked` con la razón
+(`dependency S7 blocked`) en vez de quedarse callada en `todo`: esa razón es la que te
+muestra `tldrx status` y sobre la que actúa el turno siguiente. Nunca se construye sobre
+código que no aterrizó, y nada que jamás necesitó ese código queda frenado por él.
+
 Una rama por épica da por hecho que las épicas son independientes. Cuando una story lleva
 `depends_on` a una story de **otra** épica, las épicas forman una cadena y el run corta una
 sola **rama de integración**, `epic/<run-id>`, y las épicas se quedan en el plan como
