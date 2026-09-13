@@ -81,7 +81,14 @@ describe("gh #133 · the reviewer prompt points at the schema instead of paraphr
   test("it restates NO field of the schema — the drift risk, asserted off the schema", () => {
     const prompt = reviewerPrompt();
     expect(SHAPE_ONLY_FIELDS).toEqual(
-      ["verdict", "summary", "findings", "n", "severity", "finding", "where", "disposition", "detail", "do_not"],
+      [
+        "verdict", "summary", "findings",
+        // `kind` (#255) joined the row, so it joined the list of names this prompt
+        // may not spell: the schema stays the one authority on the envelope's shape,
+        // and the prompt teaches only the JUDGEMENT — which of the four words is
+        // true of the defect — the way it teaches which verdict to return.
+        "n", "severity", "finding", "where", "kind", "disposition", "detail", "do_not",
+      ],
     );
     for (const field of SHAPE_ONLY_FIELDS) {
       expect(prompt).not.toContain(`\`${field}\``);

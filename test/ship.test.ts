@@ -291,6 +291,8 @@ function writeFixlistFixture(
       summary: "signed, with findings",
       findings: findings.map((partial, i) => ({
         n: i + 1,
+        kind: "correctness",
+        normalisedFrom: null,
         severity: "high",
         finding: "a finding",
         where: "src/app.ts:1",

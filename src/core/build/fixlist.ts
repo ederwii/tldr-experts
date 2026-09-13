@@ -62,9 +62,74 @@ export const MAX_FIXLIST_ROUNDS = STAGE_TUNING_DEFAULTS.fixlistRounds;
 export const DISPOSITIONS = ["fix-now", "defer-with-log", "refuted", "out-of-scope"] as const;
 export type Disposition = (typeof DISPOSITIONS)[number];
 
+/**
+ * What a finding IS, as opposed to where it goes (#255).
+ *
+ * A separate axis from `Disposition` on purpose, and the measurement is the
+ * reason: on 2026-09-12, three stories with a green DoD, a merged commit and an
+ * approving reviewer ended `blocked` — every one of them on a `fix-now` finding
+ * whose whole content was a docstring or a citation. The reviewer was not wrong
+ * to raise them and was not wrong to call them this story's own: the prompt says
+ * `fix-now` is "this story's own correctness", and a stale docstring in the
+ * story's own files honestly reads that way. What the record could not say was
+ * that the defect was TEXT. A disposition answers "where does this go"; nothing
+ * answered "what is it", so a night's run stopped for a comment.
+ *
+ * Four, and the split is exactly where the framework's appetite for risk
+ * changes: `correctness` and `security` are behaviour, and behaviour holds a
+ * story; `docs` and `style` are the way the repo reads, which is worth fixing
+ * and is not worth a person's night.
+ */
+export const FINDING_KINDS = ["correctness", "security", "docs", "style"] as const;
+export type FindingKind = (typeof FINDING_KINDS)[number];
+
+/**
+ * The kinds that may be declared to STOP holding a story — and the ones that pay.
+ *
+ * Owner decision, 2026-09-13 (`authority: owner-decision`, via Slack): declaring
+ * a `fix-now` finding `docs` or `style` so it stops blocking costs the SAME
+ * `[src: …]` citation `refuted` already costs. One exit, one rule — unblocking
+ * costs evidence, whatever it is called. The alternative was a second, free exit
+ * with `refuted`'s exact effect on the gate: the wide door beside the narrow one.
+ */
+export const UNBLOCKING_KINDS: readonly FindingKind[] = ["docs", "style"];
+
+export function isUnblockingKind(kind: FindingKind | null): boolean {
+  return kind !== null && UNBLOCKING_KINDS.includes(kind);
+}
+
 export interface FixFinding {
   /** 1-based, and stable: the number is how a human and a prompt refer to it. */
   readonly n: number;
+  /**
+   * What the finding IS (#255) — or null, and ONLY from a record written before
+   * this field existed.
+   *
+   * Null is the tolerant read (§7: `version: 1` formats only grow), not a value
+   * a reviewer may produce: `parseFixFindings` refuses an envelope row with no
+   * readable `kind`, while `parseFixlistFile` reads a fix list already on disk
+   * with no `Kind:` line and reports what it found. The two are different
+   * questions — "did the reviewer classify this" and "what does this file say" —
+   * and answering the second with a refusal would make a run already in flight
+   * unreadable by upgrading the tool under it.
+   *
+   * Null never unblocks anything: every unblocking path asks
+   * `isUnblockingKind`, which is false for it.
+   */
+  readonly kind: FindingKind | null;
+  /**
+   * The disposition this finding was SUBMITTED with, when it is not the one it
+   * carries now — `fix-now`, on a `docs`/`style` finding routed to
+   * `defer-with-log` (#255). Null when nothing was rewritten.
+   *
+   * Recorded rather than performed silently, for the same reason `markUnverified`
+   * writes its sentence into the file: the artifact is the state, and a state
+   * that quietly disagrees with what the reviewer said is the failure mode this
+   * whole change is one step away from. The finding is still in the document,
+   * still in the PR body, still on `retro.md` — what changed is that it no longer
+   * holds a story, and the file says who changed it.
+   */
+  readonly normalisedFrom: Disposition | null;
   /** Free text from the reviewer — `high`, `medium`, `low`, or its own word. */
   readonly severity: string;
   /** The heading: one line a person can act on. */
@@ -234,6 +299,25 @@ export function parseFixFindings(value: unknown): ParsedFixlist {
       );
       continue;
     }
+    // What the finding IS, and there is no default (#255). Absent, unreadable or
+    // a word outside the enum all land here, and all land the same way: REFUSED,
+    // through `refuseFormat`, so the envelope falls back to `changes` and the
+    // reviewer is re-prompted for free. Fail-closed without punishing — a
+    // reviewer that forgot one field did not do bad work, it wrote a bad report,
+    // and this file's whole model is that FORM never costs an attempt. Defaulting
+    // instead would be the dangerous direction twice over: a missing word would
+    // either invent `correctness` (blocking over nothing) or invent `docs`
+    // (unblocking over nothing), and only the second one is silent.
+    const kind = row.kind;
+    if (typeof kind !== "string" || !isFindingKind(kind)) {
+      refuseFormat(
+        `finding ${String(at)} has no valid \`kind\` — one of ${FINDING_KINDS.join(", ")}. `
+        + "A finding's kind is what decides whether it holds the story: `correctness` and "
+        + "`security` do, `docs` and `style` do not. A reviewer that did not classify it did "
+        + "not finish reviewing it, and nothing here guesses which one you meant.",
+      );
+      continue;
+    }
     const where = str(row.where);
     const detail = str(row.detail);
     // A reviewer's verdict is a claim too. `refuted` is the one disposition that
@@ -248,12 +332,39 @@ export function parseFixFindings(value: unknown): ParsedFixlist {
         continue;
       }
     }
+    // The second exit, held to the first one's price (#255, owner decision
+    // 2026-09-13). A `docs` or `style` finding submitted as `fix-now` is asking
+    // for `refuted`'s exact effect — this no longer holds the story — by another
+    // name, so it costs what `refuted` costs: the §2.8 citation, read by the same
+    // parser, refused by the same call. What the citation is FOR is the asymmetry
+    // the reproduction found: "the docstring says cents, the code returns dollars"
+    // is a sentence whose own words do not say which side is wrong, and calling it
+    // `docs` decides a money bug is a typo. The reviewer that points at the
+    // behaviour it read has done the work; the one that typed a word has not.
+    let routed: Disposition = disposition;
+    let normalisedFrom: Disposition | null = null;
+    if (disposition === "fix-now" && isUnblockingKind(kind)) {
+      const why = citationProblem(where, detail);
+      if (why !== null) {
+        refuseFormat(
+          `finding ${String(at)} is \`fix-now\` and \`kind: ${kind}\`, which asks for it to stop `
+          + `holding the story — and its citation was not read — ${why} Cite the behaviour that `
+          + "makes it harmless (the code that is already correct, so that only the text is "
+          + "wrong), or leave it `fix-now` as `correctness`.",
+        );
+        continue;
+      }
+      routed = "defer-with-log";
+      normalisedFrom = "fix-now";
+    }
     findings.push({
       n: typeof row.n === "number" && Number.isInteger(row.n) && row.n > 0 ? row.n : at,
+      kind,
+      normalisedFrom,
       severity: str(row.severity) === "" ? "unrated" : str(row.severity),
       finding: text,
       where,
-      disposition,
+      disposition: routed,
       detail,
       doNot: Array.isArray(row.do_not)
         ? (row.do_not as readonly unknown[]).map(str).filter((line) => line !== "")
@@ -270,6 +381,10 @@ export function parseFixFindings(value: unknown): ParsedFixlist {
 
 function isDisposition(value: string): value is Disposition {
   return (DISPOSITIONS as readonly string[]).includes(value);
+}
+
+function isFindingKind(value: string): value is FindingKind {
+  return (FINDING_KINDS as readonly string[]).includes(value);
 }
 
 /**
@@ -352,6 +467,13 @@ export function renderFixlist(parts: FixlistParts): string {
     "> owner through `retro.md`), `out-of-scope`, or `refuted`, which must carry an `[src: …]`",
     "> proving the finding wrong.",
     ">",
+    "> `Kind:` is what a finding IS, and it is why some of these are not `fix-now`: `correctness`",
+    "> and `security` hold the story, `docs` and `style` do not. A finding the reviewer submitted",
+    "> as `fix-now` and classified `docs` or `style` was routed to `defer-with-log` here, with a",
+    "> `Normalised-from:` line saying so and the citation that bought it — it is still a defect",
+    "> somebody owns. `Kind: (not stated)` is a record written before this field existed; it",
+    "> holds the story like anything else unclassified.",
+    ">",
     "> A bare `Resolved: yes` closes nothing. The sha is checked — it must be a commit in the",
     "> repo and reachable from the story branch — and a claim that does not check out is",
     `> rewritten here as \`Resolved: ${CLAIMED_UNVERIFIED}\`, with the reason. This record is`,
@@ -363,7 +485,17 @@ export function renderFixlist(parts: FixlistParts): string {
       `## ${String(finding.n)} · ${finding.finding}  [${finding.severity}]`,
       "",
       `Where: ${finding.where === "" ? "(not stated)" : finding.where}`,
+      `Kind: ${finding.kind ?? "(not stated)"}`,
       `Disposition: **${finding.disposition}**`,
+      ...(finding.normalisedFrom === null
+        ? []
+        // Said in the document, not only in the code that did it. A normalisation
+        // the record does not mention is a gate that changed its mind in private.
+        : [
+          `Normalised-from: ${finding.normalisedFrom} — the reviewer submitted this as `
+          + `\`${finding.normalisedFrom}\` and classified it \`${finding.kind ?? "?"}\`, which does `
+          + "not hold a story; it is routed here with its citation and keeps its place in the record",
+        ]),
       `Resolved: ${resolvedLine(finding)}`,
       "",
     );
@@ -387,6 +519,14 @@ function resolvedLine(finding: FixFinding): string {
 
 const HEADING_RE = /^##\s+(\d{1,4})\s+·\s+(.+?)(?:\s+\[([^\]]*)\])?\s*$/;
 const WHERE_RE = /^Where:\s*(.*)$/;
+/**
+ * `Kind:` — absent from every fix list written before #255, and that is the
+ * tolerant read §7 requires: a run in flight when the tool was upgraded has files
+ * on disk with no such line, and they stay readable. A line this cannot narrow to
+ * the enum reads as "not stated" (null), which unblocks nothing.
+ */
+const KIND_RE = /^Kind:\s*(.*)$/;
+const NORMALISED_RE = /^Normalised-from:\s*([a-z-]+)\s*(?:—.*)?$/;
 const DISPOSITION_RE = /^Disposition:\s*\*\*([a-z-]+)\*\*\s*(?:—\s*(.*))?$/;
 const RESOLVED_RE = /^Resolved:\s*(\S+)\s*(.*)$/;
 /**
@@ -414,7 +554,8 @@ const STORY_RE = /^#\s+Fix list\s+—\s+(\S+)\s+·/;
 export function parseFixlistFile(text: string): readonly FixFinding[] {
   const findings: FixFinding[] = [];
   let current: {
-    n: number; finding: string; severity: string;
+    n: number; finding: string; severity: string; kind: FindingKind | null;
+    normalisedFrom: Disposition | null;
     where: string; disposition: Disposition | null; resolved: boolean; resolvedSha: string | null;
     detail: string[]; doNot: string[];
   } | null = null;
@@ -422,6 +563,8 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
     if (current === null || current.disposition === null) return;
     findings.push({
       n: current.n,
+      kind: current.kind,
+      normalisedFrom: current.normalisedFrom,
       severity: current.severity,
       finding: current.finding,
       where: current.where,
@@ -440,6 +583,7 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
         n: Number(heading[1] ?? "0"),
         finding: (heading[2] ?? "").trim(),
         severity: (heading[3] ?? "unrated").trim(),
+        kind: null, normalisedFrom: null,
         where: "", disposition: null, resolved: false, resolvedSha: null, detail: [], doNot: [],
       };
       continue;
@@ -449,6 +593,21 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
     if (where !== null) {
       const value = (where[1] ?? "").trim();
       current.where = value === "(not stated)" ? "" : value;
+      continue;
+    }
+    const kind = KIND_RE.exec(line);
+    if (kind !== null) {
+      const value = (kind[1] ?? "").trim();
+      // Narrowed or dropped, never kept as prose. A word this does not recognise
+      // is "not stated", and "not stated" holds the story — the direction a
+      // mistake is recoverable in.
+      if (isFindingKind(value)) current.kind = value;
+      continue;
+    }
+    const normalised = NORMALISED_RE.exec(line);
+    if (normalised !== null) {
+      const value = normalised[1] ?? "";
+      if (isDisposition(value)) current.normalisedFrom = value;
       continue;
     }
     const disposition = DISPOSITION_RE.exec(line);
@@ -764,8 +923,16 @@ export function fixlistRetroLines(
   return findings
     .filter((finding) => finding.disposition === "defer-with-log")
     .map((finding) =>
-      `- \`${storyId}\` — reviewer finding DEFERRED (${finding.severity}): `
-      + `${oneLine(finding.finding)}${finding.detail === "" ? "" : ` — ${oneLine(finding.detail)}`} ${src}`,
+      `- \`${storyId}\` — reviewer finding DEFERRED (${finding.severity}`
+      + `${finding.kind === null ? "" : `, ${finding.kind}`}`
+      // A finding that was ROUTED here rather than filed here says so on the
+      // bullet the owner actually reads (#255). The retro is where a deferred
+      // defect reaches a person, and "the reviewer wanted this fixed now and the
+      // taxonomy moved it" is the one thing about it a person needs to be able to
+      // disagree with.
+      + `${finding.normalisedFrom === null ? "" : `, submitted \`${finding.normalisedFrom}\``}`
+      + `): ${oneLine(finding.finding)}`
+      + `${finding.detail === "" ? "" : ` — ${oneLine(finding.detail)}`} ${src}`,
     );
 }
 

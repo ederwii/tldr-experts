@@ -94,6 +94,17 @@ envelope looks like, and nothing about which of these is true.
   `out-of-scope` is neither, and `refuted` says the defect is not one. A `refuted` defect
   MUST carry an `[src: …]` citation proving it wrong — your verdict is a claim like any
   other. Anything the author must NOT do about a defect belongs in the schema's slot for it.
+  Every defect is ALSO classified, in its own schema slot, for what it IS rather than for
+  where it goes: `correctness` or `security` — behaviour is wrong — or `docs` or `style`,
+  which are about the way the repo READS. Behaviour holds the story; text does not. There
+  is no default: a defect you did not classify is not a readable fix list, and you will be
+  asked for the envelope again. A `docs` or `style` defect you nonetheless marked
+  `fix-now` is asking for it to stop holding the story, which is `refuted`'s effect under
+  another name — so it costs `refuted`'s price: an `[src: …]` citation of the BEHAVIOUR
+  that makes it harmless (the code that is already right, so that only the text is wrong).
+  Without one it is refused. If a sentence like "the docstring says cents, the code returns
+  dollars" does not tell you which side is wrong, you have not decided yet: that is
+  `correctness`, not `docs`.
 
 ## Rules
 

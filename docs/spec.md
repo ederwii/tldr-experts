@@ -1333,8 +1333,9 @@ and costs the attempt.
 grammar alone; #79 widened it to every envelope-FORMAT refusal, because they are the same kind of fault and two
 economies for one kind of fault is a rule nobody can hold. Free and bounded: a `refuted` finding whose `[src: …]` does
 not parse, a `fixlist` that is missing, not an array or empty, a row that is not an object, a row with no `finding`
-text, a row with no valid `disposition`, and a verdict WORD outside the enum (#36 — its message is unchanged, only its
-price). Still costs the attempt, unchanged: a verdict's CONTENT, a red DoD, a second fix-list round refused by its own
+text, a row with no valid `disposition`, a row with no valid `kind` or a `docs`/`style` row submitted `fix-now`
+without the citation that buys it (#255), and a verdict WORD outside the enum (#36 — its message is unchanged, only
+its price). Still costs the attempt, unchanged: a verdict's CONTENT, a red DoD, a second fix-list round refused by its own
 bound, a reviewer that never answered — and **any refusal the format index does not claim.** That last one is the
 guard: the free round is granted only when every reason the envelope was refused is indexed as form
 (`isFormatRejection`), so a future refusal about the WORK costs the attempt until somebody deliberately says otherwise.
@@ -3530,8 +3531,8 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    A third verdict, **`fixlist`**, is the one the other two could not express: the reviewer would SIGN and it found
    defects the acceptance criteria never covered (measured 2026-08-31 on S5 of `260830-tenancy-identity-customers` —
    every criterion met, zero scope violations, and a concurrent double-confirm minting two sessions). It is granted
-   only when the envelope carries a readable `fixlist[]` — `{n, severity, finding, where, disposition, detail,
-   do_not[]}` — and a declared one this cannot read falls to `changes` like any other unreadable envelope, because an
+   only when the envelope carries a readable `fixlist[]` — `{n, severity, finding, where, kind, disposition,
+   detail, do_not[]}`, with `finding`, `kind` and `disposition` required — and a declared one this cannot read falls to `changes` like any other unreadable envelope, because an
    unreadable review must not buy the third VERDICT. It may buy a bounded free CORRECTION, which is a different thing
    and is #78/#79 below: the round is granted on a fix list somebody can read, and on nothing else. See "the fix list"
    below.
@@ -3577,7 +3578,7 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    **The rule is FORM versus WORK, and §2.9 lists both sides.** #78 shipped it for the claim-sources grammar alone and
    filed the rest; the owner's #79 decision (2026-09-01) widened it to every envelope-FORMAT refusal — a missing or
    non-array `fixlist`, an empty one, a row that is not an object, a row with no `finding` text, a row with no valid
-   `disposition`, and a verdict WORD outside the enum (#36 keeps its message; only its price changed). A verdict's
+   `kind` (#255), a row with no valid `disposition`, and a verdict WORD outside the enum (#36 keeps its message; only its price changed). A verdict's
    CONTENT, a red DoD, a second fix-list round refused by its own bound, and any refusal the format index does not
    claim all keep the cost they had.
 
@@ -3949,7 +3950,8 @@ already reading the diff. Outside attended mode the headless reviewer is unchang
 EXECUTOR from the envelope (the reviewer holds no write tool, the same reason the review log is written here). Its
 shape: a heading, the round's own facts (verdict, attempt, diff command, commit), then one
 `## <n> · <finding>␣␣[<severity>]` section per finding — **two spaces** before the bracket — carrying `Where:`
-(the literal `(not stated)` when the envelope gave none), `Disposition:` and `Resolved:`. The disposition is written
+(the literal `(not stated)` when the envelope gave none), `Kind:`, `Disposition:`, an optional
+`Normalised-from:` and `Resolved:`. The disposition is written
 and **read back bolded**: `Disposition: **fix-now**`. A host editing the file closes a finding with
 `Resolved: yes <sha>` or re-routes it by changing the value between those asterisks; a `Disposition:` line without
 them does not parse, and the finding it belongs to is dropped rather than half-read.
@@ -3960,6 +3962,26 @@ them does not parse, and the finding it belongs to is dropped rather than half-r
   through the §2.8 parser — a reviewer's verdict is a claim like every other one, and tonight's host disproved one by
   grepping both sides before acting on it. A fix list with a `refuted` finding and no citation is refused whole, and
   the verdict falls to `changes`.
+- **Four KINDS, and they are a different axis from the dispositions (#255).** A disposition says where a finding GOES;
+  `kind` says what it IS: `correctness` and `security` are behaviour, `docs` and `style` are the way the repo reads.
+  **Behaviour holds a story; text does not.** Measured 2026-09-12 across two workspaces: three stories with a green
+  DoD, a merged commit and an APPROVING reviewer settled `blocked`, every one on a `fix-now` finding whose whole
+  content was a docstring or a broken citation — and a blocked story is unfinished, so each held the Build gate's
+  `stories` condition and sent a night's unattended run to a person.
+  `kind` is REQUIRED in the reviewer envelope and has **no default**: absent, unreadable or outside the enum is a
+  FORMAT refusal (free and bounded, §2.9's rule), never a guess, because a guessed kind would either block over
+  nothing or, worse, unblock over nothing.
+  **A `docs` or `style` finding submitted `fix-now` is NORMALISED to `defer-with-log`** — it is still a defect, still
+  in the artefact, still in the PR body and still on `retro.md`, and it no longer holds the story. That move costs the
+  SAME `[src: …]` citation `refuted` costs, read by the same §2.8 parser (owner decision, 2026-09-13): unblocking
+  costs evidence whatever it is called, and a second free exit with `refuted`'s exact effect would be the wide door
+  beside the narrow one. What the citation is FOR is the asymmetry — "the docstring says cents, the code returns
+  dollars" is a sentence whose own words do not say which side is wrong, so the reviewer cites the BEHAVIOUR that
+  makes it harmless or leaves it `correctness`. The normalisation is RECORDED, never silent: `Normalised-from: fix-now`
+  on the finding, and the retro bullet says what it was submitted as.
+  Reading a fix list ALREADY ON DISK is tolerant (§7 — `version: 1` formats only grow): a file written before `Kind:`
+  existed, or one whose `Kind:` this cannot narrow to the enum, reads as **not stated** — and not stated holds the
+  story, like anything else unclassified.
 - **A disposition ROUTES a finding; `Resolved:` CLOSES it.** Two questions, two fields. `defer-with-log` findings are
   appended to `retro.md`'s `## Build feedback` as they are written — the existing second writer with its existing
   verbatim dedup — so a deferred defect reaches the owner through a channel that already exists.

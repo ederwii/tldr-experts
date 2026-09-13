@@ -245,6 +245,7 @@ describe("a refuted finding with no readable citation is told which rule broke",
   test("the arrow case names `cmd-arrow` and quotes what the reviewer wrote", () => {
     const parsed = parseFixFindings([{
       finding: "the retry cap is off by one",
+      kind: "correctness",
       disposition: "refuted",
       where: "src/Retry.ts",
       detail: "the suite covers it [src: $ bun test -> exit 0]",
@@ -259,6 +260,7 @@ describe("a refuted finding with no readable citation is told which rule broke",
   test("a refutation that cited nothing at all still gets the grammar, not the symptom", () => {
     const parsed = parseFixFindings([{
       finding: "the retry cap is off by one",
+      kind: "correctness",
       disposition: "refuted",
       where: "src/Retry.ts",
       detail: "I read it and it is fine",

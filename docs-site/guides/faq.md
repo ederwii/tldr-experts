@@ -139,6 +139,35 @@ through Build, and a documented upgrade path.
 the loop a change goes through, the four gates and what CI actually runs, the red-first
 test rules, and the seam an outside model provider would plug into.
 
+## A story ended `blocked` on a docstring — why, and what does it cost?
+
+A reviewer that signs your story can still attach a **fix list** of defects the acceptance
+criteria never covered, and any finding it marks `fix-now` keeps the story out of `done`. An
+unfinished story holds the Build gate, so an unattended run stops for a person. Measured across
+two workspaces on 2026-09-12: three stories with a green definition of done, a merged commit and
+an approving reviewer ended `blocked` — every one of them on a finding whose whole content was a
+stale docstring or a citation that did not resolve.
+
+Every finding now also declares a **`kind`**, which is what it IS rather than where it goes:
+
+- `correctness` and `security` are behaviour. They hold the story, exactly as before.
+- `docs` and `style` are the way the repo reads. They do not.
+
+A `docs` or `style` finding the reviewer nonetheless marked `fix-now` is routed to
+`defer-with-log`: it stays in the fix list, in the pull request body and in `retro.md`, with a
+`Normalised-from: fix-now` line saying what it was submitted as — it is still a defect somebody
+owns, and it no longer costs a night.
+
+Unblocking is not free. Declaring a `fix-now` finding `docs` costs the **same `[src: …]`
+citation** that `refuted` already costs: cite the behaviour that makes it harmless — the code
+that is already right, so that only the text is wrong — or the row is refused and the reviewer is
+asked again. The reason is the sentence "the docstring says cents, the code returns dollars": its
+own words do not say which side is wrong, and a one-word field deciding that a money bug is a typo
+is the one failure with no log line to find it by. When in doubt the finding blocks: a `kind` that
+is absent, unreadable or outside the enum is refused — for free, costing the story no attempt —
+and a fix list written before this field existed reads as *not stated*, which blocks like anything
+else unclassified.
+
 ## A story blocked on its DoD — where is the real failure?
 
 In `04-build/log/dod-output/<story>-<n>.txt`: the last 200 lines (or 16 KB, whichever is
