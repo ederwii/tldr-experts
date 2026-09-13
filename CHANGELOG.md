@@ -35,6 +35,23 @@
   was left alone.
 ### Fixed
 
+- **The dependency frontier is the sequential path's too — nothing fans out over a story a dead
+  developer parked (#263).** Measured on a field run (2026-09-12, `run auto --yolo`): S3's
+  developer died on its own cap, `parkDeveloperFailure` put the story back at `todo` — deliberate,
+  a transport failure settles nothing about the work — and one second later the next wave started
+  S4, whose front matter says `depends_on: [S3]`. S4 reached `done` on an epic branch S3 had put
+  no line of code on, which is an audit record lying in the dangerous direction: a gate signer
+  reads `done` over work that was never delivered. #260 had already built the check that answers
+  this (`blockingDependency`: any dependency that is not `done` holds a story, and the story is
+  written `blocked` with the reason rather than left quietly at `todo`) and switched it on for
+  `--parallel N` only, on the grounds that the sequential loop had no defect of its own. It had
+  this one, and `lanes === 1` is the default and what `run auto` runs. Re-measured at 017dda8
+  before the change, one fixture, one field moved: at `--parallel 2` the dependent is held with
+  the reason `dependency S1 is not done` on `gate.requested`; at the default it is built and
+  reported `done`. Now the same one derivation is asked on every N — no second copy of the rule,
+  and #260's own direction is kept: a story that depends on nothing still runs after a parked one.
+  The park itself, the cap arithmetic and the DoD-decides half of #277 are all untouched.
+
 - **The plan's per-story price is a ceiling now, not a wall — and a story that dies on it with
   work in its tree lets the DoD decide (#277).** We shipped this one ourselves, hours earlier:
   #264 landed in 0.18.1 and made the Build executor actually read `03-plan/budget.yml`'s

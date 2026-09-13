@@ -1464,8 +1464,24 @@ describe("Build writes retro.md as it goes", () => {
     expect(existsSync(join(ws.runDir, "04-build", "log", "S1.md"))).toBe(true);
   });
 
+  /**
+   * Two INDEPENDENT stories, deliberately: `TWO_WAVES` has S2 `depends_on: [S1]`,
+   * and since #263 the dependency frontier holds a story whose dependency did not
+   * land on the sequential path too — so under that fixture S2 would never run its
+   * dod and there would be no second line to find. What this test is about is the
+   * retro CONTENT of a red dod, one per story that ran one, which is exactly what
+   * the frontier leaves alone. Dropping `dependsOn` is the change; the assertions
+   * are untouched.
+   */
   test("a failed dod is written with its command and exit code", async () => {
-    const ws = workspace({ ...TWO_WAVES, testScript: RED_ONLY_AFTER_DEVELOPER });
+    const ws = workspace({
+      ...TWO_WAVES,
+      stories: [
+        { id: "S1", epic: "E1", title: "First story" },
+        { id: "S2", epic: "E1", title: "Second story" },
+      ],
+      testScript: RED_ONLY_AFTER_DEVELOPER,
+    });
     await next(ws);
     const text = retro(ws);
     expect(text).toContain("dod `npm run test` exited 1 on the first attempt");
@@ -4070,4 +4086,80 @@ describe("the plan's price is a ceiling, not a wall (gh #277)", () => {
     expect(story(ws, "S1")).toContain("status: todo");
     expect(outcome.lines.join("\n")).toContain("the developer FAILED and produced no work");
   }, 60_000);
+});
+
+/**
+ * gh #263 — the dependency frontier is the SEQUENTIAL path's too.
+ *
+ * Measured on a field run (2026-09-12, `run auto --yolo`): S3's developer died on
+ * its own cap, the story was parked `todo` by `parkDeveloperFailure` — deliberate,
+ * a transport failure settles nothing — and **one second later the next wave
+ * started S4, whose front matter says `depends_on: [S3]`**. S4 reached `done` on
+ * top of a story that had produced no line of code.
+ *
+ * #260 built the frontier that answers this (`blockingDependency` /
+ * `blockOnDependency`) and switched it on for the PARALLEL path only, on the
+ * grounds that the sequential loop had no defect of its own to fix. It has one:
+ * `lanes === 1` is the default, it is what `run auto` uses, and it is the path the
+ * field case ran on. Measured here at `017dda8` before the change: with `lanes`
+ * at 2 S2 is held `blocked` with the reason; with `lanes` at 1 the same fixture
+ * builds S2 and calls it `done`.
+ *
+ * Nothing about the park changes — that half of #263 is explicitly not this — and
+ * nothing about a story that depends on NOTHING changes, which is the second test
+ * here and the reason this cannot be satisfied by a rule that ignores
+ * `depends_on`.
+ */
+describe("a story whose dependency was parked by a dead developer (gh #263)", () => {
+  /** W1 = [S1], W2 = [S2]. `dependsOn` is the only thing the two cases disagree about. */
+  function twoWaves(dependsOn: readonly string[]): BuildWorkspace {
+    return workspace({
+      stories: [
+        { id: "S1", epic: "E1", title: "First" },
+        { id: "S2", epic: "E1", title: "Second, in the next wave", dependsOn },
+      ],
+      epics: [{ id: "E1", stories: ["S1", "S2"], branch: "epic/e1" }],
+      waves: [["S1"], ["S2"]],
+      budgetUsd: 40,
+      perAgentMaxUsd: 40,
+    });
+  }
+
+  /** S1's developer dies on its own cap having written nothing — the parked case. */
+  function killS1(): void {
+    process.env.FAKE_BUILD_FAIL = "developer:S1#1";
+    process.env.FAKE_BUILD_FAIL_REASON = "Reached maximum budget ($4.80)";
+  }
+
+  test("the sequential path holds it back — `blocked` with the reason, not `done` over code that was never written", async () => {
+    const ws = twoWaves(["S1"]);
+    killS1();
+
+    const outcome = await next(ws);
+    const said = outcome.lines.join("\n");
+
+    // The park itself is unchanged: S1 is where the developer found it.
+    expect(story(ws, "S1")).toContain("status: todo");
+    // The defect: S2 was dispatched onto an epic branch S1 had put nothing on.
+    expect(events(ws).some((e) => e.type === "task.started" && e.payload.story === "S2")).toBe(false);
+    expect(story(ws, "S2")).toContain("status: blocked");
+    expect(said).toContain("S2 was not started");
+    expect(said).toContain("dependency S1 is `todo`, not `done`");
+    // And the reason reaches the gate, where a signer reads it (#239).
+    const gate = events(ws).find((e) => e.type === "gate.requested");
+    expect(gate?.payload.blocked_reason).toBe("dependency S1 is `todo`, not `done`");
+    // The stage counts what it delivered, and it delivered nothing.
+    expect(said).toContain("0 of 2 story(ies) done");
+  }, 90_000);
+
+  test("a story that depends on NOTHING still runs after a parked one — the frontier is per dependency", async () => {
+    const ws = twoWaves([]);
+    killS1();
+
+    await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: todo");
+    expect(events(ws).some((e) => e.type === "task.started" && e.payload.story === "S2")).toBe(true);
+    expect(story(ws, "S2")).toContain("status: done");
+  }, 90_000);
 });

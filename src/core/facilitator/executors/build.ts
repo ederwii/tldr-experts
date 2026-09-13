@@ -634,17 +634,18 @@ class BuildSession {
         // EARLIER wave by construction (`plan/validatePlan.ts`, spec §5), so its
         // status is final and readable right here.
         //
-        // ON THE PARALLEL PATH ONLY, and that is deliberate. This frontier REPLACES
-        // the wave-wide `break` below, which is the only thing that has ever held a
-        // later story back — and it only ever existed on this path. The sequential
-        // path has always carried on, a story that depends on a blocked one gets
-        // attempted there today, and some of them reach `done`; turning those into
-        // `blocked` would be a second change, in the opposite direction to the one
-        // #260 asks for (build MORE of what can be built), on a path that has no
-        // defect to fix. `test/build-executor.test.ts`'s "a failed dod is written
-        // with its command and exit code" measures exactly that behaviour on
-        // `lanes === 1` and is left standing.
-        const held = this.lanes === 1 ? null : this.blockingDependency(planned);
+        // BOTH PATHS, since #263. #260 built this frontier for the parallel path
+        // alone, on the grounds that the sequential loop had no defect of its own
+        // — it had one, and it was the one being measured: `lanes === 1` is the
+        // default and it is what `run auto` runs, so a story parked `todo` by a
+        // developer that died on its cap was followed one second later by the
+        // dependent the next wave held, which then reached `done` over an epic
+        // branch its dependency had put nothing on. That is an audit record
+        // lying in the dangerous direction, and the frontier already answers
+        // it exactly: ONE derivation (`blockingDependency`), asked per story, on
+        // whatever number of lanes the operator chose. #260's own direction is
+        // kept — a story that depends on NOTHING still runs after a parked one.
+        const held = this.blockingDependency(planned);
         if (held !== null) {
           this.blockOnDependency(planned, held);
           continue;
