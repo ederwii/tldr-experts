@@ -43,7 +43,7 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 
 | Command | Does |
 |---|---|
-| `tldrx run new <slug>` | Open a piece of work. `--scope`, `--budget`, `--seed`, `--gates`, `--attended-by host`. |
+| `tldrx run new <slug>` | Open a piece of work. `--scope`, `--budget`, `--seed`, `--gates`, `--questions`, `--ship`, `--attended-by host`. |
 | `tldrx run status [<run>]` | Where it is, what it is waiting on, what it cost. `--json`. |
 | `tldrx next [<run>]` | Run the next stage. `--dry-run`, `--prepare`/`--commit`, `--review`, `--check`, `--effort`, `--max-reads`. |
 | `tldrx run auto [<run>]` | Call `next` repeatedly until something needs you. `--max-usd`, `--until`, `--parallel`, and `--notify-every` / `--wait-answers` / `--wait-gates` to run it fully unattended — see [Operating a run unattended](/guides/unattended-operation). |

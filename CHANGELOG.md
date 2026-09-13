@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.18.2 — unreleased
+
+### Added
+
+- **The zero-touch recipe is written down, on the pages a person opens to run one (#276).**
+  Measured on origin/main at 0.18.1, after the first fully unattended run had ended in a merged
+  pull request: `--questions`, `--ship`, `--until-done`, `--gates none` and `run cancel` were
+  each documented, and no page chained them into the thing that had just worked — seed file →
+  `run new … --gates none --questions none --ship pr --budget` → a backgrounded
+  `run auto --run <id> --until-done`. `nohup`, `2>&1 &`, the log to `tail -f` and "how do I
+  check on it later" had zero hits repo-wide; `--ui plain`, the flag that keeps a backgrounded
+  log readable, lived in the spec and the changelog only. Three seeds written the same day had
+  failed `run new` on the 240-character claim clip (#275), and the rules a seed must follow to
+  survive the importer and the `[src:]` grammar existed only in the source. So: a "Zero-touch
+  run, start to finish" section at the top of the site's unattended-operation guide (EN + ES)
+  with the copyable block, one line per flag — including that `--ship merge` on a repository
+  with no required status checks merges at once (#274) — how to check on the run, how to stop
+  it (`run cancel` after the process, never before), and the honest boundary: this is the
+  happy path without a person, and a run a person signs is a different configuration. The
+  same block, six lines, in the README quick start and both quickstarts; `docs/guide/10` has
+  its switches, its flags and its cheat sheet brought up to `--until-done`, `--questions`,
+  `--ship`, `--gates none` and `_scoped`, and drops a sentence that predated the engine's own
+  gate signer; the seed authoring rules — one claim per bullet, ~200 characters with the
+  citation, token last, `path:line` that exists, `"; "` between sources, the four What
+  headings, a `Recommended:` line per question, `.tldrx/seeds/<nn>-<slug>.md` — are in
+  `docs/guide/05` and in the site section, measured against `markdownClaims.ts` and
+  `srcToken.ts` rather than remembered. `run auto` examples in the guides now say `--run <id>` (the generated flag reference keeps its positional form), the
+  spelling under which a bare `--until-done` cannot mistake the id for its count. The ES
+  landing page links the release notes, which stay English and generated (a translated copy
+  would be the second copy `gen-changelog.ts` exists to prevent); the untranslated `TLDRX_UI`
+  row on the ES flags page is generated from `gen-cli.ts`'s English-by-design env table and
+  was left alone.
+
 ## 0.18.1 — 2026-09-13
 
 ### Added

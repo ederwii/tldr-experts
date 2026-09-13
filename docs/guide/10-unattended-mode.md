@@ -40,13 +40,19 @@ the work.
 
 ## The three switches
 
-They are independent, and each is useful alone. Together they are the mode.
+They are independent, and each is useful alone. Together they are the mode. The four rows after
+them arrived later — who answers questions, how far the epic is carried, the scoped check — and
+the zero-touch recipe at the end of this chapter sets every one of them at `run new`.
 
 | Switch | Where | What it changes |
 |---|---|---|
 | `attended_by: host` | `run.yml` | The framework never spawns on this run. Every turn is the host's. |
 | `gates_policy: agent` | `run.yml`, per stage | A gate an agent may close, over a written, validated check. |
 | `economy: host-tokens` | `budget.yml`, per phase | The ceiling is not dollars, so it may not buy a metered spawn. |
+| `gates_policy: auto`, every stage | `run.yml`, via `run new --gates none` | No person approves any stage: each gate closes itself the moment its seven `auto` conditions hold. |
+| `questions_policy: recommended` | `run.yml`, via `run new --questions none` | `run auto` takes a question's own `Recommended:` pick instead of parking; one with no pick, or tagged `irreversible:` / `money:`, still parks for a person. |
+| `ship: push \| pr \| merge` | `run.yml`, via `run new --ship` | How far past the last gate the framework carries the epic: push it, open the PR, or arm `gh pr merge --auto` (#274: with no required checks on the remote, that merges at once). |
+| `commands.<slot>_scoped` | `workspace.yml`, per repo | A story's DoD runs the template over its own paths; the full command runs once, on the epic head, before the gate (#257). |
 
 ### Turning it on
 
@@ -719,10 +725,10 @@ carries on with the exit code it already had. "The owner was not told, and here 
 about the run; "the chat tool was down, so the run failed" would make a side channel load-bearing.
 A delivered one is `notify.sent`, with the kind, the exit code and the duration. Both cost `$0.00`.
 
-### The three flags
+### The flags
 
 ```
-$ tldrx run auto --notify-every 10m --wait-answers 30m --wait-gates 4h
+$ tldrx run auto --run <id> --notify-every 10m --wait-answers 30m --wait-gates 4h --until-done
 ```
 
 `--notify-every <duration>` sends a `status` payload on that interval while the loop runs, carrying
@@ -755,10 +761,18 @@ back to `ready` with your note exactly the same way, and the loop re-runs it ins
 exiting, which is what relaunching by hand used to do.
 
 It waits FOR a signature, and produces one only where the run already said it could. A stage on
-`gates_policy: agent` stops it exactly as a `human` one does — there is no engine-side
-evidence-writing signer in this loop, so `--wait-gates` waits for an agent to sign that gate over
-an evidence note, or for you to approve it yourself, which is a recorded override and is always
-allowed.
+`gates_policy: agent` has already had the engine's own gate signer run on it — one bounded turn
+that writes `.agent/<stage>/evidence.md` and goes through the unchanged `approve --as-agent`
+path — before this flag ever sees the gate, so what is left to wait for is a PERSON: you,
+approving it yourself, which is a recorded override and is always allowed.
+
+`--until-done [<n>]` is the bound OUTSIDE the loop, where `--retry-failed` is the one inside it.
+After an exit the loop can do nothing else with — a stage failure past the retry bound (`5`), a
+thrown error, a refusal whose remedy is the same command typed again (`2`) — the same process
+runs the loop again, at most `n` times (bare means 5, the cap), writing `run.relaunched` each
+time. Never over a person's exit `4`, never over a `budget.blocked` or its own `--max-usd`, and
+never twice over the same last line. Pass the run id as `--run <id>`: a bare `--until-done`
+followed by a positional id reads the id as its count and refuses it.
 
 **An `auto` gate is the exception, and it is the same authority the run already granted.** While
 it waits, each poll re-runs the seven auto conditions off disk; the moment every one holds, the
@@ -820,6 +834,45 @@ the citations.
 
 `--tldr` works on `--attended` too — terse output is orthogonal to who signs.
 
+## Zero-touch: the recipe that worked
+
+Measured once, on a real repository: a one-story bugfix went from a seed file to a merged pull
+request in 45 minutes with no human input between the launch command and the merge. It is the
+engine (`run auto`), not the lock — every gate one it may sign, every question one it may answer,
+and `--ship` for the last mile. A run where a person signs or answers is the rest of this chapter,
+not a flag on this one.
+
+```bash
+tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.md \
+  --gates none --questions none --ship pr --budget 40
+nohup tldrx run auto --run <id> --until-done --max-usd 40 \
+  --wait-answers 8h --wait-gates 8h --notify-every 30m --ui plain > /tmp/<id>.log 2>&1 &
+```
+
+- `--gates none` — a person approves no stage; every gate closes itself on its seven `auto`
+  conditions, frozen into `run.yml`.
+- `--questions none` — the loop takes each question's own `Recommended:` pick
+  (`decided_by: agent-default`) and escalates the ones with no pick or tagged
+  `irreversible:` / `money:`.
+- `--ship pr` — push `epic/<slug>` and open the PR when the run reads `done`. `merge` also arms
+  `gh pr merge --auto --merge`, and on a repository with **no required status checks** that
+  merges at once, nothing checked (#274, open).
+- `nohup … > /tmp/<id>.log 2>&1 &` — outlives the shell; both streams, because progress is on
+  stderr. `--ui plain` is log lines rather than a redrawn screen (a redirected log gets that
+  anyway; the flag says so on the command line).
+- `--until-done` — relaunch in-process after an exit the loop can do nothing with, at most 5
+  times; `--max-usd 40` spans every relaunch; the two `8h` waits only fire if something does need
+  a person, which on this path nothing should.
+
+Check on it with `tldrx run status <id>`, `tail -f /tmp/<id>.log`, and the `notify:` hook if one
+is declared. Stop it by ending the process first, then `tldrx run cancel <id> --note "…"` —
+`cancel` refuses a run whose `.lock` a live process still holds (exit `2`). The seed's own
+rules — one claim per bullet, ~200 characters with the citation, token last, a `Recommended:`
+line per question — are in [5 — Seeds and triage](05-seeds-and-triage.md#writing-a-seed-by-hand);
+the full walk-through with every flag on one line is
+[Zero-touch run, start to finish](https://ederwii.github.io/tldr-experts/guides/unattended-operation#zero-touch-run-start-to-finish)
+on the documentation site.
+
 ## Cheat sheet
 
 ```bash
@@ -845,12 +898,20 @@ tldrx next --prepare --fixlist 04-build/fixlist/S5-1.md 260830-tenancy
 tldrx gate template                         # the blank evidence note; signs nothing
 tldrx approve --as-agent                    # sign it; 2 = broken note, 4 = a person decides
 tldrx approve --note "…"                    # overrule, as yourself
+
+# zero-touch: every decision pre-taken, the engine in the background
+tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.md \
+  --gates none --questions none --ship pr --budget 40
+nohup tldrx run auto --run <id> --until-done --max-usd 40 \
+  --wait-answers 8h --wait-gates 8h --notify-every 30m --ui plain > /tmp/<id>.log 2>&1 &
+tldrx run status <id>                       # check on it; `tail -f /tmp/<id>.log` for the loop
+tldrx run cancel <id> --note "…"            # stop it, after the process is gone
 ```
 
 | Exit | On an unattended-mode command |
 |---|---|
 | `1` | `--as-agent` on a non-`agent` gate · `--evidence` with no `--as-agent` · `run auto` on an attended run · `--review` used headless |
-| `2` | a red precondition · a broken evidence note · a headless spawn on a `host-tokens` phase · an executor refusing headless |
+| `2` | a red precondition · a broken evidence note · a headless spawn on a `host-tokens` phase · an executor refusing headless · `run cancel` on a run a live process still holds |
 | `4` | a bare `tldrx next` on an attended run · an agent gate falling through · an evidence note that does not sign |
 
 Reference: [3 — Runs and gates](03-runs-and-gates.md) for the gate machinery,

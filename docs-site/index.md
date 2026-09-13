@@ -90,6 +90,20 @@ drives from. The mandate is what keeps the night honest — a developer sub-agen
 fresh reviewer that is never the author, a gate signed only over a written evidence note,
 and the four things it has to wake you for instead of deciding them.
 
+The other overnight shape needs no session at all: a small, well-seeded change handed to the
+engine with every decision pre-taken — measured once, a one-story bugfix went from seed to
+merged PR in 45 minutes with no human input.
+
+```bash
+tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.md \
+  --gates none --questions none --ship pr --budget 40
+nohup tldrx run auto --run <id> --until-done --max-usd 40 \
+  --wait-answers 8h --wait-gates 8h --notify-every 30m --ui plain > /tmp/<id>.log 2>&1 &
+```
+
+[Zero-touch run, start to finish](/guides/unattended-operation#zero-touch-run-start-to-finish)
+— what each flag means, how to write the seed, how to check on it and how to stop it.
+
 [Attended or unattended](/guides/driving) — the three ways to run a stage, which to pick,
 and what each one costs.
 
