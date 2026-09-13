@@ -48,6 +48,15 @@ tu propio `.tldrx/stages/build/stage.yml`, o `build: {parallel: N}` en un workfl
 cambia de forma permanente. Dos y no más porque un abanico más ancho es lo primero que
 sufre una laptop.
 
+Mergearlas en orden implica que, cuando le toca a la segunda, su rama ya quedó atrás de la
+épica: su DoD probó un árbol que no incluía el trabajo de la primera. Por eso, justo antes de
+mergear una story, Build revisa si la épica se movió desde que esa story se cortó y, si se
+movió, mergea la épica **dentro** del worktree de la story y vuelve a correr el DoD de esa
+story sobre el resultado. El costo es una corrida extra de la suite por story, y solo cuando
+la épica efectivamente se movió; una story cuya base está al día no paga nada. Un conflicto
+real bloquea esa story nombrando los archivos en conflicto, no mergea nada y deja su worktree
+tal como lo dejó el subagente: nunca a medio aplicar.
+
 Cuando una story queda `blocked`, lo que pasa después se decide **story por story**, a
 partir de `depends_on`. Una story posterior cuyas dependencias llegaron todas a `done`
 corre: estar en una ola detrás de una story bloqueada no frena nada por sí solo. Una story

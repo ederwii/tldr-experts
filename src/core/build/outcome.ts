@@ -283,6 +283,18 @@ export function dodGreen(outcome: Pick<StoryOutcome, "dod">): boolean {
 }
 
 /**
+ * The row a DoD faulted on, or `undefined` when every row is green — the row
+ * `dodFailureReason` is then asked about.
+ *
+ * Same reason as the sentence below: three call sites in the executor spelled
+ * this `find` out themselves, and the negation of `dodGreen` has to be read off
+ * the SAME predicate or a story can block with no row to name (§7).
+ */
+export function dodFailure(dod: readonly DodResult[]): DodResult | undefined {
+  return dod.find((r) => dodRefused(r) || r.exitCode !== 0 || r.timedOut);
+}
+
+/**
  * Why a story blocked on its Definition of Done — one sentence, one derivation.
  *
  * Two call sites in the executor built this string independently

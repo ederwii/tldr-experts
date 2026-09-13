@@ -39,6 +39,29 @@
   put a file back — which moves the six frozen developer prompts in
   `test/fixtures/build/golden/` by exactly those lines and nothing else (`*-events.txt`,
   `*-run-tasks.txt`, `*-exit-codes.txt` are byte-identical: the fixture has no refusal).
+- **A story no longer merges into its epic from the base it was cut from after a sibling moved
+  that epic (#268).** A wave runs its stories at `--parallel N` from one tip and merges them one
+  after another, so every story but the first merges from a base that is already behind — and
+  its DoD proved a tree without the sibling's work in it. Measured 2026-09-13 in a field
+  workspace: a dependent story finished green, hit `CONFLICT (content)` in a handler and two of
+  its tests at the merge, and settled `blocked` with verdict `n-a` and no reviewer run; the
+  prose note telling the developer to rebase does not make anything rebase, so a person did it
+  by hand, three times in one week. Build now measures the story branch against the epic tip
+  immediately before the merge and, when the epic has moved, merges the epic INTO the story in
+  the story's own worktree and re-runs the story's DoD on the result. **The cost, plainly: one
+  extra DoD per story, and only when the epic actually moved since that story's base** — the
+  re-run is charged on the story's HEAD moving, so a story whose base is current pays nothing
+  and emits nothing. **A conflict blocks the story and names the conflicting files**, merges
+  nothing, and leaves the worktree exactly where the developer left it (`git merge --abort` has
+  already run) — a half-applied merge is worse than a blocked story, and "merge conflict" with
+  no paths in it is the refusal that sends a person to a worktree the executor has since
+  pruned. It is a merge and never a rebase, for the reason the fast-forward path already gives:
+  rewriting a branch a developer has committed to is the move the run-id-in-branch-name rule
+  exists to prevent, and every rescued sha (#129) is a promise a rebase breaks. Whether the epic
+  moved comes from the existing `baseStateOf`/`commitsBetween` derivation, and a count git could
+  not take is NOT read as "did not move" (#273): it falls through to the merge, which writes
+  nothing when the branch really was current. A move that happens is one new event,
+  `story.base_updated` (§2.9) — the record that the extra DoD was paid, and for which commits.
 - **A seed bullet over the claim cap no longer has its citation cut in half, and the refusal
   stops naming a path that is not a file (#275).** Measured on 0.18.1 in a field workspace:
   three seeds written the same day, every path in them verified with `test -e`, were refused by

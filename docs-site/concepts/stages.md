@@ -46,6 +46,15 @@ the epic in the wave's listed order however the two finish. `tldrx next --parall
 `.tldrx/stages/build/stage.yml`, or `build: {parallel: N}` in a workflow, changes it for
 good. Two rather than more because a wider fan-out is what a laptop notices first.
 
+Merging them in order means the second one's branch is behind the epic by the time its turn
+comes — its definition of done proved a tree without the first story's work in it. So just
+before a story merges, Build checks whether the epic moved since that story was cut, and if it
+did, it merges the epic **into** the story's own worktree and runs that story's definition of
+done again on the result. The cost is one extra run of the suite per story, and only when the
+epic actually moved; a story whose base is current pays nothing. A real conflict blocks that
+story with the conflicting files named, merges nothing, and leaves its worktree exactly as the
+sub-agent left it — never half-applied.
+
 When a story ends `blocked`, what happens next is decided **per story**, from `depends_on`.
 A later story whose dependencies all reached `done` runs — being in a wave behind a blocked
 story holds nothing back on its own. A story that really does depend on the blocked one is

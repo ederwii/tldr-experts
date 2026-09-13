@@ -147,6 +147,18 @@ import {
  * dirty branch is warned about on stdout and changed by nothing, so it has no
  * event, because nothing happened.
  *
+ * `story.base_updated` was added 2026-09-13 (issue #268), and is the SECOND
+ * event that records tldrx moving a ref. The first moves a story branch before a
+ * developer is put on it; this one moves it at the other end, immediately before
+ * it merges back, because the epic moves in between — a wave runs its stories at
+ * `--parallel N` from one tip and merges them one after another. The epic is
+ * merged INTO the story (never a rebase, for the reason `fastForward` gives) and
+ * the story's DoD is re-run on the result, so this event is also the record of
+ * an extra DoD being PAID: it is emitted only when the story's HEAD actually
+ * moved, which is the same condition the second DoD is charged on. Its payload
+ * is `story.base_fastforwarded`'s — story, repo, branch, base, `from`, `to`,
+ * `commits` — because it is the same measurement of the same move.
+ *
  * `epic.released` was added 2026-09-13 (issue #272). It is the third event that
  * records tldrx touching a REF on the operator's behalf: an `epic/<slug>` branch
  * a FINISHED run claimed, released so the name is free for the next run of the
@@ -180,7 +192,8 @@ export const EVENT_TYPES = [
   "question.asked", "question.answered",
   "gate.requested", "gate.approved", "gate.rejected", "gate.revoked", "gate.policy_changed",
   "questions.policy_changed",
-  "story.reopened", "story.base_fastforwarded", "story.review_retried", "story.work_rescued",
+  "story.reopened", "story.base_fastforwarded", "story.base_updated", "story.review_retried",
+  "story.work_rescued",
   "story.touches_widened",
   "epic.released",
   "worktree.foreign_work_aside", "worktree.foreign_work_restored",

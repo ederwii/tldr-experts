@@ -517,3 +517,113 @@ export async function rescueUncommitted(parts: RescueParts): Promise<RescuedWork
     return { sha, branch: parts.branch, worktree: null, failure: null };
   });
 }
+
+/** What `updateStoryBase` needs to bring a story branch onto its epic's tip. */
+export interface UpdateParts {
+  readonly storyId: string;
+  readonly repoDir: string;
+  readonly worktree: string;
+  readonly branch: string;
+  readonly epicBranch: string;
+}
+
+/**
+ * What became of the attempt — and `current` is the one that costs nothing.
+ *
+ * `why` on `current` is `null` for the ordinary "the epic has not moved", and a
+ * sentence when the answer came from a merge that found nothing to do after a
+ * count git could not take: "I looked and there was nothing" and "I could not
+ * count, so I looked" are the same INACTION and not the same claim.
+ */
+export type StoryBaseUpdate =
+  | { readonly kind: "current"; readonly why: string | null }
+  | {
+      readonly kind: "updated";
+      readonly from: string;
+      readonly to: string;
+      /** Commits the epic carried that the story did not. `0` when git could not count. */
+      readonly behind: number;
+      readonly uncounted: string | null;
+    }
+  | { readonly kind: "blocked"; readonly conflicts: readonly string[]; readonly detail: string };
+
+/**
+ * A story branch brought up to its epic's tip immediately BEFORE it merges back
+ * (gh #268).
+ *
+ * `refreshStoryBase` above answers the same question at the other end of the
+ * story — before a developer is dispatched — and that is not enough, because the
+ * epic moves in between: a wave runs its stories at `--parallel N` from one tip
+ * and merges them one after another, so every story but the first merges from a
+ * base that is already behind. Measured live 2026-09-13 (#268): a dependent
+ * story whose DoD was green merged into an epic a sibling had moved, got
+ * `CONFLICT (content)` in a handler and two of its tests, and settled `blocked`
+ * with no rebase attempted and no reviewer run. A person fixed that by hand
+ * three times in one week.
+ *
+ * **A merge, not a rebase, and that is not a preference.** Rewriting a branch a
+ * developer has already committed to is the class of move the
+ * run-id-in-branch-name fix exists to prevent (2026-08-29 audit §B) and the
+ * reason `fastForward` says "never a rebase" two files up; the rescued-work
+ * invariant (#129) is also a promise about shas that survive, and a rebase
+ * abandons every one of them. `git merge --no-ff <epic>` in the story's own
+ * worktree keeps the developer's commits reachable, and it makes the merge back
+ * into the epic the trivial one it should have been.
+ *
+ * **Whether the epic moved is measured, and an unmeasurable answer is not a
+ * "no".** `baseStateOf` is the one derivation for that question (§7), and the
+ * count behind it returns `null` when git could not answer (#273). "Could not
+ * count" is NOT "did not move", so it falls through to the merge — which is a
+ * no-op exiting 0 when the branch really was current, and the DoD below is
+ * charged on the HEAD SHA MOVING and on nothing else. That is the whole cost
+ * rule: a story whose epic did not move pays nothing, whether or not git felt
+ * like counting.
+ *
+ * **A conflict leaves nothing half-applied.** `mergeNoFf` runs `git merge
+ * --abort` before it returns, so `blocked` here is a story whose worktree is
+ * exactly where the developer left it and an epic that was never opened.
+ */
+export async function updateStoryBase(parts: UpdateParts): Promise<StoryBaseUpdate> {
+  const base = await baseStateOf(parts.repoDir, parts.branch, parts.epicBranch);
+  if (base.state === "current" && base.uncounted === null) return { kind: "current", why: null };
+  // The same assertion the epic worktree gets on every reuse, for the same
+  // reason: this is about to write a merge commit, and a worktree that is not on
+  // the branch it is named for would write it somewhere else (#40).
+  await assertWorktreeOn(parts.worktree, parts.branch, "story worktree");
+  const from = await headSha(parts.worktree);
+  const merged = await mergeNoFf(
+    parts.worktree,
+    parts.epicBranch,
+    // `sync(` and not `merge(`, deliberately: `merge(<story>): <title>` is the
+    // subject of a STORY landing on the epic, and readers of `git log <epic>`
+    // — a person, and `build-parallel.test.ts`'s merge-order assertion — take
+    // that prefix to mean exactly that. This commit is the opposite direction.
+    `sync(${parts.storyId}): \`${parts.epicBranch}\` moved under this story before it merged back`,
+  );
+  if (!merged.ok) return { kind: "blocked", conflicts: merged.conflicts, detail: merged.detail };
+  const to = await headSha(parts.worktree);
+  // `git merge --no-ff` on a branch that already has the epic says "Already up
+  // to date" and writes NO commit, so an unmoved HEAD is the measurement that
+  // the epic had nothing for this story — including on the uncounted path,
+  // where it is the only measurement there is.
+  if (to === from || to === "") return { kind: "current", why: base.uncounted };
+  return { kind: "updated", from, to, behind: base.behind, uncounted: base.uncounted };
+}
+
+/**
+ * The sentence a story blocked on a base it could not be brought up to is named
+ * with — exported so tests assert the marker and not a word of English prose,
+ * and so the operator line and the story's `reason:` cannot drift apart.
+ *
+ * It names the FILES, because "merge conflict" without them is the refusal that
+ * sent three people to `git status` in a worktree the executor had already
+ * cleaned up.
+ */
+export function staleBaseConflict(
+  branch: string, epicBranch: string, conflicts: readonly string[], detail: string, where: string,
+): string {
+  const files = conflicts.length > 0 ? conflicts.join(", ") : detail;
+  return `\`${epicBranch}\` moved since \`${branch}\` was cut, and bringing the story up to it `
+    + `CONFLICTS in ${files} — nothing was merged and nothing is half-applied. `
+    + `Resolve it in ${where} (\`git merge ${epicBranch}\`), then reopen the story`;
+}

@@ -236,6 +236,13 @@ function bullet(item: NumberedEvent, trail: Map<string, ReviewerProvenance | nul
       return `${prefix}story ${text(payload.story) || "?"}'s base fast-forwarded to`
         + ` \`${text(payload.base) || "?"}\` — ${text(payload.from) || "?"} → ${text(payload.to) || "?"}`
         + ` (${String(payload.commits ?? "?")} commit(s))`;
+    // The same ref, moved at the other end of the story (#268) — and the line a
+    // reader needs to see before the extra DoD beside it, or that second run of
+    // the suite reads as the framework charging twice for nothing.
+    case "story.base_updated":
+      return `${prefix}story ${text(payload.story) || "?"}'s base UPDATED to`
+        + ` \`${text(payload.base) || "?"}\` before merging — ${text(payload.from) || "?"} →`
+        + ` ${text(payload.to) || "?"} (${String(payload.commits ?? "?")} commit(s) behind), DoD re-run`;
     // The other one (#129). A narrative that showed a story blocked and its
     // worktree gone, with nothing in between, would be the narrative of the
     // incident this event exists to make impossible: work destroyed in silence.
