@@ -113,8 +113,7 @@ const META_RE = /[|&;<>$`(){}*?~\\]/;
 export function splitArgv(command: string): readonly string[] | null {
   if (/[\n\r]/.test(command)) return null;
   const argv: string[] = [];
-  const pattern = /"([^"]*)"|'([^']*)'|([^\s"']+)/g;
-  for (const match of command.matchAll(pattern)) {
+  for (const match of command.matchAll(TOKEN_RE)) {
     if (match[1] !== undefined || match[2] !== undefined) {
       argv.push(match[1] ?? match[2] ?? "");
       continue;
@@ -124,6 +123,43 @@ export function splitArgv(command: string): readonly string[] | null {
     argv.push(bare);
   }
   return argv.length === 0 ? null : argv;
+}
+
+/**
+ * The ONE tokenizer: a double-quoted word, a single-quoted word, or a bare word.
+ * `splitArgv` and `unquotedShellSeparator` both read a line through it, so the
+ * two can never disagree about whether a `;` sits inside quotes. (`matchAll`
+ * clones a `/g` pattern per call; sharing the constant carries no `lastIndex`.)
+ */
+const TOKEN_RE = /"([^"]*)"|'([^']*)'|([^\s"']+)/g;
+
+/**
+ * The SUBSET of `META_RE` that splits a line into more than one command: a
+ * control operator (`| || & && ;`), a redirection (`< > >> 2>&1`), a command or
+ * process substitution (`$( <( >(`) or a backtick. A glob, a tilde, braces and
+ * a plain `$VAR` are metacharacters `splitArgv` refuses to run without a shell,
+ * but they do not make a line TWO commands, which is the question this answers.
+ */
+const SEPARATOR_RE = /\|\||&&|2>&1|>>|\$\(|[|&;<>`]/;
+
+/**
+ * The first bare separator that turns one line into several commands, or null.
+ *
+ * Bare means as `splitArgv` reads it: a separator INSIDE quotes is an argument
+ * (gh #278 — `git commit -m "fix; and more"` is one command). The OPERATOR is
+ * returned (`&&`, `;`, `2>&1`, `$(`, a backtick) rather than the word it was
+ * glued to (`build.sh;`), so a record can name it; a newline is one too. This
+ * is a reading of the LINE, not of the host — whether an agent CLI's permission
+ * layer treats quotes the same way is measured elsewhere, not here.
+ */
+export function unquotedShellSeparator(command: string): string | null {
+  if (/[\n\r]/.test(command)) return "\n";
+  for (const match of command.matchAll(TOKEN_RE)) {
+    if (match[1] !== undefined || match[2] !== undefined) continue;
+    const found = SEPARATOR_RE.exec(match[3] ?? "");
+    if (found !== null) return found[0];
+  }
+  return null;
 }
 
 export class DodCommandRefused extends Error {}

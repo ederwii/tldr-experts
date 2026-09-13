@@ -2,7 +2,7 @@
 /**
  * A fake `claude` for the Build executor's tests: it plays BOTH sub-agents.
  *
- * Which one it is playing is read off the prompt's first line — `# Build — story
+ * Which one it is playing is read off the prompt's heading line — `# Build — story
  * S1 …` is the developer, `# Review — story S1 …` is the reviewer — because that
  * is the same thing the real model would key on, and it means a prompt that lost
  * its heading fails the test instead of passing it quietly.
@@ -37,7 +37,10 @@ if (argvLog !== undefined && argvLog !== "") appendFileSync(argvLog, `${JSON.str
 let prompt = "";
 for await (const chunk of process.stdin) prompt += String(chunk);
 
-const heading = prompt.split("\n")[0] ?? "";
+// gh #278: the one re-spawn after a chained refusal carries the cure IN FRONT of
+// the prompt, so the heading is the first `# ` line and no longer line 1. A
+// prompt with no heading line at all still lands on `S?` and fails its test.
+const heading = prompt.split("\n").find((line) => line.startsWith("# ")) ?? "";
 const role = heading.startsWith("# Review") ? "reviewer" : "developer";
 const storyId = /story (S\d+)/.exec(heading)?.[1] ?? "S?";
 

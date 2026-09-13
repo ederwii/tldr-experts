@@ -20,6 +20,7 @@ import { PLAN_STATUSES, type PlanStatus } from "../schemas/planCommon.ts";
 import { withoutSrcToken } from "../text/srcToken.ts";
 import { spentFigure } from "../budget/spentFigure.ts";
 import type { WideningRow } from "./measuredTouches.ts";
+import { withCure } from "./refusalKind.ts";
 
 export interface EpicSummaryRow {
   readonly id: string;
@@ -298,11 +299,16 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
         `- ${o.id} is \`${o.status}\` and needs a human: ${o.reason ?? "see the review"} ` +
         `[src: ${o.reviewRel}:1]`,
     ),
+    // gh #278: the cure the refused line shows (a chain, an ungranted verb with
+    // its granted equivalent) rides on the bullet, before the citation.
     ...refusedButMeasured.map(
       (o) =>
-        `- ${o.id}'s developer had \`${o.permissionRefused ?? ""}\` refused for approval by the agent's own ` +
-        `permission layer; its tree held committed work, so the Definition of Done decided and the story is ` +
-        `\`${o.status}\` — a person may still want to know the command it could not run [src: ${o.reviewRel}:1]`,
+        withCure(
+          `- ${o.id}'s developer had \`${o.permissionRefused ?? ""}\` refused for approval by the agent's own ` +
+          `permission layer; its tree held committed work, so the Definition of Done decided and the story is ` +
+          `\`${o.status}\` — a person may still want to know the command it could not run`,
+          o.permissionRefused ?? "",
+        ) + ` [src: ${o.reviewRel}:1]`,
     ),
     ...diedButMeasured.map(
       (o) =>

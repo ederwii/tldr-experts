@@ -4,6 +4,41 @@
 
 ### Fixed
 
+- **A headless permission refusal now names its cure, a chained line is retried once with
+  the cure in front of the prompt, and the developer prompt lists the git verbs it holds
+  (#278).** Measured on two real unattended runs in one day: six refusals, sonnet AND opus
+  developers, with #271's "verbatim and alone" rule already in every prompt and explicit
+  operator notes saying the same. Every refused line was one of two shapes — a shell chain
+  (`git checkout -- f && sha256sum f && git status`, `scripts/gate/build.sh; echo "EXIT:$?"`,
+  `cmd > log 2>&1`, `diff <(…) | head`) or a git verb the developer does not hold
+  (`git checkout --`, `git status`, `git log`, `git rev-parse`) — and every one had the same
+  arc: no work since spawn, blocked after one attempt, a person reopens it, the same refusal
+  again. The ledger could not tell the two causes apart because it recorded both with #261's
+  one sentence, and a person reading it got the symptom (`was refused`) and not what would have
+  run. Three things move, one leaf each, none of them a second rule. The refused line is
+  CLASSIFIED (`build/refusalKind.ts`: `separator` when it chains commands, read through the
+  SAME tokenizer `splitArgv` runs every DoD command through, so a `;` inside quotes is an
+  argument there and here; `verb` when it is `git <verb>` alone and the verb is outside the
+  allowance, with the granted equivalent named where one exists — `checkout --` and
+  `checkout <path>` → `git restore <path>`, `reset -- <path>` and `reset HEAD <path>` → `git
+  restore --staged <path>`, and NONE invented for a branch switch or a `--hard`; `unknown` for
+  everything else, which keeps #261's sentence byte-identical there). The recorded reason
+  keeps #261's text as its base and appends `The cure: …` — on the gate's `blocked_reason`,
+  the story's review log and the handoff's `## Unknowns`, through one joiner. And a
+  `separator` refusal with no work in the tree is re-spawned ONCE within the same attempt,
+  the refused line and the rule as the prompt's first lines (`MAX_SEPARATOR_RETRIES = 1`,
+  pinned: the second refusal blocks, with the reason saying the cure was stated and refused
+  too); the retry's turn is a `run.yml` task row and an `agent.spawned` like any other, with
+  additive `retry: "separator-cure"` and `retry_after: <line>` on that spawn — never hidden.
+  `verb` and `unknown` are NEVER retried: a verb the allowance lacks will be lacking again,
+  and a cause the line does not show cannot be cured by restating it. Why the prompt moves
+  too: `developerTools()` granted `git restore` since #261 and nothing told the developer
+  which verbs it had, so a "mutate, observe RED, restore" story reached for the commonest one.
+  The verbs are now listed in the prompt from the one constant the grant is built from and the
+  classifier reads (`build/developerGrants.ts`), with `git restore <path>` named as the way to
+  put a file back — which moves the six frozen developer prompts in
+  `test/fixtures/build/golden/` by exactly those lines and nothing else (`*-events.txt`,
+  `*-run-tasks.txt`, `*-exit-codes.txt` are byte-identical: the fixture has no refusal).
 - **A seed bullet over the claim cap no longer has its citation cut in half, and the refusal
   stops naming a path that is not a file (#275).** Measured on 0.18.1 in a field workspace:
   three seeds written the same day, every path in them verified with `test -e`, were refused by

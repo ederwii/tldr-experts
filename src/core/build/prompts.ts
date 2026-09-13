@@ -24,6 +24,7 @@ import { FINDING_KINDS } from "./fixlist.ts";
 import { reviewDiffCommand } from "./git.ts";
 import { dodRefused } from "./outcome.ts";
 import type { PlannedEpic, PlannedStory } from "./plan.ts";
+import { DEVELOPER_GIT_VERBS } from "./developerGrants.ts";
 
 /**
  * `[assumption]` — the spec sets no inline budget for a story's touched files.
@@ -192,6 +193,16 @@ export interface DeveloperPromptParts {
   readonly notInWorktree?: ReadonlySet<string>;
 }
 
+/**
+ * `git add`, `git commit`, `git rm`, `git mv` and `git restore` — rendered from
+ * the constant the grant is built from (gh #278), so the prompt cannot name a
+ * verb the allowance lacks or omit one it holds.
+ */
+function gitVerbList(): string {
+  const names = DEVELOPER_GIT_VERBS.map((verb) => `\`git ${verb}\``);
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1] ?? ""}`;
+}
+
 export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
   const { story } = parts.story;
   const extra = parts.story.extraInputs ?? [];
@@ -278,7 +289,13 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     ...(parts.testFast === undefined
       ? []
       : [...testFastRule(parts.testFast.fast, parts.testFast.full), ""]),
-    "Commit with `git add` and `git commit`. Nothing else about git is yours to do.",
+    // gh #278: the verbs are LISTED, from the constant the grant is built from.
+    // Measured on a field run: a "mutate, observe RED, restore" story reached for
+    // `git checkout -- <path>`, was refused, and blocked — with `git restore`
+    // granted and nothing in this prompt saying so.
+    `Commit with \`git add\` and \`git commit\`. The git verbs you hold are exactly ${gitVerbList()}.`,
+    "`git restore <path>` is how to put a file back (there is no checkout in that list). Nothing",
+    "else about git is yours to do.",
     "",
     "## Rules",
     "",

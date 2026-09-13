@@ -1,0 +1,255 @@
+/**
+ * gh #278 — a headless permission refusal names its CURE, not only its symptom.
+ *
+ * Measured on two real runs in one day (six refusals, sonnet and opus
+ * developers, with #271's prompt sentence in front of them): every refused line
+ * was either a CHAIN (`a && b`, `cmd; echo`, `cmd > log 2>&1`, `diff <(…)`) or
+ * a git VERB the developer does not hold (`git checkout --`, `git status`,
+ * `git log`, `git merge-tree`, `git rev-parse`), and the ledger recorded both
+ * causes with one identical sentence. This file pins the classifier — one leaf,
+ * data in, data out — the cure sentence each kind appends, the verb list the
+ * prompt derives from the SAME constant the grant is built from, and the one
+ * retry bound.
+ */
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  classifyRefusal, MAX_SEPARATOR_RETRIES, refusalCure, separatorCurePrefix,
+} from "../src/core/build/refusalKind.ts";
+import { DEVELOPER_GIT_VERBS, developerGitGrants } from "../src/core/build/developerGrants.ts";
+import { developerTools, permissionBlockReason } from "../src/core/facilitator/executors/build.ts";
+import { buildDeveloperPrompt } from "../src/core/build/prompts.ts";
+import { unquotedShellSeparator } from "../src/hooks/lib/story.ts";
+import type { PlannedEpic, PlannedStory } from "../src/core/build/plan.ts";
+
+// The six lines measured in the field, verbatim shape (paths shortened).
+const FIELD = {
+  checkoutChain: "git checkout -- src/f.cs && sha256sum src/f.cs && git status",
+  mergeTreePipe: "git merge-tree epic HEAD 2>&1 | head -100",
+  gateEcho: 'scripts/gate/build.sh; echo "EXIT:$?"',
+  gateRedirect: "scripts/gate/build.sh > /tmp/build_out.txt 2>&1; echo",
+  diffSubst: "diff <(sed -n '1,300p' f) /dev/null | head -5; git log -1 -- f; git log -1 -- g",
+  revParse: "git rev-parse HEAD:f; git hash-object f; mkdir -p /tmp/s2ev",
+} as const;
+
+describe("unquotedShellSeparator — the tokenizer `splitArgv` already has, asked one question", () => {
+  test("every bare separator is found, and named", () => {
+    expect(unquotedShellSeparator("a && b")).toBe("&&");
+    expect(unquotedShellSeparator("a || b")).toBe("||");
+    expect(unquotedShellSeparator("a | head")).toBe("|");
+    expect(unquotedShellSeparator("a; b")).toBe(";");
+    expect(unquotedShellSeparator("a > log")).toBe(">");
+    expect(unquotedShellSeparator("a >> log")).toBe(">>");
+    expect(unquotedShellSeparator("a < in")).toBe("<");
+    expect(unquotedShellSeparator("a 2>&1")).toBe("2>&1");
+    expect(unquotedShellSeparator("echo $(date)")).toBe("$(");
+    expect(unquotedShellSeparator("diff <(sort a) b")).toBe("<");
+    expect(unquotedShellSeparator("echo `date`")).toBe("`");
+    expect(unquotedShellSeparator("a &")).toBe("&");
+  });
+
+  test("a separator INSIDE quotes is an argument, not a separator — as this tokenizer reads quotes", () => {
+    // `splitArgv` hands a quoted token to the child whole; the same reading here,
+    // so the two cannot disagree about one line. Whether the HOST's permission
+    // layer reads quotes the same way is not claimed by this test.
+    expect(unquotedShellSeparator('git commit -m "fix; and more"')).toBeNull();
+    expect(unquotedShellSeparator("git commit -m 'a && b'")).toBeNull();
+    expect(unquotedShellSeparator('echo "EXIT:$?"')).toBeNull();
+  });
+
+  test("a glob, a tilde or a plain `$VAR` is a metacharacter `splitArgv` refuses, but NOT a separator", () => {
+    expect(unquotedShellSeparator("git add *.ts")).toBeNull();
+    expect(unquotedShellSeparator("ls ~/x")).toBeNull();
+    expect(unquotedShellSeparator("echo $HOME")).toBeNull();
+  });
+
+  test("a newline splits a line as surely as `;`", () => {
+    expect(unquotedShellSeparator("a\nb")).toBe("\n");
+  });
+});
+
+describe("classifyRefusal (gh #278)", () => {
+  test("every field line with a chain is `separator`, named by its first separator", () => {
+    expect(classifyRefusal(FIELD.checkoutChain)).toEqual({ kind: "separator", separator: "&&" });
+    expect(classifyRefusal(FIELD.mergeTreePipe)).toEqual({ kind: "separator", separator: "2>&1" });
+    expect(classifyRefusal(FIELD.gateEcho)).toEqual({ kind: "separator", separator: ";" });
+    expect(classifyRefusal(FIELD.gateRedirect)).toEqual({ kind: "separator", separator: ">" });
+    expect(classifyRefusal(FIELD.diffSubst)).toEqual({ kind: "separator", separator: "<" });
+    expect(classifyRefusal(FIELD.revParse)).toEqual({ kind: "separator", separator: ";" });
+  });
+
+  test("a chain is `separator` even when its first fragment is also an ungranted verb — the chain is what runs first", () => {
+    expect(classifyRefusal("git checkout -- f && git status").kind).toBe("separator");
+  });
+
+  test("an ungranted git verb, alone, is `verb`, with the granted equivalent named where one exists", () => {
+    expect(classifyRefusal("git checkout -- src/f.cs")).toEqual({
+      kind: "verb", verb: "checkout", equivalent: "git restore <path>",
+    });
+    expect(classifyRefusal("git checkout src/f.cs")).toEqual({
+      kind: "verb", verb: "checkout", equivalent: "git restore <path>",
+    });
+    expect(classifyRefusal("git reset -- src/f.cs")).toEqual({
+      kind: "verb", verb: "reset", equivalent: "git restore --staged <path>",
+    });
+    expect(classifyRefusal("git reset HEAD src/f.cs")).toEqual({
+      kind: "verb", verb: "reset", equivalent: "git restore --staged <path>",
+    });
+  });
+
+  test("an ungranted verb with NO granted equivalent says so, and invents none", () => {
+    expect(classifyRefusal("git status")).toEqual({ kind: "verb", verb: "status", equivalent: null });
+    expect(classifyRefusal("git log -1 -- f")).toEqual({ kind: "verb", verb: "log", equivalent: null });
+    expect(classifyRefusal("git merge-tree epic HEAD")).toEqual({ kind: "verb", verb: "merge-tree", equivalent: null });
+    // A branch switch is not a file restore: no equivalent is offered for it.
+    expect(classifyRefusal("git checkout -b topic")).toEqual({ kind: "verb", verb: "checkout", equivalent: null });
+    expect(classifyRefusal("git reset --hard")).toEqual({ kind: "verb", verb: "reset", equivalent: null });
+  });
+
+  test("a GRANTED git verb that was still refused is `unknown` — the grant is not the cause and no cure is claimed", () => {
+    // #261's measured shape: refused for a reason the line does not show.
+    expect(classifyRefusal("git rm -- unused.txt")).toEqual({ kind: "unknown" });
+    expect(classifyRefusal("git commit -m 'a; b'")).toEqual({ kind: "unknown" });
+  });
+
+  test("a non-git line with no separator, and a git line with a global option before the verb, are `unknown`", () => {
+    expect(classifyRefusal("sha256sum src/f.cs")).toEqual({ kind: "unknown" });
+    expect(classifyRefusal("git -C /elsewhere rm -- o.txt")).toEqual({ kind: "unknown" });
+    expect(classifyRefusal("")).toEqual({ kind: "unknown" });
+  });
+
+  test("the verb allowlist the classifier reads IS the one the grant is built from", () => {
+    for (const verb of DEVELOPER_GIT_VERBS) {
+      expect(classifyRefusal(`git ${verb} x`)).toEqual({ kind: "unknown" });
+      expect(developerTools([])).toContain(`Bash(git ${verb} *)`);
+    }
+    expect(developerGitGrants()).toEqual(DEVELOPER_GIT_VERBS.map((verb) => `Bash(git ${verb} *)`));
+    // Every `Bash(git …)` grant the developer holds comes from the constant.
+    const gitGrants = developerTools([]).filter((tool) => tool.startsWith("Bash(git "));
+    expect(gitGrants).toEqual([...developerGitGrants()]);
+  });
+});
+
+describe("refusalCure — the sentence each kind appends", () => {
+  test("separator: run each command alone, and why", () => {
+    expect(refusalCure(classifyRefusal(FIELD.gateEcho))).toBe(
+      "run each command alone — shell separators split a line into subcommands that each need their own grant",
+    );
+  });
+
+  test("verb with an equivalent names it; without one it names only the refusal", () => {
+    expect(refusalCure(classifyRefusal("git checkout -- f"))).toBe("`git checkout` is not granted; use `git restore <path>`");
+    expect(refusalCure(classifyRefusal("git status"))).toBe("`git status` is not granted");
+  });
+
+  test("unknown: nothing is appended", () => {
+    expect(refusalCure(classifyRefusal("git rm -- unused.txt"))).toBe("");
+  });
+
+  // #261's exact wording as the BASE — the cure follows it, never replaces it.
+  const BASE_FOR = (command: string): string =>
+    `permission — \`${command}\` was refused for approval by the agent's own permission layer, `
+    + "and a headless turn has nobody to approve it: the same allowance would refuse it again, "
+    + "so this attempt was not repeated";
+
+  test("permissionBlockReason keeps #261's text verbatim as the base and appends the cure", () => {
+    expect(permissionBlockReason("git rm -- unused.txt")).toBe(BASE_FOR("git rm -- unused.txt"));
+    expect(permissionBlockReason(FIELD.gateEcho)).toBe(
+      `${BASE_FOR(FIELD.gateEcho)}. The cure: run each command alone — shell separators split a line `
+      + "into subcommands that each need their own grant",
+    );
+    expect(permissionBlockReason("git checkout -- f")).toBe(
+      `${BASE_FOR("git checkout -- f")}. The cure: \`git checkout\` is not granted; use \`git restore <path>\``,
+    );
+  });
+
+  test("a block AFTER the one retry says the cure was already stated once", () => {
+    expect(permissionBlockReason("git checkout -- f", { retried: true })).toBe(
+      `${BASE_FOR("git checkout -- f")} beyond the one re-spawn with the cure stated, which was refused too. `
+      + "The cure: `git checkout` is not granted; use `git restore <path>`",
+    );
+  });
+});
+
+describe("the one retry (gh #278)", () => {
+  test("the bound is ONE, by name", () => {
+    expect(MAX_SEPARATOR_RETRIES).toBe(1);
+  });
+
+  test("the cure prefix names the refused line and the rule, first", () => {
+    const prefix = separatorCurePrefix(FIELD.gateEcho);
+    expect(prefix.split("\n")[0]).toBe(
+      `Your previous command \`${FIELD.gateEcho}\` was refused because it chains commands. Run each command alone.`,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The developer prompt lists the verbs it holds — from the constant, and no other.
+// ---------------------------------------------------------------------------
+
+const EPIC: PlannedEpic = {
+  epic: {
+    version: 1, id: "E1", title: "One epic", repos: ["app"],
+    stories: ["S1"], branch: "epic/e1", status: "todo",
+  },
+  text: "# E1\n",
+  path: "/nowhere/E1.md",
+  rel: "03-plan/epics/E1.md",
+};
+
+const STORY: PlannedStory = {
+  story: {
+    version: 1, id: "S1", epic: "E1", title: "One story",
+    repo: "app", status: "todo", depends_on: [], touches: [],
+    acceptance: ["it works"], test_plan: ["$ npm run test -> exit 0"], evidence: [],
+  },
+  dod: { present: true, commands: ["npm run test"] },
+  text: "# S1\n",
+  path: "/nowhere/S1.md",
+  rel: "03-plan/stories/S1.md",
+  wave: "W1",
+  goal: [],
+};
+
+function prompt(): string {
+  return buildDeveloperPrompt({
+    runId: "260913-r",
+    story: STORY,
+    epic: EPIC,
+    repoName: "app",
+    branch: "story/260913-r/S1",
+    epicBranch: "epic/e1",
+    worktree: "/nowhere",
+    commands: ["npm run test"],
+    conventions: "_none_",
+    facts: "_none_",
+    experts: [],
+    budgetUsd: 4,
+  });
+}
+
+describe("the developer prompt's git verbs (gh #278)", () => {
+  test("the prompt names every verb from the constant and no other `git <verb>`", () => {
+    const text = prompt();
+    const named = new Set([...text.matchAll(/`git ([a-z-]+)/g)].map((m) => m[1]));
+    expect([...named].sort()).toEqual([...DEVELOPER_GIT_VERBS].sort());
+    // The LIST line itself, in order — the sentence before it already says
+    // `git add` and `git commit`, so a list that dropped one of those would pass
+    // the set check above (measured: a `.slice(1)` mutation did). This one reads
+    // the list and only the list.
+    const line = text.split("\n").find((l) => l.includes("The git verbs you hold are exactly ")) ?? "";
+    const list = line.slice(line.indexOf("exactly "));
+    expect([...list.matchAll(/`git ([a-z-]+)`/g)].map((m) => m[1])).toEqual([...DEVELOPER_GIT_VERBS]);
+  });
+
+  test("`git restore <path>` is named as the way to put a file back", () => {
+    expect(prompt()).toContain("`git restore <path>` is how to put a file back");
+  });
+
+  test("the list in the prompt is rendered from the constant, so the two cannot drift", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "src", "core", "build", "prompts.ts"), "utf8");
+    expect(source).toContain("DEVELOPER_GIT_VERBS");
+  });
+});

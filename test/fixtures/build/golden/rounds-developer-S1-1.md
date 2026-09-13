@@ -106,7 +106,9 @@ ones you may run, and they are the same ones the Definition of Done re-runs:
 
 - `npm run test`
 
-Commit with `git add` and `git commit`. Nothing else about git is yours to do.
+Commit with `git add` and `git commit`. The git verbs you hold are exactly `git add`, `git commit`, `git rm`, `git mv` and `git restore`.
+`git restore <path>` is how to put a file back (there is no checkout in that list). Nothing
+else about git is yours to do.
 
 ## Rules
 
