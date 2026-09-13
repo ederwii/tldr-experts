@@ -235,6 +235,9 @@ export const MAX_CARRIED_BULLETS = 25;
 export function renderBuildHandoff(parts: BuildHandoffParts): string {
   const done = parts.outcomes.filter((o) => o.status === "done");
   const notDone = parts.outcomes.filter((o) => o.status !== "done");
+  // A refusal the story survived (gh #271): the `blocked` case already carries
+  // the command inside its reason, so this names only the ones that went on.
+  const refusedButMeasured = done.filter((o) => o.permissionRefused != null);
 
   const lines = [
     `# Handoff — 04-build / ${parts.stageId} — run ${parts.runId}`,
@@ -265,7 +268,7 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
     // would be worse than one that said neither.
     ...(notDone.length === 0 && (parts.carried ?? []).length === 0
       && (parts.unreadableStories ?? []).length === 0 && (parts.foreignWork ?? []).length === 0
-      && (parts.notStarted ?? []).length === 0
+      && (parts.notStarted ?? []).length === 0 && refusedButMeasured.length === 0
       ? [`- none — every scheduled story reached \`done\` and no carried finding is unowned `
         + `[src: absent:04-build/log]`]
       : []),
@@ -273,6 +276,12 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
       (o) =>
         `- ${o.id} is \`${o.status}\` and needs a human: ${o.reason ?? "see the review"} ` +
         `[src: ${o.reviewRel}:1]`,
+    ),
+    ...refusedButMeasured.map(
+      (o) =>
+        `- ${o.id}'s developer had \`${o.permissionRefused ?? ""}\` refused for approval by the agent's own ` +
+        `permission layer; its tree held committed work, so the Definition of Done decided and the story is ` +
+        `\`${o.status}\` — a person may still want to know the command it could not run [src: ${o.reviewRel}:1]`,
     ),
     ...(parts.notStarted ?? []).map(
       (row) =>

@@ -61,7 +61,7 @@ import {
   dispatchNotesRecord, type PendingStage,
 } from "../pending.ts";
 import {
-  addWorktree, commitsBetween, ensureBranch, fullShaOf, git, GitError, removeWorktree, repoDirOf,
+  addWorktree, commitsBetween, ensureBranch, fullShaOf, git, GitError, headSha, removeWorktree, repoDirOf,
   reviewDiffCommand, reviewDiffRange, shaReachability,
 } from "../../build/git.ts";
 import { BaseGateFailure, baseRefusalLines } from "../../build/preflight.ts";
@@ -114,7 +114,7 @@ import {
 } from "../../build/dodRunner.ts";
 import {
   commitIfDirty, EpicState, mergeIntoEpic, refreshStoryBase, rescueUncommitted, storyWorktreePath,
-  unreadableTouches, type EpicWorktreeParts,
+  unreadableTouches, workSince, type EpicWorktreeParts,
 } from "../../build/worktrees.ts";
 import {
   installCommandFor, installFailed, installFailureReason, runWorktreeInstall, type InstallCheck,
@@ -486,6 +486,13 @@ class BuildSession {
   /** Every sub-agent this stage ran; `runNext` turns them into `run.yml` tasks. */
   readonly tasks: ExecutorTask[] = [];
   private readonly outcomes = new Map<string, StoryOutcome>();
+  /**
+   * Per story, the command the permission layer refused on an attempt that went
+   * on anyway because its tree held committed work (gh #271). Set by `buildHalf`,
+   * read by `settle` — the same shape as `reviewers`, so half B's five settle
+   * paths need no sixth argument. Cleared at the top of every attempt.
+   */
+  private readonly refusals = new Map<string, string>();
   /**
    * The epic branches, worktrees and merges this invocation accumulated
    * (`build/worktrees.ts`). ONE instance, created here and passed by reference
@@ -1196,6 +1203,10 @@ class BuildSession {
     // without delivering must leave the story exactly where it found it, and
     // "where it found it" stops being readable one line from here.
     const before = this.statusOf(planned);
+    // A fresh attempt carries no refusal from the last one (gh #271) — cleared
+    // here, before any early return, so a developer that fails on attempt 2
+    // cannot settle with attempt 1's command on its record.
+    this.refusals.delete(planned.story.id);
     // (a)(b)(c) touch the SHARED repo — `git branch`, `git worktree add` — so they
     // go through the one writer even though the sub-agent below does not.
     // `true`: same reason as `prepare()` — the headless developer is dispatched
@@ -1226,6 +1237,9 @@ class BuildSession {
       };
     }
 
+    // The tree the developer is handed, so that afterwards "did it commit work"
+    // is a comparison against THIS and not against a proxy (gh #271).
+    const handed = await headSha(story.worktree);
     // A developer that FAILED is a TRANSPORT outcome, not a story that could not
     // be built: the sub-agent never wrote a line, so nothing about the work has
     // been learned and nothing about it may be settled. `failure` stays null —
@@ -1240,17 +1254,34 @@ class BuildSession {
     const spent = developer.cost;
 
     // (d½) gh #261: the turn asked for something this run's permission layer
-    // refused, and in headless mode there is nobody to approve it. BLOCK, with
-    // the command named — do not let the story walk on to a DoD that is green on
-    // an untouched tree, an empty commit and a reviewer who faults a diff that
-    // was never written. `blocked` is where the attempt stops (`driveStory`
-    // returns on any status that is not `review`), which is the point: the same
-    // allowance would refuse the same command on attempt 2.
+    // refused, and in headless mode there is nobody to approve it. With NO
+    // committed work, BLOCK, with the command named — do not let the story walk
+    // on to a DoD that is green on an untouched tree, an empty commit and a
+    // reviewer who faults a diff that was never written. `blocked` is where the
+    // attempt stops (`driveStory` returns on any status that is not `review`),
+    // which is the point: the same allowance would refuse the same command on
+    // attempt 2.
+    //
+    // gh #271: with WORK in the tree — committed or not — the refusal is
+    // RECORDED and the Definition of Done decides. Measured on a field run, the
+    // refused call was the developer's own DoD command wrapped in shell plumbing,
+    // and the block landed on a story the DoD one step below would have
+    // measured. Uncommitted work counts because the normal path already says so:
+    // `runDod` runs before `commitIfDirty`, and a developer refused while
+    // VERIFYING never reaches its commit. "Work" is `workSince` — the tree
+    // against the one handed, state dirs excluded, untracked-but-ignored files
+    // not counted — so an empty commit and an untouched tree still block.
     if (developer.refused !== null) {
-      return {
-        story, cost: spent, dod: [], commit: null,
-        failure: permissionBlockReason(developer.refused), developerError: null, before,
-      };
+      const proven = await workSince({
+        workspaceRoot: this.workspace.root, repoDir: story.repoDir, worktree: story.worktree, since: handed,
+      });
+      if (!proven) {
+        return {
+          story, cost: spent, dod: [], commit: null,
+          failure: permissionBlockReason(developer.refused), developerError: null, before,
+        };
+      }
+      this.refusals.set(story.planned.story.id, developer.refused);
     }
 
     // (e) the Definition of Done, re-run in the story's own worktree.
@@ -1263,14 +1294,17 @@ class BuildSession {
     const green = dod.length === 0 ? dodIsSatisfiedEmpty(this.plan) : dodGreen({ dod });
     if (!green) {
       const failing = dod.find((r) => dodRefused(r) || r.exitCode !== 0 || r.timedOut);
+      const why = failing === undefined
+        ? "the story declares no dod commands, so nothing could prove it"
+        : dodFailureReason(failing, story.planned.story.repo);
       return {
         story,
         cost: spent,
         dod,
         commit: null,
-        failure: failing === undefined
-          ? "the story declares no dod commands, so nothing could prove it"
-          : dodFailureReason(failing, story.planned.story.repo),
+        // A red DoD on a tree whose developer was also refused names BOTH (#271):
+        // the DoD is the verdict, the refusal is the cause a person triages first.
+        failure: developer.refused === null ? why : `${why}; and ${permissionBlockReason(developer.refused)}`,
         developerError: null,
         before,
       };
@@ -2570,6 +2604,7 @@ class BuildSession {
       reviewFindings: parts.review.findings,
       reviewRel,
       reason: parts.reason,
+      permissionRefused: this.refusals.get(id) ?? null,
       rescued,
       cost_usd: parts.cost,
     };
@@ -2610,6 +2645,9 @@ class BuildSession {
       ...(parts.epicBase === null || parts.epicBase === undefined || parts.epicBase === ""
         ? {}
         : { epic_base: parts.epicBase }),
+      // ADDITIVE (gh #271): the command the permission layer refused on an
+      // attempt the DoD went on to decide. Omitted when there was none.
+      ...(outcome.permissionRefused == null ? {} : { permission_refused: outcome.permissionRefused }),
     });
     // Worktrees survive a `review` on purpose: the second attempt continues in
     // the same tree rather than re-cutting the branch it just wrote. A parked
@@ -2622,7 +2660,10 @@ class BuildSession {
     }
     this.lines.push(
       `  ${status === "done" ? "✓" : "·"} ${id} → \`${status}\`` +
-        (parts.reason === null ? "" : ` (${parts.reason})`),
+        (parts.reason === null ? "" : ` (${parts.reason})`) +
+        (outcome.permissionRefused == null
+          ? ""
+          : ` — \`${outcome.permissionRefused}\` was refused for approval; the tree held committed work, so the DoD decided`),
     );
   }
 

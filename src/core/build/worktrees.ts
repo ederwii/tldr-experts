@@ -23,6 +23,7 @@ import type { PlanStatus } from "../schemas/planCommon.ts";
 import {
   addWorktree, assertWorktreeOn, baseStateOf, commitAll, dirtyPaths, fastForward, firstLine, headSha,
   isDirty, mergeNoFf, partitionDirty, pathAtRef, stateDirPrefixes,
+  treesDiffer,
 } from "./git.ts";
 import type { RescuedWork, SerialWrite, StoryOutcome } from "./outcome.ts";
 import { WORKTREES } from "./plan.ts";
@@ -290,6 +291,36 @@ export async function commitIfDirty(parts: CommitParts): Promise<string | null> 
   }
   const sha = await headSha(parts.worktree);
   return sha === "" ? null : sha;
+}
+
+/** What `workSince` compares: the story tree against the tree the developer was handed. */
+export interface WorkSinceParts {
+  readonly workspaceRoot: string;
+  readonly repoDir: string;
+  readonly worktree: string;
+  /** HEAD of the worktree BEFORE the developer was spawned. */
+  readonly since: string;
+}
+
+/**
+ * Did the developer do WORK — does the story tree, committed or not, differ from
+ * the tree it was handed, outside the framework's own state dirs? (gh #271)
+ *
+ * Two comparisons, one answer: the branch tip's tree against `since`
+ * (`treesDiffer`), and the working copy against the index (`isDirty`, which sees
+ * untracked files too). Uncommitted work COUNTS, because that is what the normal
+ * path already says — `runDod` runs before `commitIfDirty`, so a developer that
+ * edits, is refused for its own verification command and never reaches its
+ * commit is exactly the tree the DoD is there to measure. What does NOT count is
+ * a proxy's false positive: an empty commit moves HEAD and changes nothing, and
+ * a clean tree at the same HEAD is #261's untouched story. `null` from the tree
+ * comparison — a sha that no longer resolves — is read as no work: a refusal is
+ * blocked unless the work is PROVEN.
+ */
+export async function workSince(parts: WorkSinceParts): Promise<boolean> {
+  const state = stateDirPrefixes(parts.workspaceRoot, parts.repoDir);
+  if ((await treesDiffer(parts.worktree, parts.since, "HEAD", state)) === true) return true;
+  return await isDirty(parts.worktree, state);
 }
 
 /** What an epic worktree is opened — or merged into — from, as data. */

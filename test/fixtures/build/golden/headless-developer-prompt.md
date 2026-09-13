@@ -116,6 +116,11 @@ Commit with `git add` and `git commit`. Nothing else about git is yours to do.
 - Stay inside the $3.20 ceiling for this story.
 - Done means proven: the Definition of Done is re-run after you stop, and every
   command in it must exit 0. Your own "it works" is not evidence.
+- Run each Definition of Done command verbatim and alone: no redirection, pipes or chaining.
+  Shell separators (`>`, `>>`, `2>&1`, `<`, `|`, `;`, `&&`, `||`, `&`, `$()`) split a line into
+  subcommands, and each subcommand must match its own grant, so a compound line is refused
+  even when the script itself is allowed. The facilitator re-runs the Definition of Done
+  after you anyway.
 
 ### Conventions
 

@@ -594,3 +594,27 @@ describe("`tldrx next --prepare` puts the project's skills in the stage prompt",
     );
   });
 });
+
+/**
+ * gh #271 — the developer is told, in words, WHY a DoD command wrapped in shell
+ * plumbing is refused. Measured on a field run: a committed story stopped at
+ * `cmd > log 2>&1; echo …`, a line the permission layer splits at every
+ * separator and refuses because the fragments do not each match a grant.
+ */
+describe("the developer prompt says to run each DoD command verbatim and alone (gh #271)", () => {
+  test("the sentence names the mechanism and the facilitator's own re-run, once, beside the DoD rule", () => {
+    const text = devPrompt([]);
+    expect(text).toContain("verbatim and alone");
+    expect(text).toContain("no redirection, pipes or chaining");
+    expect(text).toContain("split a line into");
+    expect(text).toContain("`2>&1`");
+    expect(text).toContain("`$()`");
+    expect(text).toContain("must match its own grant");
+    expect(text).toContain("re-runs the Definition of Done");
+    // Beside the "Done means proven" rule, inside `## Rules`.
+    expect(text.indexOf("Done means proven:")).toBeLessThan(text.indexOf("verbatim and alone"));
+    expect(text.indexOf("verbatim and alone")).toBeLessThan(text.indexOf("### Conventions"));
+    // One spelling, not two.
+    expect(text.split("verbatim and alone").length - 1).toBe(1);
+  });
+});

@@ -84,10 +84,47 @@ const extraTools: FakeTool[] = [];
  * returns a perfectly ordinary envelope having changed nothing, which is exactly
  * why the framework could not see that the turn was impossible.
  */
-const deniedCommand = perStory("FAKE_BUILD_DENIED");
+// ONE developer attempt counter, read before the branches so exactly one
+// advance happens per spawn whichever branch runs.
+const devAttempt = role === "developer" && !failing ? attemptCount(`dev:${storyId}`) : 1;
+// `S1#2` beats `S1`, so a refusal can be scripted for one attempt (gh #271).
+const deniedCommand = perStory("FAKE_BUILD_DENIED", devAttempt);
 const gitRmPath = perStory("FAKE_BUILD_GIT_RM");
 
+/**
+ * gh #271 — what the tree holds WHEN the refusal comes. `FAKE_BUILD_DENIED_WORK`
+ * = `{"S1": "committed" | "uncommitted" | "empty-commit"}`, read only beside
+ * `FAKE_BUILD_DENIED`; absent means the #261 shape, a developer that touched
+ * nothing. `committed` writes the story's default file and commits it itself —
+ * the field case, a developer that finished and then asked for a DoD command
+ * wrapped in shell plumbing. `uncommitted` writes and stops. `empty-commit`
+ * moves HEAD without changing the tree, which is the case a "HEAD moved" proxy
+ * would misread as work. `state-only` writes under `tldrx-work/` — the
+ * framework's own state dir, which a `root_is_repo` worktree carries a checkout
+ * of — and nothing else. `ignored-only` writes a file the repo's `.gitignore`
+ * covers and nothing else. Both are "no work" and must block.
+ */
+const deniedWork = perStory("FAKE_BUILD_DENIED_WORK");
+
 if (role === "developer" && !failing && deniedCommand !== null) {
+  if (deniedWork === "committed" || deniedWork === "uncommitted") {
+    const rel = `${storyId.toLowerCase()}.txt`;
+    writeFileSync(join(process.cwd(), rel), `${storyId} was here\n`, "utf8");
+    written.push(rel);
+    if (deniedWork === "committed") {
+      execFileSync("git", ["add", "-A"], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+      execFileSync("git", ["commit", "-m", `feat(${storyId}): fake developer commit`],
+        { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+    }
+  } else if (deniedWork === "empty-commit") {
+    execFileSync("git", ["commit", "--allow-empty", "-m", `chore(${storyId}): nothing`],
+      { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+  } else if (deniedWork === "state-only") {
+    mkdirSync(join(process.cwd(), "tldrx-work"), { recursive: true });
+    writeFileSync(join(process.cwd(), "tldrx-work", "written-during-the-turn.txt"), "state\n", "utf8");
+  } else if (deniedWork === "ignored-only") {
+    writeFileSync(join(process.cwd(), "scratch.log"), "ignored\n", "utf8");
+  }
   extraTools.push({
     name: "Bash",
     input: { command: deniedCommand },
@@ -99,8 +136,7 @@ if (role === "developer" && !failing && deniedCommand !== null) {
   extraTools.push({ name: "Bash", input: { command: `git rm -- ${gitRmPath}` }, result: "rm '" + gitRmPath + "'" });
 } else if (role === "developer" && !failing) {
   const plan = JSON.parse(process.env.FAKE_BUILD_WRITE ?? "{}") as Record<string, Record<string, string>>;
-  const attempt = attemptCount(`dev:${storyId}`);
-  const files = plan[`${storyId}#${String(attempt)}`] ?? plan[storyId] ?? {
+  const files = plan[`${storyId}#${String(devAttempt)}`] ?? plan[storyId] ?? {
     [`${storyId.toLowerCase()}.txt`]: `${storyId} was here\n`,
   };
   for (const [rel, content] of Object.entries(files)) {
@@ -181,11 +217,12 @@ function shouldFail(): boolean {
 }
 
 /** A `{"S1": "<value>"}` env map, read for THIS story. Null when it says nothing. */
-function perStory(key: string): string | null {
+function perStory(key: string, attempt: number | null = null): string | null {
   const raw = process.env[key];
   if (raw === undefined || raw === "") return null;
   const map = JSON.parse(raw) as Record<string, string>;
-  return map[storyId] ?? null;
+  const byAttempt = attempt === null ? undefined : map[`${storyId}#${String(attempt)}`];
+  return byAttempt ?? map[storyId] ?? null;
 }
 
 /** The real CLI's words for the failure this fake is standing in for. */
