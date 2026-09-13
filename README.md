@@ -18,8 +18,12 @@ npm i -g tldr-experts     # installs `tldrx` (short) and `tldr-experts` (same bi
 cd your-project
 tldrx doctor              # check the environment — it is the authority, not a list in a README
 tldrx init                # detect repos, map the code, write .tldrx/, ask only the gaps
-tldrx install --claude    # write the skill, hooks and status line into ./.claude/
+tldrx install --claude    # write the skills, hooks and status line into ./.claude/
 ```
+
+Planning a feature for an unattended run? **`/tldrx-plan`** (the second skill `install --claude`
+writes) turns "I want X" into seed files that pass `tldrx seed check`, and ends with the exact
+`run new` line.
 
 Later: **`tldrx update`** pulls the newest published version and prints the CHANGELOG between the
 one you had and the one you now have. Any command will tell you, in one line, when there is a newer

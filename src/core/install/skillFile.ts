@@ -19,8 +19,30 @@
 
 export const SKILL_MARKER = "<!-- tldrx-managed -->";
 
-/** Where the skill goes, relative to `.claude/`. */
+/** Where the facilitator skill goes, relative to `.claude/`. */
 export const SKILL_RELATIVE = "skills/tldrx/SKILL.md";
+
+/**
+ * Where the PLANNING skill goes (#291) — `tldrx-plan`, installed beside the
+ * facilitator by the same command, under the same marker and the same
+ * foreign-file rule. Two skills, one ownership test: a `SKILL.md` at either path
+ * without the marker is somebody's own file.
+ */
+export const PLAN_SKILL_RELATIVE = "skills/tldrx-plan/SKILL.md";
+
+/** One managed skill: where it is installed, and where its source lives in `plugin/`. */
+export interface ManagedSkill {
+  /** Relative to `.claude/` on install and to `plugin/` as the source — the same path. */
+  readonly relative: string;
+  /** Word used in the install summary. */
+  readonly label: string;
+}
+
+/** Every skill `tldrx install --claude` owns, in summary order. */
+export const MANAGED_SKILLS: readonly ManagedSkill[] = [
+  { relative: SKILL_RELATIVE, label: "skill" },
+  { relative: PLAN_SKILL_RELATIVE, label: "skill" },
+];
 
 /**
  * The plugin's SKILL.md with the marker inserted under the frontmatter, plus one

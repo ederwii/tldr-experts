@@ -146,8 +146,9 @@ command synthesised from the language id still says so at the end of its reason.
 
 ## `tldrx install --claude`
 
-Install the tldrx skill, hooks and status line into `.claude/`. Idempotent and reversible —
-see [7 — Claude Code](07-claude-code.md).
+Install the tldrx skills (`/tldrx`, the facilitator, and `/tldrx-plan`, the planner), hooks
+and status line into `.claude/`. Idempotent and reversible — see
+[7 — Claude Code](07-claude-code.md).
 
 ```
 tldrx install --claude [--project|--user] [--skill-only] [--no-hooks] [--no-statusline]
@@ -159,7 +160,7 @@ tldrx install --claude [--project|--user] [--skill-only] [--no-hooks] [--no-stat
 | `--claude` | The install target. Required — it is the only one today |
 | `--project` | Install into `./.claude/` (the default; refuses outside a git repo) |
 | `--user` | Install into `~/.claude/` instead |
-| `--skill-only` | Install the skill and neither the hooks nor the status line |
+| `--skill-only` | Install the two skills and neither the hooks nor the status line |
 | `--no-hooks` / `--no-statusline` | Skip that half |
 | `--force-statusline` | Replace an existing `statusLine` setting instead of leaving it alone |
 | `--uninstall` | Remove what a previous install wrote, and nothing else |
@@ -521,10 +522,11 @@ the handshake the stage is waiting for. Exits: `0` `1` `2` `3` `4` `5`.
 
 ## `tldrx seed`
 
-Triage a seed too big for one run into several, then create them. See
-[5 — Seeds and triage](05-seeds-and-triage.md).
+Check a hand-written seed, or triage a seed too big for one run into several, then create
+them. See [5 — Seeds and triage](05-seeds-and-triage.md).
 
 ```
+tldrx seed check  <file|dir> [--scope <s>] [--budget <usd>]
 tldrx seed triage <path> [--out <dir>] [--json] [--threshold-tokens <n>]
 tldrx seed triage <path> --propose [--model <m>] [--effort <level>] [--max-usd <n>]
                                    [--ui <mode>] [--prepare|--commit] [--yolo] [--out <dir>]
@@ -535,6 +537,18 @@ tldrx seed apply  <split.yml> [--dry-run]
 `--model`, `--effort`, `--max-usd`, `--ui`, `--prepare`/`--commit` and `--yolo` mean here
 exactly what they mean under [`tldrx next`](#tldrx-next), where they are explained once —
 `--yolo` in particular lets the sub-agent run without per-tool permission prompts.
+
+`check` is read-only and free: the seed goes through the same importer `run new --seed` uses,
+then the authoring rules of [Writing a seed by hand](05-seeds-and-triage.md#writing-a-seed-by-hand)
+— bullets under 200 characters, `[src:]` last on its line and resolving, `dod` lines byte-equal
+to a `commands:` value with no shell separator, a `Recommended:` on every open question,
+`touches:` + `depends_on:` + a ```dod fence per story, no two stories sharing a touched file in
+one wave. One `file:line rule — text` line per finding, exit `1`; an `advisory:` line (over
+4 stories or 2 waves — the framework's current limit, patch for #286/#244/#280 — or a missing
+What heading) never moves the exit code. `--scope <s>` names the preset the run would open
+with (default `feature`); `--budget <usd>` also prints the stage split `run new` would write
+and the per-story developer and reviewer caps for the seed's story count, off the same
+arithmetic (#244/#289). It creates no run.
 
 `triage` without `--propose` is free: no model, no network. `--propose` spawns ONE sub-agent
 (effort `low`, `--max-usd 1.00` by default) and **never creates a run**. `apply` creates the

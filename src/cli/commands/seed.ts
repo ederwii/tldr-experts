@@ -1,7 +1,8 @@
-/** `tldrx seed` — Triage a big seed into several runs
+/** `tldrx seed` — check a hand-written seed, or triage a big one into several runs
  *
- * Spec §6.2. Three things, in the order you do them:
+ * Spec §6.2. Four things, in the order you do them:
  *
+ *   tldrx seed check <file|dir>         validate a seed you wrote — free, no model, no run (#291)
  *   tldrx seed triage <path>            count it — free, deterministic, no model
  *   tldrx seed triage <path> --propose  ONE cheap model pass → split.yml
  *   tldrx seed apply <split.yml>        the human gate: create the runs
@@ -24,17 +25,19 @@ import { runTriage, type TriageMode } from "../../core/seed/runTriage.ts";
 import { applySplit } from "../../core/seed/applySplit.ts";
 import { answerSplitQuestion } from "../../core/seed/answerSplitQuestion.ts";
 import { SeedError } from "../../core/seed/collectSeed.ts";
+import { checkSeed, renderSeedCheck } from "../../core/seed/checkSeed.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 
-const VALUE_FLAGS = ["out", "threshold-tokens", "model", "effort", "max-usd", "root", "ui"];
+const VALUE_FLAGS = ["out", "threshold-tokens", "model", "effort", "max-usd", "root", "ui", "scope", "budget"];
 
 /** Codes whose report belongs on stdout: the command did what it said it would. */
 const INFORMATIONAL: readonly number[] = [EXIT_OK];
 
 export const seedCommand: Command = {
   name: "seed",
-  summary: "Triage a big seed into several runs, then create them",
-  usage: "tldrx seed triage <path> [--out <dir>] [--json] [--threshold-tokens <n>] [--root <path>]\n" +
+  summary: "Check a hand-written seed, or triage a big one into several runs",
+  usage: "tldrx seed check <file|dir> [--scope <s>] [--budget <usd>] [--root <path>]\n" +
+    "       tldrx seed triage <path> [--out <dir>] [--json] [--threshold-tokens <n>] [--root <path>]\n" +
     "       tldrx seed triage <path> --propose [--model <m>] [--effort <level>] [--max-usd <n>]\n" +
     "                                          [--ui scene|compact|plain|off] [--prepare|--commit]\n" +
     "                                          [--yolo] [--out <dir>] [--root <path>]\n" +
@@ -44,6 +47,8 @@ export const seedCommand: Command = {
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;
     switch (sub) {
+      case "check":
+        return check(rest);
       case "triage":
         return triage(rest);
       case "answer":
@@ -51,11 +56,37 @@ export const seedCommand: Command = {
       case "apply":
         return apply(rest);
       default:
-        process.stderr.write(`tldrx seed: expected \`triage\`, \`answer\` or \`apply\`\n${seedCommand.usage}\n`);
+        process.stderr.write(`tldrx seed: expected \`check\`, \`triage\`, \`answer\` or \`apply\`\n${seedCommand.usage}\n`);
         return EXIT_USAGE;
     }
   },
 };
+
+/**
+ * Read-only. Exit 0 when there is no finding, 1 with one `file:line rule — text`
+ * line per finding; an `advisory:` line never moves the code. A path that does
+ * not exist is 3, the code every other `seed` verb gives it. It creates no run.
+ */
+function check(argv: readonly string[]): number {
+  try {
+    const args = parseArgs(argv, VALUE_FLAGS);
+    const seedPath = args.positionals[0];
+    if (seedPath === undefined) {
+      throw new UsageError("seed check needs a path: `tldrx seed check <file|dir>`");
+    }
+    const root = workspaceRootFrom(args);
+    const budgetUsd = numberFlag(args, "budget");
+    if (budgetUsd !== undefined && !(budgetUsd > 0)) throw new UsageError("--budget must be a number > 0");
+    const report = checkSeed(root, seedPath, { scope: stringFlag(args, "scope") ?? "feature", budgetUsd });
+    process.stdout.write(renderSeedCheck(report));
+    return report.ok ? EXIT_OK : EXIT_USAGE;
+  } catch (error) {
+    if (error instanceof UsageError) return fail("seed check", error, EXIT_USAGE);
+    if (error instanceof SeedError) return fail("seed check", error, codeFor(error));
+    // A bad --scope (`PresetError`) and anything else: usage, nothing behind it.
+    return fail("seed check", error, EXIT_USAGE);
+  }
+}
 
 async function triage(argv: readonly string[]): Promise<number> {
   try {

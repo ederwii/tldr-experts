@@ -653,7 +653,12 @@ function assertValid(what: string, validation: { ok: boolean; issues: readonly {
   throw new NewRunError(`refusing to create a run with an invalid ${what}: ${first?.path ?? ""} ${first?.message ?? ""}`);
 }
 
-function describeHandoff(
+/**
+ * One sentence for a handoff that does not validate — the first problem, in the
+ * order a reader can act on. Exported for `seed check` (#291), which reports the
+ * importer's verdict in exactly these words rather than in a second wording.
+ */
+export function describeHandoff(
   missing: readonly string[],
   empty: readonly { name: string; line: number }[],
   unsourced: readonly number[],

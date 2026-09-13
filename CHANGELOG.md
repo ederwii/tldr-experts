@@ -1,6 +1,49 @@
 # Changelog
 
-## 0.19.1 — unreleased
+## 0.20.0 — unreleased
+
+### Added
+
+- **`tldrx seed check <file|dir>` — a read-only seed validator, and `/tldrx-plan`, a second
+  managed skill that plans seeds a run can finish (#291).** Measured this week across four
+  unattended runs on two workspaces: the difference between a run that finishes alone and one
+  that needs four rescues is decided BEFORE `run new`, in the seed — and nothing in the
+  framework helped a person write one. `install --claude` installed exactly one skill, the
+  facilitator; the only authoring guidance was the hand-written grammar list in the seeds
+  guide, which said nothing about stories, `touches`, `dod` lines, dependencies, size or
+  boundaries; the seeds that ran cleanly were written by a subagent that had to build its own
+  validator to check them. `seed check` is that validator, in the CLI: the seed goes through the
+  SAME importer chain `run new --seed` runs (`collectSeeds` → `seedClaims` →
+  `renderSeedHandoff` → `validateHandoff`, into a temp dir that stands in for the run dir), and
+  then through the authoring rules each traceable to a run that died without it — bullets
+  under 200 characters, `[src:]` last on its line and resolving to a real line, `dod` lines
+  byte-equal to a `commands:` value with no shell separator (`unquotedShellSeparator`, the
+  gate's own reader), a `Recommended:` on every open question (#251), `touches:` +
+  `depends_on:` + a ```dod fence on every story, and no two stories sharing a touched file in
+  one wave (#286: one conflicted file became four). One `file:line rule — text` line per
+  finding, exit `1`; an `advisory:` line for more than 4 stories or 2 waves — the framework's
+  CURRENT limit, named as a patch for #286/#244/#280 so the number is never read as a design
+  preference — never moves the exit code. `--budget <usd>` prints the stage split `run new`
+  would write and the per-story developer and reviewer caps, off `planBudget` and `caps.ts`
+  as they are (#244/#289: a `--budget 60` feature run gives Build $10.80 per attempt, and
+  nobody was told). Nothing here is a second reading of a rule: every check calls the function
+  that enforces it at run time. The planning skill, `plugin/skills/tldrx-plan/SKILL.md`, is
+  installed by `tldrx install --claude` beside the facilitator under the same
+  `<!-- tldrx-managed -->` marker, the same foreign-file refusal (a `SKILL.md` without the
+  marker at EITHER path refuses the whole install, nothing written) and the same uninstall;
+  `--dry-run` lists it as its own row. It reads `workspace.yml` and the repo tree before
+  writing, splits work into runs sized to what the framework carries today, chains stories
+  that share a counted or snapshot file, names only declared tools (patch for #290 — the
+  planner checks by hand what Plan cannot yet detect; the cure names tool + subcommand, and a
+  `git` line is never a `commands:` slot), gives every question a `Recommended:`, derives the
+  budget with `seed check --budget`, and ends with the exact
+  `run new … --gates none --questions none --ship merge` line. Every rule in the skill and on
+  the guide page is marked either **craft** (holds for any version) or **patch for #N**
+  (delete when the issue closes) — and the skill CITES the guide for the grammar instead of
+  restating it, which `test/plan-skill.test.ts` pins the way `test/maintain-skill.test.ts`
+  pins the maintain skill. The seed guide's "Writing a seed by hand" gained the story rules
+  with the same markers; the unattended recipe, both documentation sites (EN and ES) and the
+  README quick start name the validator and the skill.
 
 ### Fixed
 
