@@ -93,6 +93,20 @@ programa, luego un revisor nuevo que nunca es quien escribió el código, una co
 se firma solo sobre una nota de evidencia escrita, y las cuatro cosas para las que sí tiene
 que despertarte en lugar de decidirlas.
 
+La otra forma de pasar la noche no necesita sesión alguna: un cambio pequeño y bien sembrado
+entregado al motor con todas las decisiones ya tomadas — medido una vez, un bugfix de una
+sola story fue de la semilla al PR mergeado en 45 minutos, sin intervención humana.
+
+```bash
+tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.md \
+  --gates none --questions none --ship pr --budget 40
+nohup tldrx run auto --run <id> --until-done --max-usd 40 \
+  --wait-answers 8h --wait-gates 8h --notify-every 30m --ui plain > /tmp/<id>.log 2>&1 &
+```
+
+[Un run sin tocar nada, de principio a fin](/es/guides/unattended-operation#un-run-sin-tocar-nada-de-principio-a-fin)
+— qué significa cada bandera, cómo escribir la semilla, cómo revisarlo y cómo detenerlo.
+
 [Atendido o desatendido](/es/guides/driving): las tres maneras de correr una etapa, cuál
 elegir, y qué cuesta cada una.
 
