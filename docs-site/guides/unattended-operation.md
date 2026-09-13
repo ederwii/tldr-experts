@@ -83,10 +83,13 @@ tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.
   own `Recommended:` pick, records it as `decided_by: agent-default`, and escalates the
   ones with no pick or tagged `irreversible: true` / `money: true`.
 - **`--ship pr`** — when the run reads `done`, push `epic/<slug>` and open the pull
-  request. **`--ship merge`** also arms `gh pr merge --auto --merge`, so the remote's own
-  checks decide — and on a repository whose default branch has **no required status
-  checks** that means the PR merges at once, with nothing checked (#274, open). A PR that
-  reports no check at all is left open with `merge: absent`.
+  request. **`--ship merge`** also arms `gh pr merge --auto --merge`, so the base branch's
+  own **required** checks decide — and it is armed only over a base that was SEEN to
+  require one (#274): auto-merge waits on the base's requirements, not on the checks the
+  PR happens to report, so on a repository whose default branch requires none `--auto`
+  would merge at once. A PR that reports no check, a base that requires none, and a base
+  the probe could not read are all left open with an `merge: absent — …` reason naming
+  which it was.
 - **`--budget 40`** — the run's total ceiling in USD, split across its phases.
 
 `run new` prints `created tldrx-work/<id> — …`; the id is `<yymmdd>-<slug>` and every

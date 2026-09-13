@@ -89,10 +89,12 @@ tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.
   las que no traen una o están marcadas `irreversible: true` / `money: true`.
 - **`--ship pr`** — cuando el run queda en `done`, hace push de `epic/<slug>` y abre el
   pull request. **`--ship merge`** además arma `gh pr merge --auto --merge`, así que deciden
-  los checks del propio remoto — y en un repositorio cuya rama por defecto **no tiene
-  status checks requeridos** eso significa que el PR se mergea de inmediato, sin que nada
-  lo haya verificado (#274, abierto). Un PR que no reporta ningún check se deja abierto con
-  `merge: absent`.
+  los checks **requeridos** por la rama base — y sólo se arma sobre una base de la que se
+  VIO que exige alguno (#274): el auto-merge espera los requisitos de la base, no los
+  checks que el PR reporte, así que en un repositorio cuya rama por defecto no exige
+  ninguno `--auto` mergearía de inmediato. Un PR que no reporta ningún check, una base que
+  no exige nada y una base que la sonda no pudo leer se dejan abiertos con una razón
+  `merge: absent — …` que dice cuál de las tres fue.
 - **`--budget 40`** — el techo total del run en USD, repartido entre sus fases.
 
 `run new` imprime `created tldrx-work/<id> — …`; el id es `<yymmdd>-<slug>` y todos los
