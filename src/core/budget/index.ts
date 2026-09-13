@@ -6,7 +6,7 @@ export {
   ON_EXCEED, ECONOMIES, DEFAULT_ECONOMY, DEFAULT_WARN_AT_PCT, MAX_PHASES,
 } from "./RunBudget.ts";
 export type { RunBudget, BudgetPhase, OnExceed, Economy } from "./RunBudget.ts";
-export { buildBudgetView, renderBudget, raiseCommand, shortBy, usd } from "./budgetView.ts";
+export { buildBudgetView, renderBudget, raiseCommand, stageRaiseCommand, shortBy, usd } from "./budgetView.ts";
 export type { BudgetView, BudgetPhaseView } from "./budgetView.ts";
 export {
   remainingWork, renderRemainingWork, remainingWorkContext, reviewVerdictsByStory,

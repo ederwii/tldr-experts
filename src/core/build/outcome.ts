@@ -263,6 +263,17 @@ export interface StoryOutcome {
    */
   readonly budgetDeath?: string | null;
   /**
+   * Why NO REVIEWER WAS SPAWNED for this story — the stage had less left than a
+   * review costs, so the turn was refused before it was paid for (gh #289).
+   *
+   * The reviewer-side sibling of `developerError`, and `verdict` stays `n-a`
+   * here for the same reason it does there: an agent that never started formed
+   * no opinion, and writing its absence down as a verdict — `error` included,
+   * which means "it died mid-read" — is an audit record lying in the dangerous
+   * direction. Optional and absent on every record written before it existed.
+   */
+  readonly reviewerUnfunded?: string | null;
+  /**
    * Uncommitted work found in the worktree as the story settled — null on the
    * ordinary case, where `commitIfDirty` already put every byte on the branch.
    */
@@ -284,6 +295,21 @@ export interface StoryOutcome {
 
 /** What the executor records when the spawn layer had nothing else to say. */
 export const DEVELOPER_FAILED = "the developer sub-agent failed";
+
+/**
+ * Is this story's REVIEW still owed — nothing judged the diff and nothing is
+ * going to without an operator moving something?
+ *
+ * Two shapes, one question, and one place that answers it: a reviewer that died
+ * mid-read (`verdict: "error"`) and a reviewer that was never funded enough to
+ * start (`reviewerUnfunded`, gh #289). Every caller of the first was a caller of
+ * the second the day it shipped — the requeue rule, the review-only resume path,
+ * the retro — and a second copy of "or the other one" in each of them is how the
+ * two drift into different fates for the same story.
+ */
+export function reviewStillOwed(outcome: StoryOutcome): boolean {
+  return outcome.verdict === "error" || (outcome.reviewerUnfunded ?? null) !== null;
+}
 
 /**
  * The words a record uses for a story settled from its branch AS IT STANDS

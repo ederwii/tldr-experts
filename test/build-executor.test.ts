@@ -4347,3 +4347,82 @@ describe("a story whose dependency was parked by a dead developer (gh #263)", ()
     expect(story(ws, "S2")).toContain("status: done");
   }, 90_000);
 });
+
+/**
+ * gh #289 — the reviewer spawned with $0.43 after the developer took the stage.
+ *
+ * Measured on a live unattended run (0.19.0, `--gates none --questions none
+ * --ship merge`, `run new --budget 60`), story S1: the developer turn went DoD
+ * 3/3 green at `cost_usd: 10.64`, and the reviewer right after it was handed
+ * $0.43 and died with `Reached maximum budget ($0.43)` before reading a line of
+ * the diff. It was recorded as `verdict: error`, which parked S1 at `review` and
+ * blocked both dependent stories; the loop stopped after $17.23 of a $60 run.
+ *
+ * `REVIEWER_FLOOR_USD` ($1.00) already existed and did not save it: the floor
+ * YIELDS to the stage remainder (`caps.ts`, `Math.min(REVIEWER_FLOOR_USD, …)`),
+ * so a nearly-exhausted stage buys a turn that provably cannot finish. The fix
+ * is not a bigger floor — it is refusing to pay for a turn that cannot work, and
+ * naming the knob that actually moves the ceiling (the stage's `budget_usd`,
+ * #244), rather than recording a death nobody's agent chose as a review verdict.
+ */
+describe("a reviewer that cannot be funded is not spawned (#289)", () => {
+  /** A stage whose remainder at review time is under `REVIEWER_FLOOR_USD`. */
+  function exhausted(): BuildWorkspace {
+    const ws = workspace({ ...ONE_STORY, budgetUsd: 8, perAgentMaxUsd: 40 });
+    // The developer takes $7.50 of the $8.00 stage: $0.50 left when the reviewer
+    // would be spawned, half of what the floor says a review costs.
+    process.env.FAKE_BUILD_COST = "7.50";
+    return ws;
+  }
+
+  function reviewEvents(ws: BuildWorkspace): readonly Record<string, unknown>[] {
+    return events(ws).filter((e) => e.payload.check === "review").map((e) => e.payload);
+  }
+
+  test("no reviewer is spawned, and nothing is paid for the turn that could not work", async () => {
+    const ws = exhausted();
+
+    await next(ws);
+
+    const spawned = events(ws).filter((e) => e.type === "agent.spawned" && e.payload.role === "reviewer");
+    expect(spawned).toEqual([]);
+    // Every dollar on the ledger is the developer's. A spawn under the floor
+    // spends money AND loses the story; this is the half that proves the money.
+    const reviewerCost = events(ws)
+      .filter((e) => e.type === "agent.result" && e.payload.role === "reviewer")
+      .reduce((sum, e) => sum + e.cost_usd, 0);
+    expect(reviewerCost).toBe(0);
+  });
+
+  test("the refusal is recorded as no verdict at all, and names the stage's own budget", async () => {
+    const ws = exhausted();
+
+    const outcome = await next(ws);
+
+    // Parked exactly where an unjudged story parks — the diff is merged and the
+    // review is still owed.
+    expect(story(ws, "S1")).toContain("status: review");
+    const recorded = reviewEvents(ws);
+    expect(recorded).toHaveLength(1);
+    // NOT `error`: nothing died, because nothing was spawned. `n-a` is what the
+    // record already means by "no reviewer ran for this story".
+    expect(recorded[0]?.verdict).toBe("n-a");
+    expect(String(recorded[0]?.detail)).toContain("1.00");
+    // The lever, named. `tldrx budget raise <phase> <usd>` moves the phase
+    // ceiling and no spawn cap at all (#244), so the sentence has to say --stage.
+    const said = outcome.lines.join("\n");
+    expect(said).toContain("--stage");
+    expect(said).not.toContain("the reviewer FAILED");
+  });
+
+  test("the story keeps its one attempt: no second developer is spawned for it", async () => {
+    const ws = exhausted();
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+
+    await next(ws);
+
+    expect(readdirSync(promptDir).filter((n) => n.startsWith("developer-"))).toEqual(["developer-S1-1.md"]);
+    expect(readdirSync(promptDir).filter((n) => n.startsWith("reviewer-"))).toEqual([]);
+  });
+});

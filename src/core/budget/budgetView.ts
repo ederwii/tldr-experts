@@ -220,6 +220,27 @@ export function raiseCommand(runId: string, phaseId: string, amountUsd: number):
 }
 
 /**
+ * The same raise, aimed at the knob that caps a SPAWN (gh #244).
+ *
+ * Three knobs, three jobs, and only one of them sets a ceiling a sub-agent is
+ * dispatched under. Measured by the session running two live unattended runs
+ * (their measurement, not this file's): raising the stage `budget_usd` alone,
+ * 16.20 → 60, moved a developer ceiling 5.97 → 22.11 on the next spawn, while
+ * raising `per_agent_max_usd` and the phase ceiling without touching the stage
+ * moved it by nothing. `per_agent_max_usd` only caps from above; the phase
+ * ceiling only takes part in the economy refusal.
+ *
+ * So a refusal about a CAP names this, and a refusal about the phase's remaining
+ * money names `raiseCommand`. Both are the same subcommand, which is why they
+ * are derived in one place.
+ */
+export function stageRaiseCommand(
+  runId: string, phaseId: string, stageId: string, amountUsd: number,
+): string {
+  return `${raiseCommand(runId, phaseId, amountUsd)} --stage ${stageId}`;
+}
+
+/**
  * What the ceiling is short by, rounded UP to the cent.
  *
  * Rounding up matters: `remaining` is a float difference, and a raise that lands

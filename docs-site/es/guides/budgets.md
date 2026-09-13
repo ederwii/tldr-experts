@@ -86,6 +86,29 @@ en `budget.yml`, que nunca se mezcla con `ceiling_usd`; ver
 guarda quién lo subió, por cuánto y por qué. Subir un techo a media etapa es además una de
 las cosas que impide que una [compuerta agent](/es/concepts/gates) se firme sola.
 
+## Las tres perillas, y cuál limita a un sub-agente
+
+Un `raise` como el de arriba mueve el **techo de la fase**, y un techo de fase decide una sola
+cosa: si la siguiente etapa puede arrancar. No limita a ningún sub-agente. El techo bajo el que
+realmente se despacha a un developer o a un reviewer sale del **`budget_usd` de la etapa** en
+`run.yml`, y `per_agent_max_usd` solo lo recorta por arriba. Medido en dos runs desatendidos
+reales: subir solo la cifra de la etapa, 16.20 → 60, movió el techo de un developer de 5.97 a
+22.11 en el siguiente spawn, mientras que subir las otras dos sin tocarla no movió nada.
+
+```bash
+tldrx budget raise 04-build 25 --stage build
+```
+
+`--stage` suma el mismo monto al `budget_usd` de esa etapa, y es lo que hay que usar cuando un
+sub-agente murió contra su tope — no cuando al run se le acabó el dinero. Un `raise` que no
+nombra etapa lo dice en su propia salida: no se movió ningún techo de spawn.
+
+El reviewer es el único turno que el framework no va a financiar a medias: cuando lo que le
+queda a la etapa está por debajo de lo que cuesta una revisión, no se lanza reviewer alguno.
+La historia queda con su diff mergeado y su revisión pendiente, no se gasta nada en un turno
+que no podía leer el diff, y el registro dice *no corrió ningún reviewer* — nunca que pidió
+cambios ni que falló. La línea que imprime trae el comando `--stage` con el monto que falta.
+
 ## Dejar por escrito lo autorizado
 
 ```bash

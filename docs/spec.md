@@ -2387,7 +2387,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx questions lint [--run <id>] [--fix] [--area <a>]` | every `<phase>/questions.md` in the run | nothing, or those files rewritten to the §2.7 grammar with `--fix` (no wording changed) | 0,2,3 |
 | `tldrx questions cards [<run>] [--run <id>]` | every `<phase>/questions.md` in the run | **nothing** (stdout cards). One printable decision card per OPEN question: two lines of context, the block's own `Why asked:` note verbatim with its `[src: …]` — flagged when it cites nothing, and named as absent when there is no note — and the block's lettered options, or a `NEEDS OPTIONS` marker when it has none, since manufacturing them would answer the question in the act of asking it. Answers still flow through `tldrx answer`, whose command every card prints. No open question is a sentence and an exit 0 | 0,1,3 |
 | `tldrx budget show [<run>] [--run <id>] [--json]` | `run.yml`, `budget.yml` | nothing (stdout). Names the recorded grant (§2.11) — the fact, each authorized scope and `on_grant_exceed` — and is silent when none is recorded | 0,1,2,3 |
-| `tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>]` | `run.yml`, `budget.yml` | `budget.yml` ceilings, `run.yml` ceiling mirror, `events.jsonl` (`budget.raised`, with before/after/actor/note). The RESULTING ceiling is reconciled against the recorded grant (§2.11) BEFORE anything is written — a phase grant against the phase ceiling, the run grant against the run ceiling; above it under `on_grant_exceed: block` is a refusal (2) that writes nothing, and under `warn` one sentence naming the grant, the fact and the figure | 0,1,2,3 |
+| `tldrx budget raise <phase> <usd> [--stage <id>] [--run <id>] [--take-from <phase>] [--note <text>]` | `run.yml`, `budget.yml` | `budget.yml` ceilings, `run.yml` ceiling mirror, `events.jsonl` (`budget.raised`, with before/after/actor/note). **`--stage <id>` also adds the same amount to that stage's `budget_usd` in `run.yml` (gh #244)** — the only one of the three money knobs that sets a SPAWN ceiling, recorded additively on the same event as `stage`/`stage_budget_before`/`stage_budget_after` and omitted when no stage was named; an unknown stage is a usage refusal (1) that writes neither file. The RESULTING ceiling is reconciled against the recorded grant (§2.11) BEFORE anything is written — a phase grant against the phase ceiling, the run grant against the run ceiling; above it under `on_grant_exceed: block` is a refusal (2) that writes nothing, and under `warn` one sentence naming the grant, the fact and the figure | 0,1,2,3 |
 | `tldrx budget grant <usd> --fact <F> [--phase <p>] [--on-exceed <warn\|block>] [--note <text>] [--run <id>]` | `run.yml`, `budget.yml`, `facts.yml` | `budget.yml` `authorized_usd`/`authorized_by`/`authorized_at`/`on_grant_exceed` (or `phases[].authorized_usd` under `--phase`, the fact id still at run level), `events.jsonl` (`budget.granted`, carrying `previous_usd` — null on the first grant). Moves no money and refuses no ceiling. A second grant on the same scope REPLACES the amount and prints `replaces $X → $Y`. `--fact` must name a LIVE fact, and the amount must be >0, or it is a usage error and nothing is written | 0,1,2,3 |
 | `tldrx map --refresh` | `workspace.yml`, repos, `graphify-out/` | `map/**`, `graphify-out/`, `events.jsonl` | 0,1 |
 | `tldrx map --check` | `map/**` citations, filesystem | `cache/map-drift.json` (stdout report) | 0,1 |
@@ -3993,6 +3993,20 @@ $1.03. **The reviewer also has a floor** (`REVIEWER_FLOOR_USD`, $1.00), clamped 
 `per_agent_max_usd`. The floor is the one place the "every worst case sums inside the ceiling" property is knowingly
 given up: a reviewer that cannot finish reading the diff judges nothing and wastes the developer turn beside it, and
 `budget.yml`'s gate is what actually stops a stage that runs out.
+
+**A stage that cannot fund a review does not buy one** (gh #289). The floor above is a clamp on a cap, and a clamp
+yields: measured on a live unattended run, a developer took most of its stage and the reviewer after it was handed
+$0.43, died with `Reached maximum budget ($0.43)` before reading the diff, and its `verdict: error` parked the story
+at `review` with two dependents blocked behind it. So when the stage's remainder is below `REVIEWER_FLOOR_USD` the
+executor refuses BEFORE the spawn: no `agent.spawned`, no task row, no cent, and the story parks at `review` exactly
+where an unjudged story parks. What it records is **not a verdict** — `verdict: "n-a"`, "no reviewer ran for this
+story", beside a `reviewer_unfunded:` reason on the story's `task.done`, its review log and the retro, the
+reviewer-side sibling of `developerError` and `budget_death:`. An agent that never started formed no opinion, and
+`error` means "it died mid-read". The reason names the lever that actually moves a ceiling —
+`tldrx budget raise <phase> <usd> --stage <id>`, the stage's own `budget_usd` — because the phase ceiling an
+unqualified raise moves caps no spawn at all (gh #244). The review is still owed, so the next invocation's
+review-only path picks it up rather than re-running the developer; under the same remainder it refuses again, for
+free. A HOST review (`attended_by: host`) is never refused this way: it costs the stage nothing.
 
 **One activity line per lane.** Every event a Build sub-agent publishes carries its story id as a `lane`, so the
 scene, the compact one-liner and `--ui plain` show `S1 reading … · S2 $ dotnet test …` rather than interleaving two

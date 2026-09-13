@@ -1073,6 +1073,12 @@ const ENTRIES: readonly CommandHelp[] = [
       runFlag(),
       json("the budget view", "show"),
       { name: "take-from", arg: "<phase>", meaning: "Move the money out of this phase instead of raising the run's total.", sub: "raise" },
+      {
+        name: "stage",
+        arg: "<id>",
+        meaning: "ALSO add the same amount to that stage's own budget_usd in run.yml \u2014 the one knob a sub-agent's ceiling is derived from (#244). Without it a raise moves the phase ceiling, which decides only whether a stage may START, and every per-story and reviewer cap stays exactly where it was.",
+        sub: "raise",
+      },
       { name: "note", arg: "<text>", meaning: "Why the ceiling moved. Recorded on the budget.raised event beside the before/after and the actor.", sub: "raise" },
       // A SECOND entry rather than dropping `sub`: `grant` records the note on
       // its own event and `show` records nothing, so "every subcommand" would
@@ -1103,10 +1109,12 @@ const ENTRIES: readonly CommandHelp[] = [
     examples: [
       "tldrx budget show",
       "tldrx budget raise 04-build 25 --take-from 02-how",
+      "tldrx budget raise 04-build 25 --stage build",
       "tldrx budget grant 20 --fact F031 --on-exceed block",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
     notes: [
+      "Three knobs, three jobs, and only one of them caps a spawn. The STAGE's `budget_usd` (run.yml) decides the price scale, every per-story developer ceiling and the reviewer's \u2014 `--stage` is the sanctioned way to move it (#244). The PHASE ceiling (budget.yml) decides only the economy refusal, `remaining work > what is left`. `per_agent_max_usd` only caps a ceiling from above. Measured on two live unattended runs: the stage figure alone, 16.20 to 60, moved a developer ceiling 5.97 to 22.11 on the next spawn; raising the other two without it moved nothing.",
       "`raise` ADDS. `raise 04-build 25` on a phase already ceilinged at $10 leaves it at $35, not $25 \u2014 the amount is a delta, and the run ceiling grows with it unless --take-from moves the money. `budget show` prints the exact command, already sized to the shortfall, when a stage is blocked; pasting that is the way to raise without doing the arithmetic.",
       "`grant` RECORDS, it does not spend: it writes authorized_usd, authorized_by, authorized_at and on_grant_exceed into budget.yml and appends a budget.granted event. No ceiling moves, and a grant the current ceiling already exceeds is still recorded \u2014 the money is committed, there is nothing left to refuse. `raise` then measures the ceiling it is about to write against it: a PHASE grant against the phase ceiling, the RUN grant against the run ceiling.",
       "Two exit families, two conditions. A bad amount, an unknown phase, an unknown --on-exceed value, or a --fact naming no live fact is a USAGE error: exit 1, nothing written. A ceiling above the recorded grant under on_grant_exceed: block is a GATE refusal: exit 2, budget.yml byte-identical. Under the default warn the ceiling is written and one sentence names the grant, the fact and the figure.",

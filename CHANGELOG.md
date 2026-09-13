@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.21.0 — unreleased
+
+### Fixed
+
+- **The raise an operator is told to make now moves a ceiling, and a stage that cannot fund a
+  review stops buying one (#244, #289).** One function, one question — how much money is there,
+  and who decides when there is not enough — so the two were done together. The model, measured
+  case by case by the session running two live unattended runs (their measurement, not this
+  file's): the three money figures are three knobs with three different jobs, not three copies of
+  one number. The STAGE's `budget_usd` decides the price scale and therefore every per-story
+  developer ceiling and the reviewer's; the PHASE ceiling only takes part in the economy refusal
+  ("remaining work > what is left") and caps no spawn at all; `per_agent_max_usd` only trims a
+  ceiling from above. Their two controls: raising only the stage figure, 16.20 → 60, moved a
+  developer ceiling 5.97 → 22.11 on the next spawn, and raising `per_agent_max_usd` and the phase
+  ceiling *without* touching the stage moved the ceiling by nothing. So `tldrx budget raise
+  <phase> <usd>` — the command every refusal names — moved the one knob that caps nothing a
+  sub-agent is dispatched under: the operator raised, re-ran, died on the identical cap, and each
+  `reject --and-continue` bought exactly one more turn. It now takes `--stage <id>`, which adds
+  the same amount to that stage's own `budget_usd` in `run.yml` (additively, like the phase
+  ceiling; recorded on `budget.raised` as `stage`/`stage_budget_before`/`stage_budget_after`, and
+  an unknown stage id is a usage refusal that writes neither file), and a raise that names no
+  stage now SAYS in its own output that no spawn ceiling moved and names the flag that would
+  move one.
+- **A reviewer the stage cannot fund is not spawned, and the refusal is not recorded as a verdict
+  (#289).** Measured on a live unattended run (`--budget 60`, `--gates none --questions none
+  --ship merge`): story S1's developer went DoD 3/3 green at $10.64, the reviewer right after it
+  was handed **$0.43**, died with `Reached maximum budget ($0.43)` before reading a line of the
+  diff, and the `verdict: error` that recorded its death parked S1 at `review` with both
+  dependent stories blocked behind it — the loop stopped after $17.23 of a $60 run.
+  `REVIEWER_FLOOR_USD` ($1.00) already existed and did not save it, because the floor YIELDS to
+  the stage remainder (`min(REVIEWER_FLOOR_USD, budget − spent)`): a nearly-exhausted stage buys a
+  turn that provably cannot finish. The fix is not a bigger floor. When the stage has less left
+  than a review costs the executor refuses BEFORE the spawn — no `agent.spawned`, no task row, not
+  a cent — and the story parks at `review` exactly where an unjudged story parks, with its diff
+  merged and its one attempt unspent. What it writes down is **not a verdict**: `verdict: "n-a"`
+  ("no reviewer ran for this story") beside a `reviewer_unfunded:` reason on the story's
+  `task.done`, its review log and the retro — the reviewer-side sibling of the `developerError`
+  and `budget_death:` records #271 and #277 shipped, and for the same reason. An agent that never
+  started formed no opinion, and `error` already means "it died mid-read"; writing a death nobody
+  chose as a review outcome is an audit record lying in the dangerous direction. The reason names
+  the lever that actually moves the ceiling — `tldrx budget raise <phase> <usd> --stage <id>`,
+  sized to the shortfall — rather than the phase ceiling that caps no spawn. The review stays
+  owed, so the next invocation's review-only path picks it up instead of re-running the developer,
+  and under an unchanged remainder it refuses again for free. `reviewerCap`'s arithmetic is
+  deliberately untouched: it is mirrored on the budget gate's hot path, and the brake's estimate
+  must keep reading the schedule the executor would have spent under. A HOST review is never
+  refused this way — it costs the stage nothing.
+
 ## 0.20.0 — 2026-09-13
 
 ### Added

@@ -302,6 +302,14 @@ export function storyCeilingUsd(parts: CapParts, price: number): number {
  * The floor is the fix for the failure that produced this code: $0.26 cannot
  * read a 39-file diff, and a reviewer that runs out mid-read costs the whole
  * developer turn it was supposed to judge (`REVIEWER_FLOOR_USD`).
+ *
+ * The floor still YIELDS to the stage remainder here, and that is now a
+ * deliberate division of labour rather than the hole gh #289 measured: what this
+ * function answers is "what would this turn be capped at", which
+ * `budget/remainingWork.ts` mirrors for the brake's estimate and
+ * `seed/checkSeed.ts` quotes when nothing has been spent. Whether the turn is
+ * WORTH SPAWNING at that cap is `reviewerUnderfunded`'s question, and the
+ * executor asks it first — before the spawn, before a cent.
  */
 export function reviewerCap(parts: CapParts, spentUsd: number, storyId?: string): number {
   const price = priceOf(parts, storyId);
@@ -311,6 +319,48 @@ export function reviewerCap(parts: CapParts, spentUsd: number, storyId?: string)
     : parts.agentCap(shareOf(parts, price * share / (attemptsOf(parts) * (1 + share))));
   const floor = Math.min(REVIEWER_FLOOR_USD, Math.max(parts.budgetUsd - spentUsd, 0));
   return round2(Math.min(Math.max(derived, floor), parts.maxBudgetUsd));
+}
+
+/**
+ * What the stage has LEFT — `budget_usd` less what this invocation has spent —
+ * or `null` when the stage carries no budget figure to subtract from.
+ *
+ * `null` is the `commitsBetween` contract, not a zero: a stage with
+ * `budget_usd: 0` is a stage whose money nothing here can count, and a remainder
+ * invented for it would be the confident zero §7 forbids. Every caller must
+ * decide what to do with "I could not count", and the one below refuses to
+ * refuse on it.
+ */
+export function stageRemainderUsd(parts: CapParts, spentUsd: number): number | null {
+  if (!(parts.budgetUsd > 0)) return null;
+  return Math.max(round2(parts.budgetUsd - spentUsd), 0);
+}
+
+/**
+ * Is there too little left in the stage to fund a review at all (gh #289)?
+ *
+ * `REVIEWER_FLOOR_USD` was already the fix for this failure's earlier shape, and
+ * it did not hold: `reviewerCap` takes the floor as
+ * `min(REVIEWER_FLOOR_USD, remainder)`, so the floor YIELDS to whatever the
+ * developer left behind and a nearly-exhausted stage buys a reviewer that cannot
+ * read the diff. Measured on a live unattended run (0.19.0, `--budget 60`): a
+ * developer spent 10.64 of its stage, the reviewer after it was handed $0.43,
+ * died with `Reached maximum budget ($0.43)` before reading a line, and its
+ * recorded `verdict: error` parked the story at `review` and blocked both
+ * dependents — $17.23 of a $60 run, stopped.
+ *
+ * So the answer is not a bigger floor. A cap below the floor is a turn that
+ * provably cannot finish, and paying for it spends money AND loses the story:
+ * the executor refuses BEFORE the spawn and names the knob that moves the
+ * ceiling (the stage's own `budget_usd` — see gh #244; the phase ceiling caps no
+ * spawn). The arithmetic in `reviewerCap` is deliberately UNCHANGED: it is
+ * mirrored in `budget/remainingWork.ts` on the budget gate's hot path, and the
+ * brake's estimate must keep reading the same schedule the executor would have
+ * spent under.
+ */
+export function reviewerUnderfunded(parts: CapParts, spentUsd: number): boolean {
+  const left = stageRemainderUsd(parts, spentUsd);
+  return left !== null && left < REVIEWER_FLOOR_USD;
 }
 
 /**

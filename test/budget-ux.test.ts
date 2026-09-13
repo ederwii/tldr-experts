@@ -365,3 +365,70 @@ describe("budget raise: <usd> is a delta, and the help says so (#32)", () => {
     expect(outcome.phaseCeilingAfter).toBe(8);
   });
 });
+
+/**
+ * gh #244 — `budget raise` moves the one knob that caps no spawn.
+ *
+ * Measured by the session running two live unattended runs (their measurement,
+ * not this file's): raising ONLY the stage `budget_usd` 16.20 → 60 moved a
+ * developer ceiling 5.97 → 22.11 on the next spawn, while raising
+ * `per_agent_max_usd` AND the phase ceiling without touching the stage moved the
+ * ceiling by nothing. The three knobs are three jobs: the stage `budget_usd`
+ * decides the price scale and therefore every per-story ceiling, the phase
+ * ceiling decides only the economy refusal, and `per_agent_max_usd` only caps
+ * from above.
+ *
+ * So an operator told by a refusal to raise the budget raises it, and the next
+ * spawn is dispatched under exactly the ceiling that just killed it.
+ */
+describe("budget raise --stage moves the knob that caps the spawn (#244)", () => {
+  function stageBudget(runDir: string, phaseId: string, stageId: string): number {
+    const phase = loadRunFile(runDir).phases.find((p) => p.id === phaseId);
+    return phase?.stages.find((s) => s.id === stageId)?.budget_usd ?? -1;
+  }
+
+  test("a plain raise leaves every stage ceiling where it was, and says so", async () => {
+    const ws = fresh();
+    await tldrx(ws.root, "run", "new", "leaderboard", "--budget", "10");
+    const runDir = onlyRunDir(ws.root);
+    const stageId = loadRunFile(runDir).phases.find((p) => p.id === "01-what")?.stages[0]?.id ?? "";
+    const before = stageBudget(runDir, "01-what", stageId);
+
+    const raised = await tldrx(ws.root, "budget", "raise", "01-what", "2.00");
+    expect(raised.code).toBe(EXIT_OK);
+    expect(stageBudget(runDir, "01-what", stageId)).toBe(before);
+    // The trap #244 is about: the raise that changed no spawn cap has to SAY it
+    // changed no spawn cap, and name the flag that does.
+    expect(raised.stdout).toContain("--stage");
+  });
+
+  test("--stage raises that stage's own budget_usd by the same amount", async () => {
+    const ws = fresh();
+    await tldrx(ws.root, "run", "new", "leaderboard", "--budget", "10");
+    const runDir = onlyRunDir(ws.root);
+    const stageId = loadRunFile(runDir).phases.find((p) => p.id === "01-what")?.stages[0]?.id ?? "";
+    const before = stageBudget(runDir, "01-what", stageId);
+
+    const raised = await tldrx(ws.root, "budget", "raise", "01-what", "2.00", "--stage", stageId);
+    expect(raised.stderr).toBe("");
+    expect(raised.code).toBe(EXIT_OK);
+    expect(stageBudget(runDir, "01-what", stageId)).toBeCloseTo(before + 2, 2);
+    // The phase ceiling still moves: a stage that may spend more and a phase that
+    // may not is a stage refused by the economy gate on its next entry.
+    expect(loadBudgetFile(runDir).phases.find((p) => p.id === "01-what")?.ceiling_usd)
+      .toBeGreaterThan(0);
+  });
+
+  test("an unknown stage is a usage error and nothing is written", async () => {
+    const ws = fresh();
+    await tldrx(ws.root, "run", "new", "leaderboard", "--budget", "10");
+    const runDir = onlyRunDir(ws.root);
+    const budgetBefore = readFileSync(join(runDir, "budget.yml"), "utf8");
+    const runBefore = readFileSync(join(runDir, "run.yml"), "utf8");
+
+    const bad = await tldrx(ws.root, "budget", "raise", "01-what", "2.00", "--stage", "no-such-stage");
+    expect(bad.code).toBe(EXIT_USAGE);
+    expect(readFileSync(join(runDir, "budget.yml"), "utf8")).toBe(budgetBefore);
+    expect(readFileSync(join(runDir, "run.yml"), "utf8")).toBe(runBefore);
+  });
+});
