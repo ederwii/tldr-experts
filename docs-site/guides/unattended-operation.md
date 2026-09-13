@@ -335,9 +335,15 @@ whose "What shipped" section is empty.
 **And a run can end in the PR itself.** Open it with `--ship merge` (or `pr`, or `push`) and
 the moment `run auto` sees the run read `done` it runs `tldrx ship` for you: the epic branch is
 pushed, the PR opens with the body above, and under `merge` GitHub's auto-merge is armed so the
-repo's own checks decide — a PR that reports no check at all is left open, and `run.finished`
-then reads `merge: absent — no checks to wait on` beside the `pr_url`. Absent the flag, the
-loop ends where it always did. The gates are unchanged by it: a run that goes from `run new` to
+base branch's own REQUIRED checks decide. It is armed only over a base that was SEEN to require
+one: GitHub's auto-merge waits on the base's requirements, not on the checks the PR happens to
+report, so over a base that requires nothing `--auto` does not mean "merge when green", it means
+"merge now". Three absences leave the PR open for a person instead, and `run.finished` names
+which one beside the `pr_url` — `absent — no checks to wait on` (the PR reported none),
+`absent — the base branch requires no check before merge` (its rulesets and branch protection
+were read and hold nothing back), `absent — could not tell what the base branch requires` (that
+probe could not be read; for a merge, not knowing behaves like nothing to wait on). Absent the
+flag, the loop ends where it always did. The gates are unchanged by it: a run that goes from `run new` to
 a merged PR with nobody in the loop is `--gates none --ship merge`, said in full, and
 `run.yml` carries both decisions.
 

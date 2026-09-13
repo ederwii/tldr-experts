@@ -348,9 +348,16 @@ del PR de `tldrx ship` — y `tldrx ship` rechaza un run así en vez de abrir un
 **Y un run puede terminar en el PR mismo.** Ábrelo con `--ship merge` (o `pr`, o `push`) y en
 cuanto `run auto` ve el run en `done` corre `tldrx ship` por ti: la rama de la épica se
 publica, el PR se abre con el cuerpo de arriba, y con `merge` se arma el auto-merge de GitHub
-para que decidan los checks del propio repo — un PR que no reporta ningún check se queda
-abierto, y `run.finished` entonces dice `merge: absent — no checks to wait on` junto a la
-`pr_url`. Sin el flag, el loop termina donde siempre. Las compuertas no cambian por esto: un
+para que decidan los checks REQUERIDOS por la rama base. Solo se arma sobre una base de la que
+se VIO que exige alguno: el auto-merge de GitHub espera los requisitos de la base, no los checks
+que el PR reporte, así que sobre una base que no exige nada `--auto` no significa "mergea cuando
+esté verde", significa "mergea ya". En ese caso el PR se queda abierto para una persona, y
+`run.finished` dice cuál de las tres ausencias fue, junto a la `pr_url`:
+`absent — no checks to wait on` (el PR no reportó ninguno),
+`absent — the base branch requires no check before merge` (se leyeron sus rulesets y su
+protección de rama y no retienen nada), `absent — could not tell what the base branch requires`
+(esa sonda no se pudo leer; para un merge, no saber se comporta como no tener nada que esperar).
+Sin el flag, el loop termina donde siempre. Las compuertas no cambian por esto: un
 run que va de `run new` a un PR mergeado sin nadie en medio es `--gates none --ship merge`,
 dicho completo, y `run.yml` guarda las dos decisiones.
 

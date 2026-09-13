@@ -32,6 +32,30 @@
   would be the second copy `gen-changelog.ts` exists to prevent); the untranslated `TLDRX_UI`
   row on the ES flags page is generated from `gen-cli.ts`'s English-by-design env table and
   was left alone.
+### Fixed
+
+- **`--ship merge` no longer arms an auto-merge over a base that requires nothing (#274).**
+  Measured on the zero-touch proof run (a field workspace, `--gates none --ship merge`, no human
+  in the loop): the PR merged at `06:20:14Z` while all four of its check runs were still pending
+  — they had started at 06:20:12/06:20:16/06:20:28 and completed between 06:21:38 and 06:24:56,
+  every one of them AFTER the merge — and the ship record said `queued — GitHub merges when its
+  checks pass`. The mechanism is a gap between two different sets: the guard counted the checks
+  the PR REPORTED (`gh pr view --json statusCheckRollup`), while `gh pr merge --auto` hands the
+  wait to GitHub's auto-merge, which waits on the base branch's REQUIREMENTS. That workspace's
+  `main` had none (`gh api …/branches/main/protection` → 404 `Branch not protected`), so `--auto`
+  did not mean "merge when green", it meant "merge now", and the ledger recorded a red-eligible
+  suite as merged on green — a record lying in the dangerous direction (§7). `ship` now asks the
+  BASE what it requires before arming anything: `repos/{owner}/{repo}/rules/branches/<base>` for
+  rulesets (repository and organization level) and, when that finds none,
+  `repos/{owner}/{repo}/branches/<base>/protection` for classic branch protection. Nothing is
+  armed without a requirement actually SEEN — `merge: absent — the base branch requires no check
+  before merge` when both were read and hold nothing back, and `absent — could not tell what the
+  base branch requires` when a probe could not be read, because for a merge "I could not tell" has
+  to behave like "there is nothing to wait on". A requirement imposed by a mechanism neither probe
+  can see (a merge queue, an org policy this token cannot read) reads as "requires nothing" and so
+  arms NOTHING: the residual gap can only ever cost a merge that was not armed, never a merge that
+  should not have happened. The `queued` sentence now says what `--auto` actually waits on — the
+  base's REQUIRED checks.
 
 ## 0.18.1 — 2026-09-13
 

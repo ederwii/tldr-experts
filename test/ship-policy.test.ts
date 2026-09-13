@@ -37,7 +37,8 @@ import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { shipRun, type ShipTransport } from "../src/core/run/ship.ts";
 import {
-  AUTO_MERGE_POLICIES, MERGE_QUEUED, NO_CHECKS_TO_WAIT_ON, parseShipFlag, ShipPolicyError, shipWanted,
+  AUTO_MERGE_POLICIES, MERGE_QUEUED, NO_CHECKS_TO_WAIT_ON, NO_REQUIRED_CHECKS, parseShipFlag,
+  REQUIREMENTS_UNREADABLE, ShipPolicyError, shipWanted,
 } from "../src/core/run/shipPolicy.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { validateRunFile, type RunFile } from "../src/core/run/RunFile.ts";
@@ -186,6 +187,27 @@ const PR_URL = "https://github.com/ederwii/app/pull/9";
 const ROLLUP_WITH_CI = JSON.stringify({ statusCheckRollup: [{ name: "ci", status: "IN_PROGRESS", conclusion: null }] });
 const ROLLUP_EMPTY = JSON.stringify({ statusCheckRollup: [] });
 
+// The two endpoints the requirements probe asks (#274), spelled as the fake keys
+// on `<cmd> <arg0> <arg1>` — so a changed endpoint reddens these tests by name.
+const RULES_KEY = "gh api repos/{owner}/{repo}/rules/branches/main";
+const PROTECTION_KEY = "gh api repos/{owner}/{repo}/branches/main/protection";
+/** What a ruleset with one required status check answers. */
+const RULES_REQUIRING_CI = JSON.stringify([
+  { type: "pull_request" },
+  { type: "required_status_checks", parameters: { required_status_checks: [{ context: "ci" }] } },
+]);
+/** What a branch with no ruleset answers: 200, empty array. */
+const RULES_NONE = "[]";
+/** What classic branch protection answers when there is none — exit 1, measured 2026-09-13. */
+const PROTECTION_404: Answer = {
+  exitCode: 1,
+  stdout: JSON.stringify({ message: "Branch not protected", status: "404" }),
+  stderr: "gh: Branch not protected (HTTP 404)",
+};
+const PROTECTION_REQUIRING_CI = JSON.stringify({
+  required_status_checks: { strict: false, contexts: ["ci"], checks: [{ context: "ci" }] },
+});
+
 /** The answers a repo with checks gives: the branch lands on the remote, gh opens the PR. */
 function answersWithChecks(rollup = ROLLUP_WITH_CI): Record<string, Answer> {
   return {
@@ -195,6 +217,7 @@ function answersWithChecks(rollup = ROLLUP_WITH_CI): Record<string, Answer> {
     "gh pr create": { stdout: PR_URL },
     "gh pr view": { stdout: rollup },
     "gh pr list": { stdout: "[]" },
+    [RULES_KEY]: { stdout: RULES_REQUIRING_CI },
   };
 }
 
@@ -341,6 +364,75 @@ describe("`tldrx ship` under `ship: {push, pr, auto_merge: checks}`", () => {
     expect(shape(transport.calls)).toEqual(["git push -u", "gh pr create", "gh pr view"]);
     expect(RunStore.open(ws.runDir).run.ship?.merge).toBe(NO_CHECKS_TO_WAIT_ON);
     expect(out.lines.join("\n")).toContain(NO_CHECKS_TO_WAIT_ON);
+  });
+
+  // -------------------------------------------------------------------------
+  // #274 — a PR REPORTING checks is not a base that REQUIRES them
+  // -------------------------------------------------------------------------
+  //
+  // Measured in the field (dev/whatsapp-agent PR #34, 2026-09-13): the rollup
+  // reported four checks that had STARTED two seconds earlier, the guard counted
+  // `> 0`, `--auto` was armed, and GitHub merged 2 s later because the base
+  // required nothing. Every one of those four checks completed AFTER the merge.
+  // `gh api .../branches/main/protection` → 404 "Branch not protected".
+
+  test("pending checks over a base that REQUIRES nothing are not armed — the record says which", async () => {
+    const ws = shippable({ push: true, pr: true, auto_merge: "checks" });
+    const transport = fakeTransport({
+      ...answersWithChecks(),
+      [RULES_KEY]: { stdout: RULES_NONE },
+      [PROTECTION_KEY]: PROTECTION_404,
+    });
+
+    const out = await ship(ws, transport);
+
+    // The property: nothing is armed. `--auto` here means "merge now".
+    expect(shape(transport.calls)).toEqual(["git push -u", "gh pr create", "gh pr view"]);
+    expect(out.code).toBe(EXIT_OK);
+    expect(RunStore.open(ws.runDir).run.ship?.merge).toBe(NO_REQUIRED_CHECKS);
+    expect(out.lines.join("\n")).toContain(NO_REQUIRED_CHECKS);
+    // ...and never the sentence that was false in the dangerous direction.
+    expect(out.lines.join("\n")).not.toContain("GitHub merges when its checks pass");
+  });
+
+  test("both mechanisms are asked, and a RULESET alone is enough to arm", async () => {
+    const ws = shippable({ push: true, pr: true, auto_merge: "checks" });
+    const transport = fakeTransport(answersWithChecks());
+
+    const out = await ship(ws, transport);
+
+    expect(out.code).toBe(EXIT_OK);
+    const api = transport.calls.filter((call) => call.cmd === "gh" && call.args[0] === "api");
+    expect(api.map((call) => call.args[1])).toEqual([RULES_KEY.replace("gh api ", "")]);
+    expect(RunStore.open(ws.runDir).run.ship?.merge).toBe(MERGE_QUEUED);
+  });
+
+  test("classic branch protection alone is enough to arm — the rules endpoint sees no ruleset", async () => {
+    const ws = shippable({ push: true, pr: true, auto_merge: "checks" });
+    const transport = fakeTransport({
+      ...answersWithChecks(),
+      [RULES_KEY]: { stdout: RULES_NONE },
+      [PROTECTION_KEY]: { stdout: PROTECTION_REQUIRING_CI },
+    });
+
+    const out = await ship(ws, transport);
+
+    expect(out.code).toBe(EXIT_OK);
+    expect(shape(transport.calls)).toEqual(["git push -u", "gh pr create", "gh pr view", "gh pr merge"]);
+    expect(RunStore.open(ws.runDir).run.ship?.merge).toBe(MERGE_QUEUED);
+  });
+
+  test("a requirement probe that cannot be read is `could not tell`, and arms nothing", async () => {
+    const ws = shippable({ push: true, pr: true, auto_merge: "checks" });
+    const transport = fakeTransport({
+      ...answersWithChecks(),
+      [RULES_KEY]: { exitCode: 1, stderr: "gh: Resource not accessible by integration (HTTP 403)" },
+    });
+
+    await ship(ws, transport);
+
+    expect(shape(transport.calls)).toEqual(["git push -u", "gh pr create", "gh pr view"]);
+    expect(RunStore.open(ws.runDir).run.ship?.merge).toBe(REQUIREMENTS_UNREADABLE);
   });
 
   test("`auto_merge: never` opens the PR and never asks about checks", async () => {
@@ -610,6 +702,9 @@ function autoWorkspace(shipFlag: string | null): AutoMade {
     '  "pr create") echo "https://github.com/ederwii/api/pull/9";;',
     `  "pr view") echo '${ROLLUP_WITH_CI}';;`,
     '  "pr list") echo "[]";;',
+    // #274: the base must REQUIRE a check before `--auto` is armed. This stub
+    // answers as a repo whose ruleset requires `ci`.
+    `  "api repos/{owner}/{repo}/rules/branches/main") echo '${RULES_REQUIRING_CI}';;`,
     "esac",
     "exit 0",
     "",
