@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.19.0 — unreleased
+
+### Added
+
+- **`tldrx story reopen <id> --as-is --note "…"` settles a story a person finished BY HAND
+  from its branch as it stands, with no developer spawned (#279).** Measured on a real
+  unattended run at 0.18.2: S2's merge into its epic hit the #268 conflict, a person rebased
+  the branch by hand (DoD green, `git merge-tree` clean), and then there was no way to get that
+  branch merged. `story reopen` hands the story to a developer; the developer had nothing to
+  do; #271's rule — work is measured SINCE THE SPAWN — blocked the story after one attempt,
+  correctly, because work that already exists, older than the spawn, is indistinguishable from
+  a developer that did nothing. A second reopen buys the same outcome, so the only way out was
+  to invent a commit for the developer to make. This is the case that rule could not see, added
+  beside it and not carved out of it: `--as-is` spawns nothing at all, so there is no spawn to
+  measure work since. Everything after the missing developer is the path every other story
+  takes — the epic is merged in if it moved (#268), the DoD runs in the story's worktree, the
+  same reviewer judges the same diff, the same merge lands it. The worktree is found BY NAME
+  from the branch and reopened when the build had removed it, which is the ordinary case: a
+  blocked story's tree is pruned as it settles, and the hand fix is typically made in a scratch
+  worktree that is then removed. Two refusals are STRUCTURAL and no flag skips either, because
+  a verb that merges a branch nobody's agent wrote is exactly where a `--force` gets added at
+  3 a.m. to unstick a run: the branch must carry at least one commit its epic has not already
+  got (`commitsBetween`, whose `null` stays "could not count" and refuses rather than reading
+  as "did not move", #273), and the DoD must go green under the same `dodProves` every other
+  story faces — the story blocks with the reason naming which. And the record does not lie
+  about who did the work (§7): `story.reopened` carries `reason: as_is` with the actor and the
+  note, `task.done` carries `as_is`/`as_is_by`/`as_is_note`, the review log's developer line
+  opens **none** and names the branch it took and the person who signed for it, and no task row
+  is written for a turn nothing was spawned for. The signature is cleared the moment a real
+  developer attempt starts, so a story requeued after a `changes` verdict over a hand-finished
+  branch records a DEVELOPER and not an as-is — found by review before it shipped, and pinned.
+  `--for-fix` and `--as-is` together are a usage error rather than a resolution in favour of
+  one: they answer different questions, and quietly performing the other is the CLI reporting
+  success for work it did not do. `tldrx next --prepare` refuses an `--as-is` story rather than
+  dispatching a developer bundle for it.
+
 ## 0.18.3 — 2026-09-13
 
 ### Fixed

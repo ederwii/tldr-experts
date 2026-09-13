@@ -115,6 +115,7 @@ tldrx reject --note "…"                    # regresa esta etapa; la nota le ll
 tldrx reject --stage 02-how/how --note "…" # revoca una aprobación ya dada
 tldrx story reopen S3 --note "…"           # solo esta story de Build
 tldrx story reopen S3 --for-fix --note "…" # un defecto concreto en una story ya terminada
+tldrx story reopen S3 --as-is --note "…"   # terminaste la rama a mano: sin developer, mismas compuertas
 tldrx run cancel --note "superseded"       # cierra el run para siempre; libera su rama epic, sus archivos quedan
 ```
 

@@ -834,7 +834,7 @@ Give one Build story another run of attempts, open a fix round on a done one, or
 paths it declares.
 
 ```
-tldrx story reopen <id> --note <text> [--for-fix] [--run <id>] [--root <path>]
+tldrx story reopen <id> --note <text> [--for-fix | --as-is] [--run <id>] [--root <path>]
 tldrx story widen  <id> <path>… --note <text> [--run <id>] [--root <path>]
 ```
 
@@ -873,6 +873,39 @@ closes when the story is `done` again.
 Refuses (`2`) a story that is **not** `done` (that is the plain reopen), a missing `--note`,
 and a story that already has a fix round open — the refusal names who opened it and with
 which defect.
+
+### `--as-is` — a story a person finished BY HAND
+
+The plain verb hands the story to a **developer**, and a developer handed a branch whose work
+is already finished has nothing to commit. The rule that measures work **since the spawn**
+then blocks the story after one attempt — correctly, because work older than the spawn cannot
+be told apart from a developer that did nothing — so a hand-finished branch could only be
+merged by inventing a commit for the developer to make. That was measured on a real
+unattended run: a story whose merge hit a conflict, rebased by hand, DoD green, and no way to
+land it.
+
+```
+tldrx story reopen S2 --as-is --note "rebased onto the epic by hand after the merge conflict; dod green"
+```
+
+**No developer is spawned at all.** The next Build turn opens the story's worktree from the
+branch (re-creating it when the build had already pruned it, which is the usual case), runs
+the Definition of Done, hands the same diff to the same reviewer and lands the same merge into
+the epic. Nothing about the gates moves — the shortcut is the developer turn, not the proof.
+
+Two refusals are structural and **no flag skips either**: the branch must carry at least one
+commit its epic has not already got — a branch git could not count refuses too, because a
+settlement that spawns no developer will not merge on a measurement it does not have — and the
+DoD must go green. The story blocks with the reason naming which.
+
+The record says who did the work. `story.reopened` carries `reason: as_is` with the actor and
+the note, `task.done` carries `as_is`, `as_is_by` and `as_is_note`, and the story's review log
+opens its developer line with **none**, naming the branch it took and the person who signed
+for it. Nothing anywhere reads as though a developer delivered it.
+
+`--for-fix` and `--as-is` together are a usage error (`1`): they answer different questions.
+`tldrx next --prepare` refuses an `--as-is` story rather than dispatching a developer bundle
+for it — the headless `tldrx next` is what settles it.
 
 ### `tldrx story widen` — the sanctioned way to grow a story's surface
 
