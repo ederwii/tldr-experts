@@ -89,7 +89,7 @@ import {
   type Review,
 } from "../../build/review.ts";
 import {
-  DEVELOPER_FAILED, dodFailureReason, dodGreen, dodRefused,
+  DEVELOPER_FAILED, dodFailure, dodFailureReason, dodGreen, dodRefused,
   type DodResult, type RescuedWork, type StoryOutcome,
 } from "../../build/outcome.ts";
 import {
@@ -115,7 +115,8 @@ import {
 import { scopedPathsFor } from "../../build/scopedPaths.ts";
 import {
   commitIfDirty, EpicState, mergeIntoEpic, openEpicWorktree, refreshStoryBase, rescueUncommitted,
-  storyWorktreePath, unreadableTouches, workSince, type EpicWorktreeParts,
+  staleBaseConflict, storyWorktreePath, unreadableTouches, updateStoryBase, workSince,
+  type EpicWorktreeParts,
 } from "../../build/worktrees.ts";
 import {
   INSTALL_SLOT, installCommandFor, installFailed, installFailureReason, runWorktreeInstall, type InstallCheck,
@@ -1353,9 +1354,8 @@ class BuildSession {
     // implicit one is the framework saying this scope has nothing to run
     // (`dodIsSatisfiedEmpty`). Everything else — one red command — blocks either way.
     const dod = await this.runDod(story);
-    const green = dod.length === 0 ? dodIsSatisfiedEmpty(this.plan) : dodGreen({ dod });
-    if (!green) {
-      const failing = dod.find((r) => dodRefused(r) || r.exitCode !== 0 || r.timedOut);
+    if (!this.dodProves(dod)) {
+      const failing = dodFailure(dod);
       const why = failing === undefined
         ? "the story declares no dod commands, so nothing could prove it"
         : dodFailureReason(failing, story.planned.story.repo);
@@ -1416,6 +1416,74 @@ class BuildSession {
       return "settled";
     }
 
+    // (f0) the epic may have MOVED since this story's branch was cut (#268), and
+    // the DoD above proved a tree that does not include what moved it. A wave
+    // runs its stories at `--parallel N` from one tip and merges them one after
+    // another, so every story but the first is in exactly this position. The
+    // story branch is brought up to the epic in its OWN worktree and its DoD is
+    // re-run on the result; the cost is one extra DoD per story, and only when
+    // the epic actually moved.
+    const update = await updateStoryBase({
+      storyId: story.planned.story.id,
+      repoDir: story.repoDir,
+      worktree: story.worktree,
+      branch: story.branch,
+      epicBranch: story.epicBranch,
+    });
+    if (update.kind === "blocked") {
+      // Nothing was merged and `mergeNoFf` has already aborted, so the story is
+      // exactly where its developer left it — which is what makes naming the
+      // files useful rather than cruel.
+      await this.block(
+        story,
+        staleBaseConflict(
+          story.branch, story.epicBranch, update.conflicts, update.detail,
+          relative(this.ctx.root, story.worktree) || story.worktree,
+        ),
+        half.cost,
+        dod,
+        { commit, conflicts: update.conflicts },
+      );
+      return "settled";
+    }
+    // The DoD that speaks for this story is the one that ran on the tree that is
+    // about to merge. On the `current` path that is the one half A already ran,
+    // and this story pays nothing at all.
+    let proven = dod;
+    if (update.kind === "updated") {
+      this.lines.push(
+        `  · ${story.planned.story.id}: \`${story.branch}\` was ${String(update.behind)} commit(s) behind `
+        + `\`${story.epicBranch}\`${update.uncounted === null ? "" : ` (${update.uncounted})`} — merged the epic `
+        + `into it (${update.from.slice(0, 7)} → ${update.to.slice(0, 7)}) and re-ran the DoD on the result`,
+      );
+      this.ctx.emit("story.base_updated", {
+        phase: this.ctx.phaseId,
+        story: story.planned.story.id,
+        repo: story.planned.story.repo,
+        branch: story.branch,
+        base: story.epicBranch,
+        from: update.from,
+        to: update.to,
+        commits: update.behind,
+      });
+      proven = await this.runDod(story);
+      if (!this.dodProves(proven)) {
+        const failing = dodFailure(proven);
+        await this.block(
+          story,
+          `${failing === undefined
+            ? "the story declares no dod commands, so nothing could prove it"
+            : dodFailureReason(failing, story.planned.story.repo)}`
+          + ` — re-run after \`${story.epicBranch}\` moved under \`${story.branch}\` `
+          + `(${update.from.slice(0, 7)} → ${update.to.slice(0, 7)}); nothing was merged`,
+          half.cost,
+          proven,
+          { commit },
+        );
+        return "settled";
+      }
+    }
+
     // (f) merge into the epic. A conflict blocks the story; the wave carries on.
     //
     // How much the merge is about to MOVE is measured first, because afterwards
@@ -1439,7 +1507,7 @@ class BuildSession {
     const epicShaBefore = await fullShaOf(story.repoDir, story.epicBranch);
     const merge = await this.mergeIntoEpic(story);
     if (!merge.ok) {
-      await this.block(story, `merge into \`${story.epicBranch}\` failed: ${merge.detail}`, half.cost, dod, {
+      await this.block(story, `merge into \`${story.epicBranch}\` failed: ${merge.detail}`, half.cost, proven, {
         commit,
         conflicts: merge.conflicts,
       });
@@ -1448,7 +1516,7 @@ class BuildSession {
     this.noteMerged(story, carried);
 
     // (g)(h) the reviewer, and whatever it decides.
-    return await this.reviewAndSettle(story, dod, commit, half.cost, carried, epicShaBefore);
+    return await this.reviewAndSettle(story, proven, commit, half.cost, carried, epicShaBefore);
   }
 
   /**
@@ -1961,9 +2029,8 @@ class BuildSession {
   /** DoD → commit → merge → review → done/blocked, for the `--commit` cycle. */
   private async pipelineFromDod(story: StoryContext, developerCost: number): Promise<ReviewRoute> {
     const dod = await this.runDod(story);
-    const green = dod.length === 0 ? dodIsSatisfiedEmpty(this.plan) : dodGreen({ dod });
-    if (!green) {
-      const failing = dod.find((r) => dodRefused(r) || r.exitCode !== 0 || r.timedOut);
+    if (!this.dodProves(dod)) {
+      const failing = dodFailure(dod);
       await this.block(
         story,
         failing === undefined
@@ -2217,6 +2284,18 @@ class BuildSession {
   }
 
   /** (e) the story's ```dod block, in the worktree, via the gate's own runner. */
+  /**
+   * Does this DoD PROVE the story? One derivation, three callers (§7).
+   *
+   * The empty list is the interesting half: a planned story that declares no
+   * command is a Plan bug and blocks, and an implicit one is the framework
+   * saying this scope has nothing to run — which is `dodIsSatisfiedEmpty`'s
+   * question, not `dodGreen`'s.
+   */
+  private dodProves(dod: readonly DodResult[]): boolean {
+    return dod.length === 0 ? dodIsSatisfiedEmpty(this.plan) : dodGreen({ dod });
+  }
+
   private async runDod(story: StoryContext): Promise<readonly DodResult[]> {
     const scoped = await this.scopedParts(story);
     const results = await runStoryDod({

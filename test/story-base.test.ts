@@ -24,7 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { baseStateOf, commitsBetween, fastForward, shaOf, uncountedCount } from "../src/core/build/git.ts";
-import { refreshStoryBase } from "../src/core/build/worktrees.ts";
+import { refreshStoryBase, staleBaseConflict, updateStoryBase } from "../src/core/build/worktrees.ts";
 import { reopenStory } from "../src/core/run/reopenStory.ts";
 import { reject } from "../src/core/run/gates.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
@@ -588,5 +588,192 @@ describe("(d) up to date — the case that must stay byte-identical", () => {
 
     expect(outcome.lines.join("\n")).toContain("S1 → `done`");
     expect(fastForwards(ws)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Part 3 — the epic moved UNDER the story, between its base and its merge (#268)
+// ---------------------------------------------------------------------------
+
+/** Two stories in ONE wave, run two at a time: both cut from the same epic tip. */
+const ONE_WAVE: BuildWorkspaceOptions = {
+  stories: [
+    { id: "S1", epic: "E1", title: "First story" },
+    { id: "S2", epic: "E1", title: "Second story" },
+  ],
+  epics: [{ id: "E1", stories: ["S1", "S2"], branch: "epic/e1" }],
+  waves: [["S1", "S2"]],
+};
+
+/** Red exactly when BOTH stories' files are present — fine apart, broken together. */
+const BOTH_IS_RED =
+  "node -e \"const fs=require('fs');if(fs.existsSync('a.txt')&&fs.existsSync('b.txt'))process.exit(1)\"";
+
+function baseUpdates(ws: BuildWorkspace) {
+  return events(ws).filter((e) => e.type === "story.base_updated");
+}
+
+function dodRuns(ws: BuildWorkspace, storyId: string): number {
+  return events(ws).filter(
+    (e) => (e.type === "check.passed" || e.type === "check.failed")
+      && e.payload.check === "dod" && e.payload.story === storyId,
+  ).length;
+}
+
+/**
+ * One repo, `epic` and `story`, `story` checked out — which is what a story
+ * worktree is, minus the second checkout. `updateStoryBase` runs git and reads
+ * git, so a real repo is the only instrument that can tell "merged" from
+ * "aborted" (and a stub would let both be wrong in the same direction).
+ */
+function twoBranches(): { dir: string; git: (...args: string[]) => string } {
+  const repo = bareRepo();
+  repo.git("branch", "epic");
+  repo.git("checkout", "-q", "-b", "story");
+  return repo;
+}
+
+describe("updateStoryBase — the git seam, on a plain repository (#268)", () => {
+  test("a branch that already has the epic is `current`, and git writes nothing", async () => {
+    const { dir, git: run } = twoBranches();
+    writeFileSync(join(dir, "s.txt"), "story\n", "utf8");
+    run("add", "-A");
+    run("commit", "-qm", "story work");
+    const head = run("rev-parse", "HEAD");
+
+    const update = await updateStoryBase({
+      storyId: "S1", repoDir: dir, worktree: dir, branch: "story", epicBranch: "epic",
+    });
+
+    expect(update).toEqual({ kind: "current", why: null });
+    expect(run("rev-parse", "HEAD")).toBe(head);
+  });
+
+  test("a count git could not take is not a `no`: it LOOKS, and charges nothing for a no-op", async () => {
+    const { dir, git: run } = twoBranches();
+    run("merge", "-q", "--ff-only", "epic");
+    const head = run("rev-parse", "HEAD");
+    // `repoDir` is not a repository, so both counts fail and `baseStateOf` can
+    // only say `current` because it could not look (#273). The merge below is
+    // what actually looks — and finds nothing, so no DoD is owed.
+    const elsewhere = mkdtempSync(join(tmpdir(), "tldrx-not-a-repo-"));
+    scratch.push(elsewhere);
+
+    const update = await updateStoryBase({
+      storyId: "S1", repoDir: elsewhere, worktree: dir, branch: "story", epicBranch: "epic",
+    });
+
+    expect(update).toEqual({ kind: "current", why: uncountedCount("epic", "story") });
+    expect(run("rev-parse", "HEAD")).toBe(head);
+  });
+
+  test("a moved epic is merged IN, and the developer's commit stays reachable", async () => {
+    const { dir, git: run } = twoBranches();
+    writeFileSync(join(dir, "s.txt"), "story\n", "utf8");
+    run("add", "-A");
+    run("commit", "-qm", "story work");
+    const devCommit = run("rev-parse", "HEAD");
+    run("checkout", "-q", "epic");
+    writeFileSync(join(dir, "e.txt"), "epic\n", "utf8");
+    run("add", "-A");
+    run("commit", "-qm", "a sibling merged");
+    run("checkout", "-q", "story");
+
+    const update = await updateStoryBase({
+      storyId: "S1", repoDir: dir, worktree: dir, branch: "story", epicBranch: "epic",
+    });
+
+    expect(update.kind).toBe("updated");
+    expect(run("rev-parse", "HEAD")).not.toBe(devCommit);
+    // A MERGE and not a rebase: the sha the developer committed to is still a
+    // commit, and still an ancestor. A rebase would have abandoned both.
+    expect(run("merge-base", "--is-ancestor", devCommit, "HEAD")).toBe("");
+    expect(existsSync(join(dir, "e.txt"))).toBe(true);
+    expect(run("status", "--porcelain")).toBe("");
+  });
+
+  test("a conflict names the files and leaves NOTHING half-applied", async () => {
+    const { dir, git: run } = twoBranches();
+    writeFileSync(join(dir, "shared.txt"), "the story's line\n", "utf8");
+    run("add", "-A");
+    run("commit", "-qm", "story work");
+    const head = run("rev-parse", "HEAD");
+    run("checkout", "-q", "epic");
+    writeFileSync(join(dir, "shared.txt"), "a sibling's line\n", "utf8");
+    run("add", "-A");
+    run("commit", "-qm", "a sibling merged");
+    run("checkout", "-q", "story");
+
+    const update = await updateStoryBase({
+      storyId: "S1", repoDir: dir, worktree: dir, branch: "story", epicBranch: "epic",
+    });
+
+    expect(update).toMatchObject({ kind: "blocked", conflicts: ["shared.txt"] });
+    expect(run("rev-parse", "HEAD")).toBe(head);
+    expect(run("status", "--porcelain")).toBe("");
+    expect(readFileSync(join(dir, "shared.txt"), "utf8")).toBe("the story's line\n");
+  });
+});
+
+describe("(e) the epic moved since the story's base (#268)", () => {
+  test("a story green ALONE and red MERGED is blocked, and does not reach the epic", async () => {
+    const ws = workspace({ ...ONE_WAVE, testScript: BOTH_IS_RED });
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({ S1: { "a.txt": "S1\n" }, S2: { "b.txt": "S2\n" } });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"] });
+
+    await next(ws, { parallel: 2 });
+
+    expect(readFileSync(join(ws.planDir, "stories", "S1.md"), "utf8")).toContain("status: done");
+    expect(readFileSync(join(ws.planDir, "stories", "S2.md"), "utf8")).toContain("status: blocked");
+    // The whole point: the epic is the tree that ships, and the DoD said no.
+    expect(git(ws, "ls-tree", "--name-only", "-r", "epic/e1")).not.toContain("b.txt");
+    expect(git(ws, "ls-tree", "--name-only", "-r", "epic/e1")).toContain("a.txt");
+  });
+
+  test("the extra DoD is paid by the story the epic moved under, and by no other", async () => {
+    const ws = workspace(ONE_WAVE);
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"] });
+
+    await next(ws, { parallel: 2 });
+
+    // S1 merges first, from the tip it was cut from: nothing moved, nothing paid.
+    expect(dodRuns(ws, "S1")).toBe(1);
+    expect(baseUpdates(ws).map((e) => e.payload.story)).toEqual(["S2"]);
+    expect(dodRuns(ws, "S2")).toBe(2);
+    expect(readFileSync(join(ws.planDir, "stories", "S2.md"), "utf8")).toContain("status: done");
+  });
+
+  test("a conflicting story is blocked by NAME, with no merge commit on its branch", async () => {
+    const ws = workspace(ONE_WAVE);
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "shared.txt": "S1's line\n" },
+      S2: { "shared.txt": "S2's line\n" },
+    });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"] });
+
+    await next(ws, { parallel: 2 });
+
+    const branch = `story/${ws.runId}/S2`;
+    // The marker, not a word of English prose: the same function the executor
+    // blocks with, over the same three facts.
+    const named = staleBaseConflict(branch, "epic/e1", ["shared.txt"], "", "anywhere").split(" Resolve it in")[0];
+    expect(named).toBeDefined();
+    expect(readFileSync(join(ws.runDir, "04-build", "log", "S2.md"), "utf8")).toContain(named ?? "");
+    expect(readFileSync(join(ws.planDir, "stories", "S2.md"), "utf8")).toContain("status: blocked");
+    // Nothing half-applied: the branch is exactly the developer's commit, and
+    // the epic carries S1's line and only S1's.
+    expect(git(ws, "rev-list", "--count", "--merges", `epic/e1..${branch}`)).toBe("0");
+    expect(git(ws, "show", "epic/e1:shared.txt")).toBe("S1's line");
+  });
+
+  test("a story whose epic did NOT move pays no second DoD and moves no ref", async () => {
+    const ws = workspace(TWO);
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"] });
+
+    await next(ws);
+
+    expect(dodRuns(ws, "S1")).toBe(1);
+    expect(dodRuns(ws, "S2")).toBe(1);
+    expect(baseUpdates(ws)).toHaveLength(0);
   });
 });

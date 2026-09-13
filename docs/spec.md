@@ -1235,7 +1235,7 @@ Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with
 
 **Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `run.attended` `run.relaunched` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
-`gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `gate.policy_changed` `questions.policy_changed` `story.reopened` `story.base_fastforwarded` `story.review_retried` `story.work_rescued`
+`gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `gate.policy_changed` `questions.policy_changed` `story.reopened` `story.base_fastforwarded` `story.base_updated` `story.review_retried` `story.work_rescued`
 `story.touches_widened` `epic.released` `worktree.foreign_work_aside` `worktree.foreign_work_restored` `result.unreadable` `input.truncated` `operator_note` `check.passed` `check.failed` `budget.warned`
 `budget.blocked` `budget.raised` `budget.granted` `fact.added` `fact.retired` `fact.superseded` `fact.conflict_raised` `doc.superseded` `notify.sent` `notify.failed` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
@@ -1300,6 +1300,13 @@ ref**: a story branch that sat behind its epic tip, brought up to it before a de
 (short shas) and `commits` (how many the move carried). It is appended ONLY when the ref actually moved — a divergent
 or dirty branch is warned about on stdout and changed by nothing, so it has no event, because nothing happened. A
 branch tldrx moves without saying so would be the framework editing the operator's git state silently.
+
+**`story.base_updated` was added 2026-09-13 (#268).** It is the same ref moved at the OTHER end of the story: a story
+branch brought up to its epic's tip immediately before it merges back, because the epic moves in between (§5, step 3½).
+Its payload is `story.base_fastforwarded`'s — `phase`, `story`, `repo`, `branch`, `base`, `from`, `to`, `commits` —
+because it is the same measurement of the same move. It is appended ONLY when the story's HEAD actually moved, which
+is the same condition the re-run of the story's DoD is charged on: this event is the record of that extra DoD being
+paid, and its absence is the record that the story's base was current and nothing was owed.
 
 **`story.work_rescued` was added 2026-09-02 (#129).** It is the SECOND event in the enum that records tldrx touching
 git on the operator's behalf: changes found in a story worktree that had reached no ref, committed to the story branch
@@ -3595,6 +3602,23 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    two of three declared commands already failed on pristine main — one of them running paid `Live` AI tests the repo's
    own CI excludes — so all 15 stories would have blocked identically, each having spent a developer turn on it. Then anything still uncommitted is committed as `feat(<story-id>): <title>` — the agent may
    have committed already, and either way the sha is read back with `rev-parse`.
+3½. **The epic may have MOVED, and the DoD above proved a tree without it (#268).** A wave runs its stories at
+   `--parallel N` from one tip and merges them one after another, so every story but the first is merging from a base
+   a sibling has already advanced. Immediately before the merge, the story branch is measured against the epic tip
+   (`baseStateOf`, the one derivation) and, if the epic moved, the epic is merged INTO the story **in the story's own
+   worktree** and the story's **DoD is re-run on the result**; only then does step 4 happen. **A merge, not a rebase**,
+   for the reason "Resolve and cut" gives above: rewriting a branch a developer has committed to is the move the
+   run-id-in-branch-name rule exists to prevent, and every rescued sha (#129) is a promise a rebase breaks.
+   **The cost is one extra DoD per story, and only when the epic moved** — the update is charged on the story's HEAD
+   actually MOVING, so a story whose base is current pays nothing and emits nothing. A count git could not take is not
+   a "no": it falls through to the merge, which is a no-op exiting 0 when the branch really was current (#273, "could
+   not count" is not "did not move"). A CONFLICT here blocks the story **naming the conflicting paths** and merges
+   nothing — `git merge --abort` has already run, so the worktree is exactly where the developer left it and the epic
+   worktree is never opened. Measured 2026-09-13 (#268): a dependent story with a green DoD hit `CONFLICT (content)`
+   in a handler and two of its tests at step 4, settled `blocked` with verdict `n-a` and no reviewer, and a person
+   rebased it by hand — three times in one week. A move that happens emits one `story.base_updated` (§2.9), and its commit subject is
+   `sync(<story-id>): …` — never `merge(<story-id>): …`, which is the subject of a story LANDING on the epic and is
+   read as exactly that by a person and by the merge-order assertion in `build-parallel.test.ts`.
 4. **Merge into the epic**, `git merge --no-ff` inside a worktree checked out on the epic branch. On conflict the merge
    is **aborted** — so the epic branch is exactly as the previous story left it and the wave can continue — the
    conflicting paths are read from `diff --diff-filter=U`, and the story is `blocked` with them as its `evidence:`.
