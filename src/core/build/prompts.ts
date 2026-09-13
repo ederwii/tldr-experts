@@ -293,9 +293,10 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     // at every separator and each fragment must match a grant on its own, so the
     // mechanism is stated rather than the rule alone.
     "- Run each Definition of Done command verbatim and alone: no redirection, pipes or chaining.",
-    "  Shell separators (`>`, `|`, `;`, `&&`) split a line into subcommands, and each subcommand",
-    "  must match its own grant, so a compound line is refused even when the script itself is",
-    "  allowed. The facilitator re-runs the Definition of Done after you anyway.",
+    "  Shell separators (`>`, `>>`, `2>&1`, `<`, `|`, `;`, `&&`, `||`, `&`, `$()`) split a line into",
+    "  subcommands, and each subcommand must match its own grant, so a compound line is refused",
+    "  even when the script itself is allowed. The facilitator re-runs the Definition of Done",
+    "  after you anyway.",
     "",
     "### Conventions",
     "",

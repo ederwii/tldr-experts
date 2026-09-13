@@ -558,8 +558,9 @@ because the same allowance would refuse the same command on the second try.
 **The developer committed, then was refused for its own DoD run.** The usual shape is a DoD
 command wrapped in `> log 2>&1; echo …` — the permission layer splits a line at every separator
 and refuses it because the fragments do not each match a grant, even when the script itself is
-allowed. Since gh #271 that refusal does not block a story whose tree holds committed work: it
-is recorded (on the review log, on `task.done`, in `## Unknowns`) and the facilitator's own
+allowed. Since gh #271 that refusal does not block a story whose tree holds work — committed or
+not, since the DoD runs before the facilitator's own commit anyway; git-ignored files and the
+framework's own state dirs do not count: it is recorded (on the review log, on `task.done`, in `## Unknowns`) and the facilitator's own
 Definition of Done decides — green goes on to review, red blocks with both reasons. A refusal
 with nothing committed still blocks after one attempt, exactly as above. The developer prompt
 now says to run each DoD command verbatim and alone, and why.

@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { executorFor, EXECUTORS } from "../src/core/facilitator/executors/index.ts";
 import {
-  buildExecutor, developerTools, permissionBlockReason, phaseCostToDate, readReviewLedger, REVIEWER_TOOLS,
+  buildExecutor, developerTools, phaseCostToDate, readReviewLedger, REVIEWER_TOOLS,
 } from "../src/core/facilitator/executors/build.ts";
 import { looksLikeReviewerError, renderReviewLog, reviewerFailed } from "../src/core/build/review.ts";
 import { renderBuildHandoff, type BuildHandoffParts } from "../src/core/build/handoff.ts";
@@ -3729,11 +3729,14 @@ describe("a file the developer must remove (gh #261)", () => {
  * a committed story the facilitator's DoD was one step away from measuring —
  * $8.12 to reach a committed, unverified story and stop.
  *
- * The rule now: with COMMITTED work in the tree the refusal is recorded and the
- * Definition of Done decides; with none, #261's block stands unchanged. What
- * "committed work" means is a tree comparison — the branch tip's tree against
- * the tree the developer was handed — so an empty commit, an unmoved HEAD and
- * an uncommitted tree all fall on the block side.
+ * The rule now: with WORK in the tree — committed or not — the refusal is
+ * recorded and the Definition of Done decides; with none, #261's block stands
+ * unchanged. Uncommitted work counts because the normal path already says so
+ * (`runDod` runs before `commitIfDirty`). What "work" means is a comparison of
+ * the tree against the one the developer was handed, state dirs excluded and
+ * git-ignored files not counted — so an empty commit, an untouched tree, a
+ * turn that only wrote framework state and a turn that only wrote an ignored
+ * file all fall on the block side.
  */
 describe("a refusal after the developer committed (gh #271)", () => {
   const S1_FILE = "s1.txt";
@@ -3802,14 +3805,42 @@ describe("a refusal after the developer committed (gh #271)", () => {
     expect(developerSpawns(ws)).toBe(1);
   }, 60_000);
 
-  // The three shapes that MUST still block after one attempt, each with #261's
-  // exact wording: no commit means the refusal is the whole story of the turn.
-  for (const [work, why] of [
-    ["empty-commit", "HEAD moved but the tree is identical to the base"],
-    ["uncommitted", "the tree is dirty and nothing was committed"],
+  /**
+   * The incident's most likely shape: edit, run a compound command TO VERIFY, be
+   * refused, never reach the commit. The normal path takes a dirty tree into the
+   * DoD and commits it afterwards; the refusal path now does the same.
+   */
+  test("uncommitted work + a green DoD: measured, committed by the facilitator, and landed", async () => {
+    const ws = workspace(ONE);
+    refusedWith("uncommitted");
+
+    await next(ws);
+
+    expect(dodRanFor(ws, "S1")).toBe(true);
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(git(ws, ["ls-tree", "--name-only", "epic/e1"]).split("\n")).toContain(S1_FILE);
+    const done = events(ws).find((e) => e.type === "task.done" && e.payload.story === "S1");
+    expect(done?.payload.permission_refused).toBe(PLUMBED);
+    expect(developerSpawns(ws)).toBe(1);
+  }, 60_000);
+
+  // #261's exact wording, as a literal: the block reason is what a person reads.
+  const BLOCKED_WITH_PLUMBED = "permission — `npm run test > /tmp/s1.log 2>&1; echo EXIT:$? >> /tmp/s1.log` "
+    + "was refused for approval by the agent's own permission layer, and a headless turn has nobody to "
+    + "approve it: the same allowance would refuse it again, so this attempt was not repeated";
+
+  // The shapes that MUST still block after one attempt: no work means the
+  // refusal is the whole story of the turn. `state-only` and `ignored-only` run
+  // in a `root_is_repo` workspace, where the worktree carries `tldrx-work/` and
+  // a `.gitignore` covering `*.log` — the two ways a no-work turn could look
+  // dirty by accident.
+  for (const [work, why, rootIsRepo] of [
+    ["empty-commit", "HEAD moved but the tree is identical to the base", false],
+    ["state-only", "only the framework's own state dir was written", true],
+    ["ignored-only", "only a git-ignored file was written", true],
   ] as const) {
     test(`${work} (${why}): blocked with \`permission — <command>\` after ONE attempt, no DoD spent`, async () => {
-      const ws = workspace(ONE);
+      const ws = workspace({ ...ONE, rootIsRepo });
       refusedWith(work);
 
       const outcome = await next(ws);
@@ -3817,10 +3848,56 @@ describe("a refusal after the developer committed (gh #271)", () => {
       expect(story(ws, "S1")).toContain("status: blocked");
       expect(dodRanFor(ws, "S1")).toBe(false);
       const gate = events(ws).find((e) => e.type === "gate.requested");
-      expect(String(gate?.payload.blocked_reason ?? "")).toBe(permissionBlockReason(PLUMBED));
+      expect(String(gate?.payload.blocked_reason ?? "")).toBe(BLOCKED_WITH_PLUMBED);
       expect(developerSpawns(ws)).toBe(1);
       expect(outcome.code).toBe(4);
       expect(git(ws, ["ls-tree", "--name-only", "epic/e1"]).split("\n")).not.toContain(S1_FILE);
     }, 60_000);
   }
+
+  /**
+   * The record must not lie sideways (§7): a refusal is the story's own, never a
+   * sibling's, and never the NEXT attempt's. Two stories with the refusal on S1
+   * only; then one story refused on attempt 1, sent back by the reviewer, and
+   * clean on attempt 2 — the record that settles last carries no refusal.
+   */
+  test("a refusal is attributed to its own story only", async () => {
+    const ws = workspace({
+      stories: [
+        { id: "S1", epic: "E1", title: "First", touches: ["s1.txt"] },
+        { id: "S2", epic: "E1", title: "Second", touches: ["s2.txt"] },
+      ],
+      epics: [{ id: "E1", stories: ["S1", "S2"], branch: "epic/e1" }],
+      waves: [["S1", "S2"]],
+    });
+    refusedWith("committed");
+
+    await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(story(ws, "S2")).toContain("status: done");
+    const doneS2 = events(ws).find((e) => e.type === "task.done" && e.payload.story === "S2");
+    expect(doneS2?.payload.permission_refused).toBeUndefined();
+    expect(readFileSync(join(ws.runDir, "04-build", "log", "S2.md"), "utf8")).not.toContain("refused for approval");
+    const handoff = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    expect(handoff).toContain("- S1's developer had");
+    expect(handoff).not.toContain("- S2's developer had");
+  }, 60_000);
+
+  test("a refusal on attempt 1 is not on attempt 2's record", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_DENIED = JSON.stringify({ "S1#1": PLUMBED });
+    process.env.FAKE_BUILD_DENIED_WORK = JSON.stringify({ S1: "committed" });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "approve"] });
+
+    await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(developerSpawns(ws)).toBe(2);
+    const dones = events(ws).filter((e) => e.type === "task.done" && e.payload.story === "S1");
+    expect(dones.length).toBe(2);
+    expect(dones[0]?.payload.permission_refused).toBe(PLUMBED);
+    expect(dones[1]?.payload.permission_refused).toBeUndefined();
+    expect(readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8")).not.toContain("refused for approval");
+  }, 60_000);
 });

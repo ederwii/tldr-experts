@@ -113,8 +113,8 @@ import {
   baseResultOf, PreflightCache, redBaseRefusal, runStoryDod, type BaseParts,
 } from "../../build/dodRunner.ts";
 import {
-  commitIfDirty, committedWork, EpicState, mergeIntoEpic, refreshStoryBase, rescueUncommitted, storyWorktreePath,
-  unreadableTouches, type EpicWorktreeParts,
+  commitIfDirty, EpicState, mergeIntoEpic, refreshStoryBase, rescueUncommitted, storyWorktreePath,
+  unreadableTouches, workSince, type EpicWorktreeParts,
 } from "../../build/worktrees.ts";
 import {
   installCommandFor, installFailed, installFailureReason, runWorktreeInstall, type InstallCheck,
@@ -1262,14 +1262,17 @@ class BuildSession {
     // which is the point: the same allowance would refuse the same command on
     // attempt 2.
     //
-    // gh #271: with committed work in the tree the refusal is RECORDED and the
-    // Definition of Done decides — measured on a field run, the refused call was
-    // the developer's own DoD command wrapped in shell plumbing, AFTER it had
-    // committed, and the block landed on a story the DoD one step below would
-    // have measured. "Committed work" is a tree comparison (`committedWork`), so
-    // an empty commit, an unmoved HEAD and an uncommitted tree all still block.
+    // gh #271: with WORK in the tree — committed or not — the refusal is
+    // RECORDED and the Definition of Done decides. Measured on a field run, the
+    // refused call was the developer's own DoD command wrapped in shell plumbing,
+    // and the block landed on a story the DoD one step below would have
+    // measured. Uncommitted work counts because the normal path already says so:
+    // `runDod` runs before `commitIfDirty`, and a developer refused while
+    // VERIFYING never reaches its commit. "Work" is `workSince` — the tree
+    // against the one handed, state dirs excluded, untracked-but-ignored files
+    // not counted — so an empty commit and an untouched tree still block.
     if (developer.refused !== null) {
-      const proven = await committedWork({
+      const proven = await workSince({
         workspaceRoot: this.workspace.root, repoDir: story.repoDir, worktree: story.worktree, since: handed,
       });
       if (!proven) {

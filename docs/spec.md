@@ -3431,10 +3431,14 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    Measured on a headless run: the refused call was the developer's own DoD command wrapped in shell plumbing
    (`cmd > log 2>&1; echo …`), AFTER it had committed — the permission layer splits a line at every separator and
    each fragment must match a grant on its own — and the block above landed on a story the facilitator's own DoD, one
-   step below, would have measured. So the block applies only when the tree holds no committed work, and "committed
-   work" is a tree comparison — `git diff --quiet <handed> HEAD` outside the framework's state dirs — not a proxy:
-   an empty commit, a HEAD that never moved and a dirty uncommitted tree all still block with the wording above after
-   one attempt (the uncommitted tree is rescued by #129, not measured). With committed work the refusal is still
+   step below, would have measured. So the block applies only when the tree holds no WORK, and "work" is a
+   comparison against the tree the developer was handed (`workSince`), not a proxy: the branch tip's tree against
+   it (`git diff --quiet <handed> HEAD`) OR a dirty working copy (`git status --porcelain` semantics — untracked
+   files count, git-ignored files do not), both outside `tldrx-work/` and `.tldrx/`, which a `root_is_repo` worktree
+   carries and the framework writes during the turn. Uncommitted work counts because the normal path already says
+   so — `runDod` runs before `commitIfDirty`, and a developer refused while VERIFYING never reaches its commit.
+   An empty commit, an untouched tree, a turn that wrote only framework state and a turn that wrote only an ignored
+   file all still block with the wording above after one attempt. With work the refusal is still
    written — `- Developer: … was refused for approval …` on the review log, `permission_refused` (additive) on
    `task.done`, a bullet in the handoff's `## Unknowns` — and the DoD decides: green goes on to review, red blocks
    with both reasons on one row, the DoD's first. The developer prompt's `## Rules` also says to run each DoD

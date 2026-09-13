@@ -293,8 +293,8 @@ export async function commitIfDirty(parts: CommitParts): Promise<string | null> 
   return sha === "" ? null : sha;
 }
 
-/** What `committedWork` compares: the story tree against the tree the developer was handed. */
-export interface CommittedWorkParts {
+/** What `workSince` compares: the story tree against the tree the developer was handed. */
+export interface WorkSinceParts {
   readonly workspaceRoot: string;
   readonly repoDir: string;
   readonly worktree: string;
@@ -303,19 +303,24 @@ export interface CommittedWorkParts {
 }
 
 /**
- * Did the developer COMMIT work — is the tree at the branch tip different from
+ * Did the developer do WORK — does the story tree, committed or not, differ from
  * the tree it was handed, outside the framework's own state dirs? (gh #271)
  *
- * A tree comparison and not a proxy, because every proxy has a false positive
- * that matters here: "HEAD moved" is true of an empty commit, `commitIfDirty`
- * returns HEAD when it committed nothing, and a dirty working copy is work the
- * developer did not stand behind — it is rescued by the block path (#129), not
- * measured by the DoD. `null` from the comparison — a sha that no longer
- * resolves — is read as `false`: a refusal is blocked unless the work is PROVEN.
+ * Two comparisons, one answer: the branch tip's tree against `since`
+ * (`treesDiffer`), and the working copy against the index (`isDirty`, which sees
+ * untracked files too). Uncommitted work COUNTS, because that is what the normal
+ * path already says — `runDod` runs before `commitIfDirty`, so a developer that
+ * edits, is refused for its own verification command and never reaches its
+ * commit is exactly the tree the DoD is there to measure. What does NOT count is
+ * a proxy's false positive: an empty commit moves HEAD and changes nothing, and
+ * a clean tree at the same HEAD is #261's untouched story. `null` from the tree
+ * comparison — a sha that no longer resolves — is read as no work: a refusal is
+ * blocked unless the work is PROVEN.
  */
-export async function committedWork(parts: CommittedWorkParts): Promise<boolean> {
+export async function workSince(parts: WorkSinceParts): Promise<boolean> {
   const state = stateDirPrefixes(parts.workspaceRoot, parts.repoDir);
-  return (await treesDiffer(parts.worktree, parts.since, "HEAD", state)) === true;
+  if ((await treesDiffer(parts.worktree, parts.since, "HEAD", state)) === true) return true;
+  return await isDirty(parts.worktree, state);
 }
 
 /** What an epic worktree is opened — or merged into — from, as data. */

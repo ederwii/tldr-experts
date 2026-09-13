@@ -606,9 +606,11 @@ describe("the developer prompt says to run each DoD command verbatim and alone (
     const text = devPrompt([]);
     expect(text).toContain("verbatim and alone");
     expect(text).toContain("no redirection, pipes or chaining");
-    expect(text).toContain("split a line into subcommands");
+    expect(text).toContain("split a line into");
+    expect(text).toContain("`2>&1`");
+    expect(text).toContain("`$()`");
     expect(text).toContain("must match its own grant");
-    expect(text).toContain("re-runs the Definition of Done after you anyway");
+    expect(text).toContain("re-runs the Definition of Done");
     // Beside the "Done means proven" rule, inside `## Rules`.
     expect(text.indexOf("Done means proven:")).toBeLessThan(text.indexOf("verbatim and alone"));
     expect(text.indexOf("verbatim and alone")).toBeLessThan(text.indexOf("### Conventions"));

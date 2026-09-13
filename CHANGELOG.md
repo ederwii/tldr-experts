@@ -4,37 +4,48 @@
 
 ### Fixed
 
-- **A permission refusal on a story whose tree holds committed work no longer blocks it before
-  the facilitator's own Definition of Done can measure it, and the developer is told why a
-  plumbed DoD line is refused (#271).** Measured 2026-09-12 on a headless `run auto --until-done`
-  at 0.18.0: the developer finished, committed, and then ran the workspace's DoD command wrapped
-  in `> log 2>&1; echo EXIT:$? >> log; tail …` — a line the agent's permission layer splits at
-  every separator and refuses because the fragments do not each match a grant (#215). #261's
-  block did exactly what it says: `blocked: permission — <that line>` on the gate, one attempt
-  spent, `--until-done` correctly parked. And it was the wrong verdict, because the refusal was
-  the developer's OWN attempt at verification, the work was already on the branch, and the
-  facilitator re-runs the DoD one step later regardless — $8.12 to reach a committed story
-  nothing measured. The refusal now stops a story only when the tree holds NO committed work.
-  "Committed work" is a tree comparison (`treesDiffer`: the branch tip's tree against the tree
-  the developer was handed, outside the framework's state dirs) and not a proxy: an empty
-  commit, an unmoved HEAD and a dirty uncommitted tree all still block with #261's exact
-  wording after one attempt — an uncommitted tree is work the developer did not stand behind,
-  and the block path's rescue (#129) keeps it. With committed work the refusal is RECORDED and
-  the Definition of Done decides: green, and the story goes on to review with the refused
-  command named on its review log (`- Developer: … was refused for approval …`), on
-  `task.done` as an additive `permission_refused`, and in the handoff's `## Unknowns`; red,
-  and the story blocks with BOTH reasons on one row, the DoD's first. Not blocking never means
-  not recording. The spawned developer prompt also gains one rule beside "Done means proven":
-  run each DoD command verbatim and alone, with the mechanism stated — separators split a line
-  into subcommands and each must match its own grant, so a compound line is refused even when
-  the script is allowed — and that the facilitator re-runs the DoD anyway. That sentence moves
-  the frozen developer prompt in `test/build-golden.test.ts` by exactly those four lines in six
-  prompt files; events, `run.yml` rows and exit codes are byte-identical. Pinned by five tests:
-  refusal after a commit + green DoD → `check.*` ran, `done`, recorded on all three surfaces;
-  + red DoD → `blocked` with both reasons; empty commit and uncommitted tree → `blocked:
-  permission — …` with no DoD spent, one spawn; and the prompt sentence once, in `## Rules`.
-  Reverting the gate reddens the first two; dropping the tree comparison reddens #261's own
-  test and the two no-work cases.
+- **A permission refusal on a story whose tree holds work no longer blocks it before the
+  facilitator's own Definition of Done can measure it, and the developer is told why a plumbed
+  DoD line is refused (#271).** Measured 2026-09-12 on a headless `run auto --until-done` at
+  0.18.0: the developer finished, committed, and then ran the workspace's DoD command wrapped in
+  `> log 2>&1; echo EXIT:$? >> log; tail …` — a line the agent's permission layer splits at every
+  separator and refuses because the fragments do not each match a grant (#215). #261's block did
+  exactly what it says: `blocked: permission — <that line>` on the gate, one attempt spent,
+  `--until-done` correctly parked. And it was the wrong verdict, because the refusal was the
+  developer's OWN attempt at verification, the work was already in the tree, and the facilitator
+  re-runs the DoD one step later regardless — $8.12 to reach a committed story nothing measured.
+  The refusal now stops a story only when the tree holds NO work. "Work" is `workSince`, one
+  derivation against the tree the developer was handed: the branch tip's tree differs from it
+  (`git diff --quiet`), OR the working copy is dirty (`git status --porcelain` semantics —
+  untracked files count, git-ignored files do not), both outside `tldrx-work/` and `.tldrx/`,
+  which a `root_is_repo` worktree carries and the framework writes during the turn. Uncommitted
+  work counts on purpose: the normal path already takes a dirty tree into the DoD and commits it
+  afterwards (`runDod` runs before `commitIfDirty`), and the incident's likeliest shape is a
+  developer refused while VERIFYING that never reaches its commit. An empty commit, an untouched
+  tree, a turn that wrote only framework state and a turn that wrote only an ignored file all
+  still block with #261's exact wording after one attempt. With work the refusal is RECORDED and
+  the Definition of Done decides: green, and the story goes on to review with the refused command
+  named on its review log (`- Developer: … was refused for approval …`), on `task.done` as an
+  additive `permission_refused`, and in the handoff's `## Unknowns`; red, and the story blocks
+  with BOTH reasons on one row, the DoD's first. Not blocking never means not recording, and a
+  refusal is its own story's and its own attempt's only. The spawned developer prompt also gains
+  one rule beside "Done means proven": run each DoD command verbatim and alone, with the
+  mechanism stated — `>`, `>>`, `2>&1`, `<`, `|`, `;`, `&&`, `||`, `&`, `$()` split a line into
+  subcommands and each must match its own grant, so a compound line is refused even when the
+  script is allowed — and that the facilitator re-runs the DoD anyway. That sentence moves the
+  frozen developer prompt in `test/build-golden.test.ts` by exactly those lines in six prompt
+  files; events, `run.yml` rows and exit codes are byte-identical. Pinned by nine tests: refusal
+  after a commit + green DoD → `check.*` ran, `done`, recorded on all three surfaces; uncommitted
+  work + green DoD → measured, committed by the facilitator, landed; + red DoD → `blocked` with
+  both reasons; empty commit, state-dir-only and ignored-file-only → `blocked: permission — …`
+  with no DoD spent, one spawn; two stories with the refusal on one → the other's record clean;
+  refused on attempt 1 and clean on attempt 2 → attempt 2's record clean; and the prompt sentence
+  once, in `## Rules`. Mutations, each measured: dropping the comparison (every refusal
+  continues) reddens #261's own test and the empty-commit, state-only and ignored-only cases; a
+  `headSha !== since` proxy reddens the uncommitted and empty-commit cases; dropping the dirty
+  half reddens the uncommitted case; dropping the state-dir exclusions reddens state-only;
+  counting ignored files (`git status --ignored`) reddens state-only and ignored-only; removing
+  the per-attempt reset reddens the attempt-2 case.
 - **The headless refusal under a `host-tokens` ceiling now writes its `budget.blocked` — it was
   the one money-family exit 2 the ledger could not see (#266).** Measured 2026-09-12 on
   `runNext.ts`: `budgetRefusal` and `hostTokensNote` both append a `budget.blocked` before
