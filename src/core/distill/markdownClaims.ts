@@ -10,6 +10,7 @@
  * they are provenance in *its* notation, and the imported claim carries provenance
  * in ours.
  */
+import { unclosedSrcMarker } from "../text/srcToken.ts";
 
 /** A claim longer than this is truncated — a handoff bullet has to stay readable. */
 export const MAX_CLAIM_CHARS = 240;
@@ -98,7 +99,28 @@ export function extractProseClaims(text: string, options: ProseOptions = {}): re
   return claims;
 }
 
-/** Strip AI-DLC grounding tags, collapse whitespace, truncate, drop a trailing full stop run. */
+/**
+ * Strip AI-DLC grounding tags, collapse whitespace, truncate, drop a trailing full stop run.
+ *
+ * The cut never lands inside a `[src: …]` citation (gh #275). It used to: a seed
+ * bullet of 248 characters was cut at 239, leaving `… [src: notes/desi…`, and
+ * `renderSeed` then appended the importer's own token — whose `]` closed the
+ * dangling marker, so the reader saw ONE file ref whose path was two citations
+ * glued together. `tldrx run new --seed` refused three field seeds in a row
+ * naming a path that appears nowhere in the document, which tells the author
+ * nothing about the cure.
+ *
+ * So when the cut falls inside a citation, it moves BACK to that citation's
+ * start: the over-long bullet loses the citation it could not fit rather than
+ * half of it, and the importer cites the seed line on the rendered bullet anyway,
+ * so the provenance that matters survives. Truncation is unchanged for every
+ * claim whose cut lands in prose — the alternative (strip citations before
+ * measuring) would rewrite short claims too, which are not broken.
+ *
+ * A claim that is NOTHING but a citation has no prose to keep: it is returned
+ * whole rather than cut to an ellipsis, because an invented path and a vanished
+ * claim are both worse than one long bullet.
+ */
 export function clean(text: string): string {
   const stripped = text
     .replace(GROUNDING_TAG_RE, "")
@@ -106,5 +128,9 @@ export function clean(text: string): string {
     .replace(/\*\*/g, "")
     .trim();
   if (stripped.length <= MAX_CLAIM_CHARS) return stripped;
-  return `${stripped.slice(0, MAX_CLAIM_CHARS - 1).trimEnd()}…`;
+  const cut = stripped.slice(0, MAX_CLAIM_CHARS - 1);
+  const open = unclosedSrcMarker(cut);
+  if (open === null) return `${cut.trimEnd()}…`;
+  const kept = cut.slice(0, open).trimEnd();
+  return kept === "" ? stripped : `${kept}…`;
 }

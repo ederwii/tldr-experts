@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.18.3 — unreleased
+
+### Fixed
+
+- **A seed bullet over the claim cap no longer has its citation cut in half, and the refusal
+  stops naming a path that is not a file (#275).** Measured on 0.18.1 in a field workspace:
+  three seeds written the same day, every path in them verified with `test -e`, were refused by
+  `tldrx run new --seed` with `no such file: src/M… [src: .tldrx/seeds/<x>.md`. The mechanism is
+  a fold, not a missing file — `clean()` cut a 248-character bullet at 239, which landed INSIDE
+  its inline `[src: …]`; `renderSeed` then appended the importer's own token, whose `]` closed
+  the dangling marker, and the reader saw ONE file ref whose path was two citations glued
+  together. The cut now moves BACK to the start of the citation it would have split, so an
+  over-long bullet loses the citation it could not fit rather than half of it; the importer
+  cites the seed line on the rendered bullet anyway, so the provenance that matters survives.
+  Claims whose cut lands in prose are byte-identical, which is why the fix is the clip and not
+  the cap or a pre-measurement strip — those would rewrite short claims that are not broken.
+  The other half is the refusal, which was worth as much: an author can write an unterminated
+  `[src:` by hand and get the same fold with no clipping involved, so `run new` now says the
+  line carries an unterminated citation, that the path above is a fold and not a file to look
+  for, and quotes the bullet — and says nothing at all when it cannot read the line back,
+  rather than guessing. Where a string ends mid-citation is a question for the `[src:]` grammar
+  and only for it: `unclosedSrcMarker` and `foldsUnclosedSrcMarker` are new leaves in
+  `src/core/text/srcToken.ts`, and neither caller carries a regex of its own.
+
 ## 0.18.2 — 2026-09-13
 
 ### Added

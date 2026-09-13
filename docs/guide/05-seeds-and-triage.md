@@ -35,8 +35,13 @@ measured in both:
   anything else happens — a hard-wrapped paragraph is one claim, not several — and a blank
   line, a heading or a fence ends it.
 - **At most ~200 characters per bullet, citation included.** The importer clips a claim at
-  240 characters (`MAX_CLAIM_CHARS`). A clip that lands inside the citation leaves a path
-  that does not exist, and `run new` refuses the seed (#275). Stay well under.
+  240 characters (`MAX_CLAIM_CHARS`). The clip never splits a citation — since #275 it moves
+  back to the start of the one it would have cut — but a clipped bullet LOSES that citation,
+  and the handoff then cites only the seed line. Stay well under if you want your own `[src:]`
+  to survive.
+- **Close every `[src:` you open.** An unterminated marker is swallowed by the closing `]` of
+  the importer's own token, and the two fold into one path that is not a file; `run new`
+  refuses and says so, naming the line (#275).
 - **The `[src: path:line]` token is the LAST thing on the line.** A citation written
   mid-sentence is invisible to the reader; only punctuation may follow the `]`.
 - **A `file` source is `[repo:]path:line[-line]`** — a path with no line number cites a

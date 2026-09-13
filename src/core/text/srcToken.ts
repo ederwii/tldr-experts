@@ -554,6 +554,41 @@ export function hasSrcMarker(line: string): boolean {
   return line.includes(SRC_MARKER);
 }
 
+/**
+ * Where the text's LAST `[src:` marker begins when nothing closes it, else null.
+ *
+ * The grammar's own answer to "does this string end mid-citation". A token's
+ * payload cannot hold a `]` (`TRAILING_TOKEN_RE`), so a marker is closed exactly
+ * when a `]` follows it — which is why this is one `indexOf`, and why it lives
+ * here rather than as a second regex in whatever needed to ask (gh #80, §7's one
+ * implementation per derivation).
+ *
+ * gh #275: the claim clipper cut a seed bullet at 240 characters INSIDE its
+ * inline citation; the renderer then appended its own token, whose `]` closed the
+ * dangling marker, and the reader below folded both into one file ref with a path
+ * that existed nowhere. Callers that cut text ask this before they cut.
+ */
+export function unclosedSrcMarker(text: string): number | null {
+  const open = text.lastIndexOf(SRC_MARKER);
+  if (open < 0) return null;
+  return text.includes("]", open + SRC_MARKER.length) ? null : open;
+}
+
+/**
+ * True when the line's trailing token SWALLOWED an earlier, unterminated `[src:`.
+ *
+ * Not "the line holds two markers": a closed citation quoted mid-sentence is
+ * legitimate and common. The fold is the case where the token the reader actually
+ * takes still contains a `[src:` inside itself, because the earlier marker had no
+ * `]` of its own and borrowed this one's — which is how gh #275's refusal came to
+ * name `src/M… [src: .tldrx/seeds/x.md` as a file. Read off the same parse every
+ * other caller uses, so no second notion of where a citation starts exists.
+ */
+export function foldsUnclosedSrcMarker(line: string): boolean {
+  const token = parseSrcToken(line);
+  return token !== null && token.raw.indexOf(SRC_MARKER, SRC_MARKER.length) >= 0;
+}
+
 /** One `src` production. Returns a ref, or an error describing why it is not one. */
 export function classifySrc(src: string, repos?: ReadonlySet<string>): SrcRef | SrcParseError {
   const raw = src;

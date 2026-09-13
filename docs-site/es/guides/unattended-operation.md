@@ -35,8 +35,10 @@ mecánicas:
   afirmación antes que cualquier otra cosa, así que un párrafo con saltos de línea es una
   sola afirmación, no varias.
 - **Como mucho ~200 caracteres por viñeta, cita incluida.** El importador recorta una
-  afirmación a los 240 caracteres, y un recorte que cae dentro de la cita deja una ruta que
-  no existe — `run new` entonces rechaza la semilla (#275). Quédate bien por debajo.
+  afirmación a los 240 caracteres. El recorte ya nunca parte una cita (#275), pero una viñeta
+  recortada la PIERDE y el handoff cita solo la línea de la semilla: quédate bien por debajo si
+  quieres que tu propio `[src:]` sobreviva. Cierra cada `[src:` que abras: uno sin terminar se
+  funde con el token del importador y `run new` rechaza la semilla, nombrando la línea.
 - **El token `[src: path:line]` es LO ÚLTIMO de la línea.** Una cita escrita a mitad de
   frase es invisible para el lector. Una ruta sin número de línea cita un archivo, no un
   hecho, y se rechaza; `path:line-line` es un rango; varias fuentes se unen con `"; "`
