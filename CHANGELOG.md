@@ -26,7 +26,7 @@
   citation, token last, `path:line` that exists, `"; "` between sources, the four What
   headings, a `Recommended:` line per question, `.tldrx/seeds/<nn>-<slug>.md` — are in
   `docs/guide/05` and in the site section, measured against `markdownClaims.ts` and
-  `srcToken.ts` rather than remembered. `run auto` examples now all say `--run <id>`, the
+  `srcToken.ts` rather than remembered. `run auto` examples in the guides now say `--run <id>` (the generated flag reference keeps its positional form), the
   spelling under which a bare `--until-done` cannot mistake the id for its count. The ES
   landing page links the release notes, which stay English and generated (a translated copy
   would be the second copy `gen-changelog.ts` exists to prevent); the untranslated `TLDRX_UI`
