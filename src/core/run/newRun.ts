@@ -44,6 +44,7 @@ import { renderSeedHandoff, renderSeedIndex, SEED_INDEX } from "../seed/renderSe
 import { findDuplicate } from "../facts/findDuplicate.ts";
 import { parseShipFlag, ShipPolicyError, type ShipPolicy } from "./shipPolicy.ts";
 import { renderHandoff, renderProse, renderQuestions, targetOf } from "../distill/renderDistill.ts";
+import { foldsUnclosedSrcMarker } from "../text/srcToken.ts";
 import { emitBudgetYaml, emitRunYaml } from "./emitRunYaml.ts";
 import { GatePolicyError, parseGatesFlag, resolveGatesPolicy, type GatesPolicy } from "./gatePolicy.ts";
 import { QuestionsPolicyError, parseQuestionsFlag, type QuestionsPolicy } from "./questionsPolicy.ts";
@@ -371,7 +372,7 @@ function createRunLocked(options: NewRunOptions): NewRunOutcome {
       const check = validateHandoff(handoff, toSrcContext(workspace, temp));
       if (!check.ok) {
         throw new NewRunError(
-          `seeded handoff is invalid: ${describeHandoff(check.missingSections, check.emptySections, check.unsourced, check.unresolved)}`,
+          `seeded handoff is invalid: ${describeHandoff(check.missingSections, check.emptySections, check.unsourced, check.unresolved, handoff)}`,
         );
       }
     }
@@ -412,7 +413,7 @@ function createRunLocked(options: NewRunOptions): NewRunOutcome {
       const handoffCheck = validateHandoff(handoff, srcCtx);
       if (!handoffCheck.ok) {
         throw new NewRunError(
-          `distilled handoff is invalid: ${describeHandoff(handoffCheck.missingSections, handoffCheck.emptySections, handoffCheck.unsourced, handoffCheck.unresolved)}`,
+          `distilled handoff is invalid: ${describeHandoff(handoffCheck.missingSections, handoffCheck.emptySections, handoffCheck.unsourced, handoffCheck.unresolved, handoff)}`,
         );
       }
 
@@ -657,13 +658,43 @@ function describeHandoff(
   empty: readonly { name: string; line: number }[],
   unsourced: readonly number[],
   unresolved: readonly { line: number; message: string }[],
+  text = "",
 ): string {
   if (missing.length > 0) return `missing section(s) ${missing.join(", ")}`;
   if (empty.length > 0) {
     return `section(s) with no list items: ${empty.map((s) => `${s.name} (L${String(s.line)})`).join(", ")}`;
   }
   if (unsourced.length > 0) return `unsourced bullet(s) on line(s) ${unsourced.join(", ")}`;
-  return unresolved[0]?.message ?? "unknown problem";
+  const first = unresolved[0];
+  if (first === undefined) return "unknown problem";
+  return `${first.message}${foldedCitationNote(text, first.line)}`;
+}
+
+/** At most this much of the offending bullet is quoted back — enough to find it, not a wall. */
+const MAX_QUOTED_CHARS = 120;
+
+/**
+ * Why a refusal may be naming a path that exists nowhere (gh #275).
+ *
+ * A bullet whose trailing token has SWALLOWED an earlier `[src:` has not cited two
+ * things: the reader takes one token, so an unterminated marker earlier in the line
+ * is closed by the `]` of the one after it and the path it reports is two citations
+ * glued together. A closed citation quoted mid-sentence is not this and says nothing. A field author hunted for `src/M…` because the refusal named it with no
+ * hint that it was a fold. Naming the real thing — the line, quoted, and the
+ * unterminated marker — is the difference between "shorten this bullet" and a file
+ * search that cannot succeed. When the line cannot be read back, nothing is added
+ * rather than a guess.
+ */
+function foldedCitationNote(text: string, line: number): string {
+  if (text === "" || line < 1) return "";
+  const raw = text.split("\n")[line - 1];
+  if (raw === undefined || raw.trim() === "") return "";
+  if (!foldsUnclosedSrcMarker(raw)) return "";
+  const trimmed = raw.trim();
+  const quoted = trimmed.length <= MAX_QUOTED_CHARS ? trimmed : `${trimmed.slice(0, MAX_QUOTED_CHARS)}…`;
+  return ` — L${String(line)} carries an unterminated \`[src:\` citation, so the path above is two `
+    + `citations folded into one and is not a file to look for; close or remove the inline citation `
+    + `in the seed (shorter bullets are safest). L${String(line)} reads \`${quoted}\``;
 }
 
 export function yymmdd(now: Date): string {

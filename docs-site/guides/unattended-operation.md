@@ -31,8 +31,10 @@ claim it cannot trace, so the rules are mechanical:
 - **One claim per bullet.** Consecutive prose lines are merged into ONE claim before
   anything else happens, so a hard-wrapped paragraph is one claim, not several.
 - **At most ~200 characters per bullet, citation included.** The importer clips a claim at
-  240 characters, and a clip that lands inside the citation leaves a path that does not
-  exist — `run new` then refuses the seed (#275). Stay well under.
+  240 characters. The clip never splits a citation (#275), but a clipped bullet loses it, and
+  the handoff then cites only the seed line — stay well under if you want your own `[src:]` to
+  survive. Close every `[src:` you open: an unterminated one folds into the importer's token
+  and `run new` refuses the seed, naming the line.
 - **The `[src: path:line]` token is the LAST thing on the line.** A citation written
   mid-sentence is invisible to the reader. A path with no line number cites a file, not a
   fact, and is refused; `path:line-line` is a range; several sources are joined with `"; "`

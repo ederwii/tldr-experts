@@ -23,6 +23,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   diagnoseSrcToken, describeSrcFailure, parseSrcToken, srcRule,
+  foldsUnclosedSrcMarker, unclosedSrcMarker,
   SRC_PATTERNS, SRC_RULE_IDS, SRC_RULES, SRC_SEPARATOR, readableSource,
 } from "../src/core/text/srcToken.ts";
 import {
@@ -320,5 +321,31 @@ describe("describeSrcFailure", () => {
     expect(rendered).toContain("trailing-position");
     expect(rendered).toContain("- it drops places [src: api:src/Sel.ts:2] before ranking");
     expect(rendered).toContain(srcRule("trailing-position").good);
+  });
+});
+
+// --- 8. where a string ends mid-citation ---------------------------------------
+
+describe("the grammar answers where a citation is left open (#275)", () => {
+  test("unclosedSrcMarker finds the cut-open marker, and nothing when there is none", () => {
+    expect(unclosedSrcMarker("a claim [src: src/a.ts:1]")).toBeNull();
+    expect(unclosedSrcMarker("a claim with no citation at all")).toBeNull();
+    expect(unclosedSrcMarker("a claim [src: src/a.ts")).toBe(8);
+    // The LAST marker is the one a clip can leave open; an earlier closed one is fine.
+    expect(unclosedSrcMarker("[src: src/a.ts:1] then [src: src/b")).toBe(23);
+    expect(unclosedSrcMarker("[src: src/a.ts:1] then [src: src/b.ts:2]")).toBeNull();
+  });
+
+  test("a fold is the token SWALLOWING an earlier marker, not two markers on a line", () => {
+    // What #275 produced: the clip left `[src: src/a` open and the importer's own
+    // token closed it, so one ref carries both.
+    const folded = "- a claim [src: src/a [src: seed.md:4]";
+    expect(foldsUnclosedSrcMarker(folded)).toBe(true);
+    expect(parseSrcToken(folded)?.refs).toHaveLength(1);
+
+    // A closed citation quoted mid-sentence is legitimate and is NOT a fold.
+    expect(foldsUnclosedSrcMarker("- it cites [src: src/a.ts:1] in passing [src: seed.md:4]")).toBe(false);
+    expect(foldsUnclosedSrcMarker("- an ordinary claim [src: seed.md:4]")).toBe(false);
+    expect(foldsUnclosedSrcMarker("- no citation here")).toBe(false);
   });
 });

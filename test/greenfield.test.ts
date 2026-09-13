@@ -22,6 +22,7 @@ import { createRun, NewRunError } from "../src/core/run/newRun.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { runNext } from "../src/core/facilitator/runNext.ts";
 import { collectSeed, SeedError, MAX_SEED_BYTES } from "../src/core/seed/collectSeed.ts";
+import { clean, MAX_CLAIM_CHARS } from "../src/core/distill/markdownClaims.ts";
 import { seedClaims, allSeedHeadings } from "../src/core/seed/seedClaims.ts";
 import { uncoveredSections } from "../src/core/seed/seedCoverage.ts";
 import { inlineInputs } from "../src/core/facilitator/seedInputs.ts";
@@ -248,6 +249,60 @@ describe("tldrx run new --seed <file>", () => {
       root: fixture.root, slug: "both", scope: "feature", budgetUsd: 5,
       seed: "requirements.md", from: fixture.root, actor: "alan", now: NOW,
     })).toThrow(NewRunError);
+  });
+});
+
+describe("a seed bullet over the claim cap keeps its citations whole (#275)", () => {
+  // 222 characters of prose, then a 25-character citation: the 240-character cut
+  // lands at index 239, INSIDE `[src: notes/design.md:12]`. That is the shape
+  // three field seeds hit on 0.18.1 — `run new` refused them naming a path that
+  // appears nowhere in the file.
+  const LONG_PROSE = "measured: the ledger writes one row per attempt and the retry path reuses that very "
+    + "row, so a second attempt never doubles the count, which is exactly what the cap arithmetic "
+    + "depends on and what the old code here got wrong";
+  const CITATION = "[src: notes/design.md:12]";
+
+  function seedWith(bullet: string): Readonly<Record<string, string>> {
+    return {
+      "requirements.md": `# Loyalty\n\n## Must have\n- ${bullet}\n- A leaderboard shows the top 50.\n`,
+      "notes/design.md": `# Design\n\n${"a note line\n".repeat(20)}`,
+    };
+  }
+
+  test("the cut moves back to the citation's start instead of splitting it", async () => {
+    expect(LONG_PROSE.length + 1 + CITATION.length).toBeGreaterThan(MAX_CLAIM_CHARS);
+    expect(LONG_PROSE.length + 1).toBeLessThan(MAX_CLAIM_CHARS - 1);
+
+    const claim = clean(`${LONG_PROSE} ${CITATION}`);
+    // Never a dangling marker, and never a fabricated path when the importer's
+    // own token is appended after it.
+    expect(claim).not.toContain("[src:");
+    expect(claim.endsWith("…")).toBe(true);
+    expect(claim.length).toBeLessThanOrEqual(MAX_CLAIM_CHARS);
+
+    const fixture = await greenfield(seedWith(`${LONG_PROSE} ${CITATION}`));
+    await init(fixture.root);
+    const outcome = seedRun(fixture.root, "requirements.md");
+    const handoff = readFileSync(join(outcome.runDir, "01-what/handoff.md"), "utf8");
+    expect(handoff).toContain(`- ${claim} [src: requirements.md:4]`);
+    expect(handoff).not.toContain("notes/design.md:12 [src:");
+  });
+
+  test("an author's own unterminated citation is refused by name, not by an invented path", async () => {
+    const fixture = await greenfield(seedWith("the retry path reuses the row [src: notes/design.md:12"));
+    await init(fixture.root);
+
+    let message = "";
+    try {
+      seedRun(fixture.root, "requirements.md");
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain("seeded handoff is invalid");
+    // The path in the resolver's complaint is a fold of two citations, so the
+    // refusal has to say so — and quote the line the author has to edit.
+    expect(message).toContain("unterminated `[src:`");
+    expect(message).toContain("the retry path reuses the row");
   });
 });
 
