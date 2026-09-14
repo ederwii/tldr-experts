@@ -18,7 +18,7 @@
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { foreignWaveLogPath } from "./fixtures/foreignWaveLog.ts";
@@ -1802,8 +1802,11 @@ describe("a wave WAITS on a release in flight, the way it waits on its own lock 
     // release.sh's traps cover INT/TERM only; a SIGKILL or a cut session leaves the marker with
     // no owner to remove it, and since #304 the release never hands its marker back — so this
     // dead-owner check is the ONE path that ever clears an orphaned marker, and it says so in
-    // the sentence a human will grep for, naming the marker and the pid.
-    expect(r.stderr).toContain(`merge-wave: broke open ${releaseMarkerPath(sb)} — the release that held it (pid 999999) is dead`);
+    // the sentence a human will grep for, naming the marker and the pid. The path is the one
+    // `git worktree list` answers — CANONICAL (`/private/var/…`), while a `tmpdir()` sandbox is
+    // spelled through the `/var` symlink on macOS: the wave's own gates caught this comparing the
+    // raw spelling, so the expectation is built from the real path of the sandbox root.
+    expect(r.stderr).toContain(`merge-wave: broke open ${join(realpathSync(sb.main), ".RELEASE-IN-PROGRESS")} — the release that held it (pid 999999) is dead`);
   });
 
   test("when the release finishes, the queued wave goes on to merge", async () => {
