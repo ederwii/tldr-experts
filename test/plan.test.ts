@@ -399,6 +399,21 @@ describe("the Plan gate refuses a budget.yml the Build reader could never price 
   });
 });
 
+/** A `run.yml` carrying only what the `plan` gate reads off it: the Build stage's `budget_usd`. */
+function RUN_WITH_BUILD_STAGE(budgetUsd: number): string {
+  return [
+    "version: 1",
+    "scope: feature",
+    "phases:",
+    "  - id: 04-build",
+    "    status: pending",
+    "    stages:",
+    "      - id: build",
+    `        budget_usd: ${budgetUsd.toFixed(2)}`,
+    "",
+  ].join("\n");
+}
+
 describe("the `plan` gate check (spec §2.15)", () => {
   let ws: TempRunWorkspace | null = null;
   afterEach(() => {
@@ -476,6 +491,42 @@ describe("the `plan` gate check (spec §2.15)", () => {
     });
     const outcome = await runCheck(CHECK, { root, runDir, stage: stageSpec(root, "plan") });
     expect(outcome).toMatchObject({ id: "plan", status: "passed" });
+  });
+
+  /**
+   * gh #281: a plan may price $114.00 of stories into a $16.20 Build stage and
+   * pass this gate without a word, and the Build then scales every price by
+   * 0.1421 before it caps a story — which the operator learns from a dead
+   * developer. The gate still passes (the scale is deliberate, see `priceScale`);
+   * its detail now says so, with the factor and the command that undoes it.
+   */
+  test("a passing plan priced over the Build stage's budget_usd says so, with the factor and the command (gh #281)", async () => {
+    const { root, runDir } = setUp({
+      "stories/S1.md": STORY.replace("repo: lab", "repo: api").replace("npm run test", "true"),
+      "epics/E1.md": EPIC.replace("repos: [lab]", "repos: [api]"),
+      "waves.yml": WAVES,
+      [PLAN_BUDGET_FILE]: READER_BUDGET.replace("S1: 28.00", "S1: 114.00"),
+    });
+    writeFileSync(join(runDir, "run.yml"), RUN_WITH_BUILD_STAGE(16.2), "utf8");
+    const outcome = await runCheck(CHECK, { root, runDir, stage: stageSpec(root, "plan") });
+    expect(outcome.status).toBe("passed");
+    expect(outcome.detail).toContain("1 wave(s)");
+    expect(outcome.detail).toContain("$114.00 of stories into a stage whose budget_usd is $16.20");
+    expect(outcome.detail).toContain("7.0× what the stage holds");
+    expect(outcome.detail).toContain("tldrx budget raise 04-build 97.80 --run 260830-leaderboard --stage build");
+  });
+
+  test("guard: a plan that fits its stage carries no such advisory", async () => {
+    const { root, runDir } = setUp({
+      "stories/S1.md": STORY.replace("repo: lab", "repo: api").replace("npm run test", "true"),
+      "epics/E1.md": EPIC.replace("repos: [lab]", "repos: [api]"),
+      "waves.yml": WAVES,
+      [PLAN_BUDGET_FILE]: READER_BUDGET,
+    });
+    writeFileSync(join(runDir, "run.yml"), RUN_WITH_BUILD_STAGE(30), "utf8");
+    const outcome = await runCheck(CHECK, { root, runDir, stage: stageSpec(root, "plan") });
+    expect(outcome.status).toBe("passed");
+    expect(outcome.detail).not.toContain("what the stage holds");
   });
 
   test("is skipped for a stage that writes no waves.yml", async () => {

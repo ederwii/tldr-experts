@@ -14,6 +14,7 @@ import { economyFor, type RunBudget } from "./RunBudget.ts";
 import { remainingWork, renderRemainingWork } from "./remainingWork.ts";
 import { totalSpent, wouldExceed } from "./wouldExceed.ts";
 import { spentFigure, tallyOf, type SpentTally } from "./spentFigure.ts";
+import { shortBy } from "../build/caps.ts";
 
 export interface BudgetPhaseView {
   readonly id: string;
@@ -241,15 +242,11 @@ export function stageRaiseCommand(
 }
 
 /**
- * What the ceiling is short by, rounded UP to the cent.
- *
- * Rounding up matters: `remaining` is a float difference, and a raise that lands
- * a hundredth of a cent under the estimate refuses the stage a second time — the
- * exact shape of the pilot failure this command exists to end.
+ * What the ceiling is short by, rounded UP to the cent — defined in
+ * `build/caps.ts` since gh #281 (the plan-price shortfall needs the same
+ * rounding) and re-exported here, where every raise command already reads it.
  */
-export function shortBy(estimate: number, remaining: number): number {
-  return Math.max(0.01, Math.ceil((estimate - remaining) * 100) / 100);
-}
+export { shortBy };
 
 /** The first stage in the phase that has not finished — what `next` would run. */
 function nextStageOf(stages: readonly RunStage[]): RunStage | null {

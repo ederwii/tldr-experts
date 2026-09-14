@@ -148,11 +148,11 @@ import {
 import { phaseCostToDate, storySpendToDate } from "../../build/phaseCost.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
 import {
-  clampParallel, developerAttemptDivisor, developerCap, reviewerCap, reviewerUnderfunded,
-  round2, stageRemainderUsd, storyCeilingUsd,
+  capDeathReason, clampParallel, developerAttemptDivisor, developerCap, planOverStageAdvisory,
+  reviewerCap, reviewerUnderfunded, round2, stageRemainderUsd, storyCeilingUsd,
   DEFAULT_PARALLEL, MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
   STORY_CAP_MULTIPLIER, STORY_CAP_FLOOR_USD,
-  type CapParts,
+  type CapLever, type CapParts,
 } from "../../build/caps.ts";
 import { shortBy, stageRaiseCommand } from "../../budget/budgetView.ts";
 import type { PlanStatus } from "../../schemas/planCommon.ts";
@@ -635,6 +635,10 @@ class BuildSession {
     // caps fall back to the uniform share and the build carries on, but nobody
     // gets to think the Plan's prices were honoured when they were not.
     if (plan.priceIssue !== null) this.advisories.push(plan.priceIssue);
+    // A plan priced past this stage is scaled, not refused — and said out loud
+    // here, before a spawn, rather than learned from a dead developer (gh #281).
+    const over = planOverStageAdvisory(this.capParts, this.capLever);
+    if (over !== null) this.advisories.push(over);
   }
 
   // --- the three entry points ----------------------------------------------
@@ -1625,7 +1629,9 @@ class BuildSession {
           ...(developer.refused === null
           ? []
           : [permissionBlockReason(developer.refused, { declared: this.repoCommands(story.planned.story.repo) })]),
-          ...(budgetDeath === null ? [] : [capDeathReason(budgetDeath)]),
+          ...(budgetDeath === null
+            ? []
+            : [capDeathReason(budgetDeath, this.capParts, story.planned.story.id, story.attempt, this.capLever)]),
         ].join("; and "),
         developerError: null,
         before,
@@ -4179,6 +4185,13 @@ class BuildSession {
     };
   }
 
+  /** The one command that moves a spawn ceiling (gh #244), for `build/caps.ts`'s sentences. */
+  private get capLever(): CapLever {
+    return {
+      raiseCommand: (usd) => stageRaiseCommand(this.ctx.runId, this.ctx.phaseId, this.ctx.stageId, usd),
+    };
+  }
+
   /**
    * Developer attempts one story of THIS stage gets — `attempts:` in its
    * `stage.yml`, default 2 (`schemas/stageTuning.ts`). Read once, off the spec
@@ -4561,22 +4574,6 @@ export function diedOnCap(error: string): boolean {
   return error.includes("Reached maximum budget");
 }
 
-/**
- * Why a story's turn stopped when its own per-story cap, not the work, decided
- * it (gh #277).
- *
- * The provider's sentence carries the dollar figure, so it is quoted verbatim
- * rather than paraphrased — the reader is otherwise left doing arithmetic
- * backwards from a `todo` status to find out what stopped a turn that had
- * already spent money. Same shape and same purpose as
- * `permissionBlockReason`: a CAUSE, not a verdict on the diff.
- */
-export function capDeathReason(error: string): string {
-  return `the developer died on its per-story cap — ${error}: the ceiling is derived from `
-    + "`03-plan/budget.yml`'s price for this story, so a story that really costs more than the "
-    + "plan guessed wants a higher price there or a higher `story_cap_multiplier:` on the stage";
-}
-
 /** The reviewer reads and nothing else. */
 export const REVIEWER_TOOLS: readonly string[] = ["Read", "Grep", "Glob", "Bash(git diff *)"];
 
@@ -4654,7 +4651,7 @@ function failed(ctx: ExecutorContext, error: string, tasks: readonly ExecutorTas
 // "the same symbol, a different file" stays true for every caller.
 export { readReviewLedger, phaseCostToDate };
 export {
-  clampParallel, developerAttemptDivisor, storyCeilingUsd,
+  capDeathReason, clampParallel, developerAttemptDivisor, storyCeilingUsd,
   DEFAULT_PARALLEL, MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
   STORY_CAP_MULTIPLIER, STORY_CAP_FLOOR_USD,
 };

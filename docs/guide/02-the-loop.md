@@ -43,7 +43,7 @@ The keys a stage may set, and what they do:
 | `attempts` | 2 | Developer attempts one unit of the stage's work gets before it blocks. The phase ceiling is sized for this many |
 | `fixlist_rounds` | 1 | Fix-list rounds one story gets. A `fixlist` verdict spends no attempt |
 | `reviewer_share` | 0.25 | The reviewer's share of a story's price |
-| `story_cap_multiplier` | 3 | What the plan's price for a story is multiplied by to get its developer's ceiling — the price is a ceiling, not a forecast |
+| `story_cap_multiplier` | 3 | What the plan's price for a story — as scaled to the stage's `budget_usd`, when the plan's prices sum past it — is multiplied by to get its developer's ceiling; the price is a ceiling, not a forecast |
 | `story_cap_floor_usd` | 4 | The least a priced story's developer may be given, whatever the multiplied price says |
 | `gate_signer_share` | 0.25 | The gate signer's share of the stage ceiling, on an `agent` gate |
 | `dry_run_allowed` | `true` | `false` refuses `tldrx next --dry-run` on this stage |

@@ -4009,8 +4009,10 @@ money.
 
 `03-plan/budget.yml` prices a story in its `per_phase_usd:` map — which the Plan writes and the Plan gate validates,
 and which nothing read until this date — **the price is read as a CEILING, not as a forecast** (gh #277, 2026-09-13).
-The story's ceiling is `max(price × story_cap_multiplier, story_cap_floor_usd)`, derived at DISPATCH off the price as
-it sits on disk: **attempt 1**, the pass the plan priced, gets the whole of it, and the contingency attempt after it
+The story's ceiling is `max(price × scale × story_cap_multiplier, story_cap_floor_usd)`, derived at DISPATCH off the
+price as it sits on disk — `scale` being `priceScale`, 1 while the plan's prices sum inside the stage's `budget_usd`
+and `stage ÷ Σ prices` when they do not (gh #281: a $16.20 stage over a $114.00 plan capped a story priced $14.00 at
+$5.97, not $42, and nothing said so): **attempt 1**, the pass the plan priced, gets the whole of it, and the contingency attempt after it
 gets an `attempts`-th — the 2:1 ratio gh #91 established on 2026-09-02, when it measured run
 `260901-leaderboard-v2` dispatching a story the plan priced at $2.10 under an $0.84 ceiling. Its reviewer's cap is a
 `REVIEWER_SHARE` of the worst-case figure, on every attempt, and is unchanged by all of this.
@@ -4031,7 +4033,15 @@ gh #271 gave a permission refusal): the death is recorded on the story's review 
 delivered story, a red one blocks with both reasons named. A cap death that left NO work still parks the story
 exactly where it was, unchanged since 2026-08-30.
 Prices summing to more than the stage are scaled down proportionally, so
-the plan's ratio survives and the total cannot escape the ceiling; an unparseable or invalid file is an advisory on
+the plan's ratio survives and the total cannot escape the ceiling — and since gh #281 that is SAID, not learned from a
+dead developer: the `plan` gate still passes, and its detail carries the factor (`7.0× what the stage holds`), the
+scale, the largest story's cap as a worked example and the `tldrx budget raise <phase> <usd> --run <run> --stage <id>`
+that lifts the scale to 1; the Build executor prints the same advisory on stderr at entry, before any spawn. A
+developer that dies on its cap gets a `blocked_reason` carrying the formula with its inputs (`cap $5.97 = plan price
+$14.00 × stage scale 0.1421 (stage budget_usd $16.20 over $114.00 of plan prices) × story_cap_multiplier 3 = $5.97,
+above the floor $4.00`), and on a scaled plan it names the stage's `budget_usd` as the lever — raising every price
+keeps the ratio and the sum, so the scale absorbs it exactly; an unscaled plan keeps the price as a lever; an unpriced
+story names its uniform share. An unparseable or invalid file is an advisory on
 stderr and the uniform split. Measured before it: a seven-story plan pricing S1 at $4.75 and S2 at $0.75 gave both
 $1.03. **The reviewer also has a floor** (`REVIEWER_FLOOR_USD`, $1.00), clamped by what the stage has left and by
 `per_agent_max_usd`. The floor is the one place the "every worst case sums inside the ceiling" property is knowingly

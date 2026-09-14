@@ -4262,6 +4262,43 @@ describe("the plan's price is a ceiling, not a wall (gh #277)", () => {
   }, 60_000);
 
   /**
+   * gh #281, the field case in numbers: a plan priced at $114.00 into a $16.20
+   * stage. The cap S1 dies on here is the one S4 died on there — $5.97 = $14.00 ×
+   * 0.1421 × 3 — and the reason used to send the operator to the plan price, the
+   * one lever the scale absorbs exactly (every price ×4 moved nothing). The
+   * reason now shows the formula WITH its inputs and names the stage's own
+   * `budget_usd` as the lever, with the command that lifts the scale to 1.
+   */
+  test("a cap death on a SCALED plan names the scale, the stage budget and the raise command, not the price (gh #281)", async () => {
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 16.2, perAgentMaxUsd: 26, testScript: RED_ONLY_AFTER_DEVELOPER });
+    priceStories(ws, { S1: 14, S2: 100 });
+    process.env.FAKE_BUILD_FAIL = "developer:S1#1";
+    process.env.FAKE_BUILD_FAIL_REASON = "Reached maximum budget ($5.97)";
+    process.env.FAKE_BUILD_FAIL_WORK = JSON.stringify({ S1: "committed" });
+
+    const seen = await caps(ws);
+    expect(seen[0]).toBe("5.97");
+    const gate = events(ws).find((e) => e.type === "gate.requested");
+    const reason = String(gate?.payload.blocked_reason ?? "");
+    expect(reason).toContain("Reached maximum budget ($5.97)");
+    expect(reason).toContain("cap $5.97 = plan price $14.00 × stage scale 0.1421");
+    expect(reason).toContain("stage budget_usd $16.20 over $114.00 of plan prices");
+    expect(reason).toContain(`tldrx budget raise 04-build 97.80 --run ${ws.runId} --stage build`);
+    expect(reason).not.toContain("wants a higher price there");
+    // And the same sentence reached stderr at Build entry, before any spawn.
+    // (`caps` swallows the outcome; the advisory is asserted on its own below.)
+  }, 60_000);
+
+  test("a plan priced over its stage is an advisory at Build entry, with the factor and the command (gh #281)", async () => {
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 16.2, perAgentMaxUsd: 26 });
+    priceStories(ws, { S1: 14, S2: 100 });
+    const outcome = await next(ws);
+    const stderr = (outcome.stderr ?? []).join("\n");
+    expect(stderr).toContain("7.0× what the stage holds");
+    expect(stderr).toContain(`tldrx budget raise 04-build 97.80 --run ${ws.runId} --stage build`);
+  }, 60_000);
+
+  /**
    * GUARD, not a proof: the 2026-08-30 case — a spawn that died having written
    * nothing — must keep parking the story exactly where it found it. This passed
    * before the change and must keep passing after it.

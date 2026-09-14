@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.23.1 — unreleased
+
+### Fixed
+
+- **A per-story cap now says what it was derived from, and names a lever that moves it (#281).**
+  MEASURED on a live unattended run (0.18.2, eight stories): a developer died twice on a **$5.97**
+  cap while `03-plan/budget.yml` priced its story at **$14.00** and the 0.18.2 entry below promised
+  `max(price × 3, $4.00)` = $42. The `blocked_reason` told the operator to raise the plan price; the
+  operator raised every price ×4 and the cap did not move by a cent. The arithmetic is not the
+  defect: `priceScale` fits the plan's SUM into the stage's `budget_usd` — $16.20 over a $114.00 plan
+  is a scale of 0.1421 — and a uniform raise keeps the ratio and the sum, so the scale absorbs it
+  exactly. What the framework SAID was: two comment copies in `caps.ts` and the 0.18.2 bullet wrote
+  `price` where the code reads `price × scale`, and that section is dated and immutable, so this
+  bullet corrects #277's wording — the ceiling is `max(price × scale × story_cap_multiplier,
+  story_cap_floor_usd)`, scale being 1 only while the prices sum inside the stage. Three things
+  change, none of them a number. The cap death reason now shows the FORMULA with its inputs, not
+  the conclusion — `cap $5.97 = plan price $14.00 × stage scale 0.1421 (stage budget_usd $16.20 over
+  $114.00 of plan prices) × story_cap_multiplier 3 = $5.97, above the floor $4.00` — and on a scaled
+  plan it says the price cannot move the cap and names the stage's own `budget_usd` with the
+  `tldrx budget raise … --stage` command (#244) that lifts the scale to 1; an unscaled plan keeps
+  the price as a lever (the old sentence was right exactly there), and an unpriced story names its
+  uniform share instead of a plan price it never had. A plan priced past its Build stage still
+  passes the `plan` gate — the scale is a deliberate tolerance — but the gate's detail now carries
+  the factor (`7.0× what the stage holds`), the scale, the largest story as a worked example and the
+  same command; the Build executor prints the same advisory on stderr at entry, before any spawn,
+  so a run already in flight is told too. `shortBy` moved from `budget/budgetView.ts` to
+  `build/caps.ts` (re-exported where it was): the plan-price shortfall needs the same round-up, and a
+  second copy of a rounding rule is what §7 forbids.
+
 ## 0.23.0 — 2026-09-14
 
 ### Fixed

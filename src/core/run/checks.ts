@@ -23,6 +23,11 @@ import {
 } from "../text/handoff.ts";
 import { srcRule, type SrcRuleId } from "../text/srcToken.ts";
 import { validateRunBudget } from "../budget/RunBudget.ts";
+import { planOverStageAdvisory, round2, type CapParts } from "../build/caps.ts";
+import { loadPlanPrices } from "../build/plan.ts";
+import { stageRaiseCommand } from "../budget/budgetView.ts";
+import { buildProgress, BUILD_PHASE } from "./buildProgress.ts";
+import { loadStageSpec } from "../facilitator/stageSpec.ts";
 import { loadWorkspace, repoPath, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { describePlanIssues, validatePlan, writesPlanArtefacts, validatePlanBudget } from "../plan/validatePlan.ts";
 import { branchModelFor, describeBranchModel } from "../plan/branchModel.ts";
@@ -383,12 +388,80 @@ function checkPlan(ctx: CheckContext): CheckOutcome {
     return { id: "plan", status: "failed", detail: describePlanIssues(issues) };
   }
   const model = branchModelFor(basename(ctx.runDir), report.epicChain);
+  const over = planPricesOverStage(ctx, planDir);
   return {
     id: "plan",
     status: "passed",
     detail: `${report.epicCount} epic(s), ${report.storyCount} story(ies), ${report.waveCount} wave(s)`
-      + ` — ${describeBranchModel(model)}`,
+      + ` — ${describeBranchModel(model)}${over === null ? "" : ` — ${over}`}`,
   };
+}
+
+/**
+ * gh #281: a plan whose prices sum past the Build stage's `budget_usd` passes
+ * this gate — the Build scales them, deliberately — and used to pass it without
+ * a word, so the operator learned the scale from a dead developer. The gate
+ * still passes; its detail now carries `planOverStageAdvisory`'s sentence, with
+ * the factor and the command. Null whenever nothing can be said honestly: no
+ * `run.yml`, no Build stage in it, no usable prices — never a guessed figure.
+ *
+ * The parts are what the executor will read at dispatch — the stage's own
+ * `budget_usd` and tuning off the same `loadStageSpec` `runNext` uses,
+ * `per_agent_max_usd` off the run's `budget.yml` — so the worked example is the
+ * cap the story will actually get, not an approximation of it. `--max-usd` is
+ * the one input a gate cannot know.
+ */
+function planPricesOverStage(ctx: CheckContext, planDir: string): string | null {
+  const run = rawYaml(join(ctx.runDir, "run.yml")) as {
+    scope?: unknown;
+    phases?: readonly { id?: unknown; stages?: readonly { id?: unknown; budget_usd?: unknown }[] }[];
+  } | null;
+  if (run === null || typeof run.scope !== "string" || !Array.isArray(run.phases)) return null;
+  // The first stage of the Build phase — the one `next` dispatches into, and the
+  // one the shipped presets give the phase.
+  const stage = run.phases.find((phase) => phase.id === BUILD_PHASE)?.stages?.[0];
+  if (stage === undefined || typeof stage.id !== "string" || typeof stage.budget_usd !== "number") return null;
+  const progress = buildProgress(ctx.runDir);
+  if (progress === null || progress.implicit) return null;
+  const ids = new Set(progress.waves.flatMap((wave) => wave.stories.map((story) => story.id)));
+  const prices = loadPlanPrices(planDir, ids).prices;
+  if (prices.size === 0) return null;
+  let spec: ReturnType<typeof loadStageSpec> | null = null;
+  try {
+    spec = loadStageSpec(ctx.root, run.scope, stage.id);
+  } catch {
+    spec = null;
+  }
+  const budget = rawYaml(join(ctx.runDir, "budget.yml")) as { per_agent_max_usd?: unknown } | null;
+  const perAgentMax = typeof budget?.per_agent_max_usd === "number" ? budget.per_agent_max_usd : Infinity;
+  const budgetUsd = stage.budget_usd;
+  const parts: CapParts = {
+    prices,
+    storyCount: ids.size,
+    budgetUsd,
+    maxBudgetUsd: Math.min(budgetUsd, perAgentMax),
+    agentCap: (share = 1) => round2(Math.min(budgetUsd * share, perAgentMax)),
+    ...(spec === null ? {} : {
+      attempts: spec.tuning.attempts,
+      reviewerShare: spec.tuning.reviewerShare,
+      storyCapMultiplier: spec.tuning.storyCapMultiplier,
+      storyCapFloorUsd: spec.tuning.storyCapFloorUsd,
+    }),
+  };
+  const runId = basename(ctx.runDir);
+  return planOverStageAdvisory(parts, {
+    raiseCommand: (usd) => stageRaiseCommand(runId, BUILD_PHASE, stage.id as string, usd),
+  });
+}
+
+/** A YAML document off disk, or null when there is none or it will not parse. */
+function rawYaml(path: string): unknown {
+  if (!existsSync(path)) return null;
+  try {
+    return parseYaml(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 /** The run's own two schema files, revalidated off disk. */

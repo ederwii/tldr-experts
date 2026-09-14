@@ -103,6 +103,15 @@ tldrx budget raise 04-build 25 --stage build
 sub-agente murió contra su tope — no cuando al run se le acabó el dinero. Un `raise` que no
 nombra etapa lo dice en su propia salida: no se movió ningún techo de spawn.
 
+El `budget_usd` de la etapa es también aquello a lo que se **escalan** los precios del plan. El
+tope de una story es `max(price × scale × 3, $4.00)`, y `scale` vale 1 solo mientras los precios
+de `03-plan/budget.yml` suman dentro de la etapa: una etapa de $16.20 sobre un plan de $114.00 es
+una escala de 0.1421, así que una story valuada en $14.00 queda topada en $5.97, no en $42 — y
+subir todos los precios no mueve nada, porque una subida uniforme conserva la proporción y la
+suma. El detalle de la compuerta `plan` y el stderr del Build al entrar lo dicen, con el factor
+y el comando `--stage` que lleva la escala a 1; un developer que muere contra su tope recibe la
+fórmula con sus entradas y la misma perilla nombrada.
+
 El reviewer es el único turno que el framework no va a financiar a medias: cuando lo que le
 queda a la etapa está por debajo de lo que cuesta una revisión, no se lanza reviewer alguno.
 La historia queda con su diff mergeado y su revisión pendiente, no se gasta nada en un turno
