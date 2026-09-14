@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.23.0 — unreleased
+
+### Fixed
+
+- **A fix list with nothing to fix now settles the story `done` instead of buying a developer round
+  (#295, first half).** Measured on a live unattended run (0.20.0): the reviewer signed a two-finding
+  fix list, both `docs` and both `defer-with-log`, and the story still parked at `review` — the Build
+  then spawned a fix round for it, which died four times on command-form refusals (#294) with nothing
+  to fix. The rule that a `fixlist` verdict parks the story was written when a fix list meant "here is
+  what the author must do next"; #255 then made all-deferred lists the normal outcome of a docs-only
+  review and never adjusted who settles the story. Now the count the operator line already prints —
+  findings still `fix-now` in the PARSED list, #255's routing included — decides: zero means the
+  reviewer signed and nothing is owed a developer, so the story is `done` with `verdict: fixlist` on
+  its record. The artifact is still written and its deferred findings still reach `retro.md`: settling
+  the story does not settle what it deferred. One `fix-now` finding parks it exactly as before.
+
 ## 0.22.0 — 2026-09-14
 
 ### Fixed

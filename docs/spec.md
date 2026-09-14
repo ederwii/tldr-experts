@@ -3710,8 +3710,11 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    `error` verdict also parks the story at `review` but spends **no** attempt: the diff is committed, merged and
    DoD-green, so the next `tldrx next` re-runs the **review alone**, recovering the commit and the DoD results from
    `events.jsonl`. A `fixlist` verdict likewise parks it at `review` and spends **no** attempt — nothing about the diff
-   was faulted — and writes `04-build/fixlist/<story-id>-<round>.md` beside it. Only a verdict that FAULTED the diff
-   consumes the requeue. Headless re-runs it by spawning; `--prepare` writes the
+   was faulted — and writes `04-build/fixlist/<story-id>-<round>.md` beside it; a fix list with **no `fix-now`
+   finding** (every one routed `defer-with-log`, `refuted` or `out-of-scope`, #255's docs/style routing included)
+   settles the story `done` on the spot instead — the artifact is still written and its deferred findings still reach
+   `retro.md`, but no developer round is bought for a list with nothing to fix (#295). Only a verdict that FAULTED
+   the diff consumes the requeue. Headless re-runs it by spawning; `--prepare` writes the
    reviewer bundle for the host and stops (see "the second delegable role" below).
 
    **A FORMAT-refused envelope is re-prompted, not charged (#78, #79).** An envelope Build cannot read falls to

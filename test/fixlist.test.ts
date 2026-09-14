@@ -35,7 +35,7 @@ import { REVIEW_DIR } from "../src/core/run/prepared.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { parseReview } from "../src/core/build/review.ts";
 import {
-  DISPOSITIONS, FINDING_KINDS, MAX_FIXLIST_ROUNDS, carriedFindings, isOpen, openFindings,
+  DISPOSITIONS, FINDING_KINDS, FIXLIST_SETTLED_MARK, MAX_FIXLIST_ROUNDS, carriedFindings, isOpen, openFindings,
   parseFixFindings, parseFixlistFile,
   renderFixlist, unevidencedClaims, type FixFinding,
 } from "../src/core/build/fixlist.ts";
@@ -564,6 +564,104 @@ describe("the spawned reviewer reaches the same verdict", () => {
 
 // ---------------------------------------------------------------------------
 // The grammar itself, with no run around it.
+
+// ---------------------------------------------------------------------------
+// gh #295, first half — BEGIN. A `fixlist` verdict with NOTHING to fix now.
+// ---------------------------------------------------------------------------
+
+/**
+ * Story A's fix list, measured on 2026-09-13 (tldrx 0.20.0): two findings, both
+ * `docs`, both `defer-with-log`, zero `fix-now` — and the story still sat at
+ * `review` while a developer round was spawned for it and died four times with
+ * nothing to fix (#294). The second finding is SUBMITTED `fix-now` and routed to
+ * `defer-with-log` by #255's rule, so this asserts the decision is read off the
+ * PARSED list — the one the file carries — and not off the envelope's words.
+ */
+const ALL_DEFERRED: readonly Record<string, unknown>[] = [
+  {
+    n: 1,
+    severity: "low",
+    kind: "docs",
+    finding: "README still names the old flag",
+    where: "`README.md:12` [src: app:s1.txt:1]",
+    disposition: "defer-with-log",
+    detail: "The flag was renamed and the README was not.",
+  },
+  {
+    n: 2,
+    severity: "low",
+    kind: "docs",
+    finding: "Docstring describes the previous signature",
+    where: "`src/auth.ts:40` [src: app:s1.txt:1]",
+    disposition: "fix-now",
+    detail: "Two parameters were merged and the docstring still lists both.",
+  },
+];
+
+describe("a fix list with nothing to fix now settles the story done (#295)", () => {
+  test("headless: the story is `done`, the artifact is written, and no fix round is bought", async () => {
+    const ws = workspace();
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["fixlist"] });
+    process.env.FAKE_BUILD_FIXLIST = JSON.stringify({ S1: ALL_DEFERRED });
+
+    const first = await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: done");
+    // The artifact still exists — a deferred finding is still owed to the owner.
+    const text = readFileSync(fixlistPath(ws, "S1", 1), "utf8");
+    expect(text).toContain("Disposition: **defer-with-log**");
+    expect(text).not.toContain("Disposition: **fix-now**");
+    expect(text).toContain("Normalised-from");
+    const retro = readFileSync(join(ws.runDir, "retro.md"), "utf8");
+    expect(retro).toContain("reviewer finding DEFERRED (low, docs): README still names the old flag");
+    expect(first.lines.join("\n")).toContain(FIXLIST_SETTLED_MARK);
+    const ledger = readReviewLedger(ws.runDir, "S1");
+    expect(ledger.fixlistRounds).toBe(1);
+    expect(ledger.verdicts).toBe(0);
+    const spawned = events(ws).filter((e) => e.type === "agent.spawned");
+    expect(spawned.map((e) => e.payload.role)).toEqual(["developer", "reviewer"]);
+    const done = events(ws).filter((e) => e.type === "task.done" && e.payload.story === "S1").at(-1);
+    expect(done?.payload.status).toBe("done");
+    expect(done?.payload.verdict).toBe("fixlist");
+
+    // And the NEXT turn has nothing to route back to an author: no developer.
+    await next(ws, { at: "2026-08-29T09:30:00Z" });
+    expect(events(ws).filter((e) => e.type === "agent.spawned")).toHaveLength(2);
+  }, 90_000);
+
+  test("through the host handshake: the same rule, the same `done`", async () => {
+    const ws = workspace();
+    await handOffReview(ws);
+    answerReview(ws, "S1", {
+      verdict: "fixlist",
+      summary: "signed — every criterion is met; two docs nits the criteria never covered",
+      findings: [],
+      fixlist: ALL_DEFERRED,
+    });
+    const settled = await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:00:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(settled.lines.join("\n")).toContain(FIXLIST_SETTLED_MARK);
+    expect(existsSync(fixlistPath(ws, "S1", 1))).toBe(true);
+  }, 90_000);
+
+  test("one `fix-now` finding is enough to park the story at `review` — the control", async () => {
+    const ws = workspace();
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["fixlist"] });
+    process.env.FAKE_BUILD_FIXLIST = JSON.stringify({ S1: [ALL_DEFERRED[0], THREE_DEFECTS[1]] });
+
+    const first = await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: review");
+    expect(first.lines.join("\n")).not.toContain(FIXLIST_SETTLED_MARK);
+  }, 90_000);
+});
+
+// ---------------------------------------------------------------------------
+// gh #295, first half — END.
+// ---------------------------------------------------------------------------
 
 describe("parseFixFindings", () => {
   test("every disposition parses, and defaults are filled rather than guessed", () => {

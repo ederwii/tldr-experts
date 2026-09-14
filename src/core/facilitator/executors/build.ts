@@ -95,7 +95,7 @@ import {
   type AsIsSettlement, type DodResult, type RescuedWork, type StoryOutcome,
 } from "../../build/outcome.ts";
 import {
-  CLAIMED_UNVERIFIED, canonicalizeResolutions, fixlistRel, fixlistRetroLines, latestFixlist, markUnverified,
+  CLAIMED_UNVERIFIED, FIXLIST_SETTLED_MARK, canonicalizeResolutions, fixlistRel, fixlistRetroLines, latestFixlist, markUnverified,
   openFindings, readFixlistAt, renderFixlistSection, writeFixlist,
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
@@ -1769,6 +1769,23 @@ class BuildSession {
     if (review.verdict === "fixlist") {
       const rel = this.writeFixlistFor(story, review, commit, epicBase);
       const open = openFindings(review.fixlist).length;
+      // gh #295: a fix list with NOTHING to fix now is a signature and nothing
+      // else — every finding was routed to the owner (`defer-with-log`), refuted
+      // or put out of scope, so no developer is owed a round. Measured on a live
+      // run: a two-finding list, both `docs`/`defer-with-log`, parked the story
+      // at `review` and bought a fix round that died four times with nothing to
+      // fix (#294). Decided off the PARSED list — the dispositions the file
+      // carries, #255's routing included — not off the reviewer's words, and by
+      // exactly the count the line above prints. The artifact is still written
+      // and the deferred findings still reach `retro.md`: settling the story
+      // does not settle what it deferred.
+      if (open === 0) {
+        this.lines.push(`  · ${story.planned.story.id}: ${FIXLIST_SETTLED_MARK} (${rel})`);
+        await this.settle(story, "done", {
+          dod, commit, merged: true, carried, epicBase, verdict: "fixlist", review, cost, reason: null,
+        });
+        return "settled";
+      }
       await this.settle(story, "review", {
         dod, commit, merged: true, carried, epicBase, verdict: "fixlist", review, cost,
         reason: `the reviewer SIGNED with a fix list — ${String(review.fixlist.length)} finding(s), `
