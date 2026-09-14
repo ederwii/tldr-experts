@@ -35,8 +35,8 @@ import type { PlannedStory } from "../src/core/build/plan.ts";
 import { endsWithToken } from "../src/core/text/srcToken.ts";
 import { UNFINISHED_STORIES } from "../src/core/run/autoGate.ts";
 import {
-  decidingHold, dependencyHoldOfLog, dependencyHoldReason, dependencyNamedByHold, dependencyWaitLine,
-  dependencyWaitReason,
+  decidingHold, dependencyHoldOfLog, dependencyHoldReason, dependencyNamedByHold, dependencyNextLine,
+  dependencyWaitLine, dependencyWaitReason,
 } from "../src/core/build/dependencyHold.ts";
 import { WHY_NOT_DONE_HEADING } from "../src/core/build/review.ts";
 import { approve, reject } from "../src/core/run/gates.ts";
@@ -4595,6 +4595,241 @@ describe("a story whose dependency is at `review` waits instead of blocking (gh 
     expect(story(ws, "S2")).toContain("status: blocked");
     expect(again.lines.join("\n")).toContain("S2 is already `blocked` — left alone");
   }, 90_000);
+});
+
+/**
+ * gh #300 — the in-session doors ask the SAME dependency frontier the headless
+ * loop asks.
+ *
+ * `runAll` asks `blockingDependency` per story at every wave boundary (#260,
+ * #263, #280). `prepare()`, `prepareReviewOnly()` and `commit()` never did: each
+ * took `nextPending()` / `inProgress()`, and `pendingStories` skips only `done`
+ * and a terminal `blocked` — so a `todo` dependent of a story that is NOT `done`
+ * was handed out as a developer bundle, and `--commit` then merged it into an
+ * epic branch its dependency had put nothing on.
+ *
+ * The shape that reproduces is MIXED, and it is #280's mirror image. A headless
+ * pass meets S2 behind S1 at `review` and — correctly — leaves S2 `todo`. Before
+ * #280 that pass wrote S2 `blocked`, which was wrong for its own reason and was,
+ * incidentally, the only thing keeping `--prepare` from offering S2. Measured
+ * here at `31ed3d7` before the change: the host's `--commit --review` blocks S1
+ * (`changes`, attempts exhausted) and the next `--prepare` says `prepared S2` over
+ * an epic branch S1 never landed on. NOTE the literal sequence in the issue's
+ * comment — S1 at `review`, then `--prepare` — does NOT hand S2 out: S1 is
+ * pending too and earlier in wave order, so that `--prepare` offers S1's REVIEW
+ * (the first assertion below pins it). The dependent is offered the moment S1
+ * leaves `review` for a status `pendingStories` skips.
+ *
+ * Two kinds of hold, and what each leaves ON DISK is the whole difference
+ * (`build/dependencyHold.ts`). A terminal hold at `--prepare` — the dependency is
+ * `blocked`, or `todo` with its developer dead — records the dependent `blocked`
+ * with the recorded sentence, exactly as the loop does, so the reason reaches
+ * the gate. A pending hold — `review`/`in_progress` — refuses with "nothing to
+ * prepare yet" and leaves the row UNTOUCHED at `todo`: writing `blocked` there
+ * would re-create #280 on the other door and hand `staleDependencyHold` a row
+ * `--prepare` dirtied. A held `--commit` refuses without writing in BOTH cases,
+ * because the story on that door has an attempt on its branch and `blockOnDependency`
+ * records `attempts: 0` — the refusal names where the bundle and the work stay.
+ */
+describe("the in-session doors ask the dependency frontier (gh #300)", () => {
+  const DIED = "Reached maximum budget ($0.26)";
+
+  /** W1 = [S1], W2 = [S2 depends_on S1]; ONE attempt, so one `changes` blocks. */
+  function twoWaves(): BuildWorkspace {
+    return workspace({
+      stories: [
+        { id: "S1", epic: "E1", title: "First" },
+        { id: "S2", epic: "E1", title: "Second, in the next wave", dependsOn: ["S1"] },
+      ],
+      epics: [{ id: "E1", stories: ["S1", "S2"], branch: "epic/e1" }],
+      waves: [["S1"], ["S2"]],
+      attempts: 1,
+    });
+  }
+
+  function reenter(ws: BuildWorkspace, note: string): void {
+    reject(RunStore.open(ws.runDir), { root: ws.root, actor: "alan", at: "2026-08-29T10:00:00Z", note });
+  }
+
+  function started(ws: BuildWorkspace, id: string): boolean {
+    return events(ws).some((e) => e.type === "task.started" && e.payload.story === id);
+  }
+
+  function answerReview(ws: BuildWorkspace, id: string, envelope: unknown): void {
+    writeFileSync(join(ws.runDir, ".agent", "build", id, "review", "result.json"), `${JSON.stringify(envelope)}\n`, "utf8");
+  }
+
+  function setStatus(ws: BuildWorkspace, id: string, from: string, to: string): void {
+    const path = join(ws.planDir, "stories", `${id}.md`);
+    const text = readFileSync(path, "utf8");
+    expect(text).toContain(`status: ${from}`);
+    writeFileSync(path, text.replace(`status: ${from}`, `status: ${to}`), "utf8");
+  }
+
+  /** The mixed shape: a headless pass parks S1 at `review` and leaves S2 waiting `todo`. */
+  async function headlessPassLeavesS2Waiting(ws: BuildWorkspace): Promise<void> {
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "reviewer:S1#1";
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: review");
+    expect(story(ws, "S2")).toContain("status: todo");
+    reenter(ws, "the reviewer died");
+  }
+
+  test("MIXED: a headless pass leaves S2 waiting `todo`; the host blocks S1; `--prepare` records S2 `blocked` instead of handing it out", async () => {
+    const ws = twoWaves();
+    await headlessPassLeavesS2Waiting(ws);
+
+    // The issue's literal sequence: S1 is pending and earlier, so THIS prepare
+    // offers S1's review — S2 is untouched. (A pending hold on the head of the
+    // queue is unreachable by construction: the dependency it would wait on is
+    // itself pending and earlier in wave order, so it is what gets offered.)
+    const review = await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
+    expect(review.lines.join("\n")).toContain("prepared the REVIEW of S1");
+    expect(story(ws, "S2")).toContain("status: todo");
+    expect(existsSync(join(ws.runDir, "04-build", "log", "S2.md"))).toBe(false);
+
+    // The host's verdict blocks S1 for good — one attempt, `changes`.
+    answerReview(ws, "S1", { verdict: "changes", summary: "not what the story asked for", findings: ["S1: wrong"] });
+    const blocked = await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
+    expect(story(ws, "S1")).toContain("status: blocked");
+    expect(blocked.lines.join("\n")).toContain("S1 → `blocked`");
+    // The closing hint asks the frontier too: it used to read raw `nextPending()`
+    // and name S2 the instant S1 was blocked — the exact bundle the next
+    // `--prepare` must not write.
+    expect(blocked.lines.join("\n")).not.toContain("S2 is next — run `tldrx next --prepare`");
+    expect(blocked.lines.join("\n")).toContain(dependencyNextLine("S2", { id: "S1", status: "blocked" }));
+
+    // THE DEFECT: `--prepare` handed S2 out over an epic branch S1 never landed on.
+    const prepared = await next(ws, { mode: "prepare", at: "2026-08-29T10:25:00Z" });
+    const said = prepared.lines.join("\n");
+    expect(said).not.toContain("prepared S2");
+    expect(started(ws, "S2")).toBe(false);
+    expect(existsSync(join(ws.runDir, ".agent", "build", "S2", "pending.json"))).toBe(false);
+    // A TERMINAL hold: the same row and the same sentence the headless loop writes.
+    expect(story(ws, "S2")).toContain("status: blocked");
+    expect(said).toContain("S2 was not started");
+    expect(said).toContain(dependencyHoldReason({ id: "S1", status: "blocked" }));
+    expect(dependencyHoldOfLog(readFileSync(join(ws.runDir, "04-build", "log", "S2.md"), "utf8"))).toBe("S1");
+    // Nothing left to offer, so the stage closes at its gate. The gate names the
+    // FIRST blocked story (`runOutcome.ts`) — S1, settled by the earlier
+    // `--commit --review`, and the one a person acts on — and the handoff carries
+    // S2's row with the dependency reason beside it (#239).
+    expect(prepared.code).toBe(4);
+    const gate = events(ws).filter((e) => e.type === "gate.requested").at(-1);
+    expect(gate?.payload.blocked_story).toBe("S1");
+    const handoff = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    expect(handoff).toContain(dependencyHoldReason({ id: "S1", status: "blocked" }));
+    expect(handoff).not.toContain("S2 was scheduled and never started");
+    // And the row is the loop's own shape: a person reopens S1, it lands, and
+    // `staleDependencyHold` offers S2 again — the #280 release path, untouched.
+  }, 120_000);
+
+  test("MIXED: `--prepare --review` refuses over the same hold and writes nothing", async () => {
+    const ws = twoWaves();
+    await headlessPassLeavesS2Waiting(ws);
+    await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
+    answerReview(ws, "S1", { verdict: "changes", summary: "not what the story asked for", findings: ["S1: wrong"] });
+    await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
+    expect(story(ws, "S1")).toContain("status: blocked");
+
+    const prepared = await next(ws, { mode: "prepare", review: true, at: "2026-08-29T10:25:00Z" });
+    const said = prepared.lines.join("\n");
+    // Before: "S2 has no merged commit to review … Run `tldrx next --prepare` for
+    // the developer half first" — a cure that would have handed S2 out.
+    expect(said).not.toContain("Run `tldrx next --prepare` for the developer half first");
+    expect(said).toContain(dependencyHoldReason({ id: "S1", status: "blocked" }));
+    expect(said).toContain("`tldrx next --prepare` records S2 `blocked`");
+    expect(prepared.code).toBe(1);
+    // The explicit review spelling never records a story: the row is untouched
+    // and the bare `--prepare` is what records it.
+    expect(story(ws, "S2")).toContain("status: todo");
+    expect(existsSync(join(ws.runDir, "04-build", "log", "S2.md"))).toBe(false);
+  }, 120_000);
+
+  test("a pending hold at `--prepare` leaves the row `todo` — the dependency itself is what gets offered", async () => {
+    // GUARD, not a proof: green before the change too. It pins the on-disk half
+    // of case (b) on the nearest reachable shape — S1 at `review`, S2 `todo` —
+    // where `--prepare` offers S1's review and S2 stays exactly where it was.
+    const ws = twoWaves();
+    await headlessPassLeavesS2Waiting(ws);
+    const prepared = await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
+    expect(prepared.lines.join("\n")).toContain("prepared the REVIEW of S1");
+    expect(story(ws, "S2")).toContain("status: todo");
+    expect(existsSync(join(ws.runDir, "04-build", "log", "S2.md"))).toBe(false);
+    expect(existsSync(join(ws.runDir, ".agent", "build", "S2", "pending.json"))).toBe(false);
+  }, 90_000);
+
+  /** S1 built and `done` through the doors, S2 prepared on top of it. */
+  async function prepareS2OverDoneS1(ws: BuildWorkspace): Promise<void> {
+    expect((await next(ws, { mode: "prepare" })).lines.join("\n")).toContain("prepared S1");
+    writeFileSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`, "s1.txt"), "S1 in-session\n", "utf8");
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "result.json"),
+      JSON.stringify({ outputs: ["s1.txt"], questions_asked: [], notes: "", cost_usd: 0.3 }),
+      "utf8",
+    );
+    expect((await next(ws, { mode: "commit", at: "2026-08-29T09:30:00Z" })).lines.join("\n")).toContain("S1 → `done`");
+    expect((await next(ws, { mode: "prepare", at: "2026-08-29T09:40:00Z" })).lines.join("\n")).toContain("prepared S2");
+    expect(story(ws, "S2")).toContain("status: in_progress");
+    writeFileSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S2`, "s2.txt"), "S2 in-session\n", "utf8");
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S2", "result.json"),
+      JSON.stringify({ outputs: ["s2.txt"], questions_asked: [], notes: "", cost_usd: 0.2 }),
+      "utf8",
+    );
+  }
+
+  /** What a held `--commit` must leave exactly where it found it. */
+  function expectS2WorkIntact(ws: BuildWorkspace): void {
+    expect(story(ws, "S2")).toContain("status: in_progress");
+    const bundle = join(ws.runDir, ".agent", "build", "S2");
+    expect(existsSync(join(bundle, "pending.json"))).toBe(true);
+    expect(existsSync(join(bundle, "prompt.md"))).toBe(true);
+    expect(existsSync(join(bundle, "result.json"))).toBe(true);
+    expect(readFileSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S2`, "s2.txt"), "utf8")).toBe("S2 in-session\n");
+    expect(git(ws, ["rev-parse", "--verify", `story/${ws.runId}/S2`])).not.toBe("");
+    expect(() => git(ws, ["show", "epic/e1:s2.txt"])).toThrow();
+    expect(existsSync(join(ws.runDir, "04-build", "log", "S2.md"))).toBe(false);
+  }
+
+  test("a held `--commit` (terminal: the dependency went `blocked`) refuses, settles nothing, and says where the work stays", async () => {
+    const ws = twoWaves();
+    await prepareS2OverDoneS1(ws);
+    // The shape on disk: S1 is no longer `done` and will not land as it stands.
+    setStatus(ws, "S1", "done", "blocked");
+
+    const committed = await next(ws, { mode: "commit", at: "2026-08-29T09:50:00Z" });
+    const said = committed.lines.join("\n");
+    // Before the change this settled S2 `done` and merged it into `epic/e1`.
+    expect(said).not.toContain("S2 → `done`");
+    expect(committed.code).toBe(1);
+    expect(said).toContain(dependencyHoldReason({ id: "S1", status: "blocked" }));
+    expect(said).toContain(".agent/build/S2");
+    expect(said).toContain(`story/${ws.runId}/S2`);
+    expect(said).toContain("tldrx story reopen S1");
+    expectS2WorkIntact(ws);
+    // A sequencing refusal: no task row, no event of an attempt that was not settled.
+    expect(events(ws).some((e) => e.type === "task.done" && e.payload.story === "S2")).toBe(false);
+  }, 120_000);
+
+  test("a held `--commit` (pending: the dependency is back at `review`) refuses the same way and names what releases it", async () => {
+    const ws = twoWaves();
+    await prepareS2OverDoneS1(ws);
+    setStatus(ws, "S1", "done", "review");
+
+    const committed = await next(ws, { mode: "commit", at: "2026-08-29T09:50:00Z" });
+    const said = committed.lines.join("\n");
+    expect(said).not.toContain("S2 → `done`");
+    expect(committed.code).toBe(1);
+    expect(said).toContain(dependencyHoldReason({ id: "S1", status: "review" }));
+    expect(said).toContain("S1 `done` is what releases it");
+    expect(said).not.toContain("tldrx story reopen");
+    expectS2WorkIntact(ws);
+    // And nothing wrote `blocked` anywhere — S1 is where the operator put it.
+    expect(story(ws, "S1")).toContain("status: review");
+  }, 120_000);
 });
 
 /**

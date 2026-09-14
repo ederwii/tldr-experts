@@ -117,3 +117,74 @@ export function dependencyHoldOfLog(log: string): string | null {
   const body = (end === -1 ? rest : rest.slice(0, end)).map((line) => line.trim()).filter((line) => line !== "");
   return body.length === 1 && body[0] !== undefined ? dependencyNamedByHold(body[0]) : null;
 }
+
+/**
+ * What lifts a hold, named by the status that made it — the one place the
+ * cure is spelled (#300), so `--prepare`'s and `--commit`'s refusals cannot
+ * drift from what the loop's own wait line promises.
+ */
+export function dependencyHoldCure(held: DependencyHold): string {
+  if (dependencyIsPending(held.status)) {
+    return `${held.id} \`done\` is what releases it — it is offered again by the next \`tldrx next --prepare\``;
+  }
+  return held.status === "blocked"
+    ? `${held.id} will not land in this run as it stands — \`tldrx story reopen ${held.id} --note "…"\` gives it its turn`
+    : `${held.id} is \`todo\` after its wave ran, so its developer never delivered — \`tldrx next --prepare\` offers ${held.id} first`;
+}
+
+/**
+ * The sentence a `--prepare` door refuses with over a hold it does not record
+ * (#300). Two kinds, and the sentence says which, because what is on disk
+ * afterwards differs.
+ *
+ * A PENDING hold is the bare `--prepare`'s own case: everything left is waiting
+ * on a dependency mid-pipeline, so there is nothing to prepare YET and the row
+ * is left `todo` — never `blocked`, which would re-create #280 on this door.
+ * A TERMINAL hold reaches only `--prepare --review`, the explicit spelling that
+ * writes a review bundle or nothing: the bare verb is what records the
+ * dependent `blocked` with `dependencyHoldReason`, exactly as the loop does, and
+ * this sentence carries that same reason and says so.
+ */
+export function dependencyPrepareRefusal(storyId: string, held: DependencyHold): string {
+  if (dependencyIsPending(held.status)) {
+    return `nothing to prepare yet: ${storyId} waits on dependency ${held.id}, which is \`${held.status}\`, ` +
+      `not \`done\` — ${storyId} is left \`todo\`, not \`blocked\`; ${dependencyHoldCure(held)}`;
+  }
+  return `nothing to review: ${dependencyHoldReason(held)}, so ${storyId} has no developer turn to review and ` +
+    `none is owed — \`tldrx next --prepare\` records ${storyId} \`blocked\` with that reason; ${dependencyHoldCure(held)}`;
+}
+
+/** Where a prepared story's work sits, so a held `--commit` can say none of it is lost. */
+export interface HeldWork {
+  readonly bundleDir: string;
+  readonly branch: string;
+  readonly worktree: string;
+}
+
+/**
+ * The sentence a held `--commit` refuses with (#300). Both kinds of hold refuse
+ * the same way here and NEITHER writes: the story on this door has an attempt on
+ * its branch, and the loop's `blocked` row says `attempts: 0` — recording that
+ * over a developer's work would be the audit lying about what happened.
+ */
+export function dependencyCommitRefusal(storyId: string, held: DependencyHold, work: HeldWork): string {
+  return `${storyId} is not settled: ${dependencyHoldReason(held)}, and a story does not land over a dependency ` +
+    `that has not. Nothing is lost — the bundle stays at ${work.bundleDir}, the work stays on \`${work.branch}\` ` +
+    `in ${work.worktree}, and ${storyId} stays \`in_progress\`; ${dependencyHoldCure(held)}, ` +
+    `then \`tldrx next --commit\` settles ${storyId}`;
+}
+
+/**
+ * The closing hint of a `--commit` that settled a story and has more to do
+ * (#300): what the next `--prepare` would ACTUALLY offer, asked of the same
+ * frontier. Used to read raw `nextPending()`, which named the held dependent the
+ * instant its dependency was blocked — the exact bundle `--prepare` then refuses.
+ */
+export function dependencyNextLine(storyId: string, held: DependencyHold): string {
+  if (dependencyIsPending(held.status)) {
+    return `nothing is next yet — ${storyId} waits on dependency ${held.id}, which is \`${held.status}\`, ` +
+      `not \`done\`; ${dependencyHoldCure(held)}`;
+  }
+  return `nothing is next — ${dependencyHoldReason(held)}, so \`tldrx next --prepare\` records ${storyId} ` +
+    `\`blocked\` with that reason and closes the stage at its gate; ${dependencyHoldCure(held)}`;
+}
