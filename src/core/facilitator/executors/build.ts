@@ -61,7 +61,7 @@ import {
   dispatchNotesRecord, type PendingStage,
 } from "../pending.ts";
 import {
-  addWorktree, commitsBetween, ensureBranch, fullShaOf, git, GitError, headSha, removeWorktree, repoDirOf,
+  addWorktree, commitsBetween, ensureBranch, firstLine, fullShaOf, git, GitError, headSha, removeWorktree, repoDirOf,
   reviewDiffCommand, reviewDiffRange, shaReachability, uncountedCount,
 } from "../../build/git.ts";
 import { BaseGateFailure, baseRefusalLines } from "../../build/preflight.ts";
@@ -332,16 +332,6 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
     }
     throw withPartialTasks(error, session.tasks);
   }
-}
-
-/**
- * A thrown value's first line, bounded — for a `note` or an advisory that names a
- * failure and is not itself a field the cap knows how to drop.
- */
-function firstLine(error: unknown, max = 220): string {
-  const text = error instanceof Error ? error.message : String(error);
-  const line = text.split("\n")[0]?.trim() ?? "";
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
 /** A story's DoD failure re-attributed to the base tree — see `BaseGateFailure`. */
@@ -3823,7 +3813,7 @@ class BuildSession {
       // BOUNDED absence on the same event — the counts, and a note naming why
       // the lists are not here — so a reader still sees the widening happened
       // and by how much (§7: absent with a reason, never silent).
-      const why = firstLine(error);
+      const why = firstLine(error instanceof Error ? error.message : String(error));
       try {
         this.ctx.emit(
           "story.touches_widened",
@@ -3843,7 +3833,8 @@ class BuildSession {
         // is advisory — and the loss is said where the operator reads it.
         this.advisories.push(
           `${id}: the measured widening of its surface (${String(measured.paths.length)} path(s) outside `
-          + `\`touches:\`) could not be recorded in events.jsonl — ${firstLine(again)}`,
+          + `\`touches:\`) could not be recorded in events.jsonl — `
+          + firstLine(again instanceof Error ? again.message : String(again)),
         );
       }
     }

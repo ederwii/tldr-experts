@@ -335,7 +335,18 @@ function bullet(item: NumberedEvent, trail: Map<string, ReviewerProvenance | nul
       return `${prefix}UNREADABLE ${text(payload.path) || "result.json"}`
         + ` — ${text(payload.error) || "no parse error recorded"}`
         + " (nothing failed; rewrite it and run the same command again)";
-    case "error": return `${prefix}error: ${text(payload.message) || "no message recorded"}`;
+    // The executor-throw `error` writes `detail` (or `detail_omitted` when the
+    // cap trimmed it), never `message` — this line read a field the event has
+    // never carried (#249, review round 1). It REPORTS the counts the event
+    // carries and sums nothing: a reconstruction is labelled at the surface,
+    // never fused with the measured figures below it.
+    case "error": {
+      const what = text(payload.detail) || text(payload.detail_omitted) || text(payload.message) || "no message recorded";
+      const rows = typeof payload.rows_expected === "number"
+        ? ` (${String(payload.rows_written ?? "?")} of ${String(payload.rows_expected)} task rows recorded)`
+        : "";
+      return `${prefix}error: ${what}${rows}`;
+    }
     default: return null;
   }
 }

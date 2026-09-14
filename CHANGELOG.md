@@ -50,7 +50,18 @@
   just stop losing money, it stops LYING in favour of spend. With paid turns now recorded, ceilings bite
   earlier — a run that used to reach the end because the ledger counted short may now be refused mid-way,
   correctly but differently, so a new economy refusal after upgrading is this change working, not a
-  regression to hunt elsewhere.
+  regression to hunt elsewhere. Pre-merge review found the double fault behind that: when recording the
+  carried rows itself threw (an `agent.result` the cap cannot rescue), rows and events were interleaved, so
+  a throw at event k stranded rows k+1… in memory and nothing the spend surfaces read said so — a plausible
+  short total, worse than a loud zero — and the `error` event was emitted BEFORE the save with a free-text
+  `recording_error` the cap did not trim, so a long one could throw the seam and lose the rows with no
+  trace. Now every row goes into the store before any event is appended (the in-memory row write cannot
+  throw; the append is the only line that can), the store is saved before the `error` event is emitted and
+  that emit is wrapped, `recording_error` sits in the cap's prose table beside `detail`, and no new
+  vocabulary reaches `budget show`, the dashboard or status: `run.yml` is whole, and the events side is
+  already labelled a LOWER BOUND by `tldrx cost` when a story has no metered `agent.result`. `tldrx replay`
+  renders the error line from `detail` (it read `message`, a field the event never carried) and reports
+  `rows_written` of `rows_expected` — reports, never sums.
 
 ## 0.25.0 — 2026-09-14
 

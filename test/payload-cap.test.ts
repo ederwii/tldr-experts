@@ -25,12 +25,14 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { listCount, measuredWidening } from "../src/core/build/measuredTouches.ts";
+import { spendBasisOf } from "../src/core/budget/spendBasis.ts";
 import { capPayload, MAX_PAYLOAD_BYTES, validateEvent } from "../src/core/events/Event.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { buildExecutor } from "../src/core/facilitator/executors/build.ts";
 import type { ExecutorContext } from "../src/core/facilitator/executors/index.ts";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { loadStageSpec } from "../src/core/facilitator/stageSpec.ts";
+import { loadRun, renderReplay } from "../src/core/replay/index.ts";
 import { splitFrontMatter } from "../src/core/schemas/frontMatter.ts";
 import { parseYaml } from "../src/core/yaml.ts";
 import { reject } from "../src/core/run/gates.ts";
@@ -920,5 +922,113 @@ describe("#249 — an executor that throws AFTER paid turns hands their rows to 
     expect(String(errorEvent?.payload.detail)).toContain("EISDIR");
     expect(outcome.lines.join("\n")).toContain("threw after 2 turn(s)");
     expect(outcome.lines.join("\n")).not.toContain("not in run.yml");
+  }, 90_000);
+});
+
+// ---------------------------------------------------------------------------
+// #249, review round 1: the DOUBLE fault. The executor throws after paid turns
+// AND recording their rows throws too — an `agent.result` the cap cannot rescue
+// (a 6000-character session id, exactly #248 half 2's case). Two findings:
+//
+//   1. `recordExecutorTasks` interleaved row, event, row, event — so a throw at
+//      event k stranded rows k+1… in memory, and nothing the money readers
+//      (`spendBasis.ts`, `phaseCost.ts`, the dashboard) read said the total was
+//      short: a plausible number, worse than a loud zero. `recordTask` is a pure
+//      in-memory `mapStage` and cannot throw; the append is the ONLY throw. So
+//      every row goes into the store BEFORE any event is appended, and the
+//      residual "written < expected" is structurally empty rather than signalled
+//      — no new vocabulary for the three spend surfaces to learn. The EVENTS side
+//      already has its door: `costView.ts` labels a story with no metered
+//      `agent.result` as a LOWER BOUND by itself.
+//   2. The catch emitted its `error` event BEFORE `store.save()`, and that
+//      payload's `recording_error` was free text the cap did not trim — a long
+//      one would throw uncaught, skip the save, and lose the rows just recorded
+//      with zero trace. Now: rows, save, THEN the emit, wrapped; and
+//      `recording_error` is in the cap's prose table beside `detail`.
+// ---------------------------------------------------------------------------
+
+describe("#249 double fault — the rows and their money survive an event append that throws", () => {
+  test("every row is in run.yml with its cost; the spend surfaces read a MEASUREMENT; the event gap is named", async () => {
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_COST = "0.25";
+    process.env.FAKE_BUILD_SESSION_PAD = HUGE_SESSION;
+    mkdirSync(join(ws.runDir, "04-build", "log", "S1.md"), { recursive: true });
+
+    const outcome = await next(ws);
+
+    expect(outcome.code).toBe(5);
+    const stage = buildStage(ws);
+    expect(stage?.status).toBe("failed");
+    const rows = stage?.tasks ?? [];
+    // BOTH rows — before the fix the first row's event threw and the second row
+    // never reached the store (measured: 1 of 2).
+    expect(rows.map((t) => t.role).sort()).toEqual(["developer", "reviewer"]);
+    expect(rows.map((t) => t.cost_usd)).toEqual([0.25, 0.25]);
+    expect(RunStore.open(ws.runDir).run.budget.spent_usd).toBe(0.5);
+    // The ONE derivation every spend surface prints from, over the rows on disk:
+    // nothing is missing from run.yml, so it says so — and says nothing it would
+    // have to be taught.
+    const basis = spendBasisOf(
+      rows.map((t) => ({ costUsd: t.cost_usd, metered: t.metered !== false, tokens: t.tokens ?? null })),
+      0,
+    );
+    expect(basis.basis).toBe("measured");
+    expect(basis.reason).toContain("a measurement rather than a lower bound");
+    // No `agent.result` could be appended (both carry the huge session id), and
+    // the error event says exactly that — rows whole, events short, and why.
+    expect(events(ws).filter((e) => e.type === "agent.result")).toHaveLength(0);
+    const errorEvent = events(ws).find((e) => e.type === "error" && e.payload.where === "executor");
+    expect(errorEvent?.payload.tasks_recorded).toBe(true);
+    expect(errorEvent?.payload.rows_written).toBe(2);
+    expect(errorEvent?.payload.rows_expected).toBe(2);
+    expect(errorEvent?.payload.events_written).toBe(0);
+    expect(String(errorEvent?.payload.recording_error)).toContain("exceeds the 4096 byte cap");
+    expect(String(errorEvent?.payload.detail)).toContain("EISDIR");
+    const said = outcome.lines.join("\n");
+    expect(said).toContain("threw after 2 turn(s)");
+    expect(said).toContain("0 of 2 agent.result events");
+  }, 90_000);
+
+  test("the ordinary record-tasks seam (#248 half 2) now leaves EVERY row in run.yml, events short", async () => {
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_COST = "0.25";
+    process.env.FAKE_BUILD_SESSION_PAD = HUGE_SESSION;
+
+    const outcome = await next(ws);
+
+    expect(outcome.code).toBe(5);
+    const rows = buildStage(ws)?.tasks ?? [];
+    expect(rows.map((t) => t.role).sort()).toEqual(["developer", "reviewer"]);
+    expect(RunStore.open(ws.runDir).run.budget.spent_usd).toBe(0.5);
+    const errorEvent = events(ws).find((e) => e.type === "error" && e.payload.where === "record-tasks");
+    expect(errorEvent?.payload.rows_written).toBe(2);
+    expect(errorEvent?.payload.rows_expected).toBe(2);
+    expect(errorEvent?.payload.events_written).toBe(0);
+    expect(outcome.lines.join("\n")).toContain("all 2 rows are in run.yml");
+  }, 90_000);
+
+  test("`recording_error` is prose the cap trims, beside `detail` — a huge one cannot throw the seam", () => {
+    const payload = {
+      phase: "04-build", where: "executor", detail: "short", tasks_recorded: false,
+      rows_written: 1, rows_expected: 2, recording_error: "y".repeat(MAX_PAYLOAD_BYTES * 2),
+    };
+    const capped = capPayload(payload, (_text, field) => `omitted text saved at x-${field}.txt`);
+    expect(capped.recording_error).toBeUndefined();
+    expect(String(capped.recording_error_omitted)).toContain("x-recording_error.txt");
+    expect(capped.detail).toBe("short");
+    expect(capped.rows_written).toBe(1);
+    expect(bytes(capped)).toBeLessThanOrEqual(MAX_PAYLOAD_BYTES);
+  });
+
+  test("the replay renders the error line from `detail` and says how many rows landed", async () => {
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_COST = "0.25";
+    mkdirSync(join(ws.runDir, "04-build", "log", "S1.md"), { recursive: true });
+    await next(ws);
+
+    const text = renderReplay(loadRun(ws.root, ws.runId)!);
+    expect(text).not.toContain("no message recorded");
+    expect(text).toContain("EISDIR");
+    expect(text).toContain("2 of 2 task rows recorded");
   }, 90_000);
 });

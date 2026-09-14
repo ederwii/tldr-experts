@@ -1423,21 +1423,32 @@ async function runExecutor(
     // counts below are measured off the store after the write, never assumed.
     const why = error instanceof Error ? error.message : String(error);
     const partial = partialTasksOf(error);
+    const progress: RecordProgress = { rows: 0, events: 0 };
     let recordingFailed: string | null = null;
     if (partial.length > 0) {
       try {
-        recordExecutorTasks(store, options, phaseId, stageId, spec, partial);
+        recordExecutorTasks(store, options, phaseId, stageId, spec, partial, progress);
       } catch (again) {
         recordingFailed = again instanceof Error ? again.message : String(again);
       }
     }
     const written = requireStage(store, phaseId, stageId).tasks.length - tasksBefore;
-    const whole = partial.length > 0 && written === partial.length && recordingFailed === null;
+    // Rows are whole whenever the executor carried any: `recordExecutorTasks`
+    // puts EVERY row in the store before it appends a single event, and the
+    // in-memory row write cannot throw — so a recording failure is an EVENTS
+    // failure, named beside the counts, and the money readers (which read rows)
+    // see a measurement, not a plausible short total (review round 1).
+    const whole = partial.length > 0 && written === partial.length;
+    // SAVE FIRST (review round 1): the emit below can throw — a payload the cap
+    // cannot rescue — and a throw before the save would lose the rows just
+    // recorded with no trace at all. Saved rows survive whatever the emit does.
+    store.save();
     // `detail`, not a bespoke field: `appendCapped` runs this through the SAME
     // `capPayload` every other event does, so a giant thrown message (an error
-    // thrown FOR being oversized, say) is bounded by bytes, not characters, and
-    // is never lost to a second, unrecoverable throw right here.
-    appendCapped("error", {
+    // thrown FOR being oversized, say) is bounded by bytes, not characters —
+    // and `recording_error` sits in the same prose table. Wrapped all the same:
+    // a log that refuses even the capped event is said, never fatal.
+    const extra = appendOrSay(() => appendCapped("error", {
       phase: phaseId,
       where: "executor",
       detail: why,
@@ -1448,20 +1459,23 @@ async function runExecutor(
       tasks_recorded: whole,
       rows_written: written,
       rows_expected: partial.length,
+      events_written: progress.events,
       ...(recordingFailed === null ? {} : { recording_error: recordingFailed }),
-    }, 0);
-    store.save();
-    const rows = `${String(written)} of ${String(partial.length)}`;
+    }, 0));
+    const n = String(partial.length);
+    const eventsShort = recordingFailed === null
+      ? ""
+      : `; ${String(progress.events)} of ${n} agent.result events could not be appended: ${recordingFailed}`;
     const reason = partial.length === 0
       ? `the executor threw before returning its task rows — this invocation's turn costs are not in run.yml: ${why}`
       : whole
-        ? `the executor threw after ${String(partial.length)} turn(s) — their rows and costs are in run.yml: ${why}`
-        : `the executor threw after ${String(partial.length)} turn(s) and recording their rows threw too — `
-          + `${rows} rows are in run.yml and the rest are not: ${why}; recording: ${recordingFailed ?? "unknown"}`;
+        ? `the executor threw after ${n} turn(s) — their rows and costs are in run.yml${eventsShort}: ${why}`
+        : `the executor threw after ${n} turn(s) and recording their rows threw too — `
+          + `${String(written)} of ${n} rows are in run.yml and the rest are not: ${why}; recording: ${recordingFailed ?? "unknown"}`;
     // The floor moves past the rows just written: they finished, and repainting
     // one `failed` with this throw's message would put an error on a turn that
     // did not produce it (the #234 lesson, this seam).
-    return failStage(store, options, phaseId, stageId, reason, notes, tasksBefore + written);
+    return failStage(store, options, phaseId, stageId, reason, [...notes, ...extra], tasksBefore + written);
   }
 
   // The handshake called by the wrong end, and nothing else wrong (gh #82). Its
@@ -1489,8 +1503,9 @@ async function runExecutor(
   }
 
   claimEpicBranches(store, outcome.epicBranches, outcome.branchModel);
+  const progress: RecordProgress = { rows: 0, events: 0 };
   try {
-    recordExecutorTasks(store, options, phaseId, stageId, spec, outcome.tasks);
+    recordExecutorTasks(store, options, phaseId, stageId, spec, outcome.tasks, progress);
   } catch (error) {
     // #248, the half the payload cap alone does not fix: this call sits AFTER the
     // executor try/catch above has closed, so a throw here reached
@@ -1507,22 +1522,31 @@ async function runExecutor(
     // ledger that the turn did not produce (the #234 lesson, in the other seam).
     const why = error instanceof Error ? error.message : String(error);
     const recorded = requireStage(store, phaseId, stageId).tasks.length;
-    appendCappedEvent(store, options, phaseId, stageId, "error", {
+    const written = recorded - tasksBefore;
+    const expected = outcome.tasks.length;
+    // Save FIRST, then say (review round 1, #249): the rows are in the store
+    // whatever the emit below does.
+    store.save();
+    const extra = appendOrSay(() => appendCappedEvent(store, options, phaseId, stageId, "error", {
       phase: phaseId,
       where: "record-tasks",
       detail: why,
       // Counts, not a boolean: the executor's catch can honestly say
       // `tasks_recorded: false` because it runs before a single row exists. Here
-      // some rows DID land, and saying how many of how many is the difference
-      // between a named absence and a guessed one (§7).
-      rows_written: recorded - tasksBefore,
-      rows_expected: outcome.tasks.length,
-    }, 0);
-    store.save();
+      // the rows DID land — every one, since rows go in before any event — and
+      // saying how many of how many, rows AND events, is the difference between
+      // a named absence and a guessed one (§7).
+      rows_written: written,
+      rows_expected: expected,
+      events_written: progress.events,
+    }, 0));
+    const rows = written === expected
+      ? `all ${String(expected)} rows are in run.yml and ${String(progress.events)} of ${String(expected)} `
+        + "agent.result events were appended"
+      : `${String(written)} of ${String(expected)} rows are in run.yml and the rest are not`;
     return failStage(store, options, phaseId, stageId,
-      `recording this invocation's task rows threw — ${String(recorded - tasksBefore)} of `
-      + `${String(outcome.tasks.length)} rows are in run.yml and the rest are not: ${why}`,
-      notes, recorded);
+      `recording this invocation's task rows threw — ${rows}: ${why}`,
+      [...notes, ...extra], recorded);
   }
   store.save();
 
@@ -1584,9 +1608,41 @@ function isSequencingRefusal(outcome: ExecutorOutcome): boolean {
 
 /** One `run.yml` task and one `agent.result` per sub-agent the executor ran. */
 /**
+ * How far `recordExecutorTasks` got — DATA the caller owns and reads after a
+ * throw, since a function that threw returns nothing (#249, review round 1).
+ */
+interface RecordProgress {
+  rows: number;
+  events: number;
+}
+
+/**
+ * An append that must not take the save with it: run it, and if it throws, say
+ * so as a line for the operator rather than escaping past everything below.
+ */
+function appendOrSay(append: () => void): readonly string[] {
+  try {
+    append();
+    return [];
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    return [`the error event for this failure could not be appended to events.jsonl — ${why}; run.yml is saved regardless`];
+  }
+}
+
+/**
  * Record an executor's turns as task rows and `agent.result` events — the rows
  * it RETURNED on the ordinary path, or the rows it CARRIED on a throw (#249).
  * Takes the rows as DATA, not the outcome, so both callers are the same call.
+ *
+ * EVERY row goes into the store before ANY event is appended (review round 1).
+ * `recordTask` is an in-memory `mapStage` and cannot throw; the event append is
+ * the one line here that can, and it used to run interleaved — row, event, row,
+ * event — so a throw at event k stranded rows k+1… in memory, and nothing the
+ * money readers read (they read rows) said the total was short. Rows first
+ * makes that residual structurally empty: a recording failure is an EVENTS
+ * failure, and the events side already labels a story with no metered
+ * `agent.result` as a LOWER BOUND by itself (`costView.ts`).
  */
 function recordExecutorTasks(
   store: RunStore,
@@ -1595,14 +1651,17 @@ function recordExecutorTasks(
   stageId: string,
   spec: StageSpec,
   tasks: readonly ExecutorTask[],
+  progress: RecordProgress = { rows: 0, events: 0 },
 ): void {
   const version = frameworkVersionSync();
+  const rows: { readonly id: string; readonly task: ExecutorTask; readonly metered: boolean }[] = [];
   for (const task of tasks) {
     const id = nextTaskId(store, phaseId, stageId);
     // An unmetered task is a HOST turn: nothing here watched it, so `$0.00` would
     // be a measurement and a false one. Same spelling `commitStage` uses for the
     // single-agent in-session path — `cost_usd: null` plus `metered: false`.
     const metered = task.metered !== false;
+    rows.push({ id, task, metered });
     recordTask(store, phaseId, stageId, {
       id,
       status: task.error === null ? "done" : "failed",
@@ -1633,6 +1692,9 @@ function recordExecutorTasks(
         ? {}
         : { duration_ms: task.durationMs, duration_basis: "spawned" as const }),
     });
+    progress.rows += 1;
+  }
+  for (const { id, task, metered } of rows) {
     appendCappedEvent(store, options, phaseId, stageId, "agent.result", {
       phase: phaseId,
       task: id,
@@ -1655,6 +1717,7 @@ function recordExecutorTasks(
       // and absent is "not recorded", never four zeros.
       ...(task.usage === undefined ? {} : { usage: usagePayload(task.usage) }),
     }, metered ? round2(task.costUsd) : 0);
+    progress.events += 1;
   }
 }
 

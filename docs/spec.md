@@ -1587,9 +1587,13 @@ throws out of `EventLog.append`, and the two seams that write a turn's events �
 task-recording call after it — each catch it and fail the stage BY NAME with exit 5 rather than letting it escape
 past the ledger, which is what it used to do, taking the invocation's unsaved task rows and its epic-branch claim
 with it. What was earned and what was lost are both named: an executor that threw AFTER paid turns carries their rows on
-the error and the catch records them first (#249) — `tasks_recorded: true` with `rows_written`/`rows_expected`
-measured off the store — one that threw before any turn has no rows at all and the failure says so, and a throw
-while RECORDING rows says how many of how many reached `run.yml`. An
+the error and the catch records them first (#249) — `tasks_recorded: true` with `rows_written`/`rows_expected`/
+`events_written` measured off the store — one that threw before any turn has no rows at all and the failure says
+so, and a throw while RECORDING rows says how many of how many reached `run.yml`. Every row is written to the
+store BEFORE any `agent.result` is appended and the store is SAVED before the `error` event is emitted, so a
+recording failure is an events failure that leaves `run.yml` whole — the spend surfaces read rows and print a
+measurement, and a story with no metered `agent.result` is already labelled a LOWER BOUND by `tldrx cost`; the
+`error` event's `recording_error` (prose the cap trims like `detail`) says why the events are short. An
 epic branch the invocation claimed is saved the moment it is claimed, so a later throw cannot make the next run
 read its own epic as somebody else's.
 
