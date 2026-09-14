@@ -378,11 +378,83 @@ describe("the epic worktree", () => {
     const said = outcome.lines.join("\n");
     expect(said).toContain("epic/somebody-else");   // where the worktree actually is
     expect(said).toContain("epic/one");             // where the story meant to merge
-    expect(said).toContain(path);                   // and which directory to go look at
+    // …and which directory to go look at. The RELATIVE part, not `path` whole:
+    // the failure line is bounded (220 chars of reason), and under a long enough
+    // `TMPDIR` the absolute path alone is wider than that (#310) — the workspace
+    // root is the one part of it the operator already knows, so it is the part
+    // that gives. The test below pins that shape on a path that is really that long.
+    expect(said).toContain(join(".tldrx", "worktrees", "app", `_epic-${ws.runId}-E1`));
 
     // The refusal is the point: neither branch moved a byte.
     expect(git(ws, ["rev-parse", "epic/somebody-else"])).toBe(git(ws, ["rev-parse", "main"]));
     expect(git(ws, ["log", "epic/one", "--oneline"])).not.toContain("merge(S1)");
+  });
+
+  /**
+   * #310: the same refusal under a workspace path wider than the failure line's
+   * own cap. Measured on 2026-09-14 under a ~115-char session scratchpad: the
+   * sentence put the absolute path FIRST, `oneLine` kept its first 220 chars, and
+   * the line reached the operator — and `run.yml`'s task row, and the `stage.failed`
+   * event — as `epic worktree /private/tmp/…/_epic-260829-build-E1 is checked out
+   * on \`epic/someb…`: the branch it exists to name, cut two characters in. The
+   * test above was red on that tree and green on a short `TMPDIR`, same sha.
+   *
+   * The path here is made long ON PURPOSE (the fixture roots itself in
+   * `os.tmpdir()`, which reads `TMPDIR` at call time), so this pins the shape
+   * wherever the suite runs: both branches survive, the worktree's own directory
+   * survives, and the line is still bounded — in all three records.
+   */
+  test("the WRONG-branch refusal still names both branches when the worktree path is wider than the line (#310)", async () => {
+    const shortTmp = process.env.TMPDIR;
+    const base = mkdtempSync(join(tmpdir(), "tldrx-310-"));
+    // Wide enough that the absolute worktree path ALONE exceeds the reason cap,
+    // so no ordering of the sentence could fit it whole: the test is about what
+    // gives, not about whether something gives. One component, so no filesystem
+    // limit but the 255-byte name applies.
+    const deep = join(base, "p".repeat(Math.max(1, 230 - base.length)));
+    mkdirSync(deep, { recursive: true });
+    process.env.TMPDIR = deep;
+    try {
+      const ws = workspace({
+        stories: [{ id: "S1", epic: "E1", title: "First story" }],
+        epics: [{ id: "E1", stories: ["S1"], branch: "epic/one" }],
+        waves: [["S1"]],
+      });
+      expect(ws.root.startsWith(deep)).toBe(true);
+      const path = join(ws.root, ".tldrx", "worktrees", "app", `_epic-${ws.runId}-E1`);
+      expect(path.length).toBeGreaterThan(220);
+      mkdirSync(join(path, ".."), { recursive: true });
+      execFileSync("git", ["branch", "epic/somebody-else"], { cwd: ws.repoDir, stdio: "pipe" });
+      execFileSync("git", ["worktree", "add", path, "epic/somebody-else"], { cwd: ws.repoDir, stdio: "pipe" });
+
+      const outcome = await next(ws);
+      expect(outcome.code).toBe(5);
+      const prefix = "04-build/build failed: ";
+      const line = outcome.lines.find((l) => l.startsWith(prefix));
+      expect(line).toBeDefined();
+      const tail = join(".tldrx", "worktrees", "app", `_epic-${ws.runId}-E1`);
+      const failed = events(ws).find((e) => e.type === "stage.failed");
+      const task = asRunFile(parseYaml(readFileSync(join(ws.runDir, "run.yml"), "utf8")))
+        .phases.find((p) => p.id === "04-build")?.stages.find((s) => s.id === "build")?.tasks.at(-1);
+      for (const [record, text] of [
+        ["operator line", (line ?? "").slice(prefix.length)],
+        ["stage.failed reason", String(failed?.payload.reason ?? "")],
+        ["task error", String(task?.error ?? "")],
+      ] as const) {
+        expect(`${record}: ${text}`).toContain("epic/somebody-else");
+        expect(`${record}: ${text}`).toContain("epic/one");
+        expect(`${record}: ${text}`).toContain(tail);
+        // Still one bounded line: the cap is a payload-cap concern and stays.
+        expect(text.length).toBeLessThanOrEqual(220);
+        expect(text).not.toContain("\n");
+      }
+
+      expect(git(ws, ["rev-parse", "epic/somebody-else"])).toBe(git(ws, ["rev-parse", "main"]));
+      expect(git(ws, ["log", "epic/one", "--oneline"])).not.toContain("merge(S1)");
+    } finally {
+      if (shortTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = shortTmp;
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 
   test("`assertWorktreeOn` throws its own class, naming both branches and the path", async () => {
@@ -406,6 +478,10 @@ describe("the epic worktree", () => {
     expect(message).toContain("`epic/one`");
     expect(message).toContain(path);
     expect(message).toContain("epic worktree");
+    // Branches BEFORE the path (#310): a bounded line keeps its head, and the
+    // path is the one part of this sentence that can be wider than the line.
+    expect(message.indexOf("`epic/somebody-else`")).toBeLessThan(message.indexOf(path));
+    expect(message.indexOf("`epic/one`")).toBeLessThan(message.indexOf(path));
   });
 });
 

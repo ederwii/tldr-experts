@@ -3218,9 +3218,23 @@ function nowish(options: NextOptions): string {
   return now < options.at ? options.at : now;
 }
 
+/**
+ * The first line of `text`, bounded at `max` characters.
+ *
+ * A line over the cap keeps its HEAD and its TAIL and loses the middle (#310).
+ * It used to keep the head alone, and the one sentence measured against the cap
+ * — a worktree refusal whose absolute path was wider than the line — lost the
+ * branch names it existed to say. The sentences that reach this put what they
+ * name first and where to look last (`assertWorktreeOn`), so an even split keeps
+ * both ends of a path-then-identifier or identifier-then-path line; what a cut
+ * takes is the middle of a path. The cap itself stays: `task.error`, the
+ * `stage.failed` reason and the operator line are one bounded line each.
+ */
 function oneLine(text: string, max = 220): string {
   const line = text.split("\n")[0]?.trim() ?? "";
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+  if (line.length <= max) return line;
+  const tail = Math.floor((max - 1) / 2);
+  return `${line.slice(0, max - 1 - tail)}…${line.slice(line.length - tail)}`;
 }
 
 /**

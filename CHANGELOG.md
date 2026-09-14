@@ -26,6 +26,26 @@
   tests now land a REAL diff, because the fake developer's default rewrote the bytes the first
   attempt committed, which is #308's shape exactly. Golden byte-identical.
 
+- **A stage-failure line keeps the branch it exists to name when the worktree path is wider than
+  the line (#310, #293).** MEASURED 2026-09-14 under a ~115-char session scratchpad, the very place
+  `AGENTS.md §2` sends every agent to work: the epic-worktree refusal put the absolute path FIRST
+  and the two branch names after it, `oneLine` kept the first 220 chars, and the operator line —
+  and `run.yml`'s task row, and the `stage.failed` event — read `epic worktree /private/tmp/…/
+  _epic-260829-build-E1 is checked out on \`epic/someb…`: the branch cut two characters in, while
+  the same test passed on the same sha under a short `TMPDIR`. A refusal that loses its subject
+  exactly when the path is long is a refusal that names the wrong thing when it matters most.
+  Two halves, one implementation each: `assertWorktreeOn` now says the branches first and the
+  path last (`… is checked out on \`X\`, not \`Y\` — refusing … — at <path>`), and `oneLine`'s
+  cap keeps a line's head AND its tail, losing the middle — so what a cut takes is the middle of
+  a directory whose root the operator already knows. The cap itself stays at 220: each of the
+  three records is still one bounded line. `test/build-executor.test.ts` builds the refusal under
+  a path wider than the cap on purpose (the fixture roots in `os.tmpdir()`, which reads
+  `TMPDIR` at call time) and pins both branches, the worktree's own directory and the bound in
+  all three records — RED on the old order (only the path and `…` survived), and each half
+  reverted alone reddens it on its own assertion; the unit test on `assertWorktreeOn` pins the
+  order. The existing WRONG-branch test asserts the worktree's relative directory rather than
+  the whole absolute path, so it no longer depends on how long the box's `TMPDIR` is.
+
 ## 0.26.0 — 2026-09-14
 
 ### Fixed
