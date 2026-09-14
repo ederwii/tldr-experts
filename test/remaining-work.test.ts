@@ -226,16 +226,16 @@ describe("remaining work over a plan", () => {
     expect(work.staticUsd).toBe(18);
     // S4's price is $3.75, so its ceiling is max(3.75 x 3, $4.00) = $11.25
     // (gh #277), and its one remaining turn is ATTEMPT 2: a half of that, $5.63.
-    // The reviewer's derived quarter ($0.375) loses to the $1.00 floor, untouched
-    // by #277.
+    // The reviewer's derived quarter ($0.375) loses to the $2.00 floor (gh #307),
+    // untouched by #277.
     expect(work.stories).toEqual([{
       id: "S4", status: "in_progress", developerTurns: 1, reviews: 1,
-      developerCapUsd: 5.63, developerCapsUsd: [5.63], reviewerCapUsd: 1, usd: 6.63,
+      developerCapUsd: 5.63, developerCapsUsd: [5.63], reviewerCapUsd: 2, usd: 7.63,
     }]);
-    expect(work.usd).toBe(6.63);
+    expect(work.usd).toBe(7.63);
     expect(work.blocked).toEqual(["S6", "S7"]);
     expect(work.done).toBe(4);
-    expect(renderRemainingWork(work)).toBe("remaining work: S4 dev $5.63 + reviewer $1.00 = $6.63");
+    expect(renderRemainingWork(work)).toBe("remaining work: S4 dev $5.63 + reviewer $2.00 = $7.63");
     expect(remainingWorkContext(work).join("\n")).toContain("4 of 7 stories done");
     expect(remainingWorkContext(work).join("\n")).toContain("S6, S7 are blocked");
   });
@@ -276,7 +276,7 @@ describe("remaining work over a plan", () => {
     // exactly attempt 1's developer cap plus one reviewer floor, and nothing else.
     expect(fresh.stories[0]?.developerCapsUsd).toEqual([18, 15]);
     expect(half.stories[0]?.developerCapsUsd).toEqual([15]);
-    expect(fresh.rawUsd - half.rawUsd).toBeCloseTo(19, 5);   // $18.00 dev + $1.00 reviewer
+    expect(fresh.rawUsd - half.rawUsd).toBeCloseTo(20, 5);   // $18.00 dev + $2.00 reviewer
     expect(half.rawUsd).toBeLessThan(fresh.rawUsd);
     expect(spent.rawUsd).toBe(0);
     expect(spent.stories).toEqual([]);
@@ -332,7 +332,7 @@ describe("remaining work over a plan", () => {
     });
     const work = remainingWork({ ...BASE, runDir: dir });
     expect(work.stories[0]?.developerCapUsd).toBe(1.8); // 18 / 10
-    expect(work.stories[0]?.reviewerCapUsd).toBe(1); // derived $0.45 loses to the floor
+    expect(work.stories[0]?.reviewerCapUsd).toBe(2); // derived $0.45 loses to the $2.00 floor
   });
 
   test("`--max-usd` and `per_agent_max_usd` clamp a cap, as they do on a real spawn", () => {
@@ -360,7 +360,7 @@ describe("the economy label", () => {
     // The reviewer is NOT zeroed: outside attended mode `reviewAndSettle` still
     // spawns a metered one and its floor is real money.
     expect(host.stories.every((s) => s.reviewerCapUsd === REVIEWER_FLOOR_USD)).toBe(true);
-    expect(host.usd).toBe(4); // 2 stories x 2 reviews x $1.00
+    expect(host.usd).toBe(8); // 2 stories x 2 reviews x $2.00
     expect(host.usd).toBeLessThan(metered.usd);
     expect(remainingWorkContext(host).join("\n")).toContain("host-tokens");
   });
@@ -380,7 +380,7 @@ describe("the economy label", () => {
     expect(attended.stories.every((s) => s.developerCapUsd === 0)).toBe(true);
     // Same reason the host-tokens case keeps them: a reviewer floor is metered.
     expect(attended.stories.every((s) => s.reviewerCapUsd === REVIEWER_FLOOR_USD)).toBe(true);
-    expect(attended.usd).toBe(4);
+    expect(attended.usd).toBe(8);
     expect(attended.usd).toBeLessThan(metered.usd);
     expect(remainingWorkContext(attended).join("\n")).toContain("attended");
   });
@@ -388,7 +388,7 @@ describe("the economy label", () => {
   test("attended and host-tokens together are the same answer, not a double discount", () => {
     const dir = planDir(fixture);
     const both = remainingWork({ ...BASE, runDir: dir, economy: "host-tokens", attended: true });
-    expect(both.usd).toBe(4);
+    expect(both.usd).toBe(8);
     expect(both.stories.every((s) => s.developerCapUsd === 0)).toBe(true);
   });
 
@@ -451,8 +451,8 @@ describe("what does not change", () => {
   });
 
   test("the estimate can only NARROW: it is capped at the stage's own price", () => {
-    // Twelve tiny stories: each reviewer is floored at $1.00, so the honest sum
-    // is 12 x 2 x ($0.13 + $1.00) = well above the $6.00 the stage was priced at.
+    // Twelve tiny stories: each reviewer is floored at $2.00, so the honest sum
+    // is 12 x 2 x ($0.13 + $2.00) = well above the $6.00 the stage was priced at.
     // A brake that got TIGHTER by accident is the failure to fear here.
     const dir = planDir({
       stories: Array.from({ length: 12 }, (_, i) => ({ id: `S${String(i + 1)}`, status: "todo" })),
@@ -532,16 +532,16 @@ describe("budget show's est. column", () => {
   test("with a run dir it prints the remaining work and its arithmetic, not the stage price", () => {
     const view = buildBudgetView(RUN, BUDGET, planDir(FIXTURE));
     const phase = view.phases[0];
-    expect(phase?.next_estimate_usd).toBe(6.63);
+    expect(phase?.next_estimate_usd).toBe(7.63);
     expect(phase?.next_estimate_basis).toBe("plan");
     expect(phase?.next_estimate_static_usd).toBe(18);
-    expect(phase?.next_estimate_detail).toBe("remaining work: S4 dev $5.63 + reviewer $1.00 = $6.63");
+    expect(phase?.next_estimate_detail).toBe("remaining work: S4 dev $5.63 + reviewer $2.00 = $7.63");
     // Still far under the static $18.00 that demanded a raise, and now honest
     // about what one attempt of S4 may cost (gh #277).
     expect(phase?.blocked).toBe(true);
     const rendered = renderBudget(view);
-    expect(rendered).toContain("$6.63");
-    expect(rendered).toContain("remaining work: S4 dev $5.63 + reviewer $1.00");
+    expect(rendered).toContain("$7.63");
+    expect(rendered).toContain("remaining work: S4 dev $5.63 + reviewer $2.00");
     expect(rendered).toContain("(stage estimate $18.00)");
   });
 
@@ -563,7 +563,7 @@ describe("budget show's est. column", () => {
     });
     const view = buildBudgetView(RUN, starved, planDir(FIXTURE));
     expect(view.phases[0]?.blocked).toBe(true);
-    expect(view.phases[0]?.short_by_usd).toBe(5.89);
+    expect(view.phases[0]?.short_by_usd).toBe(6.89);
     expect(renderBudget(view)).toContain("is BLOCKED");
   });
 });
@@ -628,11 +628,12 @@ describe("the brake", () => {
     const ws = workspace();
     settle(ws, "S1", "done");
     settle(ws, "S2", "done");
-    // $5.00 left against a $9.00 stage. The OLD brake compared $5.00 < $9.00 and
+    // $7.00 left against a $9.00 stage. The OLD brake compared $7.00 < $9.00 and
     // refused, which is precisely the $9.69 raise the host was asked for on
     // 2026-08-31 for money nobody was going to spend. The remaining work is S3
-    // alone: two developer shares of $1.20 and two reviewer floors = $4.40.
-    starve(ws, 5.0);
+    // alone: two developer shares of $1.20 and two $2.00 reviewer floors = $6.40.
+    // (It was $5.00 left against $4.40 until gh #307 raised the floor from $1.00.)
+    starve(ws, 7.0);
 
     const outcome = await next(ws);
     expect(outcome.code).not.toBe(2);
@@ -651,7 +652,7 @@ describe("the brake", () => {
     expect(text).toContain("refusing to start stage \"build\"");
     expect(text).toContain("$0.40 left and the remaining work is");
     expect(text).toContain("remaining work: S3 dev $");
-    expect(text).toContain("reviewer $1.00");
+    expect(text).toContain("reviewer $2.00");
     expect(text).toContain("2 of 3 stories done");
     expect(text).toContain("tldrx budget raise 04-build");
 
@@ -687,7 +688,7 @@ describe("the brake", () => {
     settle(ws, "S2", "done");
     // S3 alone, priced $4.50: its ceiling is max(4.50 x 3, 4.00) = $13.50,
     // clamped by `agentCap` to the $9.00 stage share, so dev $9.00 (attempt 1) +
-    // $6.75 (attempt 2) + two $1.00 reviewer floors, against $0.40 of phase
+    // $6.75 (attempt 2) + two $2.00 reviewer floors, against $0.40 of phase
     // ceiling. The prices are deliberately NOT the uniform share, so a plan that
     // went unread fails this test rather than passing it by coincidence.
     starve(ws, 0.4);
@@ -698,7 +699,7 @@ describe("the brake", () => {
     expect(text).toContain("refusing to start stage \"build\"");
     expect(text).toContain("$0.40 left and the remaining work is");
     expect(text).toContain("remaining work: S3 dev $9.00 + $6.75");
-    expect(text).toContain("= $17.75");
+    expect(text).toContain("= $19.75");
     const events = readFileSync(join(ws.runDir, "events.jsonl"), "utf8")
       .split("\n").filter((l) => l.trim() !== "").map((l) => JSON.parse(l) as { type: string });
     expect(events.some((e) => e.type === "agent.spawned")).toBe(false);
