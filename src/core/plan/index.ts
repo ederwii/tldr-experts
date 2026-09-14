@@ -6,6 +6,11 @@ export {
   PLAN_CONTRACT_HEADING, planContractExamples, renderPlanSchemaContract,
 } from "./schemaContract.ts";
 export type { PlanContractExamples } from "./schemaContract.ts";
+export {
+  MAX_STORIES_PER_RUN, MAX_WAVES_PER_RUN, PLAN_SHAPE_HEADING, PLAN_SHAPE_RULES, WAVE_CAP_REASON_KEY,
+  validatePlanShape,
+} from "./planShape.ts";
+export type { PlanShapeReport, PlanShapeRule } from "./planShape.ts";
 export type { PlanReport, PlanIssue } from "./validatePlan.ts";
 export {
   BRANCH_MODELS, INTEGRATION_EPIC_SLOT, branchModelFor, branchModelOfKind, describeBranchModel,

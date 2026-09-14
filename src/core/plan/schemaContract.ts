@@ -35,6 +35,7 @@ import { EPIC_KEYS } from "../schemas/epic.ts";
 import { BUDGET_REQUIRED_KEYS } from "../schemas/budget.ts";
 import { FENCE } from "../schemas/frontMatter.ts";
 import { EPICS_DIR, PLAN_BUDGET_FILE, STORIES_DIR, WAVES_FILE } from "./validatePlan.ts";
+import { PLAN_SHAPE_HEADING, PLAN_SHAPE_RULES } from "./planShape.ts";
 
 /** The H2 the facilitator splices this under, in `stage.md`. */
 export const PLAN_CONTRACT_HEADING = "Output schemas";
@@ -358,6 +359,13 @@ export function renderPlanSchemaContract(): string {
     outer,
     examples.waves.trimEnd(),
     outer,
+    "",
+    `### ${PLAN_SHAPE_HEADING}`,
+    "",
+    "How the stories are cut and scheduled. Each rule says what reads it: the `plan` check that",
+    "refuses the file, its advisory, or only the Build review — one paid round later.",
+    "",
+    ...PLAN_SHAPE_RULES.map((rule) => `- ${rule.text}`),
     "",
     `### \`${PLAN_BUDGET_FILE}\``,
     "",

@@ -43,10 +43,21 @@ Every rule below is one of two kinds, and each says which:
 
 ## Step 2 — split the work into runs
 
-- **Size (patch for #286/#244/#280 — raise when they close):** today plan runs of 3–4
-  stories and ≤2 waves; the framework's measured limit, not a design preference. 1/1 and
-  3/3 runs finished alone; the 8-story run needed four human rescues, and every story
-  that waited for a person lost the race against siblings merging into the epic.
+- **Size (patch for #286/#244/#280 — raise when they close):** plan runs no bigger than
+  the story and wave counts `tldrx seed check <file>` advises (its `size` and `waves`
+  advisories print today's figures, from the same constants the Plan gate refuses on);
+  the framework's measured limit, not a design preference. 1/1 and 3/3 runs finished
+  alone; the 8-story run needed four human rescues, and every story that waited for a
+  person lost the race against siblings merging into the epic. A plan over the wave cap
+  is refused at the Plan gate unless its `waves.yml` records `wave_cap_reason`.
+- **Plan shape (craft, measured on #316/#317/#318/#319):** `tldrx plan schema` prints,
+  under "Plan shape", the rules the Plan stage is held to — read them before you split.
+  In a seed they mean: no story waits a wave its `depends_on` does not force; each story
+  is a vertical slice, reachable from a route or endpoint when its own dod goes green,
+  wiring included (#317); grep for the route trees, guard tables, allow-lists and
+  snapshots that enumerate what a story adds and put them in its `touches:` (#318); and a
+  test harness goes first, or each UI story carries the e2e command in its own `dod` —
+  never one last e2e story that depends on everything (#319).
 - **A story is one agent's turn under one cap** (craft): ≤ ~$15 of work, one repo, one
   branch, one Definition of Done a hook can re-run. If you cannot say which files it
   touches, it is two stories or it is not ready.

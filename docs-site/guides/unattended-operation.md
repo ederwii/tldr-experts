@@ -59,6 +59,13 @@ also prints the stage split and per-story caps the run would get. In Claude Code
 seeds that pass it. The full rule list lives in the repo guide,
 [Writing a seed by hand](https://github.com/ederwii/tldr-experts/blob/main/docs/guide/05-seeds-and-triage.md#writing-a-seed-by-hand).
 
+The plan written from a seed is held harder than the seed. The Plan gate refuses more waves than the framework
+carries per run today unless `waves.yml` records `wave_cap_reason: "<why>"`, and refuses a story scheduled later than
+its `depends_on` requires: every extra wave waits on every earlier merge, and a planning audit of 9 runs found plans
+built as one-story-per-wave chains. It also names a dod command some stories of one epic carry and a sibling does not.
+The rules the Plan stage is given — vertical slices, inventory files in `touches:`, end-to-end coverage that is not the
+last story — are printed by `tldrx plan schema` under "Plan shape".
+
 The conventional place is `.tldrx/seeds/<nn>-<slug>.md`, committed with the rest of
 `.tldrx/`. A seed for a session timeout defect, every bullet under the cap:
 
