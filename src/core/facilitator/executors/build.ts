@@ -61,8 +61,8 @@ import {
   dispatchNotesRecord, type PendingStage,
 } from "../pending.ts";
 import {
-  addWorktree, commitsBetween, ensureBranch, firstLine, fullShaOf, git, GitError, headSha, removeWorktree, repoDirOf,
-  reviewDiffCommand, reviewDiffRange, shaReachability, uncountedCount,
+  abortOpenMerge, addWorktree, commitsBetween, ensureBranch, firstLine, fullShaOf, git, GitError, headSha, leftoverMerge,
+  removeWorktree, repoDirOf, reviewDiffCommand, reviewDiffRange, shaReachability, uncountedCount,
 } from "../../build/git.ts";
 import { BaseGateFailure, baseRefusalLines } from "../../build/preflight.ts";
 import {
@@ -75,7 +75,9 @@ import {
   IMPLICIT_PLAN_REL, IMPLICIT_STORY_ID, IMPLICIT_STORY_NOTE,
 } from "../../build/implicitPlan.ts";
 import { evidenceFor, updateStoryFront } from "../../build/storyFile.ts";
-import { buildDeveloperPrompt, REVIEW_SCHEMA, type PreviousAttemptKind } from "../../build/prompts.ts";
+import {
+  buildDeveloperPrompt, REVIEW_SCHEMA, type ConflictTurnPrompt, type PreviousAttemptKind,
+} from "../../build/prompts.ts";
 import { ITERATION_ONLY_SLOT } from "../../schemas/commandAllowlist.ts";
 
 /** `testFast` as an optional prompt field: present only when the repo declares one. */
@@ -91,7 +93,7 @@ import {
 } from "../../build/review.ts";
 import {
   AS_IS_MARK, AS_IS_REVIEW_ONLY_MARK, asIsNotAheadReason, DEVELOPER_FAILED, dodFailure, dodFailureReason, dodGreen, dodRefused,
-  noDiffAfterReopenReason, reviewNeverCompleted, reviewStillOwed,
+  leftoverMergeReason, noDiffAfterReopenReason, reviewNeverCompleted, reviewStillOwed,
   type AsIsSettlement, type DodResult, type RescuedWork, type StoryOutcome,
 } from "../../build/outcome.ts";
 import {
@@ -110,13 +112,16 @@ import { declaredTouchesFor } from "../../run/boundary.ts";
 
 /** The log the widening citations point at, run-relative — one spelling. */
 const EVENTS_FILE = "events.jsonl";
+
+/** gh #286: the operator line for a story requeued with a merge to resolve — one spelling, two drivers. */
+const CONFLICT_REQUEUED_LINE = "bringing it up to its epic conflicted — requeued once with the merge to resolve";
 import { carriedReportFor, type CarriedReport } from "../../build/carriedRows.ts";
 import {
   baseResultOf, PreflightCache, redBaseRefusal, runStoryDod, type BaseParts, type DodParts,
 } from "../../build/dodRunner.ts";
 import { scopedPathsFor } from "../../build/scopedPaths.ts";
 import {
-  commitIfDirty, EpicState, mergeIntoEpic, openEpicWorktree, refreshStoryBase, rescueUncommitted,
+  commitIfDirty, EpicState, mergeIntoEpic, openConflictTurnMerge, openEpicWorktree, refreshStoryBase, rescueUncommitted,
   staleBaseConflict, storyWorktreePath, unreadableTouches, updateStoryBase, workSince,
   type EpicWorktreeParts,
 } from "../../build/worktrees.ts";
@@ -134,7 +139,7 @@ import {
   type ResumableReview, type ReviewLookup, type ReviewWork,
 } from "../../build/reviewBundle.ts";
 import {
-  blockedByFailedDeveloper, dodRedRequeue, formatRetryDecision, narrowFixlist, pendingRefusal, reviewerPromptFor,
+  blockedByFailedDeveloper, conflictTurnRefusal, dodRedRequeue, formatRetryDecision, narrowFixlist, pendingRefusal, reviewerPromptFor,
   unrecordedBaseLine,
   RecurringFocus, ReviewCounters, type RoundParts,
 } from "../../build/reviewRound.ts";
@@ -222,6 +227,14 @@ interface StoryHalf {
    * while attempts remain (`dodRedRequeue` decides). Absent on every other half.
    */
   readonly redDod?: { readonly refused: string | null; readonly budgetDeath: string | null };
+  /**
+   * gh #286: this half came from a headless developer attempt, the one path a
+   * conflicting base update may requeue as a conflict turn. Absent on the host's
+   * `--commit` half and on an as-is settlement, which block on a conflict as
+   * they always did — the first has no dispatch of ours to hand the merge to,
+   * and the second was signed as "no developer".
+   */
+  readonly mayConflictTurn?: true;
 }
 
 /**
@@ -519,6 +532,11 @@ interface StoryContext {
    * for `npm ci` again on every review round is a cost nobody asked for.
    */
   readonly freshWorktree: boolean;
+  /**
+   * gh #286: the merge this attempt was handed, left in progress in the
+   * worktree at dispatch. Absent on every attempt that is not a conflict turn.
+   */
+  readonly conflictTurn?: ConflictTurnPrompt;
 }
 
 class BuildSession {
@@ -545,6 +563,8 @@ class BuildSession {
    * `changes`. Cleared at the top of every attempt, like the two maps above.
    */
   private readonly dodRequeued = new Set<string>();
+  /** gh #286: stories `settleHalf` requeued as a conflict turn in THIS process — `dodRequeued`'s twin. */
+  private readonly conflictRequeued = new Set<string>();
   /**
    * Per story, WHY no reviewer was spawned for it (gh #289) — the stage had less
    * left than a review costs. Same shape and same lifetime as the two maps above,
@@ -1286,6 +1306,11 @@ class BuildSession {
         this.lines.push(`  · ${planned.story.id}: the DoD was red — requeued with its output`);
         continue;
       }
+      // gh #286: a conflict an agent can own — requeued with the merge.
+      if (this.conflictRequeued.has(planned.story.id)) {
+        this.lines.push(`  · ${planned.story.id}: ${CONFLICT_REQUEUED_LINE}`);
+        continue;
+      }
       if (outcome?.status !== "review") return;
       // Only a real `changes` verdict buys another developer attempt. An errored
       // review leaves the story parked for the NEXT invocation's review-only
@@ -1342,14 +1367,16 @@ class BuildSession {
       // reviewer never judged the diff, and a second developer attempt is the one
       // thing that must NOT follow it.
       const requeued = wave.stories.filter((p) =>
-        halves.has(p.story.id) && (this.dodRequeued.has(p.story.id) || (
+        halves.has(p.story.id) && (this.dodRequeued.has(p.story.id) || this.conflictRequeued.has(p.story.id) || (
           this.outcomes.get(p.story.id)?.status === "review"
           && this.outcomes.get(p.story.id)?.verdict === "changes")));
       for (const planned of requeued) {
         // gh #313: the red-DoD requeue rides the same round as `changes`.
         this.lines.push(this.dodRequeued.has(planned.story.id)
           ? `  · ${planned.story.id}: the DoD was red — requeued with its output`
-          : `  · ${planned.story.id}: reviewer asked for changes — requeued once`);
+          : this.conflictRequeued.has(planned.story.id)
+            ? `  · ${planned.story.id}: ${CONFLICT_REQUEUED_LINE}`
+            : `  · ${planned.story.id}: reviewer asked for changes — requeued once`);
       }
       queue = requeued;
     }
@@ -1600,6 +1627,12 @@ class BuildSession {
     this.capDeaths.delete(planned.story.id);
     this.unfundedReviews.delete(planned.story.id);
     this.dodRequeued.delete(planned.story.id);
+    this.conflictRequeued.delete(planned.story.id);
+    // gh #286: a conflict turn granted and not yet taken — read off the ledger,
+    // so a turn granted by an invocation that ended is still handed out. Read
+    // BEFORE the opening: a story owed a turn is not fast-forwarded, because the
+    // merge below is the move it is owed.
+    const owed = readReviewLedger(this.ctx.runDir, planned.story.id).conflictTurnOwed;
     // And no as-is signature either (gh #279). A story whose reviewer asked for
     // changes over a hand-finished branch is requeued to a REAL developer, and
     // that attempt's record must not say the branch was taken as it stands —
@@ -1609,18 +1642,19 @@ class BuildSession {
     // go through the one writer even though the sub-agent below does not.
     // `true`: same reason as `prepare()` — the headless developer is dispatched
     // onto this branch a few lines below (§F.2).
-    const story = await this.writes.run(() => this.openStory(planned, true));
+    const opened = await this.writes.run(() => this.openStory(planned, owed === null));
     await this.writes.run(() => {
       this.ctx.emit("task.started", {
         phase: this.ctx.phaseId,
         story: planned.story.id,
         wave: planned.wave,
         repo: planned.story.repo,
-        branch: story.branch,
-        attempt: story.attempt,
+        branch: opened.branch,
+        attempt: opened.attempt,
       });
       this.setStoryStatus(planned, "in_progress");
     });
+    let story = opened;
 
     // (c½) gh #209: the declared `install:`, in this fresh tree, before a dollar
     // is spent. A failed install BLOCKS — it is the story's environment, and a
@@ -1633,6 +1667,35 @@ class BuildSession {
         failure: installFailureReason(install, planned.story.repo),
         developerError: null, before,
       };
+    }
+
+    // (c¾) gh #286: the conflict turn this attempt is owed. The CURRENT epic tip
+    // is merged into the story's worktree and the merge is left open for the
+    // developer — before `handed` is read, so "what the developer changed" is
+    // measured from the tree the merge left, markers and all.
+    if (owed !== null) {
+      const merge = await this.writes.run(() => openConflictTurnMerge({
+        storyId: planned.story.id,
+        repoDir: story.repoDir,
+        worktree: story.worktree,
+        branch: story.branch,
+        epicBranch: story.epicBranch,
+      }));
+      if (merge.kind === "failed") {
+        return {
+          story, cost: 0, dod: [], commit: null,
+          failure: `the conflict turn could not merge \`${story.epicBranch}\` into \`${story.branch}\`: ${merge.detail}`,
+          developerError: null, before,
+        };
+      }
+      const files = merge.kind === "conflicted" ? merge.files : [];
+      story = { ...story, conflictTurn: { files, epicSha: merge.epicSha, landed: merge.landed } };
+      this.lines.push(
+        `  · ${planned.story.id}: conflict turn — merged \`${story.epicBranch}\` (${merge.epicSha.slice(0, 7)}) `
+        + (files.length === 0
+          ? "into the story and it went in clean this time; nothing is left to resolve"
+          : `into the story and left the merge open in ${files.join(", ")} for the developer`),
+      );
     }
 
     // The tree the developer is handed, so that afterwards "did it commit work"
@@ -1725,6 +1788,21 @@ class BuildSession {
       };
     }
 
+    // (d⅞) gh #286: the MARKER GUARD, before the DoD and before any commit the
+    // framework makes. A conflict turn that left a marker anywhere — committed
+    // or not — or never closed the merge BLOCKS: a requeue would hand the same
+    // tree to the same bound, and a DoD over markers proves nothing.
+    if (story.conflictTurn !== undefined) {
+      const left = await leftoverMerge(story.worktree, handed);
+      if (left.markers.length > 0 || left.inProgress) {
+        return {
+          story, cost: spent, dod: [], commit: null,
+          failure: leftoverMergeReason(left.markers, left.inProgress),
+          developerError: null, before,
+        };
+      }
+    }
+
     // (d¾) gh #308: a story a PERSON put back with a note — a fix round or a
     // plain reopen — whose developer changed nothing since the tree it was
     // handed. Measured live: a `--for-fix` developer read the file, said it
@@ -1799,7 +1877,7 @@ class BuildSession {
         failure: "the working tree could not be committed", developerError: null, before,
       };
     }
-    return { story, cost: spent, dod, commit, failure: null, developerError: null, before };
+    return { story, cost: spent, dod, commit, failure: null, developerError: null, before, mayConflictTurn: true };
   }
 
   /**
@@ -1811,6 +1889,11 @@ class BuildSession {
    */
   private async settleHalf(half: StoryHalf): Promise<ReviewRoute> {
     const { story, dod, commit } = half;
+    // gh #286: a conflict turn that ends anywhere but a clean commit leaves no
+    // merge open behind it — a rescue's `git add -A` must never commit markers.
+    if (story.conflictTurn !== undefined && (half.failure !== null || half.developerError !== null)) {
+      await abortOpenMerge(story.worktree);
+    }
     // A developer that FAILED comes first, because it is the one case where half
     // A produced no information at all. The story goes back to where it was, its
     // attempt unspent — see `parkDeveloperFailure`.
@@ -1861,12 +1944,27 @@ class BuildSession {
       // Nothing was merged and `mergeNoFf` has already aborted, so the story is
       // exactly where its developer left it — which is what makes naming the
       // files useful rather than cruel.
+      const blocked = staleBaseConflict(
+        story.branch, story.epicBranch, update.conflicts, update.detail,
+        relative(this.ctx.root, story.worktree) || story.worktree,
+      );
+      // gh #286: ONE conflict turn, when an agent can own the conflict.
+      const refused = half.mayConflictTurn === true
+        ? conflictTurnRefusal({
+          conflicts: update.conflicts,
+          touches: story.planned.story.touches,
+          turnsSpent: this.counters.conflictTurnsSpent(this.ctx.runDir, story.planned.story.id),
+          attempt: story.attempt,
+          attempts: this.attempts,
+        })
+        : null;
+      if (half.mayConflictTurn === true && refused === null) {
+        await this.requeueConflictTurn(story, update.conflicts, half.cost, dod, half.before);
+        return "settled";
+      }
       await this.block(
         story,
-        staleBaseConflict(
-          story.branch, story.epicBranch, update.conflicts, update.detail,
-          relative(this.ctx.root, story.worktree) || story.worktree,
-        ),
+        refused === null ? blocked : `${blocked}. ${refused}`,
         half.cost,
         dod,
         { commit, conflicts: update.conflicts },
@@ -1944,6 +2042,50 @@ class BuildSession {
 
     // (g)(h) the reviewer, and whatever it decides.
     return await this.reviewAndSettle(story, proven, commit, half.cost, carried, epicShaBefore);
+  }
+
+  /**
+   * gh #286: a conflict an agent can own, settled as a requeue — #313's shape
+   * exactly: back to the status the attempt started from, worktree KEPT, one
+   * attempt spent — plus ONE `story.conflict_turn`, emitted after the settle so
+   * the ledger reads the grant as owed to the NEXT attempt, not taken by this
+   * one. `conflictTurnRefusal` has already said yes.
+   */
+  private async requeueConflictTurn(
+    story: StoryContext,
+    files: readonly string[],
+    cost: number,
+    dod: readonly DodResult[],
+    before: PlanStatus,
+  ): Promise<void> {
+    const id = story.planned.story.id;
+    const spent = this.counters.conflictTurnsSpent(this.ctx.runDir, id);
+    const storySha = await fullShaOf(story.worktree, "HEAD");
+    const epicSha = await fullShaOf(story.repoDir, story.epicBranch);
+    this.counters.countConflictTurn(id, spent);
+    this.conflictRequeued.add(id);
+    await this.settle(story, before, {
+      dod, commit: null, merged: false, carried: null, conflicts: files, verdict: "n-a",
+      review: {
+        verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [],
+        formatProblems: [], verdictProblem: null,
+      },
+      keepWorktree: true,
+      cost,
+      reason: `bringing \`${story.branch}\` up to \`${story.epicBranch}\` conflicted in ${files.join(", ")} on attempt `
+        + `${String(story.attempt)} of ${String(this.attempts)}, so the next attempt is handed the merge to resolve`,
+    });
+    this.ctx.emit("story.conflict_turn", {
+      phase: this.ctx.phaseId,
+      story: id,
+      repo: story.planned.story.repo,
+      branch: story.branch,
+      base: story.epicBranch,
+      attempt: story.attempt,
+      files: [...files],
+      epic_sha: epicSha,
+      story_sha: storySha,
+    });
   }
 
   /**
@@ -2789,7 +2931,9 @@ class BuildSession {
       // Verdicts that cost an attempt, plus attempts this process requeued on a red
       // DoD (gh #313) — both spend one, and only the first is a review.
       attempt: Math.min(
-        this.reviewAttempts(planned.story.id) + this.counters.dodRequeuesSpent(this.ctx.runDir, planned.story.id) + 1,
+        this.reviewAttempts(planned.story.id) + this.counters.dodRequeuesSpent(this.ctx.runDir, planned.story.id)
+          // gh #286: and a conflict turn spends one too.
+          + this.counters.conflictTurnsSpent(this.ctx.runDir, planned.story.id) + 1,
         this.attempts,
       ),
       ...(() => {
@@ -4406,6 +4550,7 @@ class BuildSession {
       previousAttempt: story.previousAttempt,
       previousAttemptKind: story.previousAttemptKind,
       notInWorktree: story.notInWorktree,
+      ...(story.conflictTurn === undefined ? {} : { conflictTurn: story.conflictTurn }),
       dispatchNotes: this.dispatchNotesFor(story.planned.story.id).body,
       // This repo's skills only: the worktree carries one repo's `.claude/skills`.
       projectSkills: renderProjectSkills(skillsFor(readStackPacks(this.ctx.root), [repo])),

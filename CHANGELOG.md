@@ -2,6 +2,29 @@
 
 ## 0.28.0 — unreleased
 
+### Added
+
+- **A story whose merge-up to its epic conflicts in a few of its own files gets one conflict
+  turn instead of a person (#286).** MEASURED on a field run: a story with a green DoD conflicted
+  bringing itself up to the epic (#268) in one counted test list both stories bumped, blocked
+  correctly — and nothing in the framework could resolve it: the developer holds no merge verb, a
+  plain reopen had no work, and a person did it in a scratch worktree; 1.5 h later the same story
+  conflicted again in four files. Now, when the conflict is in at most three files, every one in
+  the story's declared `touches` (the boundary matcher, `inSurface`), with no conflict turn since
+  its last `story.reopened` and an attempt left, the story is requeued the way #313 requeues a
+  red DoD — prior status, worktree kept, one attempt spent — and one new `story.conflict_turn`
+  event is written. Its next attempt is dispatched with the CURRENT epic tip merged into the
+  worktree and the merge left open (markers, `MERGE_HEAD`); the prompt names the files, the
+  story's intent and the stories that landed on the epic, and `git add` + `git commit` — verbs the
+  developer already holds — close it, with the DoD as judge. A marker guard in `git.ts`
+  (`git diff --check` against the tree handed, plus `MERGE_HEAD`) blocks, never requeues, a turn
+  that left a marker anywhere or never closed the merge, naming the files — without it, measured
+  by mutation, markers were committed and merged onto the epic as `done`. Anything else still
+  blocks exactly as before, with the reason it got no turn appended. The bound is counted from
+  `events.jsonl`, so it holds across invocations, and `tldrx replay` says an agent, not a person,
+  resolved the merge. Headless only: the host's `--commit` half and an as-is settlement block as
+  they did.
+
 ### Fixed
 
 - **`tldrx story reopen` on a `blocked` story also releases the dependents it alone was holding

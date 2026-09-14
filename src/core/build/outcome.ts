@@ -517,6 +517,35 @@ export function dodRequeueRed(dod: readonly RequeueRow[]): boolean {
 }
 
 /**
+ * The most conflicted files a conflict turn is handed (gh #286). The field case
+ * was ONE file (a counted migrations list both stories bumped); its recurrence
+ * 1.5 h later was four, after three more siblings had merged. Past three, a
+ * merge is not a registration line two stories both touched — it is two stories
+ * that overlap, and that is a plan question a person answers.
+ */
+export const MAX_CONFLICT_TURN_FILES = 3;
+
+/**
+ * Why a conflict turn left the story unfit for a DoD or a commit (gh #286) — the
+ * block reason, one sentence, exported so tests assert it rather than prose.
+ * `markers` empty and `inProgress` true is the developer that resolved but never
+ * ran `git commit`; markers present is a resolution that is not one, whether or
+ * not it was committed.
+ */
+export function leftoverMergeReason(markers: readonly string[], inProgress: boolean): string {
+  const parts = [
+    ...(markers.length === 0
+      ? []
+      : [`the conflict turn left conflict markers in ${markers.map((f) => `\`${f}\``).join(", ")}`]),
+    ...(inProgress
+      ? ["the merge the conflict turn was handed is still in progress (`MERGE_HEAD` is set — "
+        + "`git add` and `git commit` close it)"]
+      : []),
+  ];
+  return `${parts.join("; and ")} — nothing was proven, committed or merged`;
+}
+
+/**
  * Why a story blocked on its Definition of Done — one sentence, one derivation.
  *
  * Two call sites in the executor built this string independently

@@ -664,6 +664,11 @@ describe("a story that cannot prove itself", () => {
       epics: [{ id: "E1", stories: ["S1", "S2"], branch: "epic/e1" }],
       waves: [["S1"], ["S2"]],
       repoFiles: { "shared.txt": "base\n" },
+      // gh #286: a one-file conflict inside S2's own `touches` with an attempt
+      // left now gets a conflict turn (`story-base.test.ts` Part 4). ONE attempt
+      // keeps this test on the path it is about — the block, and the epic it
+      // leaves usable.
+      attempts: 1,
     });
     // A story branch that already diverged from `main`, so its merge collides
     // with what S1 puts on the epic branch. The name carries the run id, because

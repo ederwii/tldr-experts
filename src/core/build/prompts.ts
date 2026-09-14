@@ -192,6 +192,71 @@ export interface DeveloperPromptParts {
    * exactly like a new file when the only test is `existsSync` in the worktree.
    */
   readonly notInWorktree?: ReadonlySet<string>;
+  /**
+   * gh #286: the merge this attempt is handed, left in progress in the worktree
+   * by the facilitator. Absent on every other attempt, which renders nothing —
+   * byte-identical to every prompt written before the field existed.
+   */
+  readonly conflictTurn?: ConflictTurnPrompt;
+}
+
+/** What the conflict-turn section names (gh #286). */
+export interface ConflictTurnPrompt {
+  /** Conflicted paths; empty when the merge went in clean at dispatch. */
+  readonly files: readonly string[];
+  /** The epic tip merged in, full sha. */
+  readonly epicSha: string;
+  /** Stories that landed on the epic since this branch was cut, newest first. */
+  readonly landed: readonly { readonly id: string; readonly title: string }[];
+}
+
+/** The section's heading — exported so tests assert the marker, not prose. */
+export const CONFLICT_TURN_HEADING = "## Merge in progress — resolve it first";
+
+/**
+ * The conflict turn, rendered (gh #286). It goes after the brief and ahead of
+ * `## Investigate`, because until the merge is closed none of those steps can
+ * be done: the tree does not build with markers in it.
+ */
+export function conflictTurnSection(parts: DeveloperPromptParts): readonly string[] {
+  const turn = parts.conflictTurn;
+  if (turn === undefined) return [];
+  const { story } = parts.story;
+  const epicSide = turn.landed.length > 0
+    ? `what landed on \`${parts.epicBranch}\` since this branch was cut: `
+      + turn.landed.map((s) => `${s.id} · ${s.title}`).join("; ")
+    : `\`${parts.epicBranch}\` at ${turn.epicSha === "" ? "its current tip" : turn.epicSha} — no story merge `
+      + "subject on it since this branch was cut, so the epic side is named by its sha alone";
+  if (turn.files.length === 0) {
+    return [
+      CONFLICT_TURN_HEADING,
+      "",
+      `Your last attempt was green, but bringing it up to \`${parts.epicBranch}\` conflicted. The facilitator`,
+      "merged the epic in again for this attempt and it went in CLEAN — there is nothing left to resolve.",
+      `The epic side is ${epicSide}. Check the story still does what it says on the merged tree.`,
+      "",
+    ];
+  }
+  return [
+    CONFLICT_TURN_HEADING,
+    "",
+    `Your last attempt was green, but bringing it up to \`${parts.epicBranch}\` CONFLICTED. The facilitator has`,
+    "merged the epic into this worktree again and LEFT THE MERGE IN PROGRESS: the conflict markers are in the",
+    "files and `MERGE_HEAD` is set. This merge is the one piece of branch work that is yours on this attempt.",
+    "",
+    "Conflicted files:",
+    "",
+    ...turn.files.map((file) => `- \`${file}\``),
+    "",
+    `- **Your side** — ${story.id} · ${story.title}: the acceptance criteria above.`,
+    `- **The epic side** — ${epicSide}.`,
+    "",
+    "Keep BOTH intents: resolve each file so it does what the epic already does AND what this story adds. Remove",
+    "every `<<<<<<<`, `=======` and `>>>>>>>` line. Then `git add` the files and `git commit` — that commit",
+    "closes the merge. A marker left anywhere, committed or not, or a merge left open, BLOCKS the story; the",
+    "Definition of Done judges the resolved tree exactly as it judges any other attempt.",
+    "",
+  ];
 }
 
 /**
@@ -265,6 +330,7 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     "",
     ...dispatchNotesSection(parts.dispatchNotes),
     ...projectSkillsSection(parts.projectSkills),
+    ...conflictTurnSection(parts),
     "## Investigate",
     "",
     "1. Read the story and the inlined files above. They are the whole brief.",

@@ -19,7 +19,7 @@
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
@@ -31,6 +31,8 @@ import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { validateEvent, EVENT_TYPES } from "../src/core/events/Event.ts";
 import { loadRun, renderReplay } from "../src/core/replay/index.ts";
+import { CONFLICT_TURN_HEADING } from "../src/core/build/prompts.ts";
+import { leftoverMergeReason } from "../src/core/build/outcome.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
@@ -44,6 +46,7 @@ const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
   "FAKE_BUILD_WRITE", "FAKE_BUILD_VERDICTS", "FAKE_BUILD_COST", "FAKE_BUILD_STATE",
   "FAKE_BUILD_PROMPT_DIR", "FAKE_BUILD_IS_ERROR", "FAKE_BUILD_FAIL", "FAKE_BUILD_FAIL_REASON",
+  "FAKE_BUILD_COMMIT",
 ] as const;
 
 let open: BuildWorkspace[] = [];
@@ -766,6 +769,23 @@ describe("(e) the epic moved since the story's base (#268)", () => {
     expect(git(ws, "show", "epic/e1:shared.txt")).toBe("S1's line");
   });
 
+  test("an out-of-touches conflict gets NO conflict turn — guard (#286)", async () => {
+    // GUARD, not a proof: this blocked before #286 and must still block. S2's
+    // default `touches` is `s2.txt`, so `shared.txt` is a file it never declared.
+    const ws = workspace(ONE_WAVE);
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "shared.txt": "S1's line\n" },
+      S2: { "shared.txt": "S2's line\n" },
+    });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"] });
+
+    await next(ws, { parallel: 2 });
+
+    expect(readFileSync(join(ws.planDir, "stories", "S2.md"), "utf8")).toContain("status: blocked");
+    expect(conflictTurns(ws)).toHaveLength(0);
+    expect(dodRuns(ws, "S2")).toBe(1);
+  });
+
   test("a story whose epic did NOT move pays no second DoD and moves no ref", async () => {
     const ws = workspace(TWO);
     process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"] });
@@ -775,5 +795,178 @@ describe("(e) the epic moved since the story's base (#268)", () => {
     expect(dodRuns(ws, "S1")).toBe(1);
     expect(dodRuns(ws, "S2")).toBe(1);
     expect(baseUpdates(ws)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Part 4 — ONE bounded conflict turn instead of a person with a scratch worktree (#286)
+// ---------------------------------------------------------------------------
+
+function conflictTurns(ws: BuildWorkspace) {
+  return events(ws).filter((e) => e.type === "story.conflict_turn");
+}
+
+/** S1 and S2 in one wave, both DECLARING the file they are about to collide in. */
+function sharedWave(extra: Partial<BuildWorkspaceOptions> = {}, touches: readonly string[] = ["shared.txt"]) {
+  return workspace({
+    stories: [
+      { id: "S1", epic: "E1", title: "First story", touches },
+      { id: "S2", epic: "E1", title: "Second story", touches },
+    ],
+    epics: [{ id: "E1", stories: ["S1", "S2"], branch: "epic/e1" }],
+    waves: [["S1", "S2"]],
+    ...extra,
+  });
+}
+
+function promptDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "tldrx-conflict-prompts-"));
+  scratch.push(dir);
+  process.env.FAKE_BUILD_PROMPT_DIR = dir;
+  return dir;
+}
+
+function storyLog(ws: BuildWorkspace, id: string): string {
+  return readFileSync(join(ws.runDir, "04-build", "log", `${id}.md`), "utf8");
+}
+
+describe("(f) a conflict inside the story's touches gets ONE conflict turn (#286)", () => {
+  test("the developer resolves the merge the facilitator left open, and BOTH sides land on the epic", async () => {
+    const ws = sharedWave();
+    const prompts = promptDir();
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "shared.txt": "S1's line\n" },
+      S2: { "shared.txt": "S2's line\n" },
+      "S2#2": { "shared.txt": "S1's line\nS2's line\n" },
+    });
+    process.env.FAKE_BUILD_COMMIT = JSON.stringify({ "S2#2": "commit" });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"] });
+
+    await next(ws, { parallel: 2 });
+
+    expect(readFileSync(join(ws.planDir, "stories", "S2.md"), "utf8")).toContain("status: done");
+    expect(git(ws, "show", "epic/e1:shared.txt")).toBe("S1's line\nS2's line");
+    const turns = conflictTurns(ws);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.payload).toMatchObject({ story: "S2", attempt: 1, files: ["shared.txt"] });
+    expect(String(turns[0]?.payload.epic_sha ?? "")).toMatch(/^[0-9a-f]{40}$/);
+    expect(String(turns[0]?.payload.story_sha ?? "")).toMatch(/^[0-9a-f]{40}$/);
+    expect(validateEvent(turns[0]).ok).toBe(true);
+    expect(EVENT_TYPES).toContain("story.conflict_turn");
+    // The narrative says an AGENT resolved it — the whole point of the event.
+    expect(renderReplay(loadRun(ws.root, ws.runId)!)).toContain(
+      "story S2 CONFLICTED bringing it up to `epic/e1` in shared.txt on attempt 1 — requeued: "
+      + "its next developer agent, not a person, resolves the merge",
+    );
+    // The second developer was handed the merge, by file, with both intents.
+    // Found by its heading rather than by `-2`: the fake's per-prompt counter
+    // lives in one state file two parallel lanes write, so its number races.
+    const prompt = readdirSync(prompts)
+      .filter((name) => name.startsWith("developer-S2-"))
+      .map((name) => readFileSync(join(prompts, name), "utf8"))
+      .find((text) => text.includes(CONFLICT_TURN_HEADING)) ?? "";
+    expect(prompt).toContain(CONFLICT_TURN_HEADING);
+    expect(prompt).toContain("`shared.txt`");
+    expect(prompt).toContain("S1");
+    expect(prompt).toContain("Second story");
+  });
+
+  test("a resolution that leaves conflict markers BLOCKS, naming the file, and never reaches the epic", async () => {
+    const ws = sharedWave();
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "shared.txt": "S1's line\n" },
+      S2: { "shared.txt": "S2's line\n" },
+      // Attempt 2 writes something else and commits the markers along with it.
+      "S2#2": { "notes.txt": "resolved, honest\n" },
+    });
+    process.env.FAKE_BUILD_COMMIT = JSON.stringify({ "S2#2": "commit" });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"] });
+
+    await next(ws, { parallel: 2 });
+
+    expect(conflictTurns(ws)).toHaveLength(1);
+    expect(readFileSync(join(ws.planDir, "stories", "S2.md"), "utf8")).toContain("status: blocked");
+    expect(storyLog(ws, "S2")).toContain(leftoverMergeReason(["shared.txt"], false));
+    expect(git(ws, "show", "epic/e1:shared.txt")).toBe("S1's line");
+  });
+
+  test("a merge the developer never CLOSED blocks, and says the merge is still in progress", async () => {
+    const ws = sharedWave();
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "shared.txt": "S1's line\n" },
+      S2: { "shared.txt": "S2's line\n" },
+      "S2#2": { "shared.txt": "S1's line\nS2's line\n" },
+    });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"] });
+
+    await next(ws, { parallel: 2 });
+
+    expect(conflictTurns(ws)).toHaveLength(1);
+    expect(readFileSync(join(ws.planDir, "stories", "S2.md"), "utf8")).toContain("status: blocked");
+    expect(storyLog(ws, "S2")).toContain(leftoverMergeReason([], true));
+    expect(git(ws, "show", "epic/e1:shared.txt")).toBe("S1's line");
+  });
+
+  test("more than three conflicted files gets no turn — guard", async () => {
+    const files = ["f1.txt", "f2.txt", "f3.txt", "f4.txt"];
+    const ws = sharedWave({}, files);
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: Object.fromEntries(files.map((f) => [f, "S1\n"])),
+      S2: Object.fromEntries(files.map((f) => [f, "S2\n"])),
+    });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"] });
+
+    await next(ws, { parallel: 2 });
+
+    expect(readFileSync(join(ws.planDir, "stories", "S2.md"), "utf8")).toContain("status: blocked");
+    expect(conflictTurns(ws)).toHaveLength(0);
+    expect(storyLog(ws, "S2")).toContain("4 files conflict");
+  });
+
+  test("no attempt left gets no turn — guard", async () => {
+    const ws = sharedWave({ attempts: 1 });
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "shared.txt": "S1's line\n" },
+      S2: { "shared.txt": "S2's line\n" },
+    });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"] });
+
+    await next(ws, { parallel: 2 });
+
+    expect(readFileSync(join(ws.planDir, "stories", "S2.md"), "utf8")).toContain("status: blocked");
+    expect(conflictTurns(ws)).toHaveLength(0);
+  });
+
+  test("a SECOND conflict on the same story blocks — one turn per story — guard", async () => {
+    const touches = ["shared.txt"];
+    const ws = workspace({
+      stories: [
+        { id: "S1", epic: "E1", title: "First story", touches },
+        { id: "S2", epic: "E1", title: "Second story", touches },
+        { id: "S3", epic: "E1", title: "Third story", touches },
+      ],
+      epics: [{ id: "E1", stories: ["S1", "S2", "S3"], branch: "epic/e1" }],
+      waves: [["S1", "S2", "S3"]],
+      attempts: 3,
+    });
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "shared.txt": "S1\n" },
+      S2: { "shared.txt": "S2\n" },
+      S3: { "shared.txt": "S3\n" },
+      "S2#2": { "shared.txt": "S1\nS2\n" },
+      // S3 resolves against the epic it was handed (S1 only); by its merge S2
+      // has landed too, and bringing it up conflicts AGAIN.
+      "S3#2": { "shared.txt": "S1\nS3\n" },
+    });
+    process.env.FAKE_BUILD_COMMIT = JSON.stringify({ "S2#2": "commit", "S3#2": "commit" });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"], S3: ["approve"] });
+
+    await next(ws, { parallel: 3 });
+
+    expect(readFileSync(join(ws.planDir, "stories", "S2.md"), "utf8")).toContain("status: done");
+    expect(readFileSync(join(ws.planDir, "stories", "S3.md"), "utf8")).toContain("status: blocked");
+    expect(conflictTurns(ws).map((e) => e.payload.story)).toEqual(["S2", "S3"]);
+    expect(storyLog(ws, "S3")).toContain("already had its conflict turn");
+    expect(git(ws, "show", "epic/e1:shared.txt")).toBe("S1\nS2");
   });
 });

@@ -54,8 +54,17 @@ mergear una story, Build revisa si la épica se movió desde que esa story se co
 movió, mergea la épica **dentro** del worktree de la story y vuelve a correr el DoD de esa
 story sobre el resultado. El costo es una corrida extra de la suite por story, y solo cuando
 la épica efectivamente se movió; una story cuya base está al día no paga nada. Un conflicto
-real bloquea esa story nombrando los archivos en conflicto, no mergea nada y deja su worktree
-tal como lo dejó el subagente: nunca a medio aplicar.
+real no mergea nada y nunca deja nada a medio aplicar. Cuando es chico —a lo sumo tres
+archivos, todos dentro de los `touches` de la propia story— la story recibe **un turno de
+conflicto**: vuelve a la cola (gastando un intento) y su siguiente desarrollador recibe el merge
+ya en curso, con los marcadores incluidos, y su prompt nombra los archivos en conflicto, la
+intención de la propia story y las stories que llegaron a la épica. Los resuelve y cierra el
+merge con `git add` y `git commit`; la definición de hecho juzga el resultado como en cualquier
+otro intento, y un marcador de conflicto que quede o un merge sin cerrar bloquea la story
+nombrando los archivos. El turno queda registrado como `story.conflict_turn`, así `tldrx replay`
+dice que lo resolvió un agente. Un conflicto más grande, uno fuera de los `touches` de la story,
+un segundo conflicto en la misma story o sin intentos restantes bloquea como antes, nombrando
+los archivos en conflicto y con el worktree tal como lo dejó el subagente.
 
 Cuando una story queda `blocked`, lo que pasa después se decide **story por story**, a
 partir de `depends_on`. Una story posterior cuyas dependencias llegaron todas a `done`

@@ -216,6 +216,30 @@ export interface ReviewLedger {
    * `story.reopened` with every other count here.
    */
   readonly redDodAttempts: number;
+  /**
+   * `story.conflict_turn` events since the last `story.reopened` (gh #286) — the
+   * conflict turns this story was granted. Counted from the log for the reason
+   * `redDodAttempts` is: the bound is one per story, and a fresh invocation must
+   * not hand out a second. A log written before the event existed counts 0.
+   */
+  readonly conflictTurns: number;
+  /**
+   * The conflict turn granted and not yet TAKEN, or null (gh #286): the last
+   * `story.conflict_turn`, until a `task.done` from an attempt whose developer
+   * actually ran — or a `story.reopened` — follows it. A developer that FAILED
+   * mid-turn parks the story with the attempt unspent, and its turn is still
+   * owed, so a parked failure does not clear this. The dispatch reads it to
+   * redo the merge; the payload is what the event recorded.
+   */
+  readonly conflictTurnOwed: ConflictTurnRecord | null;
+}
+
+/** What one `story.conflict_turn` recorded (gh #286), read back tolerantly. */
+export interface ConflictTurnRecord {
+  readonly attempt: number;
+  readonly files: readonly string[];
+  readonly epicSha: string;
+  readonly storySha: string;
 }
 
 /** Everything the two resume paths and the requeue counter need, in one pass. */
@@ -226,11 +250,14 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     lastDodOutputPath: null,
     developerErroredWith: null, blockedWithNothingRun: false, reopened: null, asIs: null, lastMerge: null, fixRound: null,
     formatRetries: 0, formatRefusal: null, reviewer: null, redDodAttempts: 0,
+    conflictTurns: 0, conflictTurnOwed: null,
   };
   if (!existsSync(path)) return empty;
 
   let verdicts = 0;
   let redDodAttempts = 0;
+  let conflictTurns = 0;
+  let conflictTurnOwed: ConflictTurnRecord | null = null;
   let fixlistRounds = 0;
   let erroredWith: string | null = null;
   let commit: string | null = null;
@@ -297,6 +324,8 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     if (event.type === "story.reopened") {
       verdicts = 0;
       redDodAttempts = 0;
+      conflictTurns = 0;
+      conflictTurnOwed = null;
       fixlistRounds = 0;
       erroredWith = null;
       commit = null;
@@ -327,6 +356,18 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
       formatRefusal = null;
       spawned = null;
       reviewer = null;
+      continue;
+    }
+
+    // gh #286: a merge handed to the developer. Counted, and owed until taken.
+    if (event.type === "story.conflict_turn") {
+      conflictTurns++;
+      conflictTurnOwed = {
+        attempt: typeof payload.attempt === "number" ? payload.attempt : 0,
+        files: Array.isArray(payload.files) ? payload.files.filter((f): f is string => typeof f === "string") : [],
+        epicSha: typeof payload.epic_sha === "string" ? payload.epic_sha : "",
+        storySha: typeof payload.story_sha === "string" ? payload.story_sha : "",
+      };
       continue;
     }
 
@@ -385,6 +426,9 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
       // One signature, one settlement attempt (see the field). The turn has
       // ended — done, blocked or parked — and the flag does not survive it.
       asIs = null;
+      // gh #286: a turn whose developer RAN has taken the conflict turn owed; a
+      // parked developer failure has not (see the field).
+      if (developerErroredWith === null) conflictTurnOwed = null;
       // The COMPAT shape, decided at the moment the attempt ended: blocked with
       // nothing to show for itself and nothing that could have judged it.
       // gh #313: the attempt a red DoD spent — judged by `dodRequeueRed`, the SAME
@@ -503,6 +547,8 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     fixRound,
     formatRetries,
     redDodAttempts,
+    conflictTurns,
+    conflictTurnOwed,
     formatRefusal,
     reviewer,
   };

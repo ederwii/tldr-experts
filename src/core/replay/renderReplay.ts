@@ -252,6 +252,16 @@ function bullet(item: NumberedEvent, trail: Map<string, ReviewerProvenance | nul
       return `${prefix}story ${text(payload.story) || "?"}'s base UPDATED to`
         + ` \`${text(payload.base) || "?"}\` before merging — ${text(payload.from) || "?"} →`
         + ` ${text(payload.to) || "?"} (${String(payload.commits ?? "?")} commit(s) behind), DoD re-run`;
+    // #286: the conflict the move above could not make, handed to an AGENT. The
+    // sentence says so in those words, because the alternative it replaces was a
+    // person in a scratch worktree, and a handoff that cannot tell the two apart
+    // hides exactly what the cost of this run was.
+    case "story.conflict_turn": {
+      const files = Array.isArray(payload.files) ? payload.files.map((f) => text(f)).filter((f) => f !== "") : [];
+      return `${prefix}story ${text(payload.story) || "?"} CONFLICTED bringing it up to`
+        + ` \`${text(payload.base) || "?"}\` in ${files.length > 0 ? files.join(", ") : "?"} on attempt`
+        + ` ${String(payload.attempt ?? "?")} — requeued: its next developer agent, not a person, resolves the merge`;
+    }
     // The other one (#129). A narrative that showed a story blocked and its
     // worktree gone, with nothing in between, would be the narrative of the
     // incident this event exists to make impossible: work destroyed in silence.

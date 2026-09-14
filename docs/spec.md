@@ -1267,7 +1267,7 @@ Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with
 
 **Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `run.attended` `run.relaunched` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
-`gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `gate.policy_changed` `questions.policy_changed` `story.reopened` `story.base_fastforwarded` `story.base_updated` `story.review_retried` `story.work_rescued`
+`gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `gate.policy_changed` `questions.policy_changed` `story.reopened` `story.base_fastforwarded` `story.base_updated` `story.conflict_turn` `story.review_retried` `story.work_rescued`
 `story.touches_widened` `epic.released` `worktree.foreign_work_aside` `worktree.foreign_work_restored` `result.unreadable` `input.truncated` `operator_note` `check.passed` `check.failed` `budget.warned`
 `budget.blocked` `budget.raised` `budget.granted` `fact.added` `fact.retired` `fact.superseded` `fact.conflict_raised` `doc.superseded` `notify.sent` `notify.failed` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
@@ -1346,6 +1346,14 @@ Its payload is `story.base_fastforwarded`'s — `phase`, `story`, `repo`, `branc
 because it is the same measurement of the same move. It is appended ONLY when the story's HEAD actually moved, which
 is the same condition the re-run of the story's DoD is charged on: this event is the record of that extra DoD being
 paid, and its absence is the record that the story's base was current and nothing was owed.
+
+**`story.conflict_turn` was added 2026-09-14 (#286).** When that same move CONFLICTS, the story is not always blocked:
+in at most three files, every one inside the story's declared `touches`, with no conflict turn since its last
+`story.reopened` and an attempt left, it is requeued — back to the status its attempt started from, worktree kept —
+and its next developer is handed the merge in progress (§5, step 3½). Its payload is `phase`, `story`, `repo`,
+`branch`, `base` (the epic branch), `attempt` (the attempt that hit the conflict), `files` (the conflicted paths),
+`epic_sha` and `story_sha` (both full). It is the record that the grant was made and an attempt spent on it, and the
+reason a replay says an agent resolved the merge rather than a person.
 
 **`story.work_rescued` was added 2026-09-02 (#129).** It is the SECOND event in the enum that records tldrx touching
 git on the operator's behalf: changes found in a story worktree that had reached no ref, committed to the story branch
@@ -3779,6 +3787,19 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    rebased it by hand — three times in one week. A move that happens emits one `story.base_updated` (§2.9), and its commit subject is
    `sync(<story-id>): …` — never `merge(<story-id>): …`, which is the subject of a story LANDING on the epic and is
    read as exactly that by a person and by the merge-order assertion in `build-parallel.test.ts`.
+   **A conflict an agent can own gets ONE conflict turn instead (#286).** When the conflict is in at most three files,
+   every one inside the story's declared `touches` (the boundary condition's matcher, `inSurface`), the story has had
+   no conflict turn since its last `story.reopened`, and `attempt < attempts`, the story is requeued — back to the
+   status its attempt started from, worktree kept, one `story.conflict_turn` (§2.9) — rather than blocked. When that
+   attempt is dispatched, the CURRENT epic tip is merged into the story worktree again and the merge is left IN
+   PROGRESS (markers and `MERGE_HEAD` in place); the developer prompt names the conflicted files, the story's own
+   intent and the stories that landed on the epic since the branch was cut (read off the epic's `merge(<id>): …`
+   subjects, or the epic sha when there are none), and says that `git add` + `git commit` close the merge. Before the
+   DoD, a **marker guard** (`leftoverMerge`: `git diff --check <handed>` for `leftover conflict marker`, plus
+   `MERGE_HEAD`) BLOCKS — not requeues — a turn that left a marker anywhere, committed or not, or never closed the
+   merge, naming the files. Refused otherwise, with the reason appended to the block above. Measured on the field run
+   that filed it (#286): one conflict in a counted test list on an otherwise-green story, resolved only by a person in a
+   scratch worktree, and 1.5 h later the same story conflicting again in four files.
 4. **Merge into the epic**, `git merge --no-ff` inside a worktree checked out on the epic branch. On conflict the merge
    is **aborted** — so the epic branch is exactly as the previous story left it and the wave can continue — the
    conflicting paths are read from `diff --diff-filter=U`, and the story is `blocked` with them as its `evidence:`.

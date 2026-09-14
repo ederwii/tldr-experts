@@ -800,13 +800,21 @@ export interface MergeOutcome {
  * Concept §9: a story merges to its epic on green. On a conflict the merge is
  * aborted so the epic branch is left exactly as it was — the next story in the
  * wave still has somewhere to land.
+ *
+ * `leaveConflicts` is the ONE caller that wants the opposite (gh #286): a story
+ * owed a conflict turn has the epic merged into its OWN worktree and the merge
+ * left in progress — markers in the files, `MERGE_HEAD` set — for its developer
+ * to close with `git add` and `git commit`. Same command, same conflict list;
+ * only the abort is skipped.
  */
-export async function mergeNoFf(cwd: string, branch: string, message: string): Promise<MergeOutcome> {
+export async function mergeNoFf(
+  cwd: string, branch: string, message: string, leaveConflicts = false,
+): Promise<MergeOutcome> {
   const merged = await git(["merge", "--no-ff", "-m", message, branch], cwd);
   if (merged.ok) return { ok: true, conflicts: [], detail: firstLine(merged.stdout) };
   const conflicted = await git(["diff", "--name-only", "--diff-filter=U"], cwd);
   const conflicts = conflicted.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== "");
-  await git(["merge", "--abort"], cwd);
+  if (!leaveConflicts || conflicts.length === 0) await git(["merge", "--abort"], cwd);
   return {
     ok: false,
     conflicts,
@@ -814,6 +822,53 @@ export async function mergeNoFf(cwd: string, branch: string, message: string): P
       ? `conflict in ${conflicts.join(", ")}`
       : firstLine(merged.stderr) || firstLine(merged.stdout) || `git merge exited ${String(merged.exitCode)}`,
   };
+}
+
+/** Is a merge in progress in this worktree — `MERGE_HEAD` set, whichever worktree's git dir holds it? */
+export async function mergeInProgress(cwd: string): Promise<boolean> {
+  return (await git(["rev-parse", "-q", "--verify", "MERGE_HEAD"], cwd)).ok;
+}
+
+/**
+ * `git merge --abort` when, and only when, a merge is open — so a conflict turn
+ * that ends anywhere but a clean commit leaves its tree as a person would want
+ * to find it, and nothing downstream (a rescue's `add -A`, a DoD) meets markers
+ * git still owns (gh #286).
+ */
+export async function abortOpenMerge(cwd: string): Promise<boolean> {
+  if (!(await mergeInProgress(cwd))) return false;
+  return (await git(["merge", "--abort"], cwd)).ok;
+}
+
+/** What a conflict turn left behind that must never reach a DoD or a commit (gh #286). */
+export interface LeftoverMerge {
+  /** Files holding a leftover conflict marker, repo-relative, in git's order, each once. */
+  readonly markers: readonly string[];
+  /** `MERGE_HEAD` is still set: the developer never closed the merge. */
+  readonly inProgress: boolean;
+}
+
+/**
+ * The ONE marker guard (gh #286): leftover conflict markers anywhere in what
+ * changed since `since` — committed, staged or only in the working tree — and
+ * whether the merge is still open.
+ *
+ * `git diff --check <since>` compares the commit to the WORKING TREE, so a
+ * marker the developer committed is found exactly like one it left unstaged
+ * (MEASURED 2026-09-14 on a scratch repo: `leftover conflict marker` at the same
+ * lines unmerged, after `git add`, and after `git commit`, exit 2 each time).
+ * It also reports whitespace errors, which are not this guard's business, so
+ * only its `leftover conflict marker` lines are read — and its exit code is not,
+ * because 2 means "found something" of EITHER kind.
+ */
+export async function leftoverMerge(cwd: string, since: string): Promise<LeftoverMerge> {
+  const checked = await git(["diff", "--check", since], cwd);
+  const markers: string[] = [];
+  for (const line of checked.stdout.split("\n")) {
+    const hit = /^(.+?):\d+: leftover conflict marker$/.exec(line.trim());
+    if (hit?.[1] !== undefined && !markers.includes(hit[1])) markers.push(hit[1]);
+  }
+  return { markers, inProgress: await mergeInProgress(cwd) };
 }
 
 /**
