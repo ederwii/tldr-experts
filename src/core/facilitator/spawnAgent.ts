@@ -564,10 +564,31 @@ function describe(
     return `${name} exited ${exitCode} without a parseable result event: ${tail}`;
   }
   const errors = Array.isArray(doc.errors) ? (doc.errors as unknown[]).filter((e) => typeof e === "string") : [];
-  const reason = errors[0] ?? (typeof doc.subtype === "string" ? doc.subtype : "") ?? "";
-  const suffix = reason === "" ? "" : `: ${String(reason)}`;
-  return `${name} exited ${exitCode} with is_error=${String(doc.is_error === true)}${suffix}`;
+  const verdict = `${name} exited ${exitCode} with is_error=${String(doc.is_error === true)}`;
+  const named = typeof errors[0] === "string" && errors[0] !== "" ? (errors[0] as string) : "";
+  if (named !== "") return `${verdict}: ${named}`;
+  const subtype = typeof doc.subtype === "string" ? doc.subtype : "";
+  if (subtype !== "" && !SUCCESS_SUBTYPES.has(subtype)) return `${verdict}: ${subtype}`;
+  // Nothing here can name WHY. Say that, and — when the provider's own subtype is
+  // the thing that disagrees — say that too, rather than dropping either half.
+  const contradiction = subtype === "" ? "" : ` (the provider's own subtype said "${subtype}")`;
+  return `${verdict}: no reason named${contradiction}`;
 }
+
+/**
+ * Provider subtypes that assert the turn SUCCEEDED.
+ *
+ * `describe()` is reached only when `ok` is false (`interpret`, `:529`/`:540`), so
+ * one of these on the result document is not this failure's reason — it is a
+ * SECOND, contradicting verdict. MEASURED (gh #296, two live unattended runs,
+ * 2026-09-13): a turn that died against the account's usage limit parsed with
+ * `errors: []` and `subtype: "success"`, and the old line concatenated the two
+ * into `claude exited 1 with is_error=true: success` — an audit record whose only
+ * human-readable word was the wrong one (AGENTS.md §7). WHY the turn died is still
+ * unmeasured and this function does not guess at it; it refuses to borrow a word
+ * that means the opposite.
+ */
+const SUCCESS_SUBTYPES: ReadonlySet<string> = new Set(["success"]);
 
 function firstLine(text: string): string {
   const line = text.split("\n").map((l) => l.trim()).find((l) => l !== "");

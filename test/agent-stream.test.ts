@@ -303,6 +303,59 @@ describe("interpret, over either format", () => {
     expect(outcome.metered).toBe(false);
     expect(outcome.costUsd).toBe(0);
   });
+
+  /**
+   * `claude exited 1 with is_error=true: success` (gh #296). MEASURED on two live
+   * unattended runs while the account was over its usage limit: the result document
+   * PARSED, `errors` was empty, and the provider's own `subtype` was the literal
+   * `"success"` — so the only human-readable word on the line was the one that
+   * contradicted everything else on it. `describe()` is only ever reached for a
+   * FAILURE, so a `success` subtype cannot be this failure's reason; borrowing it
+   * is an audit record lying in the dangerous direction (AGENTS.md §7), and
+   * tomorrow's reader learns the story failed when it never ran.
+   *
+   * This says nothing about WHY the turn died — the limit signal itself is
+   * unmeasured and deliberately not detected here.
+   */
+  test("a subtype that contradicts is_error is never printed as the failure's reason (#296)", () => {
+    const line = JSON.stringify({
+      type: "result", subtype: "success", is_error: true,
+      result: "", session_id: "sess-limit", total_cost_usd: 0.8,
+      usage: { input_tokens: 5, output_tokens: 1 },
+      errors: [],
+    });
+
+    const outcome = interpret(1, line, "", false);
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).not.toContain("is_error=true: success");
+    // Both facts survive: our verdict AND that the provider's own word disagreed.
+    expect(outcome.error).toContain("claude exited 1 with is_error=true");
+    expect(outcome.error).toContain("no reason named");
+    expect(outcome.error).toContain('subtype said "success"');
+  });
+
+  test("a failure the provider named is still named, and a real error subtype survives (#296)", () => {
+    const withError = JSON.stringify({
+      type: "result", subtype: "success", is_error: true, session_id: "s1",
+      errors: ["Reached maximum budget ($0.26)"],
+    });
+    expect(interpret(1, withError, "", false).error)
+      .toBe("claude exited 1 with is_error=true: Reached maximum budget ($0.26)");
+
+    const errorSubtype = JSON.stringify({
+      type: "result", subtype: "error_during_execution", is_error: true, session_id: "s2", errors: [],
+    });
+    expect(interpret(1, errorSubtype, "", false).error)
+      .toBe("claude exited 1 with is_error=true: error_during_execution");
+  });
+
+  test("a failure with no reason at all says so rather than trailing off (#296)", () => {
+    // Codex's synthesized result document carries no `subtype` at all.
+    const line = JSON.stringify({ type: "result", is_error: false, session_id: "s3", errors: [] });
+    expect(interpret(1, line, "", false).error)
+      .toBe("claude exited 1 with is_error=false: no reason named");
+  });
 });
 
 describe("what a tool is doing to", () => {
