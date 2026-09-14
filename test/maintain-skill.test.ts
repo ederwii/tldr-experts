@@ -191,6 +191,21 @@ describe("every rule the skill cites resolves to a real heading", () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  // The versioning rule lives in RELEASING.md "What to consider" and nowhere else. The skill
+  // once glossed it beside the citation ("patch for fixes only, minor when a command … changed
+  // behaviour"), so when the owner changed the rule (0.26.1) there were three copies to move,
+  // not one. A gloss that defines what a patch or a minor IS is a second copy; cite the heading.
+  test("it never restates what a patch or a minor is — it cites RELEASING.md for that", () => {
+    const offenders: string[] = [];
+    for (const { rel, text } of files) {
+      const prose = text.replace(/\s+/g, " ");
+      for (const match of prose.matchAll(/\b(patch|minor)\b (for|when|means|=|is a fix|is a new)\b[^.;:]{0,60}/gi)) {
+        offenders.push(`${rel}: "${match[0]}"`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
 });
 
 /**

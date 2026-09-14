@@ -31,8 +31,8 @@ Other sessions may be working this same repo.
 - When a release lands mid-cycle, the released CHANGELOG section becomes immutable
   (`AGENTS.md` §5). Your unreleased bullets move under a NEW `## <next> — unreleased`
   heading; whether that next version is a patch or a minor is the judgement in
-  `docs/RELEASING.md` "What to consider (judgement, not automated)" — patch for fixes only,
-  minor when a command, file schema or hook changed behaviour.
+  `docs/RELEASING.md` "What to consider (judgement, not automated)" — read it there, not from
+  memory: the rule changed at 0.26.1.
 - A wave already running in the shared checkout has a marker and a lock; §2 says what it is
   and what to do about it. Wait.
 
@@ -209,8 +209,8 @@ them was one of these, done by chat after the fact instead of before.
 2. **One unreleased heading, agreed and NAMED before it is written.** One `## <V> — unreleased`
    per next version for the whole repo, not per branch: propose `<V>` to the driver, get it
    back, then write it. Version by behaviour, the judgement in
-   `docs/RELEASING.md` "What to consider (judgement, not automated)": patch for fixes only,
-   minor when a command, file schema or hook changed behaviour. Two unreleased headings on the
+   `docs/RELEASING.md` "What to consider (judgement, not automated)", which says what a patch
+   is and what a minor is. Two unreleased headings on the
    merged tree, or one at or below the last release,
    are refused by the wave with **exit 12**, having merged nothing (§2); a CHANGELOG conflict
    on rebase resolves as the UNION under the one agreed heading (§2, §5).
