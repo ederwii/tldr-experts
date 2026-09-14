@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.27.0 — unreleased
+
+### Added
+
+- **The Plan gate holds a plan to its shape, not only to whether it can execute (#316, #317,
+  #318, #319).** A planning audit of 9 runs (relayed, not re-run) found 25 of 54 build-gate
+  rejections were dependency reopens and every multi-story plan in one workspace a
+  one-story-per-wave chain; a 4-wave plan left 2 stories never attempted, while the 2-wave cap
+  lived only as skill prose and a `seed check` advisory nothing enforced. The `plan` check now
+  refuses more waves than the framework carries per run unless `waves.yml` records the new
+  optional `wave_cap_reason` (an additive root key — `version: 1` only grows), refuses a story
+  scheduled later than its `depends_on` requires, and names in its detail a dod command some
+  stories of one epic and repo carry and a sibling does not — an advisory, because which
+  stories share a shape is not machine-readable and the evidence is one epic. Vertical slices,
+  inventory files in `touches:` and end-to-end placement are Plan-prompt rules rather than
+  checks, because no stack-independent name marks a route file and no changed-file set exists
+  at Plan time to compare against. Every rule, number and sentence comes from one file,
+  `src/core/plan/planShape.ts`, which the gate, the rendered "Plan shape" section
+  (`tldrx plan schema`) and `seed check` all read; the gate's pass is its own, not
+  `validatePlan`'s, so a plan approved before it still loads at Build.
+
 ## 0.26.1 — 2026-09-14
 
 ### Changed
