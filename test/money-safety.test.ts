@@ -27,8 +27,8 @@ import {
   STORY_CAP_FLOOR_USD, STORY_CAP_MULTIPLIER, developerAttemptDivisor, storyCeilingUsd,
 } from "../src/core/facilitator/executors/build.ts";
 import {
-  capDeathReason, describeStoryCap, planOverStageAdvisory, plannedSumUsd, storyCapDerivation,
-  type CapParts,
+  capDeathReason, describeStoryCap, planOverStageAdvisory, plannedSumUsd, reviewerCap,
+  reviewerUnderfunded, storyCapDerivation, type CapParts,
 } from "../src/core/build/caps.ts";
 import { cacheSplit, tokenSplit } from "../src/core/facilitator/runNext.ts";
 import { turnTokens } from "../src/core/budget/turnTokens.ts";
@@ -581,7 +581,7 @@ describe("M9 · a phase ceiling is a ceiling", () => {
     // to read. The measured failure was $0.26.
     const reviewer = prices.S1 * REVIEWER_SHARE / (MAX_ATTEMPTS * (1 + REVIEWER_SHARE));
     expect(reviewer).toBeCloseTo(0.475, 5);
-    expect(Math.max(reviewer, REVIEWER_FLOOR_USD)).toBe(1.0);
+    expect(Math.max(reviewer, REVIEWER_FLOOR_USD)).toBe(2.0); // gh #307: the floor is $2.00
 
     // What the old uniform split handed the same story: $1.03 and $0.26, the
     // same as the story priced at $0.75.
@@ -641,6 +641,38 @@ describe("M9 · a phase ceiling is a ceiling", () => {
     const oldReviewer = stageCeiling * (REVIEWER_SHARE / stories);
     const oldTotal = stories * MAX_ATTEMPTS * (oldDev + oldReviewer);
     expect(oldTotal / stageCeiling).toBeCloseTo(2.5, 5);
+  });
+});
+
+/**
+ * gh #307, measured: every reviewer of a 3-story run priced $8–$9 landed on the
+ * $1.00 floor, and one died with `Reached maximum budget ($1)` before reading the
+ * diff. Across 44 measured reviewer rows the most a COMPLETED review cost was
+ * $1.02 — so a $1.00 floor sits below the reviews that finish. Owner decision:
+ * the floor is $2.00. The figures are literal on purpose — asserting against the
+ * constant would pass whatever the constant says.
+ */
+describe("the reviewer floor funds a review that finishes (gh #307)", () => {
+  function priced(stageUsd: number, price: number): CapParts {
+    return {
+      prices: new Map([["S1", price]]),
+      storyCount: 1,
+      budgetUsd: stageUsd,
+      maxBudgetUsd: stageUsd,
+      agentCap: (share = 1) => stageUsd * share,
+    };
+  }
+
+  test("an $8 story at the shipped defaults gives its reviewer at least $2.00", () => {
+    // Derived: 8 × 0.25 / (2 × 1.25) = $0.80, under the floor.
+    expect(reviewerCap(priced(40, 8), 0, "S1")).toBe(2);
+    // Above the $1.02 max a completed review was measured at.
+    expect(reviewerCap(priced(40, 8), 0, "S1")).toBeGreaterThan(1.02);
+  });
+
+  test("a stage with $1.50 left cannot fund a review, so it is refused before the spawn", () => {
+    expect(reviewerUnderfunded(priced(40, 8), 38.5)).toBe(true);
+    expect(reviewerUnderfunded(priced(40, 8), 38)).toBe(false);
   });
 });
 

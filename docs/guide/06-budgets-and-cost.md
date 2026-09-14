@@ -414,12 +414,16 @@ death is recorded (the story's review log, its `task.done`, the handoff) and the
 own Definition of Done decides: green is a delivered story, red blocks with both reasons named.
 A cap death that left no work still parks the story where it was.
 
-**The reviewer has a floor of $1.00.** Whatever the arithmetic says, a reviewer is given at
+**The reviewer has a floor of $2.00.** Whatever the arithmetic says, a reviewer is given at
 least that (clamped by what the stage has left and by `per_agent_max_usd`). Measured the
 same day: a $0.26 reviewer on a 39-file, +1879-line diff exited with
 `Reached maximum budget ($0.26)` before finishing the read. A reviewer that cannot read the
 diff approves nothing and blocks nothing — it converts the whole developer turn beside it
-into a story stuck at `review`.
+into a story stuck at `review`. The floor was $1.00 until gh #307: across 44 measured
+reviewer turns the most a review that returned a verdict cost was $1.02, and a run whose
+stories were priced $8–$9 put every reviewer on the $1.00 floor, one of which died with
+`Reached maximum budget ($1)` before reading the diff. A stage with less than $2.00 left
+refuses the review before spawning it rather than buying one that cannot finish.
 
 ## Running stories in parallel does not change the bill
 

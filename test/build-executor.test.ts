@@ -1014,8 +1014,8 @@ describe("story caps come from 03-plan/budget.yml when it has them", () => {
 
     // Attempt 1's developer = max(price x 3, $4.00). S1: $15.00. S2: 1.00 x 3 =
     // $3.00, under the floor, so $4.00. Both reviewers derive under a dollar and
-    // are lifted to REVIEWER_FLOOR_USD — #277 did not touch their side.
-    expect(await caps(ws)).toEqual(["15.00", "1.00", "4.00", "1.00"]);
+    // are lifted to the $2.00 reviewer floor (gh #307) — #277 did not touch their side.
+    expect(await caps(ws)).toEqual(["15.00", "2.00", "4.00", "2.00"]);
   }, 60_000);
 
   test("prices that add up to more than the stage are scaled down, keeping the ratio", async () => {
@@ -1089,7 +1089,7 @@ describe("story caps come from 03-plan/budget.yml when it has them", () => {
     // S1 dev (attempt 1), S1 reviewer, S1 dev (attempt 2), S1 reviewer.
     // max(5.00 x 3, 4.00) = $15.00, then $15.00 / 2 = $7.50.
     const seen = await caps(ws);
-    expect(seen.slice(0, 4)).toEqual(["15.00", "1.00", "7.50", "1.00"]);
+    expect(seen.slice(0, 4)).toEqual(["15.00", "2.00", "7.50", "2.00"]);
   }, 60_000);
 });
 
@@ -1903,12 +1903,12 @@ describe("safety", () => {
     // $3.00, and 2 stories x 2 attempts x ($3.00 + $0.75) could charge $15.00
     // against an $8.00 stage — the audit's "Build 2.5x su fase".
     //
-    // The reviewer's derived quarter-share is $0.40, and it is raised to
-    // REVIEWER_FLOOR_USD. That is deliberate and it is the 2026-08-30 lesson: a
+    // The reviewer's derived quarter-share is $0.40, and it is raised to the
+    // $2.00 REVIEWER_FLOOR_USD (gh #307). That is deliberate and it is the 2026-08-30 lesson: a
     // $0.26 reviewer died mid-read on a 39-file diff and the framework recorded
     // the corpse as "changes". A quarter of a share buys no review on anything
     // real, and an unread diff wastes the whole developer turn beside it.
-    expect(caps).toEqual(["1.60", "1.00", "1.60", "1.00"]);
+    expect(caps).toEqual(["1.60", "2.00", "1.60", "2.00"]);
     // What THIS pass hands out still fits the stage; the floor is the one place
     // the strict "x MAX_ATTEMPTS also fits" arithmetic is knowingly given up,
     // and budget.yml's own gate is what stops a stage that actually runs out.
@@ -4918,7 +4918,7 @@ describe("the in-session doors ask the dependency frontier (gh #300)", () => {
  * the diff. It was recorded as `verdict: error`, which parked S1 at `review` and
  * blocked both dependent stories; the loop stopped after $17.23 of a $60 run.
  *
- * `REVIEWER_FLOOR_USD` ($1.00) already existed and did not save it: the floor
+ * `REVIEWER_FLOOR_USD` ($1.00 then, $2.00 since gh #307) already existed and did not save it: the floor
  * YIELDS to the stage remainder (`caps.ts`, `Math.min(REVIEWER_FLOOR_USD, …)`),
  * so a nearly-exhausted stage buys a turn that provably cannot finish. The fix
  * is not a bigger floor — it is refusing to pay for a turn that cannot work, and
@@ -4930,7 +4930,7 @@ describe("a reviewer that cannot be funded is not spawned (#289)", () => {
   function exhausted(): BuildWorkspace {
     const ws = workspace({ ...ONE_STORY, budgetUsd: 8, perAgentMaxUsd: 40 });
     // The developer takes $7.50 of the $8.00 stage: $0.50 left when the reviewer
-    // would be spawned, half of what the floor says a review costs.
+    // would be spawned, a quarter of what the $2.00 floor says a review costs.
     process.env.FAKE_BUILD_COST = "7.50";
     return ws;
   }
@@ -4967,7 +4967,7 @@ describe("a reviewer that cannot be funded is not spawned (#289)", () => {
     // NOT `error`: nothing died, because nothing was spawned. `n-a` is what the
     // record already means by "no reviewer ran for this story".
     expect(recorded[0]?.verdict).toBe("n-a");
-    expect(String(recorded[0]?.detail)).toContain("1.00");
+    expect(String(recorded[0]?.detail)).toContain("costs at least $2.00");
     // The lever, named. `tldrx budget raise <phase> <usd>` moves the phase
     // ceiling and no spawn cap at all (#244), so the sentence has to say --stage.
     const said = outcome.lines.join("\n");

@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
-import { clampParallel, DEFAULT_PARALLEL, REVIEWER_FLOOR_USD } from "../src/core/facilitator/executors/build.ts";
+import { clampParallel, DEFAULT_PARALLEL } from "../src/core/facilitator/executors/build.ts";
 import { parallelFlag } from "../src/cli/commands/next.ts";
 import { parseArgs, UsageError } from "../src/cli/argv.ts";
 import { declaredFlags, declaredValueFlags } from "../src/cli/helpText.ts";
@@ -344,7 +344,7 @@ describe("N = 2 over three stories in one wave", () => {
   }, 90_000);
 
   test("each sub-agent keeps its own share, and every share the wave hands out fits the ceiling", async () => {
-    const ws = workspace({ ...THREE_IN_ONE_WAVE, budgetUsd: 9, perAgentMaxUsd: 9 });
+    const ws = workspace({ ...THREE_IN_ONE_WAVE, budgetUsd: 12, perAgentMaxUsd: 12 });
     await next(ws, { parallel: 3 });
 
     const caps = events(ws)
@@ -353,12 +353,14 @@ describe("N = 2 over three stories in one wave", () => {
     expect(caps.length).toBe(6);           // three developers, three reviewers
     expect(new Set(caps).size).toBe(2);    // one developer share, one reviewer share
     // `worstCaseShares` = stories x attempts x (1 + REVIEWER_SHARE) = 3 x 2 x 1.25,
-    // so the developer share is 9/7.5 = $1.20. The reviewer's derived $0.30 is
-    // raised to REVIEWER_FLOOR_USD: a reviewer under a dollar does not finish
-    // reading a real diff (measured 2026-08-30, $0.26 died mid-read).
+    // so the developer share is 12/7.5 = $1.60. The reviewer's derived $0.40 is
+    // raised to the $2.00 floor: a reviewer that small does not finish reading a
+    // real diff (measured 2026-08-30, $0.26 died mid-read; gh #307, $1.00 died too).
+    // The stage was $9 until gh #307: at $9 three $2.00 floors plus three $1.20
+    // developers are $9.60, past the ceiling this test says the wave fits inside.
     const stage = RunStore.open(ws.runDir).run.phases[0]?.stages[0];
-    expect(caps.filter((cap) => cap === 1.2).length).toBe(3);
-    expect(caps.filter((cap) => cap === REVIEWER_FLOOR_USD).length).toBe(3);
+    expect(caps.filter((cap) => cap === 1.6).length).toBe(3);
+    expect(caps.filter((cap) => cap === 2).length).toBe(3);
     // What this invocation hands out is inside the ceiling. The floor knowingly
     // gives up the stricter "and again on every retry" version of that property.
     expect(caps.reduce((sum, cap) => sum + cap, 0)).toBeLessThanOrEqual(stage?.budget_usd ?? 0);

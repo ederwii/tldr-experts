@@ -4147,7 +4147,8 @@ above the floor $4.00`), and on a scaled plan it names the stage's `budget_usd` 
 keeps the ratio and the sum, so the scale absorbs it exactly; an unscaled plan keeps the price as a lever; an unpriced
 story names its uniform share. An unparseable or invalid file is an advisory on
 stderr and the uniform split. Measured before it: a seven-story plan pricing S1 at $4.75 and S2 at $0.75 gave both
-$1.03. **The reviewer also has a floor** (`REVIEWER_FLOOR_USD`, $1.00), clamped by what the stage has left and by
+$1.03. **The reviewer also has a floor** (`REVIEWER_FLOOR_USD`, $2.00 since gh #307 — $1.00 sat below the $1.02 the
+costliest measured review that returned a verdict spent), clamped by what the stage has left and by
 `per_agent_max_usd`. The floor is the one place the "every worst case sums inside the ceiling" property is knowingly
 given up: a reviewer that cannot finish reading the diff judges nothing and wastes the developer turn beside it, and
 `budget.yml`'s gate is what actually stops a stage that runs out.

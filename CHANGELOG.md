@@ -32,6 +32,25 @@
   rebased or forced) and pushed with it; without it the branch is untouched. `--dry-run` runs
   the same checks and exits the same way.
 
+- **A reviewer is given at least $2.00, not $1.00 — the old floor sat below the reviews that
+  finish (#307, owner decision: "A: piso $2").** MEASURED in the issue across 44 reviewer task
+  rows in two workspaces: the 37 that returned a verdict cost $0.17–$1.02 (median $0.50), so the
+  most expensive COMPLETED review already spent more than the $1.00 floor allowed; and a 3-story
+  run whose Plan priced every story at $8–$9 put every reviewer on that floor — at the shipped
+  defaults an $8 story derives `8 × 0.25 / (2 × 1.25)` = $0.80 — and one died with
+  `Reached maximum budget ($1)` before reading the diff, parking its story at `review`. $1.00
+  was never measured; it was chosen because it looked reasonable. `REVIEWER_FLOOR_USD` is now
+  $2.00, a fixed constant — no new key, event or schema. The consequence the owner accepted:
+  #289's refuse-before-spawn now fires when a stage has less than $2.00 left, and the refusal
+  already says so with the figure (`a review costs at least $2.00`). The budget brake's copy of
+  the floor in `budget/remainingWork.ts` is now IMPORTED from `build/caps.ts` rather than
+  restated, so the brake's estimate and the executor's cap read one definition (`caps.ts`
+  imports only two schema leaves, so the budget-gate hook stays cheap). The Build golden moves
+  by exactly that figure: the four reviewer `agent.spawned` lines carry `max_budget_usd: 2`.
+  `test/build-parallel.test.ts`'s three-story wave moves from a $9 to a $12 stage, because at $9
+  three $2.00 floors plus three developers sum past the ceiling the test proves the wave fits
+  inside. The seed-check / plan-gate warning (part 3 of #307) is not in this change.
+
 ## 0.26.1 — 2026-09-14
 
 ### Changed

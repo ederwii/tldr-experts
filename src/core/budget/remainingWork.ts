@@ -68,7 +68,7 @@
  *
  * ## Why the constants are mirrored rather than imported
  *
- * `MAX_ATTEMPTS`, `REVIEWER_SHARE`, `REVIEWER_FLOOR_USD`,
+ * `MAX_ATTEMPTS`, `REVIEWER_SHARE`,
  * `STORY_CAP_MULTIPLIER`, `STORY_CAP_FLOOR_USD`, `developerAttemptDivisor` and
  * `storyCeilingUsd` live in `facilitator/executors/build.ts`, which drags
  * `spawnAgent`, `RunStore` and the git seam in behind it. This module is loaded by the `budget-gate` PreToolUse
@@ -82,6 +82,7 @@ import { join } from "node:path";
 import { buildProgress, BUILD_PHASE, PLAN_DIR } from "../run/buildProgress.ts";
 import { loadPlanPrices } from "../build/plan.ts";
 import { looksLikeReviewerError } from "../build/review.ts";
+import { REVIEWER_FLOOR_USD } from "../build/caps.ts";
 import { DEFAULT_ECONOMY, type Economy } from "./RunBudget.ts";
 import { STAGE_TUNING_DEFAULTS } from "../schemas/stageTuning.ts";
 
@@ -89,8 +90,12 @@ import { STAGE_TUNING_DEFAULTS } from "../schemas/stageTuning.ts";
 export const MAX_ATTEMPTS = STAGE_TUNING_DEFAULTS.attempts;
 /** Mirrors `build.ts`. */
 export const REVIEWER_SHARE = STAGE_TUNING_DEFAULTS.reviewerShare;
-/** Mirrors `build.ts`. */
-export const REVIEWER_FLOOR_USD = 1.00;
+/**
+ * NOT mirrored: imported from `build/caps.ts` (gh #307). `caps.ts` imports only
+ * two schema leaves, so the hook's hot path stays cheap, and one definition of
+ * the floor cannot drift from itself.
+ */
+export { REVIEWER_FLOOR_USD };
 /** Mirrors `build/caps.ts` (gh #277). */
 export const STORY_CAP_MULTIPLIER = STAGE_TUNING_DEFAULTS.storyCapMultiplier;
 /** Mirrors `build/caps.ts` (gh #277). */

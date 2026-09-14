@@ -3,7 +3,7 @@
  * derived from.
  *
  * One place, because the arithmetic here has a MIRROR: `budget/remainingWork.ts`
- * restates `MAX_ATTEMPTS`, `REVIEWER_SHARE`, `REVIEWER_FLOOR_USD` and
+ * restates `MAX_ATTEMPTS`, `REVIEWER_SHARE` and
  * `developerPriceDivisor` on the budget-gate hook's hot path (so the hook does
  * not drag `spawnAgent` in), and `test/remaining-work.test.ts` pins the two
  * copies to each other. A ceiling derived twice in two files is how the brake and
@@ -44,8 +44,16 @@ export const REVIEWER_SHARE = STAGE_TUNING_DEFAULTS.reviewerShare;
  * strict "every worst-case cap sums inside the stage ceiling" arithmetic below:
  * the worst case only materialises when reviewers keep asking for changes, and
  * `budget.yml`'s own gate is what actually stops a stage that runs out.
+ *
+ * $2.00 since gh #307 (owner decision). $1.00 had been chosen because it looked
+ * reasonable, and it sat BELOW the reviews that finish: across 44 measured
+ * reviewer rows the most a completed review cost was $1.02, and a 3-story run
+ * priced $8–$9 put every reviewer on the $1.00 floor, one of which died with
+ * `Reached maximum budget ($1)` before reading the diff. The accepted
+ * consequence: `reviewerUnderfunded` (gh #289) now refuses a review when the
+ * stage has less than $2.00 left.
  */
-export const REVIEWER_FLOOR_USD = 1.00;
+export const REVIEWER_FLOOR_USD = 2.00;
 
 /**
  * What a story's PLANNED price is multiplied by to get the developer's ceiling
@@ -100,7 +108,7 @@ export const STORY_CAP_MULTIPLIER = STAGE_TUNING_DEFAULTS.storyCapMultiplier;
  *
  * A multiplier alone does not save a story the planner priced at a few dimes:
  * `3 x $0.40` is still a turn that dies before it has read the repo. $4.00 is a
- * deliberately small multiple of the reviewer's own $1.00 floor, and the
+ * deliberately small multiple of the reviewer's own floor, and the
  * justification is the asymmetry between the two roles: the reviewer reads one
  * diff, while the developer reads the repo, edits it, runs the story's DoD —
  * which is a whole test suite, minutes of it on a real repo — and commits.

@@ -128,7 +128,7 @@ the number of stories in the seed, off the same arithmetic the run uses.
 
 - **Budget (patch for #244/#289 — delete when closed):** a feature run at `--budget 60`
   gives Build $10.80 per attempt, and a story's developer share of that is what one turn
-  may spend; a reviewer needs $1.00 to read a diff. Pick a budget where the printed
+  may spend; a reviewer needs $2.00 to read a diff. Pick a budget where the printed
   per-story developer cap covers the LARGEST story, and say the figures to the person —
   never a bare number.
 - Print the split in your report, then the budget you chose and why.
