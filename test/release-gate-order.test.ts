@@ -503,11 +503,13 @@ describe("a released CHANGELOG section may not be edited (#200)", () => {
  * marker has to be there from before the first edit to after the tag push, and gone on EVERY
  * exit path — a marker left behind by a red gate would freeze merges until a human noticed.
  */
+/** What the release marker said while a gate ran (#299) — empty when no gate ever saw one. */
+const seenByGates = (sb: Sandbox): string => {
+  try { return readFileSync(`${sb.gateLog}.marker`, "utf8"); } catch { return ""; }
+};
+
 describe("release.sh writes a .RELEASE-IN-PROGRESS marker for its whole span, and removes it on every exit (#299)", () => {
   const marker = (sb: Sandbox) => join(sb.main, ".RELEASE-IN-PROGRESS");
-  const seenByGates = (sb: Sandbox): string => {
-    try { return readFileSync(`${sb.gateLog}.marker`, "utf8"); } catch { return ""; }
-  };
 
   test("green path: the gates ran under the marker, and it is gone once the tag is pushed", () => {
     const sb = sandbox();
@@ -597,7 +599,7 @@ describe("release.sh waits on a running merge wave before it touches the tree (#
     expect(originTags(sb)).toEqual([]);
   }
 
-  type Live = { done: Promise<Result>; stderrSoFar: () => string };
+  type Live = { done: Promise<Result>; stderrSoFar: () => string; kill: () => void };
   function runAsync(sb: Sandbox, script: string, args: string[], env: Record<string, string> = {}): Live {
     let stdout = "";
     let stderr = "";
@@ -610,8 +612,29 @@ describe("release.sh waits on a running merge wave before it touches the tree (#
     const done = new Promise<Result>((resolve) => {
       child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
     });
-    return { done, stderrSoFar: () => stderr };
+    return { done, stderrSoFar: () => stderr, kill: () => { child.kill("SIGTERM"); } };
   }
+
+  /**
+   * A stand-in `mv` that plants a wave lock the instant the release marker lands — the ONE
+   * `mv` in release.sh is the marker's (`grep -n '\\bmv\\b' scripts/*.sh`), so this is the gap
+   * interleaving constructed deterministically: the lock exists before release.sh's very next
+   * line runs, with no sleep on either side. The lock is `merge-wave.sh`'s own shape.
+   */
+  const MV_STUB = `#!/usr/bin/env bash
+/bin/mv "$@"; rc=$?
+for last; do :; done
+case "$last" in *.RELEASE-IN-PROGRESS)
+  if [ -n "\${PLANT_WAVE_LOCK:-}" ] && [ ! -d "$PLANT_WAVE_LOCK" ]; then
+    mkdir -p "$PLANT_WAVE_LOCK"
+    printf 'token-of-another-invocation\n' > "$PLANT_WAVE_LOCK/token"
+    printf 'wave-in-the-gap\n' > "$PLANT_WAVE_LOCK/branch"
+    printf 'merge\n' > "$PLANT_WAVE_LOCK/phase"
+    printf '%s\n' "$PLANT_WAVE_LOCK_OWNER" > "$PLANT_WAVE_LOCK/owner"
+  fi;;
+esac
+exit $rc
+`;
 
   async function waitUntil(predicate: () => boolean, budgetMs: number, what: string): Promise<void> {
     const until = Date.now() + budgetMs;
@@ -664,6 +687,40 @@ describe("release.sh waits on a running merge wave before it touches the tree (#
     expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
     expect(originTags(sb)).toEqual([`v${V}`]);
     expect(existsSync(releaseMarker(sb))).toBe(false);
+  });
+
+  test("precedence, not courtesy: a wave that takes the lock in the gap right after the marker lands finds the marker KEPT — the release waits it out and a wave arriving meanwhile yields (exit 13)", async () => {
+    const sb = sandbox();
+    writeFileSync(join(sb.bin, "mv"), MV_STUB);
+    chmodSync(join(sb.bin, "mv"), 0o755);
+    const before = git(sb.main, "rev-parse", "HEAD");
+    const live = runAsync(sb, "release.sh", [V, "--tag", "beta"], {
+      MW_LOCK_WAIT_S: "60", MW_LOCK_POLL_S: "1",
+      PLANT_WAVE_LOCK: lockDir(sb), PLANT_WAVE_LOCK_OWNER: `${process.pid} ${hostname()} ${Math.floor(Date.now() / 1000)}`,
+    });
+    try {
+      await waitUntil(() => live.stderrSoFar().includes("waiting for a merge wave"), 30_000, "the release to queue behind the gap wave");
+      // The symmetric hand-back — both sides yielding on the same cadence — is an hour of
+      // ping-pong ending in 13 and 14. The doctrine is the wave's own refusal line: merges wait
+      // for a release. So the marker STAYS while the release waits for the lock to clear.
+      expect(existsSync(releaseMarker(sb)), "release.sh handed its marker back instead of keeping precedence").toBe(true);
+      expect(existsSync(lockDir(sb))).toBe(true);
+      expectUntouched(sb, before);
+      // A real wave arriving now sees the marker first and yields — the release is ahead of it.
+      const env = { ...process.env, TMPDIR: sb.dir, MW_LOCK_WAIT_S: "1", MW_LOCK_POLL_S: "1" };
+      const wave = spawnSync("bash", [MERGE_WAVE, "some-branch", "merge some-branch"], { cwd: sb.main, encoding: "utf8", env });
+      expect(wave.status, `${wave.stdout}\n${wave.stderr}`).toBe(13);
+      expect(wave.stdout).toContain("FAIL release in flight");
+      expect(existsSync(releaseMarker(sb))).toBe(true);   // still there after the wave looked
+      rmSync(lockDir(sb), { recursive: true });            // the gap wave yielding, by hand
+      const r = await live.done;
+      expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+      expect(originTags(sb)).toEqual([`v${V}`]);
+      expect(seenByGates(sb)).toContain(`version: ${V}`);  // and the gates ran under that same marker
+      expect(existsSync(releaseMarker(sb))).toBe(false);
+    } finally {
+      live.kill();
+    }
   });
 
   test("the other direction still holds, end to end: a REAL wave waits on a REAL running release (exit 13) and --status names it", async () => {

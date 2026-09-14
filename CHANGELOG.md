@@ -37,8 +37,16 @@
   COMMIT and leaves the three edits dirty in the shared checkout, with nothing to roll them back.
   `release.sh` now WAITS on a running wave's lock before it writes its marker and before its
   first edit — same `MW_LOCK_*` knobs, same dead-owner rule (a dead wave's lock is broken open
-  and said so on stderr), same hand-back when a wave takes the lock in the gap — and gives up
-  with **exit 14**, having edited nothing: 14 rather than 1 because there is nothing to undo, and
+  and said so on stderr) — and gives up with **exit 14**, having edited nothing. The precedence
+  is fixed rather than symmetric (peer review of this change): a wave holding the lock finishes,
+  never preempted; once the marker is up the release is ahead, a wave that took the lock in the
+  gap hands it back as it already did, and the release waits for the lock to clear WITHOUT
+  handing back its marker — two sides yielding on the same poll cadence would ping-pong for the
+  whole budget and end in 13 and 14; pinned with the gap interleaving built deterministically (a
+  stand-in `mv` plants the lock the instant the marker lands). Which makes the wave's dead-owner
+  check the only thing that ever clears a marker a SIGKILL or a cut session orphaned (the traps
+  cover INT/TERM), so it now says so on stderr, naming the marker and the pid, and that sentence
+  is pinned. The code: 14 rather than 1 because there is nothing to undo, and
   not the wave's own 6 because the two scripts' codes are read in the same logs, so the next
   number after the wave's 13 keeps a bare "exit 14" unambiguous. Pinned in both directions with
   the real scripts: a real wave against a real running release exits 13, a real release against a

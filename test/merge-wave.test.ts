@@ -1789,7 +1789,7 @@ describe("a wave WAITS on a release in flight, the way it waits on its own lock 
     expect(existsSync(lockDir(sb))).toBe(false);             // and no lock was left behind
   });
 
-  test("a marker whose release process is dead is broken open, and the merge proceeds", async () => {
+  test("a marker whose release process is dead is broken open, SAID SO, and the merge proceeds — the only recovery from a SIGKILLed release (#304)", async () => {
     const sb = sandbox();
     plantRelease(sb, 999999);                           // a pid nothing on this host is running
     const run = invoke(sb, "wave-a", { MW_LOCK_WAIT_S: "5", MW_LOCK_POLL_S: "1" });
@@ -1797,6 +1797,11 @@ describe("a wave WAITS on a release in flight, the way it waits on its own lock 
     expectExit(run, r, 0);
     expect(r.stdout).toContain("pushed");
     expect(existsSync(releaseMarkerPath(sb))).toBe(false);
+    // release.sh's traps cover INT/TERM only; a SIGKILL or a cut session leaves the marker with
+    // no owner to remove it, and since #304 the release never hands its marker back — so this
+    // dead-owner check is the ONE path that ever clears an orphaned marker, and it says so in
+    // the sentence a human will grep for, naming the marker and the pid.
+    expect(r.stderr).toContain(`merge-wave: broke open ${releaseMarkerPath(sb)} — the release that held it (pid 999999) is dead`);
   });
 
   test("when the release finishes, the queued wave goes on to merge", async () => {

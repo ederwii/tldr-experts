@@ -54,7 +54,13 @@ sells: measured over asserted, refused over guessed, named over silent.
   release, or `idle` — "is it alive?" is that command, never `ps` plus a marker's mtime.
   And the release waits on the WAVE (#304): `scripts/release.sh` polls `merge-wave.lock` with
   the same knobs and dead-owner rule BEFORE it writes its marker or edits a file, and gives up
-  with **exit 14** having edited nothing — so the freeze is mutual, not one-directional.
+  with **exit 14** having edited nothing — so the freeze is mutual, not one-directional. The
+  precedence is fixed, not symmetric: a wave that already holds the lock finishes, never
+  preempted; once the release's marker is up, a wave yields to it (a wave that took the lock in
+  the gap hands it back, as it already did) and the release waits for the lock to clear, never
+  handing back a marker it wrote — two sides yielding on the same cadence would ping-pong for
+  the whole budget and end in 13 and 14. An orphaned marker (SIGKILL, cut session — the traps
+  cover INT/TERM only) is cleared by the wave's dead-owner rule alone, and the wave says so.
 - **A branch merges only with a review record on it: `.review/<branch>.md` (#192).** A fresh
   reviewer that did not write the code reads the branch diff BEFORE the wave, and the record is
   where that verdict lives — a file on the branch, so it lands in the merge commit's tree and
@@ -188,7 +194,8 @@ Full checklist: `docs/RELEASING.md`. The shape, so you recognize the moving part
    the repo root (gitignored; removed on every exit path), and every `scripts/merge-wave.sh`
    waits on it (§2) — merges are frozen while a release is in flight, mechanically (#299).
    Before any of that it waits on a running wave's lock the same way and refuses with exit 14
-   when it gives up, having edited nothing (#304) — so a release started mid-wave queues.
+   when it gives up, having edited nothing (#304) — so a release started mid-wave queues behind
+   the wave, and a wave started after the marker queues behind the release (§2 has the order).
 3. The tag triggers `publish.yml` (npm trusted publishing). Watch it (§4 rules), then verify
    `npm view tldr-experts dist-tags` and align any global install. Optionally
    `gh release create v<V> --notes-file <section>` from the CHANGELOG section.

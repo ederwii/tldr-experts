@@ -41,7 +41,8 @@ trap 'rm -f "$MARKER" "$MARKER.tmp.$$"; exit 143' TERM
 WAIT_S="${MW_LOCK_WAIT_S:-3600}"; POLL_S="${MW_LOCK_POLL_S:-2}"   # MW_LOCK_STALE_S: mw_dead_owner
 waited=0; noted=0
 wave_desc() { printf 'branch %s, pid %s, since %s' "$(cat "$MW_LOCK/branch" 2>/dev/null || echo '?')" "${1%% *}" "$(cat "$MW_LOCK/started" 2>/dev/null || echo '?')"; }
-while :; do
+wait_for_wave() {
+  local o
   while [ -d "$MW_LOCK" ]; do
     o="$(mw_owner_of)"
     if mw_dead_owner "$o"; then
@@ -61,23 +62,29 @@ while :; do
     fi
     sleep "$POLL_S"; waited=$(( waited + POLL_S ))
   done
-  # Written whole and MOVED into place, like the wave's marker: a reader must never catch it
-  # without the `pid:` line that tells them whether the release is still alive.
-  {
-    echo "RELEASE IN PROGRESS — scripts/release.sh $V is running in this checkout; merges wait on this file (docs/RELEASING.md)."
-    echo "version: $V"
-    echo "pid:     $$"
-    echo "host:    $(hostname)"
-    echo "started: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-    echo "epoch:   $(date +%s)"
-  } > "$MARKER.tmp.$$"
-  mv -f "$MARKER.tmp.$$" "$MARKER"
-  # A wave that took its lock in the gap between the last poll and the marker: hand the marker
-  # back and queue again, rather than release under a wave because the check ran a beat early.
-  # (The wave does the same in the other direction after its mkdir.)
-  if [ -d "$MW_LOCK" ] && ! mw_dead_owner "$(mw_owner_of)"; then rm -f "$MARKER"; continue; fi
-  break
-done
+  return 0
+}
+# 1. A wave that already holds the lock finishes — it is never preempted.
+wait_for_wave
+# 2. Written whole and MOVED into place, like the wave's marker: a reader must never catch it
+#    without the `pid:` line that tells them whether the release is still alive.
+{
+  echo "RELEASE IN PROGRESS — scripts/release.sh $V is running in this checkout; merges wait on this file (docs/RELEASING.md)."
+  echo "version: $V"
+  echo "pid:     $$"
+  echo "host:    $(hostname)"
+  echo "started: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "epoch:   $(date +%s)"
+} > "$MARKER.tmp.$$"
+mv -f "$MARKER.tmp.$$" "$MARKER"
+# 3. A wave that took its lock in the gap between the last poll and the marker: the marker
+#    STAYS and this run waits for the lock to clear — the wave sees the marker and yields (it
+#    hands its lock back after its mkdir, merge-wave.sh). Precedence, not courtesy: if both
+#    sides yielded on the same cadence, the interleaving where each sees the other's token
+#    right after publishing its own is an hour of ping-pong ending in 13 and 14. The doctrine
+#    is the wave's own refusal line — merges wait for a release, they do not race it — so a
+#    release never hands back a marker it wrote. Same budget: $waited carries over.
+wait_for_wave
 # `sed -i` is not portable — BSD demands a suffix argument, GNU must not have one — and this
 # script has to run on the maintainer's Mac and be testable on ubuntu CI. Rewrite through a
 # temp file OUTSIDE the tree and `cat` it back: the file keeps its inode and mode, and no

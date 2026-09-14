@@ -175,8 +175,14 @@ wait_for_release() {
   while r="$(mw_release_owner_of)" && [ -n "$r" ]; do
     if mw_dead_owner "$r"; then
       # Same beat as the lock below: only remove a marker whose owner line has not changed.
+      # Said out loud (#304): release.sh's traps cover INT/TERM only, and since #304 it never
+      # hands its marker back, so this is the ONE path that ever clears a marker a SIGKILL or a
+      # cut session orphaned — a human reading the log must be able to see it happened.
       sleep 1; waited=$(( waited + 1 ))
-      if [ "$(mw_release_owner_of)" = "$r" ]; then rm -f "$(mw_release_marker_path)"; fi
+      if [ "$(mw_release_owner_of)" = "$r" ]; then
+        rm -f "$(mw_release_marker_path)"
+        echo "merge-wave: broke open $(mw_release_marker_path) — the release that held it (pid ${r%% *}) is dead" >&2
+      fi
       continue
     fi
     if [ "$waited" -ge "$WAIT_S" ]; then
