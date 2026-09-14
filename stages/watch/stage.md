@@ -56,7 +56,8 @@ these H2 sections, in order:
 ## Rules
 
 - Every list item under Signal / Where / Healthy baseline / Looks broken when is ONE
-  line and ENDS with a `[src: …]` token. An item without one is refused.
+  line and ENDS with a `[src: …]` token. An item without one is refused — a table, queue,
+  dashboard or console included: cite the file that defines it (**Feature** above shows one).
 - Source grammar (exact): `[src: <one or more sources separated by "; ">]`, a source being
   `<repo>:<path>:<line>` (or `:<start>-<end>`) · `F<n>` · `https://…` ·
   `$ <command> → exit <n>` · `absent:<path>`. Never a whole file, never a comma list.

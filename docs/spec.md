@@ -2029,7 +2029,11 @@ traces | where message == "leaderboard.refreshed" | summarize count() by bin(tim
 with a §2.8 `[src: …]` token, validated by the **same parser** `claim-sources` uses — a card checked by a second reader
 would drift from the rule the hook enforces, and the drift would show up as a card that passes `watch check` and is
 denied on write. Three source kinds carry the weight here: `<repo>:<path>:<line>` for a line in the code that was
-actually built, `F<n>` for a recorded fact, and `absent:<path>` for "the code emits nothing here". `[assumption]` — a
+actually built, `F<n>` for a recorded fact, and `absent:<path>` for "the code emits nothing here". **A place is cited
+like a line (gh #301):** a `## Where` item naming a table, queue, dashboard or console is not a line of code, so it
+cites the file that DEFINES it — the migration, model or config, `<repo>:<path>:<line>` — or the `F<n>` fact that names
+it. Measured on two field runs, that was the one case the rule left unsaid, and the one both runs failed on twice; the
+writer's brief now shows one such example and the refusal names the cure in the same sentence. `[assumption]` — a
 `$ <cmd> → exit <n>` source is legal **anywhere on a card**, unlike in a handoff (§2.8 confines it to the Evidence
 ledger): a card has no claims/ledger split, every section on it is evidence about a running system, and "the baseline is
 40/hour `[src: $ … → exit 0]`" is the most honest form that claim takes.
@@ -2066,7 +2070,8 @@ Query: none — no log line, metric or span is emitted on this path [src: absent
 
 — that is, `Query: none — <reason> [src: …]`, where the reason ends with a §2.8 token parsed and resolved by the **same
 reader** every other item on the card meets: an unsourced `none` is a `shape` issue with the card's ordinary
-`no [src: …] token — every item on a card is sourced` message, and a token that does not resolve is a `source` issue.
+`no [src: …] token — every item on a card is sourced; …` message (the cure half, gh #301, is the same on both), and a
+token that does not resolve is a `source` issue.
 A line rather than a fence tagged `none` because the `[src: …]` grammar is line-terminal — inside a fence the reason
 could only be sourced by a second reader of that grammar, and the card has exactly one.
 
@@ -4308,6 +4313,16 @@ them does not parse, and the finding it belongs to is dropped rather than half-r
 4. **`05-watch/handoff.md`, written deterministically** — Findings are one line per card with its status, each sourced
    `[src: 05-watch/watchers/<f>.md:1]`. The cards are the model's work; the handoff is arithmetic over them, because a
    model asked to summarise its own cards is free to describe a `draft` one as coverage.
+
+**A retry is a correction pass, not a fresh start (gh #301).** A card that fails step 3 fails the stage, and
+`tldrx next` — by hand or from `run auto --retry-failed` — runs it again. Each feature's prompt then carries a
+`## Previous attempt` section (the same heading and the same `### Previous attempt — edit, do not restart` H3 as §5's
+one-agent path, under the same 32 KB cap): the card on disk, re-read by the parser that refused it, each refused line
+listed as `L<n> <section>: <message>` with the line quoted as written, and the whole card inlined to be edited. The card
+is re-validated at prompt time rather than the recorded error replayed, so the marks are true of the file as it is now.
+Measured before this existed: the refusal reached the operator's terminal and never the writer, and attempt 2 on both
+field runs moved the refusal to a different line — what an independent re-generation does. A first attempt has no card
+on disk and gets no section, so its prompt is byte-identical to before.
 
 `--prepare`/`--commit` is **per feature**: each gets its own `.agent/<stage>/<feature>/{prompt.md,pending.json,result.json}`,
 so the host session dispatches N sub-agents with the same isolation the headless path gives them. `[assumption]` — the

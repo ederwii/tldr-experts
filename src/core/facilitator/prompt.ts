@@ -212,6 +212,18 @@ export interface PromptParts {
 
 export const INPUTS_HEADING = "Inputs";
 export const PREVIOUS_ATTEMPT_HEADING = "Previous attempt";
+/**
+ * The H3 under `## Previous attempt` that carries the refused work itself — the
+ * one-agent path's declared outputs (`runNext.ts`) and a Watch feature's refused
+ * card (`watch/watchPrompt.ts`, gh #301) both sit under it, so it is named once.
+ */
+export const PREVIOUS_ATTEMPT_EDIT_HEADING = "Previous attempt — edit, do not restart";
+/**
+ * How much refused work one retry prompt may carry (spec §5, "Attempt reuse"). Shared
+ * across a stage's declared outputs, spent in declared order; a Watch card is one file
+ * and meets the same ceiling.
+ */
+export const MAX_PREVIOUS_ATTEMPT_BYTES = 32 * 1024;
 export { DISPATCH_NOTES_HEADING, PROJECT_SKILLS_HEADING };
 
 export function buildPrompt(parts: PromptParts): string {

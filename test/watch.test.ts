@@ -20,17 +20,21 @@ import { executorFor, EXECUTORS, type ExecutorContext } from "../src/core/facili
 import { loadStageSpec } from "../src/core/facilitator/stageSpec.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { validateHandoff } from "../src/core/text/handoff.ts";
+import { parseSrcToken } from "../src/core/text/srcToken.ts";
+import { PREVIOUS_ATTEMPT_HEADING } from "../src/core/facilitator/prompt.ts";
 import { clearSrcCaches } from "../src/core/text/srcToken.ts";
 import { loadWorkspace, toSrcContext } from "../src/hooks/lib/workspace.ts";
 import {
-  checkCard, collectFeatures, loadCards, parseWatcherCard, queryBlock, renderWatchFacts, renderWatchList,
-  setWatcherStatus, watcherRelPath, WATCH_PHASE,
+  checkCard, collectFeatures, featureBrief, loadCards, NO_SRC_TOKEN_ISSUE, parseWatcherCard, queryBlock,
+  renderWatchFacts, renderWatchList, setWatcherStatus, watcherRelPath, WATCH_PHASE,
 } from "../src/core/watch/index.ts";
 import type { Fact } from "../src/core/facts/Fact.ts";
 import { makeFacilitatorWorkspace, type FacilitatorWorkspace } from "./fixtures/facilitator/workspace.ts";
 
 const ORIGINAL_PATH = process.env.PATH ?? "";
-const FAKE_KEYS = ["FAKE_CLAUDE_RUNDIR", "FAKE_CLAUDE_OUTPUTS", "FAKE_CLAUDE_COST", "FAKE_CLAUDE_IS_ERROR"] as const;
+const FAKE_KEYS = [
+  "FAKE_CLAUDE_RUNDIR", "FAKE_CLAUDE_OUTPUTS", "FAKE_CLAUDE_COST", "FAKE_CLAUDE_IS_ERROR", "FAKE_CLAUDE_PROMPT_OUT",
+] as const;
 
 let open: FacilitatorWorkspace[] = [];
 
@@ -588,8 +592,9 @@ describe("the watcher card", () => {
       .replace(QUERY_FENCE, "Query: none — nothing in this path emits anything");
     const parsed = parseWatcherCard(text, { root: "/nowhere", repos: new Map(), commands: new Set() });
 
+    // The bullets' sentence, verbatim — the rule half; #301 appended the cure to both.
     expect(parsed.issues.some((i) => i.path === "Query"
-      && i.message === "no `[src: …]` token — every item on a card is sourced")).toBe(true);
+      && i.message.startsWith("no `[src: …]` token — every item on a card is sourced"))).toBe(true);
   });
 
   test("setWatcherStatus rewrites one line and keeps the rest byte-identical", () => {
@@ -692,5 +697,104 @@ describe("renderWatchFacts skips superseded facts", () => {
   test("when every matching fact is superseded, the section says there is none", () => {
     const rendered = renderWatchFacts([deployFact("F001", "Deploys are manual.", "F002")], ["api"]);
     expect(rendered).toContain("No live fact is tagged");
+  });
+});
+
+// --- gh #301: a refused card comes back to its writer, marked ---------------
+//
+// Measured on two field runs (2026-09-13/14): a `## Where` item naming a TABLE
+// carried no `[src: …]`, the stage failed on it, and the retry — a fresh prompt
+// with no memory of the card — moved the refusal to a different line instead of
+// curing it. Twice per run, on both workspaces; a person hand-recorded the stage.
+
+describe("a retry after a refused card repairs it rather than restarting (#301)", () => {
+  const SOURCED_WHERE = "- Application Insights `traces` [src: api:src/Leaderboard.cs:3]";
+  /** What both field runs wrote: a place that is not a file, and no citation at all. */
+  const UNSOURCED_WHERE = "- PostgreSQL `leaderboard_refreshes` table, read over a database connection";
+  const REL = watcherRelPath("leaderboard");
+
+  function unsourcedWhereCard(): string {
+    const text = card("leaderboard", ["S1", "S2"], LIVE_SIGNAL);
+    expect(text).toContain(SOURCED_WHERE);
+    return text.replace(SOURCED_WHERE, UNSOURCED_WHERE);
+  }
+
+  test("the refusal names the line, the rule, and the cure for a location that is not a file", async () => {
+    const { ws, ctx } = fixture();
+    fakeClaude(ws, { [REL]: unsourcedWhereCard() });
+
+    const outcome = await watchExecutor(ctx);
+
+    expect(outcome.ok).toBe(false);
+    // Guard (passed before #301): the line and the rule.
+    expect(outcome.error ?? "").toContain("L17 Where: no `[src: …]` token");
+    // #301: the cure — WHAT to cite when the place named is a table, queue or dashboard.
+    expect(outcome.error ?? "").toContain("cite the file that defines it");
+  });
+
+  test("the headless retry is handed the refused card, its refused line marked with the refusal", async () => {
+    const { ws, ctx } = fixture();
+    fakeClaude(ws, { [REL]: unsourcedWhereCard() });
+    const first = await watchExecutor(ctx);
+    expect(first.ok).toBe(false);
+
+    // Attempt 2, headless — the same call `run auto --retry-failed` and a second
+    // `tldrx next` make. The fake records the prompt it was handed.
+    const promptOut = join(ws.root, "attempt-2-prompt.md");
+    process.env.FAKE_CLAUDE_PROMPT_OUT = promptOut;
+    await watchExecutor(ctx);
+    const prompt = readFileSync(promptOut, "utf8");
+
+    expect(prompt).toContain(`## ${PREVIOUS_ATTEMPT_HEADING}`);
+    expect(prompt).toContain(`#### \`${REL}\``);
+    // The refused line, verbatim, marked with its line number and the validator's own sentence.
+    expect(prompt).toContain(`L17 Where: ${NO_SRC_TOKEN_ISSUE}`);
+    expect(prompt).toContain(`> ${UNSOURCED_WHERE}`);
+    // The rest of the card is there to be KEPT, not rewritten.
+    expect(prompt).toContain(LIVE_SIGNAL);
+  });
+
+  test("the prepared bundle for the retry carries the same section", async () => {
+    const { ws, ctx } = fixture();
+    fakeClaude(ws, { [REL]: unsourcedWhereCard() });
+    expect((await watchExecutor(ctx)).ok).toBe(false);
+
+    process.env.PATH = "";
+    await watchExecutor({ ...ctx, mode: "prepare" });
+    const prompt = readFileSync(join(ws.runDir, ".agent", "watch", "leaderboard", "prompt.md"), "utf8");
+
+    expect(prompt).toContain(`## ${PREVIOUS_ATTEMPT_HEADING}`);
+    expect(prompt).toContain(UNSOURCED_WHERE);
+    expect(prompt).toContain(`L17 Where: ${NO_SRC_TOKEN_ISSUE}`);
+  });
+
+  test("a first attempt carries no previous-attempt section at all", async () => {
+    const { ws, ctx } = fixture();
+    fakeClaude(ws, { [REL]: card("leaderboard", ["S1", "S2"], LIVE_SIGNAL) });
+    const promptOut = join(ws.root, "attempt-1-prompt.md");
+    process.env.FAKE_CLAUDE_PROMPT_OUT = promptOut;
+
+    expect((await watchExecutor(ctx)).ok).toBe(true);
+
+    expect(readFileSync(promptOut, "utf8")).not.toContain(`## ${PREVIOUS_ATTEMPT_HEADING}`);
+  });
+
+  test("the writer's brief shows ONE non-file Where example whose citation parses, in the refusal's words", () => {
+    const { ws } = fixture();
+    const feature = collectFeatures(ws.runDir)[0];
+    expect(feature).toBeDefined();
+    if (feature === undefined) return;
+
+    const brief = featureBrief(feature);
+
+    // The same sentence the validator's refusal carries — one derivation (§7).
+    expect(brief).toContain("cite the file that defines it");
+    expect(NO_SRC_TOKEN_ISSUE).toContain("cite the file that defines it");
+    // Exactly one example item names a table/queue/dashboard, and its token is a `file` source.
+    const examples = brief.split("\n").filter((line) => /^\s+- .*\b(table|queue|dashboard)\b.*\[src: /.test(line));
+    expect(examples).toHaveLength(1);
+    const token = parseSrcToken(examples[0] ?? "");
+    expect(token?.errors ?? ["no token"]).toEqual([]);
+    expect(token?.refs.map((ref) => ref.kind)).toEqual(["file"]);
   });
 });

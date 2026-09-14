@@ -13,12 +13,16 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
 import { isLive, type Fact } from "../facts/Fact.ts";
-import type { PromptInput } from "../facilitator/prompt.ts";
+import {
+  fenceFor, MAX_PREVIOUS_ATTEMPT_BYTES, PREVIOUS_ATTEMPT_EDIT_HEADING, type PromptInput,
+} from "../facilitator/prompt.ts";
+import type { SrcContext } from "../text/srcToken.ts";
 import { MAX_STAGE_INPUTS } from "../run/workflowPreset.ts";
 import { renderDiffs, type RepoDiff } from "./epicDiff.ts";
 import { EPICS_DIR } from "../plan/validatePlan.ts";
 import { PLAN_PHASE, type Feature } from "./features.ts";
 import { WATCHERS_DIR, WATCH_PHASE, WATCHER_SECTIONS } from "./Watcher.ts";
+import { describeWatcherIssue, NON_FILE_SOURCE_CURE, parseWatcherCard } from "./watcherFile.ts";
 
 /**
  * The `area:` values (§2.5) a Watch prompt draws facts from. A fact outside them is
@@ -128,6 +132,15 @@ export function featureBrief(feature: Feature): string {
     "- Every list item under **Signal**, **Where**, **Healthy baseline** and **Looks broken when**",
     "  ends with a `[src: …]` token: `<repo>:<path>:<line>` for a line in the built code, `F<n>` for",
     "  a recorded fact, or `absent:<what you looked at>` when the code emits nothing.",
+    // gh #301: the one case both field runs got wrong — a place that is not a line
+    // of code — with the same sentence the validator's refusal carries, and ONE
+    // worked example whose token is a real `file` source.
+    `- **Where** names a PLACE, and a place is cited like a line: ${NON_FILE_SOURCE_CURE}.`,
+    "  An item with no token at all is refused, however obvious the place. One example, for a table",
+    "  that no fact and no dashboard names yet:",
+    "",
+    "      - PostgreSQL `leaderboard_refreshes` table, read with `psql` [src: api:db/migrations/0007_leaderboard_refreshes.sql:1]",
+    "",
     "- **Signal** names the log line, metric or event that is IN the diff above, at the line it is on.",
     "  If nothing is emitted, say so with an `absent:` source and say what to instrument. Do not",
     "  describe a signal that would be nice to have as though it exists.",
@@ -157,4 +170,84 @@ export function featureBrief(feature: Feature): string {
     "Leave `status: draft`. The framework sets it: a card is stamped `verified` only when nothing",
     "under **Signal** cites `absent:`. Writing `verified` yourself changes nothing and will be overwritten.",
   ].join("\n");
+}
+
+export interface PreviousCardOptions {
+  readonly runDir: string;
+  readonly feature: Feature;
+  /** The SAME context the executor validates with — a citation resolves here iff it resolves there. */
+  readonly ctx: SrcContext;
+  readonly maxBytes?: number;
+}
+
+/**
+ * `## Previous attempt` for ONE feature's retry (gh #301): the card the last
+ * attempt left on disk, re-read by the parser that refused it, its refused lines
+ * quoted with their line numbers and the validator's own sentence, then the whole
+ * card under an instruction to EDIT it.
+ *
+ * Measured before this existed: a validation failure fails the stage, the retry
+ * re-runs `tldrx next` from scratch, and `featurePrompt` was assembled from the
+ * same inputs every time — the refusal reached the operator's terminal and never
+ * the writer. Attempt 2 on both field runs moved the refusal to a different line,
+ * which is what an independent re-generation does; a correction pass needs the
+ * draft and the marks. The card is the evidence, not `run.yml`: it is re-validated
+ * HERE rather than the recorded error being replayed, so the marks are true of
+ * the file as it is now — a card a person has since hand-fixed shows no marks.
+ *
+ * "" when no card is on disk: a first attempt has no previous attempt, and
+ * `buildPrompt` emits no heading for an empty section.
+ */
+export function previousCard(options: PreviousCardOptions): string {
+  const rel = watcherRelPath(options.feature.id);
+  const abs = join(options.runDir, rel);
+  if (!existsSync(abs)) return "";
+  const text = readFileSync(abs, "utf8");
+  if (text.trim() === "") return "";
+
+  const card = parseWatcherCard(text, options.ctx, options.feature.id);
+  const lines = text.split("\n");
+  const out: string[] = [];
+  if (card.ok) {
+    out.push(
+      `The previous attempt at this stage wrote \`${rel}\` and it validates. The stage is being run`,
+      "again for another reason; keep this card as it is unless the evidence above contradicts it.",
+    );
+  } else {
+    out.push(
+      `The previous attempt at this stage wrote \`${rel}\` and it was REFUSED — `
+        + `${String(card.issues.length)} line(s) do not validate. Each one, with the line as written:`,
+      "",
+    );
+    for (const issue of card.issues) {
+      out.push(`- ${describeWatcherIssue(issue)}`);
+      const quoted = issue.line > 0 ? lines[issue.line - 1] : undefined;
+      if (quoted !== undefined && quoted.trim() !== "") out.push(`  > ${quoted}`);
+    }
+    out.push("", "Fix what is described above. Everything else in this prompt still applies.");
+  }
+
+  out.push(
+    "",
+    `### ${PREVIOUS_ATTEMPT_EDIT_HEADING}`,
+    "",
+    "This card is on disk RIGHT NOW, exactly as the last attempt left it. It is the draft you are",
+    "being paid to fix, not history: keep every item that already carries a `[src: …]` token, cure",
+    "the lines marked above, and write the file back at the same path. Starting from a blank page",
+    "throws away paid-for work — and, measured, moves a refusal to a different line instead of",
+    "curing it.",
+    "",
+  );
+  const budget = options.maxBytes ?? MAX_PREVIOUS_ATTEMPT_BYTES;
+  const size = Buffer.byteLength(text, "utf8");
+  if (size > budget) {
+    out.push(
+      `_Not inlined (past the ${budget.toLocaleString("en-US")}-byte previous-attempt budget): `
+        + `${rel} (${size.toLocaleString("en-US")} B). It is on disk; read it before you rewrite it._`,
+    );
+  } else {
+    const fence = fenceFor(text);
+    out.push(`#### \`${rel}\``, "", fence, text.replace(/\n$/, ""), fence);
+  }
+  return out.join("\n");
 }

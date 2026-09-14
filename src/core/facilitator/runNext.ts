@@ -57,7 +57,10 @@ import {
   agentDir, evidencePath, expandAll, expandPatterns, missing, present, resolveDeclared, resolveMany,
   type PathContext,
 } from "./paths.ts";
-import { fenceFor, renderConventions, renderFacts, renderParts, stackExpertNames } from "./prompt.ts";
+import {
+  fenceFor, renderConventions, renderFacts, renderParts, stackExpertNames,
+  MAX_PREVIOUS_ATTEMPT_BYTES, PREVIOUS_ATTEMPT_EDIT_HEADING,
+} from "./prompt.ts";
 import { applyCheckContracts } from "./checkContracts.ts";
 import { describeDispatchNotes, loadDispatchNotes, type DispatchNotes } from "./dispatchNotes.ts";
 import {
@@ -2484,7 +2487,7 @@ export function assemblePrompt(
  * that does not fit is NAMED rather than silently dropped — the same rule the
  * declared inputs follow, for the same reason.
  */
-export const MAX_PREVIOUS_ATTEMPT_BYTES = 32 * 1024;
+export { MAX_PREVIOUS_ATTEMPT_BYTES };
 
 export interface PreviousAttemptOptions {
   /** The stage's declared outputs, already `{repo}`-expanded. */
@@ -2541,7 +2544,7 @@ function priorOutputs(options: PreviousAttemptOptions): readonly string[] {
 
   const out = [
     "",
-    "### Previous attempt — edit, do not restart",
+    `### ${PREVIOUS_ATTEMPT_EDIT_HEADING}`,
     "",
     "These files are on disk RIGHT NOW, exactly as the last attempt left them. They are",
     "not a suggestion and they are not history: they are the draft you are being paid to",
