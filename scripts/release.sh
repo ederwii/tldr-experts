@@ -7,11 +7,33 @@
 # npm untouched, so the worst state to recover from is one local commit — never a main
 # carrying a dated release commit with no tag behind it.
 # The tag push triggers .github/workflows/publish.yml (npm trusted publishing).
+# For its WHOLE span — first edit to tag push — it advertises itself as `.RELEASE-IN-PROGRESS`
+# at the repo root (#299): `scripts/merge-wave.sh` waits on that marker exactly as it waits on
+# its own lock, so "is a release in flight?" is a file and not a question. Removed on every
+# exit path, red gate and signal included: a marker left behind freezes merges for an hour.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 V="${1:?usage: scripts/release.sh <version> [--tag alpha|beta|stable]}"; TAG="alpha"
 [ "${2:-}" = "--tag" ] && TAG="${3:-alpha}"
 D=$(date -u +%F)
+# shellcheck source=scripts/merge-lock.sh
+. scripts/merge-lock.sh
+mw_lock_paths || { echo "release.sh: cannot resolve this repository's git dir — nothing released"; exit 1; }
+MARKER="$(mw_release_marker_path)"
+trap 'rm -f "$MARKER" "$MARKER.tmp.$$"' EXIT
+trap 'rm -f "$MARKER" "$MARKER.tmp.$$"; exit 130' INT
+trap 'rm -f "$MARKER" "$MARKER.tmp.$$"; exit 143' TERM
+# Written whole and MOVED into place, like the wave's marker: a reader must never catch it
+# without the `pid:` line that tells them whether the release is still alive.
+{
+  echo "RELEASE IN PROGRESS — scripts/release.sh $V is running in this checkout; merges wait on this file (docs/RELEASING.md)."
+  echo "version: $V"
+  echo "pid:     $$"
+  echo "host:    $(hostname)"
+  echo "started: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "epoch:   $(date +%s)"
+} > "$MARKER.tmp.$$"
+mv -f "$MARKER.tmp.$$" "$MARKER"
 # `sed -i` is not portable — BSD demands a suffix argument, GNU must not have one — and this
 # script has to run on the maintainer's Mac and be testable on ubuntu CI. Rewrite through a
 # temp file OUTSIDE the tree and `cat` it back: the file keeps its inode and mode, and no

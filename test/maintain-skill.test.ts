@@ -291,3 +291,60 @@ describe("the review record's `against:` names the CODE head, in both documents"
     ).toBe(true);
   });
 });
+
+/**
+ * #299 — a session that is NOT the driver reads the same rules the driver does.
+ *
+ * Measured over one unattended day with two sessions (2026-09-13/14): every failure between
+ * them was protocol by chat — two unreleased headings for one next version, a file set
+ * exchanged as prose (naming a directory that did not exist), a wave's liveness inspected by
+ * `ps`, a release's existence asked by message four times. The mechanical halves live in the
+ * scripts; the half that is still prose is what a worker session announces and when, and it
+ * belongs in THIS skill, as one section, citing the rules — not in a second skill that drifts.
+ *
+ * These assert the section and the sentences that make it usable, by their load-bearing
+ * literals (AGENTS.md §8: a bare English word would pass on innocent prose).
+ */
+describe("the skill has a worker-mode section for a session that is not the driver (#299)", () => {
+  const text = existsSync(SKILL_MD) ? readFileSync(SKILL_MD, "utf8") : "";
+  const section = (() => {
+    const start = text.search(/^## 9\. Worker mode/m);
+    if (start < 0) return "";
+    const rest = text.slice(start);
+    const next = rest.slice(3).search(/^## /m);
+    return next < 0 ? rest : rest.slice(0, next + 3);
+  })();
+
+  test("SKILL.md has a `## 9. Worker mode` section", () => {
+    expect(section, "SKILL.md has no `## 9. Worker mode` heading").not.toBe("");
+  });
+
+  test("it says to announce the file set first, and names the one file two sessions never share", () => {
+    expect(section).toContain("file set");
+    expect(section).toContain("src/core/facilitator/executors/build.ts");
+  });
+
+  test("it says to announce the lock, the sha and the OK line, and names the status command", () => {
+    expect(section).toContain("OK line");
+    expect(section).toContain("`scripts/merge-wave.sh --status`");
+  });
+
+  test("it says one unreleased heading, agreed and named BEFORE it is written, and cites the gate", () => {
+    expect(section).toContain("unreleased");
+    expect(section).toContain("exit 12");
+  });
+
+  test("it defers versioning to RELEASING.md's judgement section, by its heading", () => {
+    expect(section).toContain('`docs/RELEASING.md` "What to consider (judgement, not automated)"');
+  });
+
+  test("it says to re-review after a rebase, and cites AGENTS.md §2 for why", () => {
+    expect(section).toContain("re-review");
+    expect(section).toMatch(/§2/);
+  });
+
+  test("§0 no longer says there is NO detector for a release — the wave waits on the marker now", () => {
+    expect(text).not.toContain("NO detector");
+    expect(text).toContain(".RELEASE-IN-PROGRESS");
+  });
+});

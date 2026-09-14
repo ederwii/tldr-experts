@@ -44,7 +44,14 @@ sells: measured over asserted, refused over guessed, named over silent.
   for the whole merge+gate+push span: a second invocation WAITS (poll `MW_LOCK_POLL_S`, default
   2 s), gives up with exit 6 after `MW_LOCK_WAIT_S` (default 3600 s), having merged nothing. A
   lock whose owner is dead, or older than `MW_LOCK_STALE_S`, is broken open automatically. Do
-  not work around it.
+  not work around it. It waits the same way on a RELEASE (#299): `scripts/release.sh` writes
+  `.RELEASE-IN-PROGRESS` at the repo root for its whole span (pid, version, started; removed on
+  every exit path, signals included), the wave polls it with the same knobs, breaks a dead
+  owner's marker open, and gives up with **exit 13** — its own code, one per condition — having
+  merged nothing. `scripts/merge-wave.sh --status` prints one line, exit 0 either way:
+  `holder=<pid> branch=<b> phase=<merge|gates|push> started=<iso>` for a live wave (read from
+  the lock, which records all four), `release holder=<pid> version=<v> started=<iso>` for a live
+  release, or `idle` — "is it alive?" is that command, never `ps` plus a marker's mtime.
 - **A branch merges only with a review record on it: `.review/<branch>.md` (#192).** A fresh
   reviewer that did not write the code reads the branch diff BEFORE the wave, and the record is
   where that verdict lives — a file on the branch, so it lands in the merge commit's tree and
@@ -91,6 +98,12 @@ sells: measured over asserted, refused over guessed, named over silent.
   full local gate, then wave. **CHANGELOG conflicts resolve as the UNION of both sides** under
   the current unreleased section — every bullet from both sides survives, one section per
   version, one heading per kind (a duplicate `### Fixed` group has shipped before; don't).
+  **The wave enforces the "one section" half on the MERGED tree (#299): more than one
+  `## <v> — unreleased` heading, or one whose version is not greater than the top dated
+  heading, refuses with exit 12** — the merge commit is rewound, nothing is pushed, and the
+  refusal names the headings. Two sessions once staged `0.22.1` and `0.23.0` for the same next
+  version, each branch internally consistent; agree the next version with your peer BEFORE
+  writing the heading (`.claude/skills/maintain/SKILL.md` §9 says when).
 - Clean up: remove your worktree and delete your branch after the wave. The branch delete may
   be refused by the ref guard while a sibling holds the lock — retry in a bounded loop; never
   force.
@@ -167,7 +180,9 @@ Full checklist: `docs/RELEASING.md`. The shape, so you recognize the moving part
    commit rather than merging separately.)
 2. `scripts/release.sh <V> --tag beta` — commits locally, runs `release-check.sh --pre-push`
    (full gates; NOTHING is pushed if the gate goes red — it prints the exact undo), then pushes
-   `main`, tags `v<V>`, pushes the tag.
+   `main`, tags `v<V>`, pushes the tag. For that whole span it holds `.RELEASE-IN-PROGRESS` at
+   the repo root (gitignored; removed on every exit path), and every `scripts/merge-wave.sh`
+   waits on it (§2) — merges are frozen while a release is in flight, mechanically (#299).
 3. The tag triggers `publish.yml` (npm trusted publishing). Watch it (§4 rules), then verify
    `npm view tldr-experts dist-tags` and align any global install. Optionally
    `gh release create v<V> --notes-file <section>` from the CHANGELOG section.

@@ -9,7 +9,11 @@ check and the already-on-the-registry check. `publish.yml` does NOT re-run typec
 build: it REFUSES to publish unless the `ci` workflow has a successful run for the same sha,
 which is the same evidence without a third computation of it. A `cancelled` ci run (ci cancels
 a run superseded by a later push on the same ref) fails publish by name, with the remedy —
-which is also why **merges are frozen while a release is in flight**.
+which is also why **merges are frozen while a release is in flight**. Since #299 that freeze is
+mechanical: `release.sh` writes `.RELEASE-IN-PROGRESS` at the repo root (pid, version, started)
+for its whole span and removes it on every exit path, and `scripts/merge-wave.sh` waits on that
+marker exactly as it waits on its own lock — poll, stale-by-dead-pid, bounded by the same
+`MW_LOCK_*` knobs, exit 13 when it gives up. `scripts/merge-wave.sh --status` reads either.
 
 ## What a release is
 
@@ -85,6 +89,12 @@ holds that ordering against a sandbox origin.
 scripts/release.sh X.Y.Z --tag beta
 ```
 That is the whole ceremony. The script refuses to run when the two lines above are missing.
+
+**One unreleased heading, and above the last release.** `CHANGELOG.md` carries exactly one
+`## X.Y.Z — unreleased` heading between releases, and its version is greater than the top dated
+one — `merge-wave.sh` refuses a merged tree that breaks either with exit 12 (`AGENTS.md` §2),
+because two sessions once staged two headings for the same next version, each branch consistent
+on its own. Agree the next version before writing the heading; the choice is the judgement below.
 
 **`--tag` is not optional in practice.** Omit it and `release.sh` writes `alpha`
 (`scripts/release.sh:12`, `TAG="alpha"`), which stopped being this project's status at 0.4.0 —

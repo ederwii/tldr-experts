@@ -49,7 +49,9 @@ Maintainers merge internal wave branches with `scripts/merge-wave.sh`, which tak
 the shared checkout and re-runs every gate before pushing. It exits `1` dirty tree · `2` merge
 conflict · `3` red gate · `4` push failed · `5` HEAD moved during the gates · `6` gave up waiting
 for the lock · `7` the gated commit is not a fast-forward of `origin/main` · `10` no usable
-review record on the branch — and on every one of them `main` is left unpushed. That script is
+review record on the branch · `11` the ref-transaction hook aborted the merge · `12` the merged
+CHANGELOG has two unreleased headings, or one at or below the last release · `13` gave up
+waiting for a release in flight — and on every one of them `main` is left unpushed. That script is
 for the maintainer's own multi-agent workflow; a fork's PR does not use it, and you do not need
 it. The review record it asks for is `.review/<branch>.md` on the branch, carrying the verdict,
 who reviewed and the sha they read; `AGENTS.md` §2 has the shape and every way it refuses.

@@ -52,6 +52,9 @@ if [ "\${GATE_MOVE_HEAD:-}" = "$1" ]; then git commit -q --allow-empty -m "a thi
 exit 0
 `;
 
+/** The CHANGELOG shape every branch inherits: one unreleased heading above one dated one (#299). */
+const CHANGELOG_OK = "# Changelog\n\n## 0.1.1 — unreleased\n\n- work in flight\n\n## 0.1.0 — 2026-01-01\n\n- shipped\n";
+
 const PACKAGE_JSON = JSON.stringify({
   name: "mw-sandbox", private: true, type: "module",
   scripts: {
@@ -115,6 +118,9 @@ function sandbox(): Sandbox {
   writeFileSync(join(main, "package.json"), `${PACKAGE_JSON}\n`);
   writeFileSync(join(main, "gate.sh"), GATE_SH);
   chmodSync(join(main, "gate.sh"), 0o755);
+  // ONE unreleased heading, above the last dated one — the shape #299's gate accepts, so every
+  // wave in this file runs that gate as a control and the two-heading tests below are the case.
+  writeFileSync(join(main, "CHANGELOG.md"), CHANGELOG_OK);
   writeFileSync(join(main, "sandbox.test.ts"),
     'import { expect, test } from "bun:test";\ntest("the sandbox suite is green", () => { expect(1).toBe(1); });\n');
   run(main, "add", "-A");
@@ -1636,5 +1642,212 @@ describe("a branch merges only with a review record on it (#192)", () => {
     const run = invoke(sb, "wave-unreviewed");
     const r = await run.done;
     expectExit(run, r, 0);
+  });
+});
+
+/**
+ * #299 — the pieces of the two-session protocol that were prose, made mechanical.
+ *
+ * Measured over one unattended day (2026-09-13/14, 0.18.3 → 0.22.0, two sessions): two
+ * branches each carried ONE unreleased CHANGELOG heading — `## 0.22.1 — unreleased` on one,
+ * `## 0.23.0 — unreleased` on the other — and `test/public-surface-consistency.test.ts` passed
+ * both, because each branch was internally consistent. The conflict only exists on the MERGED
+ * tree, and nothing looked at the merged tree until a human read the file. "Is a release in
+ * flight?" was asked by message four times the same day, because `scripts/release.sh` wrote
+ * nothing anyone could wait on. And "is the wave alive?" was answered by `ps` and a marker's
+ * mtime, once wrongly.
+ */
+describe("the merged tree carries exactly one unreleased CHANGELOG heading, above the last release (#299)", () => {
+  /** A branch whose CHANGELOG.md is `text` — committed and reviewed, so only the heading gate can refuse it. */
+  function changelogBranch(sb: Sandbox, branch: string, text: string): void {
+    sb.git("checkout", "-q", "-b", branch, "main");
+    writeFileSync(join(sb.main, "CHANGELOG.md"), text);
+    sb.git("add", "-A");
+    sb.git("commit", "-q", "-m", `${branch} work`);
+    reviewRecord(sb, branch);
+    sb.git("checkout", "-q", "main");
+  }
+
+  test("two unreleased headings refuse — exit 12, both named, main rewound, nothing pushed", async () => {
+    const sb = sandbox();
+    const before = sb.git("rev-parse", "HEAD");
+    const published = originLog(sb);
+    // The live case: a second session's heading for the same next version, surviving a
+    // conflict resolved as "keep both" instead of as the union under one heading.
+    changelogBranch(sb, "wave-two-headings",
+      "# Changelog\n\n## 0.2.0 — unreleased\n\n- theirs\n\n## 0.1.1 — unreleased\n\n- work in flight\n\n## 0.1.0 — 2026-01-01\n\n- shipped\n");
+    const run = invoke(sb, "wave-two-headings");
+    const r = await run.done;
+    expectExit(run, r, 12);
+    expect(r.stdout).toContain("FAIL changelog");
+    expect(r.stdout).toContain("## 0.2.0 — unreleased");
+    expect(r.stdout).toContain("## 0.1.1 — unreleased");
+    expect(r.stdout).toContain("nothing pushed");
+    expect(originLog(sb)).toEqual(published);
+    expect(sb.git("rev-parse", "HEAD")).toBe(before);       // the merge commit was rewound (#116)
+    expect(sb.git("status", "--porcelain")).toBe("");
+    expect(existsSync(lockDir(sb))).toBe(false);
+    expect(gateShas(sb, "wave-two-headings")).toEqual([]);  // and no gate was spent on it
+  });
+
+  test("an unreleased heading that is not above the last dated one refuses the same way", async () => {
+    const sb = sandbox();
+    const published = originLog(sb);
+    // A heading for a version that already shipped: a bullet under it would be lost at release.
+    changelogBranch(sb, "wave-stale-heading",
+      "# Changelog\n\n## 0.1.0 — unreleased\n\n- work in flight\n\n## 0.1.0 — 2026-01-01\n\n- shipped\n");
+    const run = invoke(sb, "wave-stale-heading");
+    const r = await run.done;
+    expectExit(run, r, 12);
+    expect(r.stdout).toContain("FAIL changelog");
+    expect(r.stdout).toContain("0.1.0 — 2026-01-01");        // what it is measured against
+    expect(originLog(sb)).toEqual(published);
+  });
+
+  test("the refusal is about the MERGED tree: a branch that merely keeps main's heading merges", async () => {
+    const sb = sandbox();
+    const run = invoke(sb, "wave-a");
+    const r = await run.done;
+    expectExit(run, r, 0);
+    expect(r.stdout).toContain("pushed");
+  });
+
+  test("no unreleased heading at all is the state right after a release, and it merges", async () => {
+    const sb = sandbox();
+    changelogBranch(sb, "wave-just-released", "# Changelog\n\n## 0.1.1 — 2026-01-02\n\n- shipped\n\n## 0.1.0 — 2026-01-01\n\n- shipped\n");
+    const run = invoke(sb, "wave-just-released");
+    const r = await run.done;
+    expectExit(run, r, 0);
+    expect(originLog(sb)[0]).toBe("merge wave-just-released");
+  });
+
+  test("renaming the one heading to a higher version merges — a minor bump is not two headings", async () => {
+    const sb = sandbox();
+    changelogBranch(sb, "wave-minor-bump", CHANGELOG_OK.replace("## 0.1.1 — unreleased", "## 0.2.0 — unreleased"));
+    const run = invoke(sb, "wave-minor-bump");
+    const r = await run.done;
+    expectExit(run, r, 0);
+    expect(originLog(sb)[0]).toBe("merge wave-minor-bump");
+  });
+});
+
+const releaseMarkerPath = (sb: Sandbox) => join(sb.main, ".RELEASE-IN-PROGRESS");
+
+/** What `scripts/release.sh` leaves at the shared root for its whole span (#299). */
+function plantRelease(sb: Sandbox, pid: number = process.pid, version = "0.9.9"): void {
+  writeFileSync(releaseMarkerPath(sb), [
+    "RELEASE IN PROGRESS — planted by the test",
+    `version: ${version}`,
+    `pid:     ${pid}`,
+    `host:    ${hostname()}`,
+    "started: 2026-09-14T00:00:00Z",
+    `epoch:   ${Math.floor(Date.now() / 1000)}`,
+    "",
+  ].join("\n"));
+}
+
+describe("a wave WAITS on a release in flight, the way it waits on its own lock (#299)", () => {
+  test("a live release is respected, and the wait is bounded — exit 13, nothing merged", async () => {
+    const sb = sandbox();
+    plantRelease(sb);                                   // this very process: alive, on this host
+    const before = originLog(sb);
+    const run = invoke(sb, "wave-a", { MW_LOCK_WAIT_S: "1", MW_LOCK_POLL_S: "1" });
+    const r = await run.done;
+    expectExit(run, r, 13);
+    expect(r.stdout).toContain("FAIL release in flight");
+    expect(r.stdout).toContain("0.9.9");                // which release, not just "a release"
+    expect(r.stderr).toContain("waiting for a release");
+    expect(originLog(sb)).toEqual(before);
+    expect(gateShas(sb, "wave-a")).toEqual([]);
+    expect(existsSync(releaseMarkerPath(sb))).toBe(true);   // someone else's marker is left alone
+    expect(existsSync(lockDir(sb))).toBe(false);             // and no lock was left behind
+  });
+
+  test("a marker whose release process is dead is broken open, and the merge proceeds", async () => {
+    const sb = sandbox();
+    plantRelease(sb, 999999);                           // a pid nothing on this host is running
+    const run = invoke(sb, "wave-a", { MW_LOCK_WAIT_S: "5", MW_LOCK_POLL_S: "1" });
+    const r = await run.done;
+    expectExit(run, r, 0);
+    expect(r.stdout).toContain("pushed");
+    expect(existsSync(releaseMarkerPath(sb))).toBe(false);
+  });
+
+  test("when the release finishes, the queued wave goes on to merge", async () => {
+    const sb = sandbox();
+    plantRelease(sb);
+    const run = invoke(sb, "wave-a", { MW_LOCK_WAIT_S: "60", MW_LOCK_POLL_S: "1" });
+    await waitUntil(() => run.stderrSoFar().includes("waiting for a release"), 30_000, "the wave to queue behind the release");
+    expect(gateShas(sb, "wave-a")).toEqual([]);         // it has not merged behind our back
+    rmSync(releaseMarkerPath(sb));                      // release.sh's trap, by hand
+    const r = await run.done;
+    expectExit(run, r, 0);
+    expect(originLog(sb)[0]).toBe("merge wave-a");
+  });
+
+  test("the repo's own .gitignore covers the release marker, so it cannot fail the release's own clean-tree check", () => {
+    const ignored = execFileSync("git", ["check-ignore", "-v", "--", ".RELEASE-IN-PROGRESS"],
+      { cwd: REPO, encoding: "utf8" });
+    expect(ignored).toContain(".gitignore");
+  });
+});
+
+/** `scripts/merge-wave.sh --status`, from inside `sb.main`. */
+function status(sb: Sandbox): Result {
+  const r = spawnSync("bash", [MERGE_WAVE, "--status"], { cwd: sb.main, encoding: "utf8", env: { ...process.env, TMPDIR: sb.dir } });
+  return { code: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+}
+
+describe("`merge-wave.sh --status` answers \"is it alive, and where is it?\" in one line (#299)", () => {
+  test("nothing held: `idle`, exit 0", () => {
+    const sb = sandbox();
+    const r = status(sb);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe("idle");
+  });
+
+  test("a wave in its gates: holder, branch, phase and start time, read from the lock", async () => {
+    const sb = sandbox();
+    const release = join(sb.dir, "release-a");
+    const a = invoke(sb, "wave-a", { GATE_HOLD_UNTIL: release, GATE_HOLD_ON: "build" });
+    await waitUntil(() => gateNames(sb, "wave-a").includes("build"), 60_000, "wave-a to reach its build gate");
+    const r = status(sb);
+    expect(r.code).toBe(0);
+    const line = r.stdout.trim();
+    expect(line).toMatch(/^holder=\d+ branch=wave-a phase=gates started=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    // The holder is the wave's own pid — the one `kill -0` answers for.
+    const holder = Number(/holder=(\d+)/.exec(line)?.[1]);
+    expect(readFileSync(join(lockDir(sb), "owner"), "utf8").split(" ")[0]).toBe(String(holder));
+    writeFileSync(release, "go\n");
+    expect((await a.done).code).toBe(0);
+    expect(status(sb).stdout.trim()).toBe("idle");      // and it is idle again once the wave is done
+  });
+
+  test("a lock whose owner is dead reads as idle — it is what the next wave will break open", () => {
+    const sb = sandbox();
+    holdLock(sb, 999999);
+    const r = status(sb);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe("idle");
+  });
+
+  test("a release in flight is reported too, since a wave will wait on it", () => {
+    const sb = sandbox();
+    plantRelease(sb, process.pid, "0.9.9");
+    const r = status(sb);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toMatch(/^release holder=\d+ version=0\.9\.9 started=2026-09-14T00:00:00Z$/);
+  });
+
+  test("the header's exit-code table names every code the script exits with, and nothing else", () => {
+    const src = readFileSync(MERGE_WAVE, "utf8");
+    const table = /# Exit codes:((?:.*\n)+?)# One code per condition/.exec(src)?.[1] ?? "";
+    expect(table).not.toBe("");
+    const documented = [...table.matchAll(/(?:^|\s)(\d+) /gm)].map((m) => Number(m[1])).sort((a, b) => a - b);
+    const exits = [...new Set([...src.matchAll(/\bexit (\d+)\b/g)].map((m) => Number(m[1])))]
+      .filter((code) => code !== 0 && code !== 130 && code !== 143).sort((a, b) => a - b);
+    expect(documented).toEqual(exits);
+    expect(exits).toContain(12);
+    expect(exits).toContain(13);
   });
 });

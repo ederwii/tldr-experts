@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # merge-wave.sh <branch> "<message>" — merge a wave branch into main, run every gate, push.
 # Prints ONE summary line; exits non-zero (and leaves main untouched) on any red gate.
+# merge-wave.sh --status — one line saying who holds the checkout and where they are (#299):
+#   `holder=<pid> branch=<b> phase=<merge|gates|push> started=<iso>` for a live wave,
+#   `release holder=<pid> version=<v> started=<iso>` for a live scripts/release.sh, else `idle`.
+#   Exit 0 either way; a lock or marker whose owner is dead reads as idle.
 #
 # Concurrency (#44). The merge, the gates and the push all happen in ONE shared checkout,
 # so two invocations must never overlap: a second merge landing mid-gate makes the first
@@ -32,6 +36,8 @@
 #             9 could not snapshot this script before running it
 #             10 no usable review record on the branch (#192)
 #             11 the ref-transaction hook aborted the merge — NOT a conflict (#115)
+#             12 the merged CHANGELOG has two unreleased headings, or one at or below the last release (#299)
+#             13 gave up waiting for a release in flight (#299)
 # One code per condition, deliberately: this table is its own namespace and has nothing to do
 # with `src/cli/exitCodes.ts`'s families (where 2 is a gate refusal). Here 2 is already "merge
 # conflict", so the review refusal took the next free code rather than making 2 ambiguous.
@@ -57,6 +63,27 @@ set -u
 # so every invocation snapshots itself; an exported flag would have let the outer wave
 # switch off the inner ones' protection. `exec` keeps the pid, so the caller's timeout,
 # `kill`, `$$`, the lock owner line and $LOGS all still refer to this same process.
+# --status reads and never writes, so it runs from the file itself: nothing here can be
+# rewritten under it in the time it takes to `cat` three files, and a snapshot would be one
+# more temp directory for every poll (#299).
+if [ "${1:-}" = "--status" ]; then
+  LIB="$(cd "$(dirname "$0")" && pwd)/merge-lock.sh"
+  [ -f "$LIB" ] || { echo "idle"; echo "merge-wave --status: $LIB is missing — answered idle without looking" >&2; exit 0; }
+  # shellcheck source=scripts/merge-lock.sh
+  . "$LIB"
+  mw_lock_paths || { echo "idle"; echo "merge-wave --status: not inside a git repository" >&2; exit 0; }
+  o="$(mw_owner_of)"
+  if [ -d "$MW_LOCK" ] && ! mw_dead_owner "$o"; then
+    echo "holder=${o%% *} branch=$(cat "$MW_LOCK/branch" 2>/dev/null || echo '?') phase=$(cat "$MW_LOCK/phase" 2>/dev/null || echo '?') started=$(cat "$MW_LOCK/started" 2>/dev/null || echo '?')"
+    exit 0
+  fi
+  r="$(mw_release_owner_of)"
+  if [ -n "$r" ] && ! mw_dead_owner "$r"; then
+    echo "release holder=${r%% *} version=$(mw_release_field version) started=$(mw_release_field started)"
+    exit 0
+  fi
+  echo "idle"; exit 0
+fi
 if [ "${1:-}" = "--mw-snapshot" ]; then
   MW_DIR="$2"                                   # the REAL scripts/ dir, for the two siblings
   MW_SNAP="$(cd "$(dirname "$0")" && pwd)"      # this copy's private directory, ours to remove
@@ -136,7 +163,35 @@ trap 'unwind; release; rm -rf "$MW_SNAP"' EXIT
 trap 'unwind; release; exit 130' INT
 trap 'unwind; release; exit 143' TERM
 
-waited=0; noted=0
+# Who holds the checkout is TWO questions since #299 — another wave (the lock) and a release
+# (`scripts/release.sh`'s marker at the shared root) — and both get the same answer: wait,
+# poll, break a dead owner's claim, give up after $WAIT_S. Measured before the marker existed:
+# "is a release in flight?" was asked by message four times in one day between two sessions,
+# and a wave landing mid-release is exactly the half-released state docs/RELEASING.md names.
+# One budget for both waits, so a wave never queues longer than $WAIT_S in total.
+waited=0; noted=0; rnoted=0
+wait_for_release() {
+  local r
+  while r="$(mw_release_owner_of)" && [ -n "$r" ]; do
+    if mw_dead_owner "$r"; then
+      # Same beat as the lock below: only remove a marker whose owner line has not changed.
+      sleep 1; waited=$(( waited + 1 ))
+      if [ "$(mw_release_owner_of)" = "$r" ]; then rm -f "$(mw_release_marker_path)"; fi
+      continue
+    fi
+    if [ "$waited" -ge "$WAIT_S" ]; then
+      echo "FAIL release in flight: scripts/release.sh $(mw_release_field version) (pid ${r%% *}, since $(mw_release_field started)) has held $(mw_release_marker_path) for ${waited}s — nothing merged. Merges wait for a release, they do not race it (docs/RELEASING.md)."; exit 13
+    fi
+    if [ "$rnoted" -eq 0 ] || [ $(( waited % 60 )) -lt "$POLL_S" ]; then
+      echo "merge-wave: waiting for a release in this checkout (scripts/release.sh $(mw_release_field version), pid ${r%% *}, ${waited}s so far)" >&2
+      rnoted=1
+    fi
+    sleep "$POLL_S"; waited=$(( waited + POLL_S ))
+  done
+  return 0
+}
+while :; do
+wait_for_release
 until mkdir "$LOCK" 2>/dev/null; do
   # mkdir failed and there is no lock: the PATH is unusable, not contended. Say so now —
   # queueing for an hour behind a lock that cannot exist is the worst of both worlds.
@@ -160,10 +215,21 @@ until mkdir "$LOCK" 2>/dev/null; do
   sleep "$POLL_S"; waited=$(( waited + POLL_S ))
 done
 HELD=1
+# A release that started in the gap between the two waits: hand the lock back and queue again
+# behind it, rather than merge under a release because the check ran a second too early.
+if r="$(mw_release_owner_of)" && [ -n "$r" ] && ! mw_dead_owner "$r"; then
+  rm -rf "$LOCK"; HELD=0; continue
+fi
+break
+done
 # `owner` is what everyone else polls for — a waiting merge-wave, and this run's own tests.
-# So it is published LAST, after the token the guard recognises this run by and after the
-# marker a human reads: by the time anything can see this lock as taken, both are complete.
+# So it is published LAST, after the token the guard recognises this run by, after what
+# `--status` reads (branch, phase, start time — #299) and after the marker a human reads: by
+# the time anything can see this lock as taken, all of it is complete.
 printf '%s\n' "$MW_LOCK_TOKEN" > "$LOCK/token"
+printf '%s\n' "$B" > "$LOCK/branch"
+printf '%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$LOCK/started"
+printf 'merge\n' > "$LOCK/phase"
 # The lock lives inside the git dir where nobody trips over it. The marker is the same fact
 # where somebody WILL: at the root of the shared checkout, gitignored so it cannot dirty the
 # tree it is guarding, and removed by release() on every path out.
@@ -310,6 +376,40 @@ Claude-Session: https://claude.ai/code/session_019gpPtEAhKfcQc7vfZtmT2L" >"$LOGS
 }
 GATED="$(git rev-parse HEAD)"
 MERGE_SHA="$GATED"   # from here to the push, main is this run's to put back (#116)
+printf 'gates\n' > "$LOCK/phase"
+# --- one unreleased CHANGELOG heading, above the last release (#299) -----------
+# Checked on the MERGED tree, because that is where the defect lives: two branches each carried
+# ONE `## <v> — unreleased` heading — `0.22.1` on one, `0.23.0` on the other, for the same next
+# version — and every per-branch check passed both, since each branch was internally
+# consistent. AGENTS.md §2 says CHANGELOG conflicts resolve as the UNION under ONE heading; this
+# is that sentence with an exit code. A heading at or below the top dated one is the other
+# way to lose bullets: `release.sh` dates `## <V> — unreleased` for the V it is given, and a
+# section for a version that already shipped is one release-check's immutability gate then
+# refuses. Zero unreleased headings is the state right after a release and is not refused.
+# The version compare is the only arithmetic and lives here, once (AGENTS.md §7).
+if [ -f CHANGELOG.md ]; then
+  UNRELEASED="$(grep -E '^## [0-9]+\.[0-9]+\.[0-9]+ — unreleased$' CHANGELOG.md || true)"
+  N_UNREL="$(printf '%s' "$UNRELEASED" | grep -c . || true)"
+  TOP_DATED="$(grep -m1 -E '^## [0-9]+\.[0-9]+\.[0-9]+ — [0-9]{4}-[0-9]{2}-[0-9]{2}$' CHANGELOG.md || true)"
+  ver_gt() {   # 0 when dotted $1 > dotted $2, numerically per component
+    local IFS=. ; local -a a b; local i
+    a=($1); b=($2)
+    for i in 0 1 2; do
+      [ "${a[$i]:-0}" -gt "${b[$i]:-0}" ] && return 0
+      [ "${a[$i]:-0}" -lt "${b[$i]:-0}" ] && return 1
+    done
+    return 1
+  }
+  if [ "$N_UNREL" -gt 1 ]; then
+    echo "FAIL changelog: the merged CHANGELOG.md carries $N_UNREL unreleased headings ($(printf '%s' "$UNRELEASED" | tr '\n' ';' | sed 's/;/; /g; s/; $//')) — one section per version, both sides' bullets as the UNION under ONE heading (AGENTS.md §2, §5); merge commit rewound, nothing pushed. Agree the next version with your peer BEFORE writing the heading, then rebase and re-review."; exit 12
+  fi
+  if [ "$N_UNREL" -eq 1 ] && [ -n "$TOP_DATED" ]; then
+    UV="$(printf '%s' "$UNRELEASED" | awk '{print $2}')"; DV="$(printf '%s' "$TOP_DATED" | awk '{print $2}')"
+    if ! ver_gt "$UV" "$DV"; then
+      echo "FAIL changelog: '$UNRELEASED' is not above the last release ('$TOP_DATED') — the unreleased version must be greater than the top dated one, or release.sh would date a section for a version that already shipped (AGENTS.md §5); merge commit rewound, nothing pushed."; exit 12
+    fi
+  fi
+fi
 bun install >/dev/null 2>&1
 bun run typecheck >"$LOGS/tc.log" 2>&1; TC=$?
 bun test >"$LOGS/test.log" 2>&1; TE=$?
@@ -337,6 +437,7 @@ if [ $TC -ne 0 ] || [ $TE -ne 0 ] || [ $BU -ne 0 ] || [ $DO -ne 0 ] || [ "$SEAM"
   else WHERE="main is STILL at $BAD and NOT pushed — rewind it before the next wave"; fi
   echo "FAIL typecheck=$TC test=$TE(fails=$FAILS) build=$BU docs=$DO seam=$SEAM — $WHERE; logs: $LOGS; failing: $(grep '^(fail)' "$LOGS/test.log" | head -3 | cut -c1-80 | tr '\n' '|')"; exit 3
 fi
+printf 'push\n' > "$LOCK/phase"
 # Push the commit that was GATED, not the `main` ref — which need not be the same object.
 # `git push origin main` publishes refs/heads/main whatever HEAD is: gate one tree, push
 # another, the same class of lie as #44's race. `HEAD:main` can only publish what ran.

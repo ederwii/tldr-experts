@@ -51,3 +51,7 @@ docs-site/public/
 # checkout, so an agent standing in it can SEE that a merge is in flight. It is removed
 # when the wave ends, and ignored so a wave cannot trip its own dirty-tree guard (#89).
 .MERGE-WAVE-IN-PROGRESS*
+
+# `scripts/release.sh` advertises a release in flight the same way, for its whole span:
+# `scripts/merge-wave.sh` WAITS on it, and the release's own clean-tree gate must not see it (#299).
+.RELEASE-IN-PROGRESS*

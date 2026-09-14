@@ -20,7 +20,7 @@
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
@@ -39,6 +39,8 @@ const V = "0.9.9";
  */
 const BUN_STUB = `#!/usr/bin/env bash
 echo "$* HEAD=$(git rev-parse HEAD) ORIGIN=$(git rev-parse origin/main 2>/dev/null || echo none)" >> "$GATE_LOG"
+# #299: what the release marker said WHILE a gate ran — the only moment its span can be observed.
+[ -f .RELEASE-IN-PROGRESS ] && cp .RELEASE-IN-PROGRESS "$GATE_LOG.marker"
 [ "$1" = "\${GATE_RED:-__never__}" ] && exit 1
 exit 0
 `;
@@ -104,11 +106,14 @@ function sandbox(): Sandbox {
   // The scripts under test, byte for byte. release.sh calls `scripts/release-check.sh` by a
   // path relative to the repo toplevel, so the pair has to live in the sandbox.
   mkdirSync(join(main, "scripts"), { recursive: true });
-  for (const s of ["release.sh", "release-check.sh"]) {
+  for (const s of ["release.sh", "release-check.sh", "merge-lock.sh"]) {
     copyFileSync(join(REPO, "scripts", s), join(main, "scripts", s));
     chmodSync(join(main, "scripts", s), 0o755);
   }
 
+  // The REAL .gitignore: the release marker sits at the root for the whole run, and release-check
+  // item 4 asserts a CLEAN tree — so the ignore rule is under test here as much as the scripts.
+  writeFileSync(join(main, ".gitignore"), readFileSync(join(REPO, ".gitignore"), "utf8"));
   writeFileSync(join(main, "package.json"), `${JSON.stringify({ name: "tldr-experts", version: "0.0.1", private: true, type: "module" }, null, 2)}\n`);
   mkdirSync(join(main, "plugin", ".claude-plugin"), { recursive: true });
   writeFileSync(join(main, "plugin", ".claude-plugin", "plugin.json"), `${JSON.stringify({ name: "tldr-experts", version: "0.0.1" }, null, 2)}\n`);
@@ -478,5 +483,66 @@ describe("a released CHANGELOG section may not be edited (#200)", () => {
     const r = run(sb, "release-check.sh", ["--ci"]);
     expect(r.code).toBe(1);
     expect(r.stdout).toMatch(new RegExp(`released section '## ${V}'`));
+  });
+});
+
+/**
+ * `scripts/release.sh` advertises itself for its whole span (#299).
+ *
+ * Measured 2026-09-13/14, two sessions on one repo: "is a release in flight?" was asked by
+ * message four times in a day, because the release wrote nothing anyone could wait on — the
+ * `maintain` skill said so in as many words ("there is NO detector"). A merge wave in the
+ * middle of a release is the half-released state `docs/RELEASING.md` exists to prevent, and
+ * `scripts/merge-wave.sh` now waits on this marker exactly as it waits on its own lock. So the
+ * marker has to be there from before the first edit to after the tag push, and gone on EVERY
+ * exit path — a marker left behind by a red gate would freeze merges until a human noticed.
+ */
+describe("release.sh writes a .RELEASE-IN-PROGRESS marker for its whole span, and removes it on every exit (#299)", () => {
+  const marker = (sb: Sandbox) => join(sb.main, ".RELEASE-IN-PROGRESS");
+  const seenByGates = (sb: Sandbox): string => {
+    try { return readFileSync(`${sb.gateLog}.marker`, "utf8"); } catch { return ""; }
+  };
+
+  test("green path: the gates ran under the marker, and it is gone once the tag is pushed", () => {
+    const sb = sandbox();
+    const r = run(sb, "release.sh", [V, "--tag", "beta"]);
+    expect(r.code).toBe(0);
+    const seen = seenByGates(sb);
+    expect(seen, "no gate ever saw the marker — it was not written before the gate ran").not.toBe("");
+    expect(seen).toContain(`version: ${V}`);
+    expect(seen).toMatch(/^pid:\s+\d+$/m);
+    expect(seen).toMatch(/^started:\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/m);
+    expect(existsSync(marker(sb))).toBe(false);
+    expect(originTags(sb)).toEqual([`v${V}`]);           // and the release itself still landed
+  });
+
+  test("the marker does not dirty the tree the gate asserts clean", () => {
+    const sb = sandbox();
+    // Only the ignore rule stands between the marker and `working tree not clean`.
+    const r = run(sb, "release.sh", [V, "--tag", "beta"]);
+    expect(r.code).toBe(0);
+    expect(`${r.stdout}${r.stderr}`).not.toMatch(/working tree not clean/);
+  });
+
+  test("red gate: the marker leaves with the failed release, not after a human notices", () => {
+    const sb = sandbox();
+    const r = run(sb, "release.sh", [V, "--tag", "beta"], { GATE_RED: "test" });
+    expect(r.code).not.toBe(0);
+    expect(seenByGates(sb)).toContain(`version: ${V}`);   // it WAS there while the gate ran
+    expect(existsSync(marker(sb))).toBe(false);           // and is not there now
+  });
+
+  test("a refused precondition — no unreleased heading — leaves no marker either", () => {
+    const sb = sandbox();
+    writeFileSync(join(sb.main, "CHANGELOG.md"), "# Changelog\n\n## 0.0.1 — 2026-01-01\n\n- nothing staged\n");
+    git(sb.main, "commit", "-q", "-am", "no heading staged");
+    const r = run(sb, "release.sh", [V, "--tag", "beta"]);
+    expect(r.code).toBe(1);
+    expect(existsSync(marker(sb))).toBe(false);
+  });
+
+  test("the repo's .gitignore carries the rule", () => {
+    const ignored = execFileSync("git", ["check-ignore", "-v", "--", ".RELEASE-IN-PROGRESS"], { cwd: REPO, encoding: "utf8" });
+    expect(ignored).toContain(".gitignore");
   });
 });
