@@ -110,7 +110,13 @@ describe("an `unknown` refusal names the operator's cure (gh #285)", () => {
   });
 
   test("an ungranted git verb keeps #278's verb cure, not this one", () => {
-    expect(classifyRefusal("git status", DECLARED)).toEqual({ kind: "verb", verb: "status", equivalent: null });
+    // `git status` used to stand here; it is granted since #287, so the verb that
+    // carries the case is one that is still outside the allowance.
+    expect(classifyRefusal("git stash", DECLARED)).toEqual({ kind: "verb", verb: "stash", equivalent: null });
+  });
+
+  test("a `git -C` line is #287's `elsewhere`, never blamed on `commands:` either", () => {
+    expect(classifyRefusal("git -C /elsewhere log", DECLARED)).toEqual({ kind: "elsewhere", option: "-C" });
   });
 });
 

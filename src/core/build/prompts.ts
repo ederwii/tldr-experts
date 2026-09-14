@@ -25,6 +25,7 @@ import { reviewDiffCommand } from "./git.ts";
 import { dodRefused } from "./outcome.ts";
 import type { PlannedEpic, PlannedStory } from "./plan.ts";
 import { DEVELOPER_GIT_VERBS } from "./developerGrants.ts";
+import { OUTCOME_ALREADY_REPORTED } from "./refusalKind.ts";
 
 /**
  * `[assumption]` — the spec sets no inline budget for a story's touched files.
@@ -194,9 +195,10 @@ export interface DeveloperPromptParts {
 }
 
 /**
- * `git add`, `git commit`, `git rm`, `git mv` and `git restore` — rendered from
- * the constant the grant is built from (gh #278), so the prompt cannot name a
- * verb the allowance lacks or omit one it holds.
+ * The verbs the developer holds, rendered from the constant the grant is built
+ * from (gh #278), so the prompt cannot name a verb the allowance lacks or omit
+ * one it holds — including #287's read verbs, which is the whole point of it
+ * being ONE list: they became grantable and sayable in the same edit.
  */
 function gitVerbList(): string {
   const names = DEVELOPER_GIT_VERBS.map((verb) => `\`git ${verb}\``);
@@ -294,8 +296,14 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     // `git checkout -- <path>`, was refused, and blocked — with `git restore`
     // granted and nothing in this prompt saying so.
     `Commit with \`git add\` and \`git commit\`. The git verbs you hold are exactly ${gitVerbList()}.`,
-    "`git restore <path>` is how to put a file back (there is no checkout in that list). Nothing",
-    "else about git is yours to do.",
+    "`git restore <path>` is how to put a file back (there is no checkout in that list). The read",
+    "verbs are yours so you can look at your own tree before you commit — run them from your working",
+    // gh #287: a developer ran `-C <worktree> log --oneline -5`, was refused, and
+    // the story died. The verb is granted now; the option is not, and the reason
+    // is stated so the developer drops the option instead of the command.
+    "directory, which already IS this worktree. Never `-C <path>`: it points git at another directory,",
+    "which is not yours to read or write, so it is refused on purpose. Nothing else about git is",
+    "yours to do.",
     "",
     "## Rules",
     "",
@@ -312,8 +320,14 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     "- Run each Definition of Done command verbatim and alone: no redirection, pipes or chaining.",
     "  Shell separators (`>`, `>>`, `2>&1`, `<`, `|`, `;`, `&&`, `||`, `&`, `$()`) split a line into",
     "  subcommands, and each subcommand must match its own grant, so a compound line is refused",
-    "  even when the script itself is allowed. The facilitator re-runs the Definition of Done",
-    "  after you anyway.",
+    "  even when the script itself is allowed.",
+    // gh #294: three attempts on one story appended `; echo "EXIT:$?"`, each
+    // refused, each re-spawned with "run each command alone" — which never said
+    // WHY the echo was unnecessary, so the developer kept reaching for the number
+    // it believed it was missing. The clause is the same one the refusal cure
+    // appends (`refusalKind.ts`), so the prompt and the cure cannot disagree.
+    `- Do not append \`; echo $?\` or redirect a command's output to a file to capture its outcome.`,
+    `  The exit code is not lost by dropping it: ${OUTCOME_ALREADY_REPORTED}.`,
     "",
     "### Conventions",
     "",

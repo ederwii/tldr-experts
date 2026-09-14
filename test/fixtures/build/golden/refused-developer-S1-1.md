@@ -107,9 +107,12 @@ ones you may run, and they are the same ones the Definition of Done re-runs:
 - `npm run test`
 - `npm run test | tee lint.log`
 
-Commit with `git add` and `git commit`. The git verbs you hold are exactly `git add`, `git commit`, `git rm`, `git mv` and `git restore`.
-`git restore <path>` is how to put a file back (there is no checkout in that list). Nothing
-else about git is yours to do.
+Commit with `git add` and `git commit`. The git verbs you hold are exactly `git add`, `git commit`, `git rm`, `git mv`, `git restore`, `git status`, `git log`, `git diff` and `git show`.
+`git restore <path>` is how to put a file back (there is no checkout in that list). The read
+verbs are yours so you can look at your own tree before you commit — run them from your working
+directory, which already IS this worktree. Never `-C <path>`: it points git at another directory,
+which is not yours to read or write, so it is refused on purpose. Nothing else about git is
+yours to do.
 
 ## Rules
 
@@ -122,8 +125,9 @@ else about git is yours to do.
 - Run each Definition of Done command verbatim and alone: no redirection, pipes or chaining.
   Shell separators (`>`, `>>`, `2>&1`, `<`, `|`, `;`, `&&`, `||`, `&`, `$()`) split a line into
   subcommands, and each subcommand must match its own grant, so a compound line is refused
-  even when the script itself is allowed. The facilitator re-runs the Definition of Done
-  after you anyway.
+  even when the script itself is allowed.
+- Do not append `; echo $?` or redirect a command's output to a file to capture its outcome.
+  The exit code is not lost by dropping it: the facilitator re-runs the Definition of Done after you and records each command's exit code, so the number the `echo` would print is measured and written down whether you capture it or not.
 
 ### Conventions
 

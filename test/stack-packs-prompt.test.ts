@@ -513,10 +513,13 @@ describe("project skills are named, never loaded (design decision 6)", () => {
     const withSkill = developerTools(["npm test"], { skills: true });
     expect(withSkill).toContain("Skill");
     // The git verbs the developer may use on its own tree, `git rm`/`git mv`/
-    // `git restore` included since #261. Never a bare `rm`, never `git push`.
+    // `git restore` included since #261 and the read verbs since #287. Never a
+    // bare `rm`, never `git push`, and never a `-C` form (gh #287: it would aim
+    // git at a tree this story does not own).
     expect(withSkill.filter((tool) => !BASE_TOOLS.includes(tool) && tool !== "Skill")).toEqual([
       "Bash(npm test)", "Bash(npm test *)", "Bash(git add *)", "Bash(git commit *)",
       "Bash(git rm *)", "Bash(git mv *)", "Bash(git restore *)",
+      "Bash(git status *)", "Bash(git log *)", "Bash(git diff *)", "Bash(git show *)",
     ]);
   });
 });
@@ -610,11 +613,26 @@ describe("the developer prompt says to run each DoD command verbatim and alone (
     expect(text).toContain("`2>&1`");
     expect(text).toContain("`$()`");
     expect(text).toContain("must match its own grant");
+    // gh #294 rewrote the clause that carries this: the WHY the developer is given
+    // for not appending `; echo $?` is the FACILITATOR's own re-run, named with the
+    // thing it records. Both halves are asserted, not the sentence they sit in, so
+    // the guard survives a rewording and still fails if either half goes missing.
     expect(text).toContain("re-runs the Definition of Done");
+    expect(text).toContain("records each command's exit code");
     // Beside the "Done means proven" rule, inside `## Rules`.
     expect(text.indexOf("Done means proven:")).toBeLessThan(text.indexOf("verbatim and alone"));
     expect(text.indexOf("verbatim and alone")).toBeLessThan(text.indexOf("### Conventions"));
     // One spelling, not two.
     expect(text.split("verbatim and alone").length - 1).toBe(1);
+    // ONCE, for the re-run clause too: the prompt used to end the DoD rule with a
+    // bare "the facilitator re-runs the Definition of Done after you anyway", and a
+    // rewrite that left both would say it twice.
+    expect(text.split("re-runs the Definition of Done").length - 1).toBe(1);
+    // And what it must NOT claim (gh #294): that the agent's OWN execution tool
+    // hands the exit code back. That is measured for Claude Code's `Bash` tool and
+    // established nowhere for `codex exec`, and this prompt is what BOTH providers
+    // read — so the unmeasured half stays out of it, here, mechanically.
+    expect(text).not.toContain("the tool that runs a command");
+    expect(text).not.toContain("exit code and output to you");
   });
 });

@@ -3423,8 +3423,9 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    path the story `touches` (≤24 files, ≤64 KB `[assumption]`, missing paths named as "this story creates it").
    `--allowedTools` is the file tools + TWO grants per command that repo declares — `Bash(<command>)` and
    `Bash(<command> *)` — + `Bash(git add *)` + `Bash(git commit *)` + `Bash(git rm *)` + `Bash(git mv *)` +
-   `Bash(git restore *)`: narrower than the default allowance, which is every repo's commands, and wider by exactly
-   the git verbs that make a commit and move a path around. **Never a bare `rm`** (gh #261): a story that said
+   `Bash(git restore *)` + `Bash(git status *)` + `Bash(git log *)` + `Bash(git diff *)` + `Bash(git show *)`:
+   narrower than the default allowance, which is every repo's commands, and wider by exactly the git verbs that make
+   a commit, move a path around, and READ the story's own tree (gh #287). **Never a bare `rm`** (gh #261): a story that said
    "delete an unused file" could not be done at all — `Write`/`Edit` can empty a file and nothing on the list could
    unlink it or take it out of the index, so every `git rm` the developer tried came back "This command requires
    approval", which in a headless `-p` run is a prompt nobody answers. The three verbs are git verbs for the reason
@@ -3524,8 +3525,31 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    the reason saying the cure was stated and refused too. `verb` and `unknown` are never retried — a verb the
    allowance lacks will be lacking again, and a cause the line does not show cannot be cured by restating it. The
    allowance itself, the verb list the developer prompt now states (`git add`, `git commit`, `git rm`, `git mv`,
-   `git restore`, with `git restore <path>` named as the way to put a file back) and the classifier all read ONE
-   constant (`build/developerGrants.ts`), so none of the three can drift from the others.
+   `git restore`, `git status`, `git log`, `git diff`, `git show`, with `git restore <path>` named as the way to put
+   a file back) and the classifier all read ONE constant (`build/developerGrants.ts`), so none of the three can
+   drift from the others.
+
+   **The developer may READ its own tree, `-C` is refused on purpose, and every cure says WHY (gh #287, gh #294).**
+   Until 0.21.0 the allowance held no read verb at all: a developer could write its worktree and not look at it.
+   Measured on a live unattended run, `git -C <worktree> log --oneline -5` was refused, the one cure retry was
+   refused too, and the story died for a command that changes nothing. `status`, `log`, `diff` and `show` are in the
+   constant now, so the grant, the prompt's list and the classifier gained them in one edit. **`git -C <path>` (and
+   `--git-dir` / `--work-tree`) stays ungranted as a DECISION, not an omission**: `-C` points git at ANY directory —
+   the epic worktree, another story's worktree, the shared checkout — so granting it would let a read verb read
+   trees the story does not own and a mutating verb write them. It is its own refusal kind, `elsewhere`, whose cure
+   is "drop `-C <path>` and run git from your own worktree", never "ask for `-C`". And every cure now carries a
+   short, true why-clause, because a cure that says only WHAT leaves the agent to find another way to do the same
+   thing: measured on one story, three consecutive developers appended `; echo "EXIT:$?"` to a DoD command to read
+   the exit code, each was refused, and #278's "run each command alone" answered a question none of them was asking
+   — from their side the `echo` was not a second command, it was HOW you read an exit code. A `separator`
+   classification therefore carries `capturing` (the chain exists only to capture the outcome: an `echo` naming
+   `$?`, or a redirect of the command's own output), and both that cure and the retry prefix then add the clause the
+   developer prompt states too, from the one constant: the facilitator re-runs the Definition of Done after the
+   developer and records each command's exit code, so the number the `echo` would print is written down whether the
+   developer captures it or not. The clause says ONLY that, deliberately: what an agent's own execution tool returns
+   to the model is a property of the provider's CLI, measured here for Claude Code's `Bash` tool and established
+   nowhere for `codex exec`, and this sentence goes into the prompt BOTH providers read — asserting it would be the
+   same failure one level up, a plausible explanation in place of a true one.
 3. **The Definition of Done, re-run by the facilitator** in that worktree, through the same runner `dod-gate` uses. All
    commands must exit 0.
 

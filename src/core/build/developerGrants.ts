@@ -14,8 +14,44 @@
  * `commit`): index operations on the story's own tree, on a branch that never
  * leaves the machine. Adding one here adds it to the grant, the prompt and the
  * classifier at once — which is the point, and also why it is a decision.
+ *
+ * **The read verbs are #287's** (`status`, `log`, `diff`, `show`). They were
+ * missing entirely: a developer could write its tree and not look at it.
+ * Measured on a live run — `git -C <worktree> log --oneline -5` refused, the
+ * story blocked, one developer dead for a command that changes nothing. They
+ * modify neither the index nor the working tree, and the prompt already tells
+ * the developer to inspect its diff before committing, so the grant now says
+ * what the instructions assume.
+ *
+ * **`git -C <path>` is NOT granted, and that is a decision, not an omission.**
+ * The grant is a prefix match on `git <verb>`, so `-C` never matched it; but the
+ * reason to leave it that way is that `-C` points git at ANY directory — the
+ * epic worktree, another story's worktree, the shared checkout — so granting it
+ * would turn a read verb into a read of trees this developer does not own, and a
+ * mutating verb into a write there. The cure a refused developer is handed
+ * (`refusalKind.ts`, kind `elsewhere`) therefore says "drop `-C`, you are
+ * already in your worktree" and NEVER "ask for `-C`". Do not add it here
+ * thinking the list is half-finished: it is finished.
  */
-export const DEVELOPER_GIT_VERBS = ["add", "commit", "rm", "mv", "restore"] as const;
+export const DEVELOPER_GIT_VERBS = [
+  "add", "commit", "rm", "mv", "restore", "status", "log", "diff", "show",
+] as const;
+
+/**
+ * The `-C`-shaped global options: the ones that move git's idea of WHICH TREE it
+ * is operating on, which is the whole reason they are ungranted (above).
+ * `-c`/`--config` and `-c key=value` change configuration, not the tree, and are
+ * not in this list — they are refused for the ordinary reason (they are not a
+ * granted verb), and naming them here would put a false reason on the refusal.
+ */
+export const GIT_ELSEWHERE_OPTIONS = ["-C", "--git-dir", "--work-tree"] as const;
+
+/** The `-C`-shaped option this line carries, or null. Reads the FIRST word after `git`. */
+export function gitElsewhereOption(argv: readonly string[]): string | null {
+  const word = argv[1] ?? "";
+  const flag = word.includes("=") ? word.slice(0, word.indexOf("=")) : word;
+  return (GIT_ELSEWHERE_OPTIONS as readonly string[]).includes(flag) ? flag : null;
+}
 
 export type DeveloperGitVerb = (typeof DEVELOPER_GIT_VERBS)[number];
 
