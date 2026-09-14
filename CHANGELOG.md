@@ -106,6 +106,26 @@
   whose last line is a literal about `tldrx doctor`, names its faults itself. A ninth producer
   added tomorrow inherits the door instead of being born blind.
 
+- **The Build handoff no longer fails its own `claim-sources` check over a command that spans
+  lines (#283).** MEASURED twice in one hour on a live unattended run (0.18.2 → 0.18.3): the
+  executor wrote `04-build/handoff.md` itself and then refused it — `trailing-position` on a
+  blocked story's Findings and Unknowns bullets, then `unsourced` on a `<id>'s developer had …
+  refused` bullet — stage exit 5, a `--until-done` relaunch burned each time. The issue's own
+  reading, the DoD citation joined mid-line by `; and `, was probed on the same base and passes:
+  the reader takes the LAST `[src: …]` on a line. What fails is a NEWLINE. The refused command
+  reaches the renderer as the developer typed it (`agentEvents.ts` `toolTarget` returns the Bash
+  `command` input verbatim — a wrapped `mv a \` + `b`, a heredoc), `renderBuildHandoff` quoted it
+  inside one bullet, and `parseHandoff` ends a bullet at the first column-0 line, so the first
+  physical line carried its citation mid-sentence or none at all and the rest was prose nothing
+  read. Every element of the document is now made ONE line at the join — the break shown as ` ⏎ `
+  rather than erased, so `mv a \ ⏎ b` still says the line was wrapped and nothing is dropped —
+  which holds for every field the renderer embeds, not only the two the run hit; the review log
+  keeps the command verbatim — and a document that had to draw the mark says so once, under its
+  header, where the developer that copies the line reads it. Text the framework composes has to
+  satisfy the grammar the framework checks; the rule is one function, `asOneLine`, and the file's
+  other writer (`epicRelease.ts`, the `## Epic branch released` section carrying a `run cancel
+  --note` verbatim) goes through it too. A document with no newline in any quoted text is
+  byte-identical, so the build golden is unchanged.
 
 ## 0.23.0 — 2026-09-14
 

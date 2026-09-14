@@ -30,12 +30,13 @@
  * when there is one, and an `epic.released` event on its ledger — plus, from Build,
  * on the requesting run's own ledger through `emitAlso`.
  */
-import { appendFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadWorkspace, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import type { EventType, TldrxEvent } from "../events/Event.ts";
 import type { EpicReleaseRecord, EpicReleaseVia } from "../run/RunFile.ts";
 import type { RunStore } from "../run/RunStore.ts";
+import { asOneLine, ensureLineBreakNote } from "./handoff.ts";
 import {
   branchExists, commitsBetween, deleteBranch, firstLine, renameBranch, repoDirOf, shaOf, uncountedCount, worktreeOn,
 } from "./git.ts";
@@ -219,19 +220,27 @@ function event(parts: ReleaseRunEpicsParts, runId: string, payload: Record<strin
 /**
  * The owner's Build handoff, when it wrote one, gets the same sentence under its
  * own heading — a person who reads the document a cancelled run left behind
- * finds where its epic went without opening run.yml. Appended, never rewritten:
- * the handoff is a stage artefact and its four sections stay as the stage wrote
- * them (`validateHandoff` reads only the required sections). A run cancelled
- * before Build wrote a handoff has none, and none is invented for it.
+ * finds where its epic went without opening run.yml. Appended, and the four
+ * sections never rewritten: the handoff is a stage artefact and they stay as the
+ * stage wrote them (`validateHandoff` reads only the required sections). The one
+ * line this may place OUTSIDE them is the note explaining the line-break mark,
+ * through `ensureLineBreakNote` — a note with a newline in it is drawn as the
+ * mark, and a file that draws the mark says what it is (gh #283), whichever
+ * writer drew it first. A run cancelled before Build wrote a handoff has none,
+ * and none is invented for it.
  */
 function appendToHandoff(runDir: string, released: readonly EpicReleaseRecord[]): void {
   const path = join(runDir, BUILD_PHASE, "handoff.md");
   if (!existsSync(path)) return;
-  const bullets = released.map((record) =>
+  // `record.reason` is the operator's note verbatim; a newline in it would end
+  // the bullet before its citation (gh #283), so the line goes through the same
+  // one-line rule the handoff's own renderer applies.
+  const bullets = released.map((record) => asOneLine(
     `- ${describeRelease(record)} — ${record.via} at ${record.at}: ${record.reason} `
-    + `[src: absent:${BUILD_PHASE}/log]`);
+    + `[src: absent:${BUILD_PHASE}/log]`));
   try {
-    appendFileSync(path, `\n## Epic branch released\n\n${bullets.join("\n")}\n`, "utf8");
+    const before = readFileSync(path, "utf8");
+    writeFileSync(path, ensureLineBreakNote(`${before}\n## Epic branch released\n\n${bullets.join("\n")}\n`), "utf8");
   } catch {
     // The record is on run.yml and on the ledger; a handoff that will not take
     // the note is not a reason to fail a release that already happened.

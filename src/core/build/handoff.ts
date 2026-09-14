@@ -250,6 +250,70 @@ export interface ForeignWorkNote {
  */
 export const MAX_CARRIED_BULLETS = 25;
 
+/**
+ * Where a newline stood in text this document quotes (gh #283).
+ *
+ * The file is line-oriented and so is the reader that checks it: `parseHandoff`
+ * ends a bullet at the first column-0 line, and every list item must END with
+ * its `[src: …]` token. Text the framework embeds verbatim — a refused command
+ * as the developer typed it (`agentEvents.ts` `toolTarget` hands back the Bash
+ * `command` input, wrapped lines and heredocs included), a DoD tail, a reason —
+ * can carry newlines, and a bullet quoting one was two physical lines: the
+ * first with its citation mid-sentence (`trailing-position`) or with none at
+ * all (`unsourced`), the second read as prose. MEASURED twice in one hour on a
+ * live run: the executor wrote the handoff and failed its own `claim-sources`
+ * check on it, exit 5, a `--until-done` relaunch burned each time.
+ *
+ * So every element of the document is made ONE line at the join, and the break
+ * is kept visible rather than erased: `mv a \ ⏎ b` still says the developer
+ * wrapped the line. Nothing is dropped, and the review log beside this file
+ * keeps the command verbatim.
+ */
+export const LINE_BREAK_MARK = "⏎";
+
+/**
+ * The one line that tells a READER of the document what the mark is — a
+ * representation, not part of the command. It sits where the reader acts (the
+ * lesson of gh #294: an explanation that lives only in a maintainer's comment
+ * is not read by the developer that copies the line), and only in a document
+ * that carries the mark, so every other document is byte-identical.
+ */
+export const LINE_BREAK_NOTE =
+  `\`${LINE_BREAK_MARK}\` marks a line break inside a quoted command; the review log beside this file `
+  + "keeps the command verbatim.";
+
+/**
+ * The document with its note, when it needs one — the ONE derivation of "a file
+ * that draws the mark says what the mark is" (gh #283).
+ *
+ * A guarantee of the FILE, not of a render pass: `renderBuildHandoff` writes the
+ * document and `epicRelease.ts` appends a section to it later, and a mark drawn
+ * by the second writer into a file the first left mark-free had no note anywhere
+ * (measured by review). So both writers hand their WHOLE document here. The note
+ * goes before the first H2 — outside every section `validateHandoff` reads, so it
+ * can never be a bullet or a continuation — exactly once, and never into a
+ * document without the mark, which keeps every such document byte-identical.
+ */
+export function ensureLineBreakNote(document: string): string {
+  if (!document.includes(LINE_BREAK_MARK) || document.includes(LINE_BREAK_NOTE)) return document;
+  const lines = document.split("\n");
+  const at = lines.findIndex((line) => line.startsWith("## "));
+  if (at === -1) return `${document.trimEnd()}\n\n${LINE_BREAK_NOTE}\n`;
+  lines.splice(at, 0, LINE_BREAK_NOTE, "");
+  return lines.join("\n");
+}
+
+/**
+ * One physical line, with each newline shown as `LINE_BREAK_MARK`.
+ *
+ * Exported for the OTHER writer of this file: `epicRelease.ts` appends a
+ * `## Epic branch released` section carrying a `run cancel --note` verbatim,
+ * and routes it through this function rather than a copy (§7).
+ */
+export function asOneLine(line: string): string {
+  return line.replace(/[ \t]*\r?\n[ \t]*/g, ` ${LINE_BREAK_MARK} `);
+}
+
 export function renderBuildHandoff(parts: BuildHandoffParts): string {
   const done = parts.outcomes.filter((o) => o.status === "done");
   const notDone = parts.outcomes.filter((o) => o.status !== "done");
@@ -359,7 +423,10 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
         )),
     "",
   ];
-  return lines.join("\n");
+  // Every element above is one line of the file, whatever text it quotes — and
+  // a document that had to draw the mark says what the mark is, once, under the
+  // header: outside every checked section, before the first bullet a reader acts on.
+  return ensureLineBreakNote(lines.map(asOneLine).join("\n"));
 }
 
 /**
