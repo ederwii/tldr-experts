@@ -366,14 +366,22 @@ there is nothing left to refuse; the command says so on stdout.
 `03-plan/budget.yml` is written by the Plan phase: a `per_phase_usd:` map from story id to
 dollars, inside the Build stage's ceiling. The Build executor reads it — **as a ceiling, not
 as a forecast**. A story the plan priced gets a ceiling of
-`max(price × story_cap_multiplier, story_cap_floor_usd)` (3 and $4.00 by default, both
-`stage.yml` keys): its **first** developer attempt — the pass the plan priced — gets the whole
+`max(price × scale × story_cap_multiplier, story_cap_floor_usd)` (3 and $4.00 by default, both
+`stage.yml` keys; `scale` is 1 while the plan's prices sum inside the stage's `budget_usd` — see
+the paragraph after next): its **first** developer attempt — the pass the plan priced — gets the whole
 of it, and a **second** attempt, which nobody priced, gets an `attempts`-th. Its reviewer gets
 a quarter of the price on every attempt, unchanged. A story
 the plan did not price falls back
 to an equal share of the stage. If the prices add up to more than the stage was given they
 are scaled down proportionally, so the ratio the plan decided survives and the total cannot
-escape the ceiling. A `budget.yml` that will not parse or validate is an advisory on stderr
+escape the ceiling — and the framework says so (#281): the `plan` gate's detail and the Build's
+stderr at entry both carry the factor ("7.0× what the stage holds"), the scale, the largest
+story's cap as a worked example and the `tldrx budget raise … --stage` command that lifts the
+scale to 1. Measured on a live run: a $16.20 stage over a $114.00 plan is a scale of 0.1421,
+so a story priced $14.00 was capped at $5.97, not $42 — and raising every price ×4 moved
+nothing, because a uniform raise keeps the ratio and the sum. The cap death reason shows that
+formula with its inputs and, on a scaled plan, names the stage's `budget_usd` as the lever
+rather than the price. A `budget.yml` that will not parse or validate is an advisory on stderr
 and an equal split — never a refused build. So is one labelled `economy: host-tokens`: those
 numbers are not dollars, so they never become `--max-budget-usd` on a spawn.
 
@@ -397,7 +405,9 @@ mid-change on ceilings a dollar or two wide, were left `todo` having spent the m
 runs stalled with nothing delivered. The error is not symmetric, so the plan's number is read
 as the order of magnitude of the work and the stage's own budget gate — metered against real
 spend — is what stops a stage that runs out. Raise `story_cap_multiplier:` on the stage if your
-planner is systematically low; lower it to 1 to take the price literally.
+planner is systematically low; lower it to 1 to take the price literally. If the caps are low
+because the plan is priced past the stage, the multiplier is the wrong knob — raise the stage's
+`budget_usd` (`tldrx budget raise <phase> <usd> --stage <id>`) or lower the prices.
 
 **A developer that dies on its ceiling with work in its tree no longer parks the story.** The
 death is recorded (the story's review log, its `task.done`, the handoff) and the facilitator's

@@ -68,8 +68,13 @@ export const REVIEWER_FLOOR_USD = 1.00;
  * middle of the range and does not close it: over the prices the planner writes
  * today ($1.20-$4.00), the ceiling lands at $4.00-$12.00, so a story that really
  * costs at the top of the observed spread still dies on it. **A story still dies
- * on its cap whenever its real cost exceeds `max(price x 3, $4.00)`** — that is
- * the number to check before raising this, not a claim that the wall is gone.
+ * on its cap whenever its real cost exceeds `max(price x scale x 3, $4.00)`** —
+ * `scale` being `priceScale`, ≤ 1, the factor that fits the plan's summed prices
+ * into the stage — and that is the number to check before raising this, not a
+ * claim that the wall is gone. gh #281 measured what leaving the scale out of
+ * this sentence cost: a $16.20 stage over a $114.00 plan capped a story priced
+ * $14.00 at $5.97 where the sentence promised $42, and the refusal sent the
+ * operator to raise the price — the one lever the scale absorbs exactly.
  * What carries the expensive end is the OTHER half of #277: a developer that
  * dies with work in its tree no longer parks the story, so the work is committed
  * and the DoD decides it rather than the money being lost. What neither half
@@ -271,7 +276,12 @@ export function developerCap(parts: CapParts, storyId?: string, attempt = 1): nu
 
 /**
  * What ONE priced story's developer may be asked for on the pass the plan priced
- * — `max(price × STORY_CAP_MULTIPLIER, STORY_CAP_FLOOR_USD)` (gh #277).
+ * — `max(price × STORY_CAP_MULTIPLIER, STORY_CAP_FLOOR_USD)` (gh #277), where
+ * `price` is the SCALED price `priceOf` hands in: the plan's figure × `priceScale`,
+ * so a plan whose prices sum past the stage is capped at a fraction of what it
+ * wrote (gh #281). `storyCapDerivation` writes that fraction down beside the
+ * cap, because a cap whose inputs are not on the record sends a person to the
+ * wrong lever.
  *
  * Derived HERE, at dispatch, off the price as it sits on disk, and deliberately
  * NOT migrated into `budget.yml`: a run already in flight carries prices written
@@ -384,11 +394,17 @@ export function priceOf(parts: CapParts, storyId: string | undefined): number | 
  */
 export function priceScale(parts: CapParts): number {
   if (parts.budgetUsd <= 0) return 1;
+  const sum = plannedSumUsd(parts);
+  return sum <= parts.budgetUsd ? 1 : parts.budgetUsd / sum;
+}
+
+/** Σ of every usable plan price — what `priceScale` fits into the stage. */
+export function plannedSumUsd(parts: CapParts): number {
   let sum = 0;
   for (const price of parts.prices.values()) {
     if (Number.isFinite(price) && price > 0) sum += price;
   }
-  return sum <= parts.budgetUsd ? 1 : parts.budgetUsd / sum;
+  return sum;
 }
 
 /** Dollars expressed as the fraction of the stage budget `agentCap` wants. */
@@ -403,4 +419,206 @@ export function shareOf(parts: CapParts, usd: number): number {
  */
 export function worstCaseShares(parts: CapParts): number {
   return Math.max(parts.storyCount, 1) * attemptsOf(parts) * (1 + reviewerShareOf(parts));
+}
+
+// --- what a cap was derived from (gh #281) ------------------------------------
+
+/**
+ * Every input one priced story's developer cap was derived from, so the number
+ * can be shown WITH its formula rather than as a conclusion.
+ *
+ * Measured on a live unattended run (0.18.2, gh #281): an eight-story plan
+ * priced at $114.00 into a $16.20 stage. S4, priced $14.00, died twice on a
+ * $5.97 cap while the refusal told the operator that "a story that really costs
+ * more than the plan guessed wants a higher price there". The operator raised
+ * every price ×4 and the cap did not move by a cent — `priceScale` keeps the
+ * plan's RATIO and fits its SUM into the stage, so a uniform raise is absorbed
+ * exactly. The arithmetic is deliberate; a refusal that names the one lever it
+ * cannot be moved by is not. Nothing here is a second derivation: every figure
+ * is read back off the functions above.
+ */
+export interface StoryCapDerivation {
+  readonly storyId: string;
+  readonly attempt: number;
+  /** The price as written in `03-plan/budget.yml`. */
+  readonly planPriceUsd: number;
+  /** Σ of every usable price in that file (`plannedSumUsd`). */
+  readonly plannedSumUsd: number;
+  /** The stage's own `budget_usd` (`CapParts.budgetUsd`). */
+  readonly stageBudgetUsd: number;
+  /** `priceScale` — 1 when the plan fits the stage, `stage / Σ` when it does not. */
+  readonly scale: number;
+  /** `planPriceUsd × scale` — what `priceOf` hands the arithmetic. */
+  readonly scaledPriceUsd: number;
+  readonly multiplier: number;
+  /** The floor as clamped to the stage (`storyCeilingUsd`'s own). */
+  readonly floorUsd: number;
+  /** `storyCeilingUsd` — attempt 1's whole ceiling. */
+  readonly ceilingUsd: number;
+  /** `developerAttemptDivisor` — 1 on the priced pass, `attempts` on the contingency. */
+  readonly divisor: number;
+  /** `developerCap` — what the spawn was actually handed, per-agent clamp included. */
+  readonly capUsd: number;
+}
+
+/** Null for a story the plan did not price — its cap is the uniform share. */
+export function storyCapDerivation(
+  parts: CapParts, storyId: string, attempt = 1,
+): StoryCapDerivation | null {
+  const scaled = priceOf(parts, storyId);
+  if (scaled === null) return null;
+  const planPriceUsd = parts.prices.get(storyId) as number;
+  const floorUsd = parts.budgetUsd > 0
+    ? Math.min(storyCapFloorOf(parts), parts.budgetUsd)
+    : storyCapFloorOf(parts);
+  return {
+    storyId,
+    attempt,
+    planPriceUsd,
+    plannedSumUsd: plannedSumUsd(parts),
+    stageBudgetUsd: parts.budgetUsd,
+    scale: priceScale(parts),
+    scaledPriceUsd: scaled,
+    multiplier: storyCapMultiplierOf(parts),
+    floorUsd,
+    ceilingUsd: storyCeilingUsd(parts, scaled),
+    divisor: developerAttemptDivisor(attempt, attemptsOf(parts)),
+    capUsd: developerCap(parts, storyId, attempt),
+  };
+}
+
+/** `$5.97` — two decimals, because every figure here is money on a record. */
+function usd(n: number): string {
+  return `$${n.toFixed(2)}`;
+}
+
+/**
+ * `0.1421`, not `0.14`: four places, so a reader recomputing `$14.00 × scale ×
+ * 3` lands on the cap that was printed and not on a number a dime away from it.
+ */
+function scaleOf(scale: number): string {
+  return scale === 1 ? "1" : scale.toFixed(4);
+}
+
+/**
+ * The formula with its inputs — `cap $5.97 = plan price $14.00 × stage scale
+ * 0.1421 (stage budget_usd $16.20 over $114.00 of plan prices) × story_cap_multiplier
+ * 3 = $5.97, above the floor $4.00` — never the conclusion alone.
+ */
+export function describeStoryCap(d: StoryCapDerivation): string {
+  const multiplied = d.scaledPriceUsd * d.multiplier;
+  const scaleNote = d.scale === 1
+    ? ` (stage scale 1: ${usd(d.plannedSumUsd)} of plan prices fit the stage's ${usd(d.stageBudgetUsd)})`
+    : ` (stage budget_usd ${usd(d.stageBudgetUsd)} over ${usd(d.plannedSumUsd)} of plan prices)`;
+  const scaleTerm = d.scale === 1 ? "" : ` × stage scale ${scaleOf(d.scale)}${scaleNote}`;
+  const ceiling = multiplied >= d.floorUsd
+    ? `plan price ${usd(d.planPriceUsd)}${scaleTerm} × story_cap_multiplier ${String(d.multiplier)}`
+      + ` = ${usd(multiplied)}${d.scale === 1 ? scaleNote : ""}, above the floor ${usd(d.floorUsd)}`
+    : `story_cap_floor_usd ${usd(d.floorUsd)} (plan price ${usd(d.planPriceUsd)} × stage scale ${scaleOf(d.scale)}`
+      + ` × story_cap_multiplier ${String(d.multiplier)} = ${usd(multiplied)} is below it)`;
+  const perAttempt = round2(d.ceilingUsd / d.divisor);
+  const contingency = d.divisor === 1
+    ? ""
+    : `; attempt ${String(d.attempt)} is the contingency and gets that ÷ ${String(d.divisor)} = ${usd(perAttempt)}`;
+  const clamp = d.capUsd < perAttempt
+    ? `; clamped to ${usd(d.capUsd)} by per_agent_max_usd / --max-usd`
+    : "";
+  return `cap ${usd(d.capUsd)} = ${ceiling}${contingency}${clamp}`;
+}
+
+/**
+ * The one command that moves a cap the plan's prices cannot — `tldrx budget
+ * raise <phase> <usd> --run <run> --stage <stage>` (gh #244), built by the
+ * caller that knows the ids and passed in as DATA, the way `agentCap` is.
+ */
+export interface CapLever {
+  readonly raiseCommand: (amountUsd: number) => string;
+}
+
+/**
+ * Why a story's turn stopped when its own per-story cap, not the work, decided
+ * it (gh #277) — and what the cap was derived from, so the lever named is one
+ * that moves it (gh #281).
+ *
+ * The provider's sentence carries the dollar figure, so it is quoted verbatim
+ * rather than paraphrased. Same shape and purpose as `permissionBlockReason`: a
+ * CAUSE, not a verdict on the diff. Three cases, because three different levers:
+ *
+ *  - a SCALED plan: the price cannot move the cap while Σ prices > stage, so
+ *    the stage's own `budget_usd` is named with the command that lifts the
+ *    scale to 1, and `story_cap_multiplier:` beside it;
+ *  - an unscaled plan: the price IS a lever, and the sentence says so (the
+ *    pre-#281 wording, which was right exactly here);
+ *  - an unpriced story: there is no price to raise; the uniform share is named
+ *    off the stage's own money.
+ */
+export function capDeathReason(
+  error: string, parts: CapParts, storyId: string, attempt: number, lever: CapLever,
+): string {
+  const head = `the developer died on its per-story cap — ${error}: `;
+  const d = storyCapDerivation(parts, storyId, attempt);
+  if (d === null) {
+    const cap = developerCap(parts, storyId, attempt);
+    return head
+      + `this story has no price in \`03-plan/budget.yml\`, so its cap ${usd(cap)} is the uniform share of the `
+      + `stage's budget_usd ${usd(parts.budgetUsd)} over ${String(Math.max(parts.storyCount, 1))} story(ies)`
+      + ` × ${String(attemptsOf(parts))} attempt(s) × (1 + reviewer share ${String(reviewerShareOf(parts))})`
+      + ` — the stage's own \`budget_usd\` is what moves it (\`${lever.raiseCommand(parts.budgetUsd)}\` doubles it)`;
+  }
+  const formula = describeStoryCap(d);
+  if (d.scale === 1) {
+    return head + formula
+      + "; a story that really costs more than the plan guessed wants a higher price in `03-plan/budget.yml` "
+      + "or a higher `story_cap_multiplier:` on the stage";
+  }
+  const short = shortBy(d.plannedSumUsd, d.stageBudgetUsd);
+  return head + formula
+    + "; the plan's price cannot move this cap while the plan is scaled — raising every price keeps the "
+    + "ratio and the sum still exceeds the stage — so raise the stage's own `budget_usd` "
+    + `(\`${lever.raiseCommand(short)}\` lifts the scale to 1) or \`story_cap_multiplier:\` on the stage`;
+}
+
+/**
+ * The Plan-time advisory (gh #281): a plan whose prices sum past the Build
+ * stage's `budget_usd` used to pass its gate without a word, and the operator
+ * learned the scale from a dead developer. Null when the plan fits. The gate
+ * still passes — the scale is a deliberate tolerance, not a refusal — and this
+ * says what it will do, with the factor and the command that undoes it.
+ */
+export function planOverStageAdvisory(parts: CapParts, lever: CapLever): string | null {
+  const scale = priceScale(parts);
+  if (scale >= 1) return null;
+  const sum = plannedSumUsd(parts);
+  const factor = (sum / parts.budgetUsd).toFixed(1);
+  let largest: string | null = null;
+  for (const [id, price] of parts.prices) {
+    if (Number.isFinite(price) && price > 0 && (largest === null || price > (parts.prices.get(largest) ?? 0))) {
+      largest = id;
+    }
+  }
+  const example = largest === null ? null : storyCapDerivation(parts, largest);
+  const worked = example === null
+    ? ""
+    : `: ${example.storyId} priced ${usd(example.planPriceUsd)} gets max(${usd(example.planPriceUsd)} × ${scaleOf(scale)}`
+      + ` × ${String(example.multiplier)}, ${usd(example.floorUsd)}) = ${usd(example.capUsd)}`;
+  return `advisory: 03-plan/budget.yml prices ${usd(sum)} of stories into a stage whose budget_usd is `
+    + `${usd(parts.budgetUsd)} — ${factor}× what the stage holds — so every per-story cap is derived from `
+    + `the plan price × ${scaleOf(scale)}, not the price as written${worked}. Raising the prices cannot lift a `
+    + `cap while their sum exceeds the stage; \`${lever.raiseCommand(shortBy(sum, parts.budgetUsd))}\` `
+    + "makes the stage hold the plan as priced, or raise `story_cap_multiplier:` on the stage";
+}
+
+/**
+ * What a ceiling is short by, rounded UP to the cent.
+ *
+ * Rounding up matters: `remaining` is a float difference, and a raise that lands
+ * a hundredth of a cent under the estimate refuses the stage a second time — the
+ * exact shape of the pilot failure this command exists to end. Since gh #281 it
+ * is also `Σ plan prices − stage`, the raise that lifts `priceScale` to exactly
+ * 1 — a raise a hundredth short leaves every cap a hair under the price. Defined
+ * HERE, the leaf, and re-exported by `budget/budgetView.ts` where every other
+ * caller reads it: one rounding rule, not a plan-price sibling of it.
+ */
+export function shortBy(estimate: number, remaining: number): number {
+  return Math.max(0.01, Math.ceil((estimate - remaining) * 100) / 100);
 }

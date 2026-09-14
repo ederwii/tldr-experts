@@ -594,7 +594,8 @@ export function renderSeedCheck(report: SeedCheckReport): string {
       lines.push(
         `  per story, ${String(b.build.storyCount)} story(ies), no plan price yet: developer cap $${b.build.developerUsd.toFixed(2)}`
           + ` per attempt, reviewer cap $${b.build.reviewerUsd.toFixed(2)} (#244/#289 — a priced story gets`
-          + " max(price x 3, $4.00) at dispatch; raise --budget if the cap does not cover the largest story)",
+          + " max(price x scale x 3, $4.00) at dispatch, scale being 1 only while the plan's prices sum inside"
+          + " the stage (#281); raise --budget if the cap does not cover the largest story)",
       );
     }
   }

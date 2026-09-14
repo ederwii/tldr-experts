@@ -26,7 +26,10 @@ import {
   MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
   STORY_CAP_FLOOR_USD, STORY_CAP_MULTIPLIER, developerAttemptDivisor, storyCeilingUsd,
 } from "../src/core/facilitator/executors/build.ts";
-import type { CapParts } from "../src/core/build/caps.ts";
+import {
+  capDeathReason, describeStoryCap, planOverStageAdvisory, plannedSumUsd, storyCapDerivation,
+  type CapParts,
+} from "../src/core/build/caps.ts";
 import { cacheSplit, tokenSplit } from "../src/core/facilitator/runNext.ts";
 import { turnTokens } from "../src/core/budget/turnTokens.ts";
 import { validateRunFile, type RunTask } from "../src/core/run/RunFile.ts";
@@ -638,6 +641,128 @@ describe("M9 · a phase ceiling is a ceiling", () => {
     const oldReviewer = stageCeiling * (REVIEWER_SHARE / stories);
     const oldTotal = stories * MAX_ATTEMPTS * (oldDev + oldReviewer);
     expect(oldTotal / stageCeiling).toBeCloseTo(2.5, 5);
+  });
+});
+
+/**
+ * gh #281, measured on a live unattended run (0.18.2): an eight-story plan
+ * priced at $114.00 into a $16.20 Build stage. S4, priced $14.00, died twice on
+ * a $5.97 cap while the CHANGELOG promised `max(price × 3, $4.00)` = $42 and the
+ * refusal told the operator to raise the plan price — which the operator did,
+ * ×4 on every story, and the cap did not move by a cent. The arithmetic is not
+ * the defect: `priceScale` keeps the plan's sum inside the stage on purpose.
+ * What the framework SAID was — so the derivation is now written down with
+ * every input named, and the lever it names is the one that moves the number.
+ */
+describe("the per-story cap says what it was derived from (gh #281)", () => {
+  const FIELD = { S1: 10, S2: 12, S3: 14, S4: 14, S5: 16, S6: 16, S7: 16, S8: 16 };
+  const lever = {
+    raiseCommand: (usd: number) => `tldrx budget raise 04-build ${usd.toFixed(2)} --run r --stage build`,
+  };
+
+  function priced(prices: Record<string, number>, stageUsd: number, perAgentMax = 26): CapParts {
+    return {
+      prices: new Map(Object.entries(prices)),
+      storyCount: Object.keys(prices).length,
+      budgetUsd: stageUsd,
+      maxBudgetUsd: Math.min(stageUsd, perAgentMax),
+      agentCap: (share = 1) => Math.round(Math.min(stageUsd * share, perAgentMax) * 100) / 100,
+    };
+  }
+
+  test("the field case, every input on the record: $5.97 = $14.00 × 0.1421 × 3", () => {
+    const parts = priced(FIELD, 16.2);
+    expect(plannedSumUsd(parts)).toBe(114);
+    const d = storyCapDerivation(parts, "S4");
+    expect(d).not.toBeNull();
+    expect(d?.planPriceUsd).toBe(14);
+    expect(d?.plannedSumUsd).toBe(114);
+    expect(d?.stageBudgetUsd).toBe(16.2);
+    expect(d?.scale).toBeCloseTo(0.1421, 4);
+    expect(d?.scaledPriceUsd).toBeCloseTo(1.9895, 4);
+    expect(d?.multiplier).toBe(STORY_CAP_MULTIPLIER);
+    expect(d?.floorUsd).toBe(STORY_CAP_FLOOR_USD);
+    expect(d?.ceilingUsd).toBeCloseTo(5.9684, 4);
+    expect(d?.capUsd).toBe(5.97);
+    // The sentence a person reads: the formula WITH its inputs, not the conclusion.
+    const text = describeStoryCap(d as NonNullable<typeof d>);
+    expect(text).toContain("cap $5.97 = plan price $14.00 × stage scale 0.1421");
+    expect(text).toContain("stage budget_usd $16.20 over $114.00 of plan prices");
+    expect(text).toContain("× story_cap_multiplier 3");
+    expect(text).toContain("floor $4.00");
+  });
+
+  test("raising every price ×4 moves nothing, and the reason says why and names the lever that does", () => {
+    const x4 = Object.fromEntries(Object.entries(FIELD).map(([id, usd]) => [id, usd * 4]));
+    expect(storyCapDerivation(priced(x4, 16.2), "S4")?.capUsd).toBe(5.97);
+    const reason = capDeathReason(
+      "claude exited 1 with is_error=true: Reached maximum budget ($5.97)", priced(FIELD, 16.2), "S4", 1, lever,
+    );
+    expect(reason).toContain("died on its per-story cap");
+    expect(reason).toContain("Reached maximum budget ($5.97)");
+    expect(reason).toContain("cap $5.97 = plan price $14.00 × stage scale 0.1421");
+    // The plan price is the one lever the scale absorbs exactly; the sentence
+    // that sent the operator to it is gone, and the stage's budget_usd is named
+    // with the command that lifts the scale to 1: $114.00 − $16.20 = $97.80.
+    expect(reason).not.toContain("wants a higher price there");
+    expect(reason).toContain("cannot move this cap while the plan is scaled");
+    expect(reason).toContain("`tldrx budget raise 04-build 97.80 --run r --stage build`");
+    expect(reason).toContain("story_cap_multiplier:");
+  });
+
+  test("an UNSCALED plan keeps the price as a lever — the old sentence was right there", () => {
+    const parts = priced({ S1: 1.6 }, 40, 40);
+    const d = storyCapDerivation(parts, "S1");
+    expect(d?.scale).toBe(1);
+    expect(d?.capUsd).toBe(4.8);
+    const text = describeStoryCap(d as NonNullable<typeof d>);
+    expect(text).toContain("cap $4.80 = plan price $1.60 × story_cap_multiplier 3");
+    expect(text).toContain("stage scale 1");
+    const reason = capDeathReason("Reached maximum budget ($4.80)", parts, "S1", 1, lever);
+    expect(reason).toContain("higher price in `03-plan/budget.yml`");
+    expect(reason).not.toContain("cannot move this cap");
+  });
+
+  test("the floor, when it binds, is named as the figure and the multiplied price as the one below it", () => {
+    const d = storyCapDerivation(priced({ S1: 0.5 }, 40, 40), "S1");
+    expect(d?.capUsd).toBe(4);
+    const text = describeStoryCap(d as NonNullable<typeof d>);
+    expect(text).toContain("cap $4.00 = story_cap_floor_usd $4.00");
+    expect(text).toContain("$0.50 × stage scale 1 × story_cap_multiplier 3 = $1.50 is below it");
+  });
+
+  test("the contingency attempt shows its divisor; a per-agent clamp shows itself", () => {
+    const d2 = storyCapDerivation(priced({ S1: 1.6 }, 40, 40), "S1", 2);
+    expect(d2?.divisor).toBe(MAX_ATTEMPTS);
+    expect(d2?.capUsd).toBe(2.4);
+    expect(describeStoryCap(d2 as NonNullable<typeof d2>)).toContain("attempt 2 is the contingency and gets that ÷ 2 = $2.40");
+    const clamped = storyCapDerivation(priced({ S1: 10 }, 40, 12), "S1");
+    expect(clamped?.ceilingUsd).toBe(30);
+    expect(clamped?.capUsd).toBe(12);
+    expect(describeStoryCap(clamped as NonNullable<typeof clamped>)).toContain("clamped to $12.00 by per_agent_max_usd");
+  });
+
+  test("an unpriced story's death names the uniform share and the stage, not a plan price it never had", () => {
+    const parts = priced({}, 8);
+    expect(storyCapDerivation(parts, "S1")).toBeNull();
+    const reason = capDeathReason("Reached maximum budget ($1.60)", { ...parts, storyCount: 2 }, "S1", 1, lever);
+    expect(reason).toContain("no price in `03-plan/budget.yml`");
+    expect(reason).toContain("uniform share of the stage's budget_usd $8.00");
+    expect(reason).toContain("--stage build");
+    expect(reason).not.toContain("wants a higher price there");
+  });
+
+  test("the Plan-time advisory fires only when the prices exceed the stage, and states the factor", () => {
+    expect(planOverStageAdvisory(priced({ S1: 1.6 }, 40), lever)).toBeNull();
+    expect(planOverStageAdvisory(priced({}, 40), lever)).toBeNull();
+    const text = planOverStageAdvisory(priced(FIELD, 16.2), lever);
+    expect(text).not.toBeNull();
+    expect(text).toContain("$114.00 of stories into a stage whose budget_usd is $16.20");
+    expect(text).toContain("7.0× what the stage holds");
+    expect(text).toContain("plan price × 0.1421");
+    // The largest-priced story as the worked example, so the factor has a face.
+    expect(text).toContain("max($16.00 × 0.1421 × 3, $4.00) = $6.82");
+    expect(text).toContain("`tldrx budget raise 04-build 97.80 --run r --stage build`");
   });
 });
 
