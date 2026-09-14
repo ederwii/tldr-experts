@@ -1493,6 +1493,21 @@ async function runExecutor(
   }
   store.save();
 
+  // gh #305: a `run cancel --force` landed while this stage held the run. The
+  // save above merged it — cancelled wins the file, and the stage keeps the
+  // cancel's status with this invocation's rows recorded beside it — so the
+  // process stops here rather than parking a cancelled stage on a gate. Same
+  // exit and sentence family as `advance`'s own "is cancelled — nothing to
+  // advance": 0, because nothing was refused and nothing failed.
+  if (store.cancelledUnder) {
+    return out(EXIT_OK, [
+      ...notes,
+      ...outcome.lines,
+      `run ${store.runId} was cancelled while ${phaseId}/${stageId} ran — stopped here: ` +
+        `${String(outcome.tasks.length)} task row(s) from this invocation are recorded, and nothing more is spawned`,
+    ], outcome.stderr ?? []);
+  }
+
   // A refusal is a precondition the operator can fix (spec §3 exit 2), not a
   // failure: the stage goes back to `ready` so the next run picks it up cleanly.
   if (outcome.refused === true) {

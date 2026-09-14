@@ -369,13 +369,12 @@ export interface RunCursor {
  * run.yml's budget block — a MIRROR, and only `spent_usd` is live (#236).
  *
  * `ceiling_usd` and `per_agent_max_usd` are the values the run was CREATED with
- * (`newRun.ts`). Nothing updates them: `budget raise` writes budget.yml, and
- * `RunStore.save()` carries whatever this store loaded straight back out
- * (`rollUp`), so a raise that lands while a hosted run holds the file is reverted
- * here on that run's next save. That is why they are documented rather than
- * synchronised — the live ceiling lives in budget.yml, which `save()` re-reads
- * from disk before every write (`ceilingsToWrite`) and which every money decision
- * and every live display already reads. The keys stay because a `version: 1`
+ * (`newRun.ts`). Nothing updates them: `budget raise` writes budget.yml and
+ * nothing writes these two again (until #236 a raise mirrored the run ceiling
+ * here, and a long-lived store's save reverted it). They are documented rather
+ * than synchronised — the live ceiling lives in budget.yml, which `save()`
+ * re-reads from disk before every write (`ceilingsToWrite`) and which every money
+ * decision and every live display already reads. The keys stay because a `version: 1`
  * format only grows (§7) and all three are REQUIRED by the v1 schema; what
  * changed in #236 is not their meaning — they were always the creation figures —
  * but that nothing reads them as if they were the current ones.

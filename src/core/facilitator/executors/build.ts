@@ -1226,6 +1226,18 @@ class BuildSession {
   // --- the pipeline ---------------------------------------------------------
 
   /** One story, with its at-most-one requeue after a `changes` verdict. */
+  /**
+   * Has a `run cancel --force` landed under this stage (gh #305)? Asked before
+   * every spawn — here, in `fanOut`'s lanes and before the reviewer — because
+   * this executor saves nothing until it returns, so the only way to see a
+   * cancel that arrived mid-fan-out is to read the file. A `cancelled` run.yml
+   * with a developer still spending is the record lying in the expensive
+   * direction; the check costs one parse per spawn, against minutes of turn.
+   */
+  private cancelledUnder(): boolean {
+    return RunStore.cancelledOnDisk(this.ctx.runDir);
+  }
+
   private async driveStory(planned: PlannedStory): Promise<void> {
     // A story whose LAST review ERRORED is not owed a developer: its diff is
     // committed and merged, and its DoD went green. What is missing is the
@@ -1237,6 +1249,15 @@ class BuildSession {
       return;
     }
     for (let i = 0; i < this.attempts; i++) {
+      // Per ATTEMPT, not per story: a requeue is a second developer spawn, and a
+      // cancel that landed during the first attempt's review must stop it too.
+      if (this.cancelledUnder()) {
+        this.lines.push(
+          `  · ${planned.story.id}: ${i === 0 ? "not started" : "not requeued"} — the run was cancelled `
+            + "(tldrx run cancel) while this stage held it",
+        );
+        return;
+      }
       await this.settleHalf(await this.buildHalf(planned));
       const outcome = this.outcomes.get(planned.story.id);
       // The developer never ran, so the story is back where it started and its
@@ -1323,6 +1344,13 @@ class BuildSession {
       for (;;) {
         const planned = queue[cursor++];
         if (planned === undefined) return;
+        // gh #305: the same pre-spawn question `driveStory` asks, per lane.
+        if (this.cancelledUnder()) {
+          this.lines.push(
+            `  · ${planned.story.id}: not started — the run was cancelled (tldrx run cancel) while this stage held it`,
+          );
+          return;
+        }
         halves.set(planned.story.id, await this.buildHalf(planned));
       }
     };
@@ -1895,6 +1923,32 @@ class BuildSession {
     // stage's remainder has no say over it.
     if (supplied === undefined && reviewerUnderfunded(this.capParts, this.spent())) {
       const review = this.refuseUnfundedReview(story);
+      await this.settle(story, "review", {
+        dod, commit, merged: true, carried, epicBase, verdict: "n-a", review,
+        cost: round2(priorCost),
+        reason: review.summary,
+      });
+      return "settled";
+    }
+    // gh #305: a `run cancel --force` that landed during the developer's turn (or
+    // its DoD) stops HERE — the reviewer is a spawn, and a cancelled run buys no
+    // more of them. The diff is merged on the epic branch and nobody has judged
+    // it, so the story parks at `review` with an `n-a` verdict that says why,
+    // exactly the shape an unfunded review parks it in: no reviewer ran, and
+    // nothing here claims one did.
+    if (supplied === undefined && this.cancelledUnder()) {
+      const review = reviewerUnfunded(
+        "the run was cancelled (tldrx run cancel) before the review — the diff is merged on the epic "
+          + "branch and nobody has judged it",
+      );
+      this.ctx.emit("check.failed", {
+        phase: this.ctx.phaseId,
+        check: "review",
+        story: story.planned.story.id,
+        verdict: review.verdict,
+        attempt: story.attempt,
+        detail: review.summary,
+      });
       await this.settle(story, "review", {
         dod, commit, merged: true, carried, epicBase, verdict: "n-a", review,
         cost: round2(priorCost),

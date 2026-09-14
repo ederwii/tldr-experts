@@ -7,6 +7,7 @@
  * place and both files are revalidated before either touches disk.
  */
 import { existsSync, readFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { basename, join } from "node:path";
 import { parseYaml, parseYamlRepairing, type RepairedYaml } from "../yaml.ts";
 import { EventLog } from "../events/EventLog.ts";
@@ -26,6 +27,16 @@ import {
 } from "./RunFile.ts";
 
 export class RunStoreError extends Error {}
+
+/** What `RunStore.save()` answers — see `cancelledUnder`. */
+export interface SaveOutcome {
+  /**
+   * True when THIS save found a `cancelled:` on disk that this store did not
+   * write — a `run cancel --force` landed while the store was held. The file has
+   * already resolved in the cancel's favour; this is the process being told.
+   */
+  readonly cancelledUnder: boolean;
+}
 
 /**
  * What `RunStore.resolve()` found: one run, no run at all, or several open runs
@@ -49,6 +60,16 @@ export class RunStore {
   private current: RunFile;
   private currentBudget: RunBudget;
   /**
+   * `run.yml` as THIS store last read it from disk or wrote it there. `save()`
+   * writes back only what differs between `current` and this — see `runToWrite`.
+   */
+  private loaded: RunFile;
+  /**
+   * Sticky: once a save has seen a cancel land under this store, every later
+   * save keeps the cancel's statuses too — see `carryChanges`.
+   */
+  private cancelledUnderFlag = false;
+  /**
    * Did anyone call `mutateBudget`? Only then may this store's CEILINGS win over
    * whatever is on disk at save time — see `save()`.
    */
@@ -61,6 +82,7 @@ export class RunStore {
     readonly events: EventLog,
   ) {
     this.current = run;
+    this.loaded = run;
     this.currentBudget = budget;
   }
 
@@ -202,6 +224,35 @@ export class RunStore {
     return this.current.run;
   }
 
+  /**
+   * Has a `run cancel` landed under this store (gh #305)? True from the first
+   * `save()` that merged one in, for the life of the store. A process holding
+   * the run reads this after every save and spawns nothing more — `run.yml`
+   * saying `cancelled` while a developer keeps spending is the record lying in
+   * the expensive direction.
+   */
+  get cancelledUnder(): boolean {
+    return this.cancelledUnderFlag;
+  }
+
+  /**
+   * Is `<runDir>/run.yml` cancelled RIGHT NOW, on disk? The pre-spawn question
+   * for a process that holds a store it has not saved for a while (the Build
+   * fan-out saves only when it returns). Tolerant: a file that is gone or does
+   * not parse answers `false` — "cannot tell" is not "cancelled", and the next
+   * save says what it could not read.
+   */
+  static cancelledOnDisk(runDir: string): boolean {
+    const path = join(runDir, "run.yml");
+    if (!existsSync(path)) return false;
+    try {
+      const doc = parseYaml(readFileSync(path, "utf8"));
+      return validateRunFile(doc).ok && asRunFile(doc).cancelled !== undefined;
+    } catch {
+      return false;
+    }
+  }
+
   /** The stage the cursor points at, or null when the file is inconsistent. */
   cursorEntry(): CursorEntry | null {
     return stageAt(this.current, this.current.cursor);
@@ -240,10 +291,10 @@ export class RunStore {
    * Recompute everything derived, revalidate both files, then write. A validation
    * failure throws BEFORE the first byte lands, so a run is never left half-written.
    *
-   * Three things this does that a plain `writeFileSync` pair did not, all from the
-   * 2026-08-29 resumability audit:
+   * Four things this does that a plain `writeFileSync` pair did not — three from
+   * the 2026-08-29 resumability audit, the fourth from gh #305:
    *
-   * 1. **Under `.tldrx/.lock`.** `budget.yml` is read-modified-written here and by
+   * 1. **Under `.tldrx/.lock`.** Both files are read-modified-written here and by
    *    `budget raise`; without a lock those two interleave.
    * 2. **Ceilings are re-read from disk.** This store may have loaded `budget.yml`
    *    minutes ago. A `budget raise` that landed since is on disk and not in
@@ -257,17 +308,27 @@ export class RunStore {
    *    `writeFileSync` that was killed. Same move `run new` already made for the
    *    run directory (`newRun.ts`). Atomic is not the same as GOOD, though, so
    *    `writeAtomic` also leaves one step back — see `core/fs/writeAtomic.ts`.
+   * 4. **`run.yml` is re-read from disk too, and only what this store CHANGED is
+   *    written over it** (gh #305). Point 2 fixed the lost update for one file
+   *    and left the other: `tldrx run auto` holds one store for the whole of a
+   *    stage — the Build fan-out included — and every save on it wrote `run.yml`
+   *    whole from the copy loaded when the stage began. A `budget raise --stage`
+   *    typed during that stage printed `12.60 → 62.60`, exited 0, and was back at
+   *    12.60 after the loop's next save; the developers were capped on it
+   *    (measured, installed 0.21.0). See `runToWrite` for the rule and what it is
+   *    deliberately not.
    */
-  save(): void {
-    const rolled = rollUp(this.current);
+  save(): SaveOutcome {
+    return withWorkspaceLock(workspaceRootOfRunDir(this.runDir), () => {
+      const base = this.runToWrite();
+      const rolled = rollUp(base.run);
 
-    const runValidation = validateRunFile(rolled);
-    if (!runValidation.ok) {
-      const first = runValidation.issues[0];
-      throw new RunStoreError(`refusing to write an invalid run.yml: ${first?.path ?? ""} ${first?.message ?? ""}`);
-    }
+      const runValidation = validateRunFile(rolled);
+      if (!runValidation.ok) {
+        const first = runValidation.issues[0];
+        throw new RunStoreError(`refusing to write an invalid run.yml: ${first?.path ?? ""} ${first?.message ?? ""}`);
+      }
 
-    withWorkspaceLock(workspaceRootOfRunDir(this.runDir), () => {
       const budget = rollUpBudget(this.ceilingsToWrite(), rolled);
       const budgetValidation = validateRunBudget(budget);
       if (!budgetValidation.ok) {
@@ -275,11 +336,119 @@ export class RunStore {
         throw new RunStoreError(`refusing to write an invalid budget.yml: ${first?.path ?? ""} ${first?.message ?? ""}`);
       }
       writeAtomic(join(this.runDir, "budget.yml"), emitBudgetYaml(budget));
-      writeAtomic(join(this.runDir, "run.yml"), emitRunYaml(rolled));
+      const runPath = join(this.runDir, "run.yml");
+      writeAtomic(runPath, emitRunYaml(rolled));
       this.current = rolled;
+      this.loaded = rolled;
       this.currentBudget = budget;
       this.budgetMutated = false;
+      // Said AFTER the write, once it is true — and never silently (peer review
+      // of #305, §7): the one case a merge cannot happen is exactly the case
+      // where an external write may just have been overwritten, and the
+      // operator who typed it would otherwise be the last to know.
+      if (base.fallback !== null) {
+        process.stderr.write(
+          `tldrx: ${runPath} ${base.fallback}, so it could not be merged with: this process's copy of ` +
+            `the run was written whole, and the version that was on disk is beside it as ${backupPathFor(runPath)}. ` +
+            "A change another command wrote there since this process read the run (a budget raise, a " +
+            "cancel, a rejection) may be in that backup and not in run.yml.\n",
+        );
+      }
+      if (base.cancelledUnder) {
+        this.cancelledUnderFlag = true;
+        const who = rolled.cancelled;
+        process.stderr.write(
+          `tldrx: run ${rolled.run} was cancelled` +
+            (who === undefined ? "" : ` by ${who.by} at ${who.at} (${who.note})`) +
+            " while this process held it: the cancel's statuses were kept, this process's task rows were " +
+            "recorded beside them, and nothing more may be spawned for it.\n",
+        );
+      }
+      return { cancelledUnder: base.cancelledUnder };
     });
+  }
+
+  /**
+   * The run this save should write: `run.yml` as it is on disk RIGHT NOW, with
+   * only the fields this store changed since it last read or wrote the file
+   * carried over it (`carryChanges`).
+   *
+   * Three outcomes, and they are deliberately not one. A file that is GONE is
+   * merged with nothing and nothing is said — there was no external write to
+   * lose. A file that exists but does not parse or does not validate cannot be
+   * merged with, so the in-memory copy is written whole (`ceilingsToWrite`'s
+   * fallback, and a save is not the place to fail over someone else's damage) —
+   * but that is the one case an external write may be silently destroyed, so
+   * `fallback` carries the reason and `save()` says so on stderr, beside the
+   * `.bak` `writeAtomic` keeps of what was there. A file that records ANOTHER
+   * run is not damage, it is a violated premise: the save REFUSES, naming both
+   * ids and the path, and writes nothing — unreachable by path construction
+   * today, and exactly the kind of overwrite that must not be reachable by
+   * accident tomorrow.
+   *
+   * This is ownership by CHANGE, not a blind reload-and-merge, and the
+   * distinction is the whole design (gh #305). A blind merge combines two
+   * writers' copies into a state neither asked for. Here every value that lands
+   * on disk was written by the store that changed it, and a store never carries
+   * back a value it only ever loaded — so who owns a field is decided by who
+   * writes it, which spec §2.2 lists: the loop owns the execution record
+   * (statuses, cursor, task rows, costs, the gate it parks on, `build`,
+   * `outcome`, `ship`), external commands own the decisions a person makes
+   * (`stages[].budget_usd`, `cancelled`, gate signatures and rejections,
+   * `gates_policy`, `questions_policy`, `attended_by`). The two sets never
+   * change the same field, so neither can revert the other. Two writers that DO
+   * change one field — a `run cancel --force` marking a stage `cancelled` that a
+   * live loop is still marking `running` — are the case ownership cannot
+   * settle, and that is why `cancelRun` refuses under a live `.lock` unless
+   * forced, rather than this method guessing.
+   *
+   * Every derived field (`status` at all three levels, `cost_usd`, `spent_usd`,
+   * `updated_at`, `last_written_by`) is recomputed by `rollUp` from the MERGED
+   * document, so a roll-up never describes a mix of two moments. A decision
+   * derived from fields with two owners — the economy refusal reads the loop's
+   * spend against an operator's ceiling — records the figures it read beside
+   * the verdict (`budget.blocked` carries `remaining_usd` and `ceiling_usd`; the
+   * auto-gate note carries `budget=$x of $y`), because after this change the
+   * file can legitimately hold a pair no single writer saw side by side.
+   */
+  private runToWrite(): { readonly run: RunFile; readonly fallback: string | null; readonly cancelledUnder: boolean } {
+    const path = join(this.runDir, "run.yml");
+    if (!existsSync(path)) return { run: this.current, fallback: null, cancelledUnder: false };
+    let doc: unknown;
+    try {
+      doc = parseYaml(readFileSync(path, "utf8"));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return { run: this.current, fallback: `could not be read or parsed (${detail})`, cancelledUnder: false };
+    }
+    const validation = validateRunFile(doc);
+    if (!validation.ok) {
+      const first = validation.issues[0];
+      return {
+        run: this.current,
+        fallback: `does not validate (${first?.path ?? ""} ${first?.message ?? "schema error"})`,
+        cancelledUnder: false,
+      };
+    }
+    const onDisk = asRunFile(doc);
+    if (onDisk.run !== this.current.run) {
+      throw new RunStoreError(
+        `refusing to write ${path}: it records run ${onDisk.run}, and this store holds run ` +
+          `${this.current.run} — a save never overwrites another run's record`,
+      );
+    }
+    // The one field two writers CAN both change, decided (gh #305, peer review):
+    // a `cancelled:` on disk this store neither loaded nor wrote is a cancel
+    // that landed under it, and cancelled is terminal and wins — see
+    // `carryChanges` for exactly what is then not carried.
+    const cancelledUnder = onDisk.cancelled !== undefined
+      && this.loaded.cancelled === undefined
+      && this.current.cancelled === undefined;
+    return {
+      run: carryChanges(onDisk, this.current, this.loaded, { cancelledWins: this.cancelledUnderFlag || cancelledUnder }),
+      fallback: null,
+      cancelledUnder,
+    };
   }
 
   /**
@@ -380,6 +549,62 @@ function parseStateFile(path: string): RepairedYaml {
       "  a hand-edit is the other way out, and it is the only one that keeps work the backup predates",
     ].join("\n"));
   }
+}
+
+/**
+ * `onDisk` with every field that differs between `mine` and `loaded` taken from
+ * `mine` — top-level keys, then per phase, then per stage, matched by id; a
+ * stage's `tasks` list is one field. A key `mine` dropped is dropped. A phase or
+ * stage `onDisk` does not have is written as `mine` has it (the structure is
+ * fixed at `run new`; this only says what happens if it is not).
+ *
+ * `cancelledWins` (gh #305, peer review): `cancelled` is terminal and wins the
+ * one field two writers can both change. When the on-disk run was cancelled
+ * under this store, its `cursor` change is not carried, and on every stage the
+ * cancel marked `cancelled` its `status`/`started_at`/`ended_at` changes are not
+ * carried — the stage stays cancelled. Its `tasks` ARE carried: those turns
+ * happened and cost money, and a ledger that forgot them would be the other
+ * lie. Every other field follows the ordinary rule.
+ *
+ * Exported so a test can pin it directly; `RunStore.save()` is its one caller.
+ */
+export function carryChanges(
+  onDisk: RunFile,
+  mine: RunFile,
+  loaded: RunFile,
+  rules: { readonly cancelledWins: boolean } = { cancelledWins: false },
+): RunFile {
+  const top = carryLevel(onDisk, mine, loaded, rules.cancelledWins ? ["phases", "cursor"] : ["phases"]);
+  const phases = mine.phases.map((phase) => {
+    const theirs = onDisk.phases.find((p) => p.id === phase.id);
+    const was = loaded.phases.find((p) => p.id === phase.id);
+    if (theirs === undefined || was === undefined) return phase;
+    const stages = phase.stages.map((stage) => {
+      const theirStage = theirs.stages.find((s) => s.id === stage.id);
+      const wasStage = was.stages.find((s) => s.id === stage.id);
+      if (theirStage === undefined || wasStage === undefined) return stage;
+      const kept = rules.cancelledWins && theirStage.status === "cancelled"
+        ? ["status", "started_at", "ended_at"]
+        : [];
+      return carryLevel(theirStage, stage, wasStage, kept);
+    });
+    return { ...carryLevel(theirs, phase, was, ["stages"]), stages };
+  });
+  return { ...top, phases };
+}
+
+/** One mapping level of `carryChanges`; `skip` names the keys the caller merges itself. */
+function carryLevel<T extends object>(onDisk: T, mine: T, loaded: T, skip: readonly string[]): T {
+  const out = { ...onDisk } as unknown as Record<string, unknown>;
+  const theirs = mine as unknown as Record<string, unknown>;
+  const was = loaded as unknown as Record<string, unknown>;
+  for (const key of new Set([...Object.keys(theirs), ...Object.keys(was)])) {
+    if (skip.includes(key)) continue;
+    if (isDeepStrictEqual(theirs[key], was[key])) continue;
+    if (theirs[key] === undefined) delete out[key];
+    else out[key] = theirs[key];
+  }
+  return out as unknown as T;
 }
 
 /** Costs up from tasks, statuses up from stages, `updated_at` to now. */

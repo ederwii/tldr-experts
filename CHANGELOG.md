@@ -96,6 +96,55 @@
   `--prepare` offers S1's review; the dependent is offered the moment S1 leaves `review` for a status
   `pendingStories` skips. Minor by behaviour: a `--prepare` and a `--commit` that used to hand out and
   settle now record `blocked` or refuse.
+- **A `budget raise --stage` typed during a live `run auto` loop no longer evaporates on the loop's
+  next save (#305).** MEASURED in the field on 0.21.0: the command printed `04-build/build budget_usd
+  $12.60 → $62.60`, exited 0, and two hours later `run.yml` read `budget_usd: 12.60` again with the
+  gate note holding the stage on `budget=$35.78 of $12.60` — the developers had been capped on the
+  figure the operator had raised. Not a `budget` bug: a LOST UPDATE on `run.yml`. `RunStore.save()`
+  re-read `budget.yml`'s ceilings from disk before writing (the 2026-08-29 fix) and wrote `run.yml`
+  WHOLE from the copy the store loaded — and `run auto` holds one store for the whole of a stage, the
+  Build fan-out included. Pinned RED through the real writers on today's `main`: the raise reverted
+  (`Expected: 54 / Received: 4`), a `reject --and-continue` beside a held store reverted (`rejected` →
+  `pending`), a `run cancel` beside one lost its `cancelled:` block. `save()` now re-reads `run.yml`
+  under the workspace lock and carries over it ONLY the fields this store changed since it last read
+  or wrote the file; every derived figure is rolled up from the merged document. That is ownership by
+  change, not the blind reload-and-merge the issue warned against: every value on disk was written by
+  the store that changed it, and a store never writes back a value it merely loaded — so the loop,
+  which never touches a stage's `budget_usd`, cannot revert a raise, and the raise, which never touches
+  task rows, cannot revert the ledger. Who changes what is now written down in spec §2.2 — the loop
+  owns the execution record, a person's commands own `budget_usd`, `cancelled`, gate decisions and the
+  policies — and the one field two writers can both change, a stage's `status` under `run cancel
+  --force` while a loop still runs it, has a DECLARED winner (peer review): `cancelled` is terminal
+  and wins. A cancel that landed under a held store keeps its statuses and the cursor on the file —
+  the held store's task rows still land, those turns happened and cost money — the save answers
+  `cancelledUnder: true` and says so on stderr, and the PROCESS obeys the file, not only the file:
+  the Build executor asks `RunStore.cancelledOnDisk` before every spawn (each story attempt, each
+  parallel lane, the reviewer) and `tldrx next` stops after the save that merged the cancel, with
+  the same exit 0 its "is cancelled — nothing to advance" path uses, rather than parking a
+  cancelled stage on a gate. Pinned through the real dispatch with the fake agent: a forced cancel
+  fired from S1's own DoD command leaves exactly one `agent.spawned` on the log — S1's developer —
+  S1 parked at `review` with an `n-a` verdict naming the cancel, S2 never started, `run.yml`
+  `cancelled` with the stage `cancelled`. MEASURED before the rule: the same collision spawned five
+  times over an already-cancelled run (S1's reviewer, S2's developer and reviewer, S1's developer
+  again), and the file ended `cancelled` with the stage `awaiting_gate` — #305's shape one level
+  down. A verdict read across two owners (the loop's spend against an
+  operator's ceiling) already records the figures it read beside itself — `budget.blocked` carries
+  `remaining_usd` and `ceiling_usd`, the auto-gate note carries `budget=$x of $y` — and that is now
+  the stated rule, because the file can legitimately hold a pair no single writer saw together. For
+  the record: `reject` had no live exposure by construction (it refuses anything but
+  `awaiting_gate`/`failed`, by which point the loop's store for that stage is gone) and `run cancel`
+  already refused under a live `.lock` unless forced; both are pinned at store level anyway, because
+  the next writer will not be one of these three.
+  Two edges from the pre-merge review, because a fallback that guesses silently is the same lie in a
+  smaller font: a `run.yml` on disk that exists but cannot be merged with (does not parse, does not
+  validate) has the in-memory copy written whole — the only honest move — but that is exactly the
+  case an external write may just have been destroyed, so `save()` says so on stderr, naming the
+  reason and the `.bak` beside the file where the replaced version is (the convention the repair path
+  already uses; no new event kind, none exists for repairs and §7 does not invent one); an absent file
+  is merged with nothing and stays silent, there was nothing to lose. And a `run.yml` that records
+  ANOTHER run is not damage but a violated premise: the save REFUSES, naming both ids and the path,
+  and writes nothing — unreachable by path construction today, pinned so it stays unreachable by
+  accident.
 
 ## 0.24.0 — 2026-09-14
 
