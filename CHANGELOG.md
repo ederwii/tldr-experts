@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.28.0 — unreleased
+
+### Fixed
+
+- **`tldrx story reopen` on a `blocked` story also releases the dependents it alone was holding
+  (#312).** Reopening a blocked dependency left every dependent `blocked` with a
+  `dependency S<n> blocked` reason that had just gone stale, so each needed its own reopen —
+  measured three times in one day on a live run. Every `blocked` story whose recorded hold names
+  the reopened story (or a story released this way, transitively) now goes back to `todo` in the
+  same command when no other dependency still holds it. Each release is its own signed
+  `story.reopened` naming the dependency that caused it (additive `released_by` and `dependency`),
+  consuming no attempt. A dependent still held by another dependency, or blocked by a verdict
+  rather than a hold, stays `blocked`, and the output says which and why.
+
 ## 0.27.0 — 2026-09-14
 
 ### Added
