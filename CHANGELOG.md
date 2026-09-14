@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.26.0 — unreleased
+
+### Fixed
+
+- **`tldrx replay` says what a failed stage died of, instead of `FAILED: no reason recorded` for
+  every one (#309).** MEASURED by inspection at `03d53e8`: the ONLY writer of `stage.failed` in the
+  tree — and, per `git log -S`, in its whole history — carries the failure as `payload.reason`
+  (`runNext.ts`, the fail path; the same field `stage.skipped` uses, and the same field `run auto`'s
+  own summary reads). The narrative renderer read `payload.error`, a field nothing ever set, so
+  `text()` was always empty and the fallback always fired — a stakeholder reading a replay saw
+  that a stage failed and never why, while the reason sat one field over in the same line of
+  `events.jsonl`. Same class as the `message`/`detail` drift #249's round-1 review found:
+  payloads are untyped and nothing checks a reader's field name against its writer's. The
+  renderer now reads `reason`, like its sibling one line down; the `FAILED: ` marker and the
+  fallback sentence are exported constants, and `test/replay.test.ts` feeds a hand-built
+  `stage.failed` event and pins the rendered line to the reason it carried (RED on the old read:
+  the line was never found; the fallback case is a guard). No record changes shape — nothing
+  wrote `error`, so there is no old record to tolerate.
+
 ## 0.25.0 — 2026-09-14
 
 ### Fixed
