@@ -917,6 +917,18 @@ the note, `task.done` carries `as_is`, `as_is_by` and `as_is_note`, and the stor
 opens its developer line with **none**, naming the branch it took and the person who signed
 for it. Nothing anywhere reads as though a developer delivered it.
 
+**One named exception — work already on the epic, review never completed (#295).** Under
+merge-before-review a story's diff can be entirely on the epic while nothing has judged it: the
+reviewer died, or a later attempt died on a refusal with no work. Then "tip ahead of base"
+measures the wrong thing — there is nothing to merge and something to settle. `--as-is` over
+such a branch reads the review ledger's last recorded merge (kept across reopens) and, when
+nothing judged it (`n-a` or `error`), settles the story **review-only**: nothing is merged, the
+branch is fast-forwarded to the epic (it carries nothing of its own), the DoD runs on the epic
+head and the reviewer is handed the range the story was merged as. `task.done` carries
+`as_is_reason: review-only` and the review log says so. A review that STANDS — `changes`,
+`approve`, `fixlist` — still refuses, and the refusal names the verdict: a fix is owed, not a
+third opinion on the same bytes.
+
 `--for-fix` and `--as-is` together are a usage error (`1`): they answer different questions.
 `tldrx next --prepare` refuses an `--as-is` story rather than dispatching a developer bundle
 for it — the headless `tldrx next` is what settles it.

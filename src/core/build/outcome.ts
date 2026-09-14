@@ -335,6 +335,24 @@ export const AS_IS_MARK = "the branch was taken AS IT STANDS — no developer wa
 export const AS_IS_NOT_AHEAD_MARK = "nothing to take as it stands";
 
 /**
+ * The marker in the refusal of an as-is settlement over a branch that carries
+ * nothing beyond its epic AND whose last review over that work STANDS (#295):
+ * `approve`, `changes` or `fixlist` was recorded against the merged diff, so
+ * the review is not owed — a fix is. Beside `AS_IS_NOT_AHEAD_MARK`, never
+ * instead of it.
+ */
+export const AS_IS_JUDGED_MARK = "the last review of that work stands";
+
+/**
+ * The words a record uses for the REVIEW-ONLY case of an as-is settlement
+ * (#295): the story's work was already on its epic from an earlier turn and
+ * nothing had judged it, so this turn merged nothing, ran the DoD on the epic
+ * head and the review over the range the story was merged as. Distinct from
+ * `AS_IS_MARK` on purpose — "the branch was taken" would be false here.
+ */
+export const AS_IS_REVIEW_ONLY_MARK = "the review was run AS IT STANDS — nothing was merged and no developer was spawned";
+
+/**
  * Why an as-is settlement was refused before it ran a thing.
  *
  * `ahead` is `commitsBetween`'s `number | null` contract (#273) and the two
@@ -343,14 +361,41 @@ export const AS_IS_NOT_AHEAD_MARK = "nothing to take as it stands";
  * merge on a measurement I do not have". Both refuse — a verb that takes a
  * branch without a developer may not also guess at what the branch holds.
  */
-export function asIsNotAheadReason(branch: string, epicBranch: string, ahead: number | null): string {
-  return ahead === null
-    ? `${AS_IS_NOT_AHEAD_MARK}: git could not count what \`${branch}\` carries beyond `
+export function asIsNotAheadReason(
+  branch: string,
+  epicBranch: string,
+  ahead: number | null,
+  /**
+   * The last review recorded over this story's merged work, when one STANDS
+   * (#295) — the reason the review-only case did not apply. Absent when there is
+   * no recorded merge at all, which is the sentence #279 always printed.
+   */
+  judged?: { readonly commit: string; readonly verdict: string },
+): string {
+  if (ahead === null) {
+    return `${AS_IS_NOT_AHEAD_MARK}: git could not count what \`${branch}\` carries beyond `
       + `\`${epicBranch}\`, and a settlement that spawns no developer will not merge on a `
-      + "measurement it does not have. Nothing was merged"
-    : `${AS_IS_NOT_AHEAD_MARK}: \`${branch}\` carries no commit \`${epicBranch}\` has not already `
-      + "got, so there is no work to settle. Commit the fix to the story branch first, then reopen it "
-      + "--as-is. Nothing was merged";
+      + "measurement it does not have. Nothing was merged";
+  }
+  return `${AS_IS_NOT_AHEAD_MARK}: \`${branch}\` carries no commit \`${epicBranch}\` has not already `
+    + "got, so there is no work to settle"
+    + (judged === undefined
+      ? ""
+      : `, and ${AS_IS_JUDGED_MARK} — \`${judged.commit.slice(0, 7)}\` is on \`${epicBranch}\` and its `
+        + `review said \`${judged.verdict}\`, so the review is not what is owed`)
+    + ". Commit the fix to the story branch first, then reopen it --as-is. Nothing was merged";
+}
+
+/**
+ * Did NOTHING judge the diff this `task.done` settled (#295)? `n-a` is a turn
+ * no reviewer was spawned for (blocked before one, or refused for want of
+ * money, gh #289); `error` is a reviewer that died mid-read. Every other verdict
+ * is a reviewer's opinion about the bytes, and it stands until a fix or a
+ * person's plain reopen moves it. One predicate, because the review-only case
+ * and the refusal that names the standing verdict must not disagree.
+ */
+export function reviewNeverCompleted(verdict: string): boolean {
+  return verdict === "n-a" || verdict === "error";
 }
 
 /** Who signed a story's as-is settlement, and why (#279). */
@@ -361,6 +406,20 @@ export interface AsIsSettlement {
   readonly note: string;
   /** When that reopen was signed. */
   readonly at: string;
+  /**
+   * WHICH case the Build decided this signature was (#295), or absent for the
+   * one #279 shipped: the branch taken as it stands and merged. `review-only`
+   * means the work was already on the epic from an earlier turn and nothing had
+   * judged it, so this turn merged nothing and ran the DoD and the review. Set
+   * by the executor once it has measured the branch, never by the reopen.
+   */
+  readonly reason?: "review-only";
+  /**
+   * The merge the review-only turn reviewed — the commit and the epic base the
+   * story was merged as, off the ledger (#295). Present exactly when `reason`
+   * is `review-only`.
+   */
+  readonly reviewed?: { readonly commit: string; readonly epicBase: string };
 }
 
 /** True when the merge that put this story on its epic moved no commits. */

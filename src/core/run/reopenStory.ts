@@ -86,6 +86,12 @@ export interface ReopenOptions {
    * work since; the DoD and the reviewer are unchanged and still decide, and the
    * Build refuses the settlement outright when the branch carries nothing its
    * epic has not already got or when the DoD goes red.
+   *
+   * One named case beside that refusal (#295): a story whose work is ALREADY on
+   * the epic from an earlier turn and whose review never completed is settled
+   * REVIEW-ONLY — nothing merged, the DoD on the epic head, the reviewer over
+   * the range the story was merged as. Decided by the Build off the ledger, not
+   * here: this verb records the signature and nothing about the branch.
    */
   readonly asIs?: boolean;
   readonly runId?: string;
@@ -316,6 +322,8 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
           + "over the commits already on the story branch",
         "  it is not a shortcut past either gate — a red dod BLOCKS the story, and so does a branch "
           + "that carries no commit its epic has not already got; the refusal says which",
+        "  one named exception: work that is ALREADY on the epic with a review that never completed is "
+          + "settled review-only — nothing merged, the dod on the epic head, the reviewer over the recorded range",
         "  the record will say the branch was taken as it stands and name you, so nothing reads as "
           + "though a developer delivered it",
         ...kept,

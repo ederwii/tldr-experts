@@ -219,6 +219,17 @@ export function unevidencedClaims(findings: readonly FixFinding[]): readonly Fix
  */
 export const CLAIMED_UNVERIFIED = "claimed-unverified";
 
+/**
+ * The words the operator line uses when a `fixlist` verdict carries NOTHING to
+ * fix now and the story settles `done` on the spot (gh #295).
+ *
+ * A marker rather than a sentence a test greps for, for the reason every marker
+ * in `outcome.ts` exists: a proxy string like a bare English word false-positives
+ * on innocent prose (AGENTS.md §8), and the line and the test must not be able
+ * to drift apart.
+ */
+export const FIXLIST_SETTLED_MARK = "every finding is routed away from `fix-now`, so the story is done without a fix round";
+
 // --- the envelope ----------------------------------------------------------
 
 export interface ParsedFixlist {

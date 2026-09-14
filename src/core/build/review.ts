@@ -17,7 +17,7 @@
 import { isRecord } from "../schemas/validation.ts";
 import { SRC_GRAMMAR_HEADING } from "../text/srcGrammarContract.ts";
 import { parseFixFindings, type FixFinding } from "./fixlist.ts";
-import { AS_IS_MARK, DOD_REFUSAL_FALLBACK, dodRefused, scopedNote } from "./outcome.ts";
+import { AS_IS_MARK, AS_IS_REVIEW_ONLY_MARK, DOD_REFUSAL_FALLBACK, dodRefused, scopedNote } from "./outcome.ts";
 import type { DodResult, StoryOutcome, Verdict } from "./outcome.ts";
 import { renderReviewerProvenance } from "./reviewerProvenance.ts";
 import { withCure } from "./refusalKind.ts";
@@ -491,9 +491,17 @@ export function renderReviewLog(outcome: StoryOutcome): string {
     // ordinary turn — the record lying in the dangerous direction (AGENTS.md §7).
     ...(outcome.asIs == null
       ? []
-      : [`- Developer: **none** — ${AS_IS_MARK}. \`${outcome.branch}\` was settled as it stands, `
-        + `signed by ${outcome.asIs.actor}: ${outcome.asIs.note}. The Definition of Done below and `
-        + "the reviewer above judged that branch, unchanged."]),
+      : outcome.asIs.reason === "review-only"
+        // gh #295: the OTHER as-is case, and "the branch was taken" would be
+        // false here — nothing was merged this turn. The line names the merge
+        // the reviewer was handed, so a reader can see it predates this turn.
+        ? [`- Developer: **none** — ${AS_IS_REVIEW_ONLY_MARK}. \`${outcome.asIs.reviewed?.commit ?? outcome.commit ?? "(none)"}\` `
+          + `was already on \`${outcome.epicBranch}\` from an earlier turn and nothing had judged it; `
+          + `signed by ${outcome.asIs.actor}: ${outcome.asIs.note}. The Definition of Done below ran on the `
+          + "epic head, and the reviewer above judged the range that merge was recorded as."]
+        : [`- Developer: **none** — ${AS_IS_MARK}. \`${outcome.branch}\` was settled as it stands, `
+          + `signed by ${outcome.asIs.actor}: ${outcome.asIs.note}. The Definition of Done below and `
+          + "the reviewer above judged that branch, unchanged."]),
     ...(outcome.developerError === null ? [] : [`- Developer: **FAILED** — ${outcome.developerError}`]),
     // The refusal that did NOT stop the story (gh #271): still evidence, still
     // named — and, since gh #278, with the cure the line shows, when it shows one.
