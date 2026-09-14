@@ -141,18 +141,29 @@ export async function foreignEpicRefusal(
         "did not cut it — refusing to stack this run's commits onto someone else's epic.",
       "  either delete or rename that branch, or run `tldrx next --reuse-epic` to work on it deliberately.",
     ];
-    const error = `epic branch \`${branch}\` was not created by this run`;
+    // Four structurally different faults share these lines, and each gets its OWN
+    // sentence (gh #297): a constant per branch made "a claimant is still open" and "the
+    // leftover could not be moved" the same refusal, so a run whose foreign-epic
+    // condition CHANGED shape between attempts — an open owner finishing, its branch
+    // becoming a movable leftover — read as a refusal repeating and stopped relaunching.
+    const about = `epic branch \`${branch}\` in ${planned.story.repo} was not created by this run`;
     // Whose is it? (gh #272) Read from the CLAIMS under tldrx-work/ — never from
     // "is a process running", because a run killed mid-Build or parked eight
     // hours at a gate has no process and is still the owner.
     const owners = epicClaimants(parts.root, branch, parts.runId);
     if (owners.unreadable.length > 0) {
-      return { lines: [...verbatim, `  · ${owners.unreadable.join(", ")} could not be read, so who owns it is unknown`], error };
+      return {
+        lines: [...verbatim, `  · ${owners.unreadable.join(", ")} could not be read, so who owns it is unknown`],
+        error: `${about}; who owns it is unknown — unreadable claim(s): ${owners.unreadable.join(", ")}`,
+      };
     }
     const open = owners.claimants.filter((store) => !isFinished(store.run.status));
     if (open.length > 0) {
       const named = open.map((store) => `${store.runId} (${store.run.status})`).join(", ");
-      return { lines: [...verbatim, `  · claimed by run ${named}, which is still open`], error };
+      return {
+        lines: [...verbatim, `  · claimed by run ${named}, which is still open`],
+        error: `${about}; claimed by open run(s) ${named}`,
+      };
     }
     const owner = owners.claimants[0];
     if (owner === undefined) {
@@ -161,7 +172,7 @@ export async function foreignEpicRefusal(
       // epic where it left it — moving it aside would be worse than refusing.
       return {
         lines: [...verbatim, `  · no run under ${PROJECT_WORK_DIR}/ records cutting it, so it is nobody's leftover to move`],
-        error,
+        error: `${about}; no run records cutting it, so it is nobody's leftover to move`,
       };
     }
     // The owner's run.yml says it is finished: the branch is a leftover, not a
@@ -186,7 +197,7 @@ export async function foreignEpicRefusal(
             `(${status}), and could not be moved aside — ${why}.`,
           verbatim[1] ?? "",
         ],
-        error,
+        error: `${about}; left by run ${owner.runId} (${status}) and could not be moved aside — ${why}`,
       };
     }
     state.released.push({ record, owner: owner.runId, ownerStatus: status });
@@ -329,7 +340,12 @@ export async function dirtyRepoRefusal(
             : [`  The other ${String(setAside.length)} change(s) here are nobody's story — `
               + "the engine would have set those aside and given them back itself."]),
         ],
-        error: `repo \`${name}\` has uncommitted changes a pending story declares`,
+        // The PATHS and whose story they belong to, not just the repo (gh #297). A run
+        // comes back to the same repo, so a comparand that names only the repo calls two
+        // different dirty trees — different files, different stories — the same refusal
+        // and throws away the relaunches that would have outlived them.
+        error: `repo \`${name}\` has uncommitted changes a pending story declares: `
+          + verdict.overlapping.map((row) => `${row.entry.path} (${row.why})`).join("; "),
       });
     }
     aside.push({ repo: name, repoDir: dir, paths: verdict.foreign.map((entry) => entry.path) });

@@ -328,3 +328,41 @@ describe("Build moves a stale epic aside instead of refusing it (#272, half 2)",
     expect(releaseEvents(retry.runDir)).toHaveLength(0);
   });
 });
+
+/**
+ * gh #297 — the same branch, two different faults. The foreign-epic refusal built ONE
+ * sentence per branch and handed it to `--until-done` as the comparand, so "a run still
+ * has it open" and "nobody claims it" were the same refusal. A run whose foreign-epic
+ * condition CHANGES shape between attempts — the open owner finishes, the branch becomes
+ * a movable leftover — is exactly the case a relaunch moves, and it was the case the
+ * guard stopped.
+ */
+describe("the foreign-epic refusal names its fault, not just the branch (gh #297)", () => {
+  test("an unclaimed branch and one an open run claims are different refusals", async () => {
+    const unclaimed = workspace();
+    cutEpic(unclaimed.repoDir, 1);
+    const retryA = addBuildRun(unclaimed, { ...ONE_STORY, slug: "retry" });
+    const nobody = await next(unclaimed, { runId: retryA.runId });
+
+    const held = workspace();
+    claim(held.runDir, "epic/e1");
+    cutEpic(held.repoDir, 1);
+    const retryB = addBuildRun(held, { ...ONE_STORY, slug: "retry" });
+    const open = await next(held, { runId: retryB.runId });
+
+    expect(nobody.code).toBe(2);
+    expect(open.code).toBe(2);
+    // Same branch, same repo — the part that was all the old comparand carried.
+    expect(nobody.signature).toContain("epic/e1");
+    expect(open.signature).toContain("epic/e1");
+    // And the fault, which is what a relaunch can actually move.
+    expect(nobody.signature).toContain("no run records cutting it");
+    expect(open.signature).toContain("claimed by open run");
+    expect(open.signature).not.toBe(nobody.signature);
+
+    // And the same fault twice is the same refusal, byte for byte.
+    const again = await next(held, { runId: retryB.runId });
+    expect(again.code).toBe(2);
+    expect(again.signature).toBe(open.signature);
+  });
+});

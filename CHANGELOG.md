@@ -67,11 +67,20 @@
   ledger both quote — now names the refusal rather than the advice under it. Executor refusals
   (`refused: true`) are covered at their ONE pass-through rather than producer by producer: eight
   producers across the Build and Watch executors leave through a single `out()` call, which now
-  passes the executor's own signature, falling back to `ExecutorOutcome.error` — measured across all
-  eight, it names the repo, branch, command or story at fault wherever it is not null. Watch's
-  branch-incoherence refusal is the one whose `error` IS null and whose last line is a literal about
-  `tldrx doctor`, so it names its faults itself. A ninth producer added tomorrow inherits the door
-  instead of being born blind.
+  passes the executor's own signature, falling back to `ExecutorOutcome.error` — and four of those
+  sentences had to be corrected before the fallback was worth anything. The question is not what a
+  sentence interpolates but whether it DISTINGUISHES the states a relaunch can move between, and a
+  run comes back to the same repo: naming the repo alone made two different dirty trees one
+  refusal, two different stash failures one refusal, and four structurally different foreign-epic
+  faults one refusal. So the dirty-tree refusal now names the overlapping paths and why each is
+  claimed; the foreign-epic refusal carries one sentence per fault (unreadable claims, an open
+  claimant, nobody's leftover, a leftover that could not be moved) instead of one per branch; the
+  could-not-be-set-aside refusal carries git's own reason, which its printed lines already had; and
+  the red-base refusal names EVERY red command rather than the first in iteration order — measured
+  on two base trees that differ only in their second command, where the printed refusal changed and
+  the comparand did not move a byte. Watch's branch-incoherence refusal, whose `error` is null and
+  whose last line is a literal about `tldrx doctor`, names its faults itself. A ninth producer
+  added tomorrow inherits the door instead of being born blind.
 
 
 ## 0.23.0 — 2026-09-14

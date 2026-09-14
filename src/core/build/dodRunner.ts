@@ -230,12 +230,19 @@ export async function redBaseRefusal(
     }
   }
   if (failures.length === 0) return null;
-  const first = failures[0];
   return {
     lines: [...baseRefusalLines(failures, parts.workspace)],
-    error: first === undefined
+    // EVERY red command, not the first in iteration order (gh #297). This sentence is
+    // what `--until-done` compares one attempt against the next, and a base tree with two
+    // reds and one with only the first of them still red are different states that the
+    // printed refusal already distinguishes: measured, the old sentence did not move
+    // between them, so the loop called a base an operator was fixing "the same refusal"
+    // and stopped relaunching over it.
+    error: failures.length === 0
       ? "a workspace command fails on the base tree"
-      : `\`${first.command}\` exits ${String(first.exitCode ?? "?")} on the base tree of ${first.repo}`,
+      : failures
+        .map((row) => `\`${row.command}\` exits ${String(row.exitCode ?? "?")} on the base tree of ${row.repo}`)
+        .join("; "),
   };
 }
 

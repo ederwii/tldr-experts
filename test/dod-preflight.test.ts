@@ -30,7 +30,9 @@ import {
 } from "../src/core/build/preflight.ts";
 import { loadWorkspace, type WorkspaceContext } from "../src/hooks/lib/workspace.ts";
 import type { CommandProbeRecord } from "../src/core/schemas/workspace.ts";
-import { PreflightCache } from "../src/core/build/dodRunner.ts";
+import { PreflightCache, redBaseRefusal, type BaseParts } from "../src/core/build/dodRunner.ts";
+import type { SerialWrite } from "../src/core/build/outcome.ts";
+import type { PlannedStory } from "../src/core/build/plan.ts";
 import {
   makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions,
 } from "./fixtures/build/workspace.ts";
@@ -273,6 +275,75 @@ function row(over: Partial<BaseCommandResult> = {}): BaseCommandResult {
     ...over,
   };
 }
+
+
+/**
+ * gh #297 — what the base refusal is COMPARED BY across `--until-done` attempts.
+ *
+ * `runNext` hands every executor refusal's `error` to the relaunch guard as the
+ * comparand, and this one named `failures[0]` alone. The question that matters is not
+ * "what does it interpolate" but "does it DISTINGUISH the states a relaunch can move
+ * between": a base tree where two commands are red and one where only the first of them
+ * is still red are different states, the printed refusal says so, and a comparand built
+ * from the first failure alone does not.
+ *
+ * The cache is seeded rather than measured — `baseSha: ""` and no `command_hash` make the
+ * lookup unconditional (`baseResultFor`) — so nothing spawns and the two states differ in
+ * exactly one thing.
+ */
+describe("the base refusal names every red command, not the first (gh #297)", () => {
+  const passThrough: SerialWrite = async (work) => await work();
+
+  function baseParts(ws: BuildWorkspace): BaseParts {
+    return {
+      workspace: loadWorkspace(ws.root),
+      // A FRESH cache per call: `PreflightCache` reads the file once per instance.
+      cache: new PreflightCache(ws.runDir),
+      at: "2026-08-29T09:00:00Z",
+      preparing: false,
+      timeoutMs: 60_000,
+      runDir: ws.runDir,
+      write: passThrough,
+      advisories: [],
+    };
+  }
+
+  const declaring = (commands: readonly string[]): readonly PlannedStory[] =>
+    [{ story: { repo: "app" }, dod: { commands } } as unknown as PlannedStory];
+
+  const seedRow = (command: string, exitCode: number): BaseCommandResult => ({
+    repo: "app", command, baseRef: "main", baseSha: "", exitCode, timedOut: false,
+    tail: `${command} exited ${String(exitCode)}`,
+    status: exitCode === 0 ? "ok" : "failed", checkedAt: "",
+  });
+
+  test("two red sets sharing their first failure are two refusals, not one", async () => {
+    const ws = workspace(ONE);
+    const both = ["npm run test", "npm run build"];
+
+    savePreflight(ws.runDir, { checkedAt: "", results: [seedRow(both[0] ?? "", 1), seedRow(both[1] ?? "", 1)] });
+    const two = await redBaseRefusal(baseParts(ws), declaring(both));
+
+    // The operator fixed the second command; the first is still red. A different base
+    // tree, and the refusal PRINTS differently.
+    savePreflight(ws.runDir, { checkedAt: "", results: [seedRow(both[0] ?? "", 1), seedRow(both[1] ?? "", 0)] });
+    const one = await redBaseRefusal(baseParts(ws), declaring(both));
+
+    expect(two).not.toBeNull();
+    expect(one).not.toBeNull();
+    expect(one?.lines).not.toEqual(two?.lines);
+    // So the comparand must move too — this is the assertion the old `failures[0]`
+    // sentence failed, and with it every remaining relaunch of that run.
+    expect(one?.error).not.toBe(two?.error);
+    expect(two?.error).toContain("npm run build");
+
+    // The other direction: the SAME red set twice is the same refusal, byte for byte —
+    // a comparand that never repeats would make the guard fire never.
+    savePreflight(ws.runDir, { checkedAt: "", results: [seedRow(both[0] ?? "", 1), seedRow(both[1] ?? "", 1)] });
+    const again = await redBaseRefusal(baseParts(ws), declaring(both));
+    expect(again?.error).toBe(two?.error);
+  }, 60_000);
+});
 
 describe("the pre-flight cache file", () => {
   test("lives where this file's integration tests look for it", () => {
