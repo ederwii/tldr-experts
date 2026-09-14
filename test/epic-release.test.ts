@@ -21,7 +21,7 @@
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
@@ -29,6 +29,7 @@ import { cancelRun } from "../src/core/run/rescue.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { EVENT_TYPES, validateEvent } from "../src/core/events/Event.ts";
 import { asideBranchOf, describeRelease, releaseEpicBranch, releaseRunEpics, uncountedReason } from "../src/core/build/epicRelease.ts";
+import { LINE_BREAK_MARK } from "../src/core/build/handoff.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
 import {
@@ -158,6 +159,27 @@ describe("run cancel releases the epic it claimed (#272, half 1)", () => {
       branch: "epic/e1", repo: "app", outcome: "deleted", renamed_to: null, commits: 0, owner: ws.runId,
     });
     expect(outcome.lines).toEqual([describeRelease(outcome.released[0]!, git(ws.repoDir, ["rev-parse", "--short", "main"]))]);
+  });
+
+  test("the section appended to the owner's handoff is one physical line per record, whatever the note held (#283)", async () => {
+    const ws = workspace();
+    claim(ws.runDir, "epic/e1");
+    cutEpic(ws.repoDir, 0);
+    cancel(ws, ws.runId);
+    mkdirSync(join(ws.runDir, "04-build"), { recursive: true });
+    writeFileSync(join(ws.runDir, "04-build", "handoff.md"), "# Handoff\n\n## Findings\n\n- x [src: absent:04-build/log]\n", "utf8");
+
+    await releaseRunEpics({
+      root: ws.root, owner: RunStore.open(ws.runDir), actor: "alan", at: AT,
+      via: "run cancel", reason: "cancelled: abandoned\nafter the incident",
+    });
+    const text = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    const after = text.slice(text.indexOf("## Epic branch released")).split("\n").slice(1).filter((l) => l !== "");
+    // One record, one line — the raw note's newline is drawn as the mark, and the
+    // citation is still the last thing on that line.
+    expect(after).toHaveLength(1);
+    expect(after[0]).toContain(`abandoned ${LINE_BREAK_MARK} after the incident`);
+    expect(after[0]?.endsWith("[src: absent:04-build/log]")).toBe(true);
   });
 
   test("an epic git could NOT count against its base is KEPT — an uncounted branch is never deleted", async () => {

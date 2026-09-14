@@ -36,6 +36,7 @@ import { loadWorkspace, type WorkspaceContext } from "../../hooks/lib/workspace.
 import type { EventType, TldrxEvent } from "../events/Event.ts";
 import type { EpicReleaseRecord, EpicReleaseVia } from "../run/RunFile.ts";
 import type { RunStore } from "../run/RunStore.ts";
+import { asOneLine } from "./handoff.ts";
 import {
   branchExists, commitsBetween, deleteBranch, firstLine, renameBranch, repoDirOf, shaOf, uncountedCount, worktreeOn,
 } from "./git.ts";
@@ -227,9 +228,12 @@ function event(parts: ReleaseRunEpicsParts, runId: string, payload: Record<strin
 function appendToHandoff(runDir: string, released: readonly EpicReleaseRecord[]): void {
   const path = join(runDir, BUILD_PHASE, "handoff.md");
   if (!existsSync(path)) return;
-  const bullets = released.map((record) =>
+  // `record.reason` is the operator's note verbatim; a newline in it would end
+  // the bullet before its citation (gh #283), so the line goes through the same
+  // one-line rule the handoff's own renderer applies.
+  const bullets = released.map((record) => asOneLine(
     `- ${describeRelease(record)} — ${record.via} at ${record.at}: ${record.reason} `
-    + `[src: absent:${BUILD_PHASE}/log]`);
+    + `[src: absent:${BUILD_PHASE}/log]`));
   try {
     appendFileSync(path, `\n## Epic branch released\n\n${bullets.join("\n")}\n`, "utf8");
   } catch {

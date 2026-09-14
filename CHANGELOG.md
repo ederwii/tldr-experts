@@ -120,9 +120,12 @@
   read. Every element of the document is now made ONE line at the join — the break shown as ` ⏎ `
   rather than erased, so `mv a \ ⏎ b` still says the line was wrapped and nothing is dropped —
   which holds for every field the renderer embeds, not only the two the run hit; the review log
-  keeps the command verbatim. Text the framework composes has to satisfy the grammar the framework
-  checks, and this is the one place that can enforce it for this file. A document with no newline
-  in any quoted text is byte-identical, so the build golden is unchanged.
+  keeps the command verbatim — and a document that had to draw the mark says so once, under its
+  header, where the developer that copies the line reads it. Text the framework composes has to
+  satisfy the grammar the framework checks; the rule is one function, `asOneLine`, and the file's
+  other writer (`epicRelease.ts`, the `## Epic branch released` section carrying a `run cancel
+  --note` verbatim) goes through it too. A document with no newline in any quoted text is
+  byte-identical, so the build golden is unchanged.
 
 ## 0.23.0 — 2026-09-14
 

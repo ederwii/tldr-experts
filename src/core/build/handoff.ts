@@ -271,8 +271,25 @@ export const MAX_CARRIED_BULLETS = 25;
  */
 export const LINE_BREAK_MARK = "⏎";
 
-/** One physical line, with each newline shown as `LINE_BREAK_MARK`. */
-function asOneLine(line: string): string {
+/**
+ * The one line that tells a READER of the document what the mark is — a
+ * representation, not part of the command. It sits where the reader acts (the
+ * lesson of gh #294: an explanation that lives only in a maintainer's comment
+ * is not read by the developer that copies the line), and only in a document
+ * that carries the mark, so every other document is byte-identical.
+ */
+export const LINE_BREAK_NOTE =
+  `\`${LINE_BREAK_MARK}\` marks a line break inside a quoted command; the review log beside this file `
+  + "keeps the command verbatim.";
+
+/**
+ * One physical line, with each newline shown as `LINE_BREAK_MARK`.
+ *
+ * Exported for the OTHER writer of this file: `epicRelease.ts` appends a
+ * `## Epic branch released` section carrying a `run cancel --note` verbatim,
+ * and routes it through this function rather than a copy (§7).
+ */
+export function asOneLine(line: string): string {
   return line.replace(/[ \t]*\r?\n[ \t]*/g, ` ${LINE_BREAK_MARK} `);
 }
 
@@ -385,8 +402,12 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
         )),
     "",
   ];
-  // Every element above is one line of the file, whatever text it quotes.
-  return lines.map(asOneLine).join("\n");
+  // Every element above is one line of the file, whatever text it quotes — and
+  // a document that had to draw the mark says what the mark is, once, under the
+  // header: outside every checked section, before the first bullet a reader acts on.
+  const flat = lines.map(asOneLine);
+  if (flat.some((line) => line.includes(LINE_BREAK_MARK))) flat.splice(2, 0, "", LINE_BREAK_NOTE);
+  return flat.join("\n");
 }
 
 /**

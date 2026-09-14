@@ -23,7 +23,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LINE_BREAK_MARK, renderBuildHandoff, type BuildHandoffParts } from "../src/core/build/handoff.ts";
+import { LINE_BREAK_MARK, LINE_BREAK_NOTE, renderBuildHandoff, type BuildHandoffParts } from "../src/core/build/handoff.ts";
 import { dodFailureReason, type StoryOutcome } from "../src/core/build/outcome.ts";
 import { permissionBlockReason } from "../src/core/facilitator/executors/build.ts";
 import { emptySrcContext, validateHandoff } from "../src/core/text/handoff.ts";
@@ -98,6 +98,18 @@ describe("the Build handoff passes the claim-sources check it is measured by, wh
     const bullet = text.split("\n").find((line) => line.startsWith("- S2's developer had ")) ?? "";
     expect(bullet).toContain(`notes.md ${LINE_BREAK_MARK} hello ${LINE_BREAK_MARK} EOF`);
     expect(bullet.endsWith("[src: 04-build/log/S2.md:1]")).toBe(true);
+  });
+
+  test("the note explaining the mark appears exactly once, before the first section, iff a mark appears", () => {
+    const marked = render([outcome("S2", "done", { permissionRefused: "cat <<EOF > notes.md\nhello\nEOF" })]);
+    expect(marked.split(LINE_BREAK_NOTE).length - 1).toBe(1);
+    expect(marked.indexOf(LINE_BREAK_NOTE)).toBeLessThan(marked.indexOf("## Findings"));
+    // The note is its own paragraph outside every checked section: still a valid document.
+    const { root, runDir } = cited();
+    expect(validateHandoff(marked, emptySrcContext(root, runDir)).ok).toBe(true);
+    const plain = render([outcome("S2", "done", { permissionRefused: "mv a.json b.json" })]);
+    expect(plain).not.toContain(LINE_BREAK_NOTE);
+    expect(plain).not.toContain(LINE_BREAK_MARK);
   });
 
   test("guard (green before the fix): a DoD citation joined mid-line by '; and' is not what fails the document", () => {
