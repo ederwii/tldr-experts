@@ -128,6 +128,28 @@ export interface ReviewLedger {
    */
   readonly asIs: { readonly at: string; readonly actor: string; readonly note: string } | null;
   /**
+   * The last MERGE of this story's work into its epic, as `task.done` recorded it
+   * (#295): the commit that merged, the epic sha it merged onto (`epic_base`,
+   * #166) and the verdict that turn settled under — or null when no `task.done`
+   * ever carried both.
+   *
+   * It SURVIVES `story.reopened`, unlike `commit`/`epicBase` above, and that is
+   * the whole reason it exists beside them: a reopen resets what counts against
+   * the story, not what the epic holds. The as-is review-only case reads it to
+   * know that the work is already on the epic, which range the reviewer is owed,
+   * and whether anything judged it — `n-a` and `error` mean nothing did; every
+   * other verdict stands, and the story is owed a fix, not a review.
+   *
+   * `epic_base` is required, not `commit` alone: a story blocked on a stale-base
+   * conflict records its commit and merged nothing, and only the settles that
+   * watched a merge happen write `epic_base`.
+   */
+  readonly lastMerge: {
+    readonly commit: string;
+    readonly epicBase: string;
+    readonly verdict: string;
+  } | null;
+  /**
    * The OPEN fix round on this story (issue #58), or null when there is none.
    *
    * A fix round is `tldrx story reopen <id> --for-fix --note "<defect>"`: a DONE
@@ -188,7 +210,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   const empty: ReviewLedger = {
     verdicts: 0, fixlistRounds: 0, erroredWith: null, commit: null, epicBase: null, dod: [],
     lastDodOutputPath: null,
-    developerErroredWith: null, blockedWithNothingRun: false, reopened: null, asIs: null, fixRound: null,
+    developerErroredWith: null, blockedWithNothingRun: false, reopened: null, asIs: null, lastMerge: null, fixRound: null,
     formatRetries: 0, formatRefusal: null, reviewer: null,
   };
   if (!existsSync(path)) return empty;
@@ -222,6 +244,8 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   let lastDodOutputPath: string | null = null;
   let reopened: ReviewLedger["reopened"] = null;
   let asIs: ReviewLedger["asIs"] = null;
+  // Deliberately NOT reset at a reopen boundary — see the field.
+  let lastMerge: ReviewLedger["lastMerge"] = null;
   let fixRound: ReviewLedger["fixRound"] = null;
   let formatRetries = 0;
   let formatRefusal: string | null = null;
@@ -322,6 +346,16 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
       // ADDITIVE: absent on every `task.done` written before #166, and absent
       // leaves this null rather than defaulting to anything.
       if (typeof payload.epic_base === "string" && payload.epic_base !== "") epicBase = payload.epic_base;
+      if (
+        typeof payload.commit === "string" && payload.commit !== ""
+        && typeof payload.epic_base === "string" && payload.epic_base !== ""
+      ) {
+        lastMerge = {
+          commit: payload.commit,
+          epicBase: payload.epic_base,
+          verdict: typeof payload.verdict === "string" && payload.verdict !== "" ? payload.verdict : "n-a",
+        };
+      }
       // The story finished again: whatever fix round was open has landed, and the
       // next named defect may open one of its own (#58). This is the ONLY thing
       // that closes one — the same handshake that closed the story the first time.
@@ -432,6 +466,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     blockedWithNothingRun,
     reopened,
     asIs,
+    lastMerge,
     fixRound,
     formatRetries,
     formatRefusal,

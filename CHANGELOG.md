@@ -15,6 +15,26 @@
   reviewer signed and nothing is owed a developer, so the story is `done` with `verdict: fixlist` on
   its record. The artifact is still written and its deferred findings still reach `retro.md`: settling
   the story does not settle what it deferred. One `fix-now` finding parks it exactly as before.
+- **`story reopen --as-is` can settle a story whose work is already on the epic and whose review
+  never completed — review-only, merging nothing (#295, second half).** Under merge-before-review
+  (#282) a story's diff can sit entirely on the epic while nothing has judged it: measured twice on
+  2026-09-13, a reviewer that died and a later attempt that died on a bare `echo $?` with no work.
+  #279's guard — the branch must carry a commit the epic has not got — is right for a branch with no
+  work and blind to this mirror image, where there is nothing to MERGE and something to SETTLE; the
+  operator's only moves were inventing a commit for `--as-is` to take, which corrupts the
+  measurement, or leaving the story blocked with its dependents (#280). The guard is not relaxed. A
+  new, named case sits beside it: the review ledger now keeps the story's last recorded merge
+  (`commit` + `epic_base`) across reopen boundaries — a reopen resets what counts against a story,
+  not what the epic holds — and `--as-is` over a branch that carries nothing beyond its epic asks
+  whether anything judged that merge. `n-a` and `error` mean nothing did, and the turn runs
+  review-only: the branch is brought up to the epic `--ff-only` (nothing of its own to lose), the
+  DoD runs on the epic head, the reviewer is handed the recorded range, and nothing is merged —
+  `task.done` carries `as_is_reason: review-only`, the review log's developer line says so and names
+  the commit it reviewed. A review that STANDS (`changes`, `approve`, `fixlist`) still refuses, and
+  the refusal now names that verdict beside the #279 sentence: what is owed is a fix, not a third
+  opinion on the same bytes — which is also why the #279 pin test (two `changes` over a reset
+  branch) is untouched. The issue proposed "any verdict but `approve`"; that would have flipped that
+  pin, so the boundary shipped is the one in the issue's title: the review never completed.
 
 ## 0.22.0 — 2026-09-14
 

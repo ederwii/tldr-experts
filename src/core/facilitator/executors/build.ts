@@ -90,8 +90,8 @@ import {
   type Review,
 } from "../../build/review.ts";
 import {
-  AS_IS_MARK, asIsNotAheadReason, DEVELOPER_FAILED, dodFailure, dodFailureReason, dodGreen, dodRefused,
-  reviewStillOwed,
+  AS_IS_MARK, AS_IS_REVIEW_ONLY_MARK, asIsNotAheadReason, DEVELOPER_FAILED, dodFailure, dodFailureReason, dodGreen, dodRefused,
+  reviewNeverCompleted, reviewStillOwed,
   type AsIsSettlement, type DodResult, type RescuedWork, type StoryOutcome,
 } from "../../build/outcome.ts";
 import {
@@ -204,6 +204,14 @@ interface StoryHalf {
    * requeued, `blocked` for a story rescued from a previous run's spawn error.
    */
   readonly before: PlanStatus;
+  /**
+   * gh #295: the story's work is ALREADY on the epic from an earlier turn and
+   * nothing judged it, so half B must merge nothing and run only the review —
+   * over this commit and this base, the ones the story was merged as. Set by
+   * `asIsHalf` alone, once it has measured the branch; absent on every other
+   * half, where `commit` is what half B is about to merge.
+   */
+  readonly reviewOnly?: { readonly commit: string; readonly epicBase: string };
 }
 
 /**
@@ -1343,7 +1351,31 @@ class BuildSession {
 
     // Refusal 1: there has to BE something to take.
     const ahead = await commitsBetween(story.repoDir, story.epicBranch, story.branch);
-    if (ahead === null || ahead === 0) {
+    if (ahead === 0) {
+      // gh #295, the named case BESIDE the refusal: under merge-before-review a
+      // story's whole diff can be on the epic while nothing has judged it — a
+      // reviewer that died, a later attempt that died on a refusal with no
+      // work. Then "ahead of base" measures the wrong thing: there is nothing
+      // to MERGE and there is something to SETTLE. The ledger's `lastMerge`
+      // survives the reopen boundary precisely so this question can be asked:
+      // which commit, onto which base, and did anything judge it. `n-a` and
+      // `error` mean nothing did. Every other verdict STANDS — a `changes` is a
+      // fix owed, an `approve` is a story that is done or blocked on its fix
+      // list — and the refusal below says so rather than buying a third
+      // opinion on the same bytes.
+      const merge = readReviewLedger(this.ctx.runDir, id).lastMerge;
+      if (merge !== null && reviewNeverCompleted(merge.verdict)) {
+        return await this.reviewOnlyHalf(planned, asIs, story, before, merge);
+      }
+      return {
+        story, cost: 0, dod: [], commit: null,
+        failure: asIsNotAheadReason(
+          story.branch, story.epicBranch, ahead, merge === null ? undefined : merge,
+        ),
+        developerError: null, before,
+      };
+    }
+    if (ahead === null) {
       return {
         story, cost: 0, dod: [], commit: null,
         failure: asIsNotAheadReason(story.branch, story.epicBranch, ahead),
@@ -1379,6 +1411,51 @@ class BuildSession {
       };
     }
     return { story, cost: 0, dod, commit, failure: null, developerError: null, before };
+  }
+
+  /**
+   * The REVIEW-ONLY case of an as-is settlement (gh #295): the story's work is
+   * already on its epic from an earlier turn and nothing judged it. Nothing is
+   * merged and no commit is invented — the DoD runs on the EPIC HEAD, and half
+   * B hands the reviewer the range the story was merged as, off the ledger.
+   *
+   * Why the branch is brought up to the epic first: the story tip carries
+   * nothing of its own (that is the precondition), so `--ff-only` onto the epic
+   * loses nothing and invents nothing, and the DoD then measures the tree the
+   * epic actually holds rather than a tip a sibling's merge has left behind.
+   * `refreshStoryBase` says so when it cannot move it, and the DoD then runs on
+   * the tip it names.
+   */
+  private async reviewOnlyHalf(
+    planned: PlannedStory,
+    asIs: AsIsSettlement,
+    story: StoryContext,
+    before: PlanStatus,
+    merge: { readonly commit: string; readonly epicBase: string },
+  ): Promise<StoryHalf> {
+    const id = planned.story.id;
+    const reviewed = { commit: merge.commit, epicBase: merge.epicBase };
+    // The record must name the case before anything below can settle it.
+    this.asIsSettlements.set(id, { ...asIs, reason: "review-only", reviewed });
+    this.lines.push(
+      `  · ${id}: ${AS_IS_REVIEW_ONLY_MARK} — \`${merge.commit.slice(0, 7)}\` is already on `
+      + `\`${story.epicBranch}\` and nothing judged it; running the dod on the epic head and the review `
+      + `over \`${reviewDiffRange(merge.epicBase, story.epicBranch, story.branch)}\``,
+    );
+    await this.writes.run(() =>
+      this.refreshStoryBase(planned, story.repoDir, story.worktree, story.branch, story.epicBranch));
+    const dod = await this.runDod(story);
+    if (!this.dodProves(dod)) {
+      const failing = dodFailure(dod);
+      return {
+        story, cost: 0, dod, commit: null,
+        failure: failing === undefined
+          ? "the story declares no dod commands, so nothing could prove it"
+          : dodFailureReason(failing, planned.story.repo),
+        developerError: null, before,
+      };
+    }
+    return { story, cost: 0, dod, commit: merge.commit, failure: null, developerError: null, before, reviewOnly: reviewed };
   }
 
   /** Half A for one story: worktree → developer → DoD → commit. */
@@ -1592,6 +1669,15 @@ class BuildSession {
     if (commit === null) {
       await this.block(story, "the story produced no commit to review", half.cost, dod);
       return "settled";
+    }
+    // gh #295: the work is already on the epic and only the review is owed.
+    // Nothing below this line — base update, merge — may run: there is nothing
+    // to merge, and a merge that moves nothing would still write a record
+    // saying it did. `null` for `carried`, as `rereview` passes it: this
+    // invocation did not watch the merge happen.
+    if (half.reviewOnly !== undefined) {
+      this.noteMerged(story, null);
+      return await this.reviewAndSettle(story, dod, half.reviewOnly.commit, half.cost, null, half.reviewOnly.epicBase);
     }
 
     // (f0) the epic may have MOVED since this story's branch was cut (#268), and
@@ -3189,6 +3275,9 @@ class BuildSession {
       ...(outcome.asIs == null
         ? {}
         : { as_is: true, as_is_by: outcome.asIs.actor, as_is_note: outcome.asIs.note }),
+      // ADDITIVE (gh #295): WHICH as-is case this was. Omitted on the case #279
+      // shipped, so a record written before this key reads as it always did.
+      ...(outcome.asIs?.reason === undefined ? {} : { as_is_reason: outcome.asIs.reason }),
     });
     // Worktrees survive a `review` on purpose: the second attempt continues in
     // the same tree rather than re-cutting the branch it just wrote. A parked
@@ -3202,7 +3291,10 @@ class BuildSession {
     this.lines.push(
       `  ${status === "done" ? "✓" : "·"} ${id} → \`${status}\`` +
         (outcome.reason === null ? "" : ` (${outcome.reason})`) +
-        (outcome.asIs == null ? "" : ` — ${AS_IS_MARK}; ${outcome.asIs.actor} signed it`) +
+        (outcome.asIs == null
+          ? ""
+          : ` — ${outcome.asIs.reason === "review-only" ? AS_IS_REVIEW_ONLY_MARK : AS_IS_MARK}; `
+            + `${outcome.asIs.actor} signed it`) +
         (outcome.permissionRefused == null
           ? ""
           : ` — ${withCure(

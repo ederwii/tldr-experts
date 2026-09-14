@@ -17,7 +17,7 @@
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
@@ -25,7 +25,7 @@ import { readReviewLedger, MAX_ATTEMPTS } from "../src/core/facilitator/executor
 import { reopenStory } from "../src/core/run/reopenStory.ts";
 import { storyCommand } from "../src/cli/commands/story.ts";
 import { storyBranchOf } from "../src/core/plan/branchModel.ts";
-import { AS_IS_MARK, AS_IS_NOT_AHEAD_MARK } from "../src/core/build/outcome.ts";
+import { AS_IS_JUDGED_MARK, AS_IS_MARK, AS_IS_NOT_AHEAD_MARK, AS_IS_REVIEW_ONLY_MARK } from "../src/core/build/outcome.ts";
 import { reject } from "../src/core/run/gates.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
@@ -44,6 +44,7 @@ const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
   "FAKE_BUILD_WRITE", "FAKE_BUILD_VERDICTS", "FAKE_BUILD_COST", "FAKE_BUILD_STATE",
   "FAKE_BUILD_PROMPT_DIR", "FAKE_BUILD_IS_ERROR", "FAKE_BUILD_FAIL", "FAKE_BUILD_FAIL_REASON",
+  "FAKE_BUILD_DENIED",
 ] as const;
 
 let open: BuildWorkspace[] = [];
@@ -952,3 +953,203 @@ describe("a story finished by hand, settled as it stands (#279)", () => {
     expect(stdout).toContain("no developer");
   }, 60_000);
 });
+
+// ---------------------------------------------------------------------------
+// gh #295, second half — BEGIN. Work already on the epic, review never completed.
+// ---------------------------------------------------------------------------
+
+/**
+ * A story whose WORK is already in the epic and whose REVIEW never completed
+ * (#295). Measured twice on 2026-09-13 (tldrx 0.20.0): under merge-before-review
+ * a story's diff can be entirely on the epic while nothing has judged it — a
+ * reviewer that died, a later developer attempt that died on a refusal with no
+ * work — and then #279's "tip ahead of base" guard measures the wrong thing.
+ * There is nothing to MERGE, and there is something to SETTLE: the DoD on the
+ * epic head, and the review over the range the story was merged as. The only
+ * moves an operator had were inventing a commit for `--as-is` to take, which
+ * corrupts the measurement, or leaving the story blocked with its dependents.
+ *
+ * The named case, `review-only`, is added BESIDE #279's refusal, not carved out
+ * of it: a story with no recorded merge, or one whose last review over that
+ * merge STANDS (`approve`, `changes`, `fixlist`), still refuses exactly as
+ * before — the pin test above is untouched.
+ */
+describe("a story already on the epic whose review never completed (#295)", () => {
+  const OWED = "the migration regen is already on the epic; only the verdict is missing";
+  const REQUIRE_EPIC_HEAD = "require-epic-head";
+
+  function storyBranch(ws: BuildWorkspace, id: string): string {
+    return storyBranchOf(ws.runId, id);
+  }
+
+  /**
+   * A commit made straight onto a branch — in the worktree the run keeps for it
+   * (an epic branch stays checked out for the run's lifetime, so a second
+   * checkout of it is refused by git), or in a scratch one otherwise.
+   */
+  function commitOn(ws: BuildWorkspace, branch: string, files: Record<string, string>, message: string): string {
+    const listed = git(ws, ["worktree", "list", "--porcelain"]).split("\n\n");
+    const kept = listed.find((block) => block.includes(`branch refs/heads/${branch}`));
+    const dir = kept === undefined
+      ? mkdtempSync(join(tmpdir(), "tldrx-epic-"))
+      : (/^worktree (.+)$/m.exec(kept)?.[1] ?? "");
+    expect(dir).not.toBe("");
+    if (kept === undefined) git(ws, ["worktree", "add", dir, branch]);
+    for (const [rel, text] of Object.entries(files)) writeFileSync(join(dir, rel), text, "utf8");
+    execFileSync("git", ["add", "-A"], { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("git", ["commit", "-m", message], { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    if (kept === undefined) {
+      git(ws, ["worktree", "remove", "--force", dir]);
+      rmSync(dir, { recursive: true, force: true });
+    }
+    return sha;
+  }
+
+  function taskDone(ws: BuildWorkspace, id: string) {
+    return events(ws).filter((e) => e.type === "task.done" && e.payload.story === id);
+  }
+
+  function developerSpawns(ws: BuildWorkspace): number {
+    return events(ws).filter((e) => e.type === "agent.spawned" && e.payload.role === "developer").length;
+  }
+
+  /**
+   * Story B's shape, in miniature: attempt 1 delivered, was merged and its
+   * reviewer DIED; a person reopened it and attempt 2 died on an ungranted
+   * command with no work (#261) — `blocked`, `verdict: n-a`, no commit, and the
+   * story's whole diff sitting on the epic with nothing having judged it.
+   *
+   * The DoD script is red ONLY when `require-epic-head` exists beside the
+   * workspace and `epic-only.txt` is not in the tree — so once the flag is set,
+   * a green DoD is proof the check ran on the epic head, not on the stale tip.
+   */
+  async function mergedUnjudged(): Promise<BuildWorkspace> {
+    const ws = workspace({
+      ...ONE,
+      testScript: "node -e \"const f=require('fs');process.exit(f.existsSync('../../../../"
+        + REQUIRE_EPIC_HEAD + "') && !f.existsSync('epic-only.txt') ? 1 : 0)\"",
+    });
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_FAIL = "reviewer:S1#1";
+    process.env.FAKE_BUILD_FAIL_REASON = "Reached maximum budget ($1)";
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: review");
+    expect(taskDone(ws, "S1").at(-1)?.payload.verdict).toBe("error");
+    delete process.env.FAKE_BUILD_FAIL;
+    delete process.env.FAKE_BUILD_FAIL_REASON;
+
+    // The person hands it back to a developer, which asks for an ungranted verb
+    // and writes nothing — the story blocks with no commit of its own.
+    expect(reopen(ws, "S1", "granting dotnet ef and trying again").code).toBe(0);
+    reenter(ws, "S1 reopened");
+    process.env.FAKE_BUILD_DENIED = JSON.stringify({ S1: "dotnet ef migrations add Init" });
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+    delete process.env.FAKE_BUILD_DENIED;
+    expect(story(ws, "S1")).toContain("status: blocked");
+    expect(taskDone(ws, "S1").at(-1)?.payload.verdict).toBe("n-a");
+    expect(taskDone(ws, "S1").at(-1)?.payload.commit).toBeNull();
+    // The whole diff is on the epic, and the branch carries nothing beyond it.
+    expect(git(ws, ["rev-list", "--count", `epic/e1..${storyBranch(ws, "S1")}`])).toBe("0");
+    expect(git(ws, ["log", "epic/e1", "--oneline"])).toContain("S1");
+    return ws;
+  }
+
+  test("`--as-is` runs the review it is owed: nothing merged, no developer, and the story settles", async () => {
+    const ws = await mergedUnjudged();
+    const merged = taskDone(ws, "S1")[0];
+    const epicBefore = git(ws, ["rev-parse", "epic/e1"]);
+    const developersBefore = developerSpawns(ws);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+
+    expect(reopen(ws, "S1", OWED, { asIs: true }).code).toBe(0);
+    reenter(ws, "S1 signed as-is: the review is owed");
+    await next(ws, { at: "2026-08-29T10:10:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: done");
+    // Nothing was merged and nothing was invented: the epic did not move.
+    expect(git(ws, ["rev-parse", "epic/e1"])).toBe(epicBefore);
+    expect(developerSpawns(ws)).toBe(developersBefore);
+    // The record names the case, the signer, and the merge it reviewed —
+    // the commit and the base the story was merged as, off the ledger.
+    const done = taskDone(ws, "S1").at(-1);
+    expect(done?.payload.status).toBe("done");
+    expect(done?.payload.as_is).toBe(true);
+    expect(done?.payload.as_is_reason).toBe("review-only");
+    expect(done?.payload.as_is_by).toBe("alan");
+    expect(done?.payload.commit).toBe(merged?.payload.commit);
+    expect(done?.payload.epic_base).toBe(merged?.payload.epic_base);
+    const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+    expect(log).toContain(AS_IS_REVIEW_ONLY_MARK);
+    // "the branch was TAKEN" is the other case's sentence, and it would be false here.
+    expect(log).not.toContain(AS_IS_MARK);
+    // The reviewer was handed the RECORDED range, not an empty `epic...story`.
+    const prompts = readdirSync(promptDir).filter((name) => name.startsWith("reviewer-S1-"));
+    expect(prompts).toHaveLength(1);
+    const prompt = readFileSync(join(promptDir, prompts[0] ?? ""), "utf8");
+    expect(prompt).toContain(String(merged?.payload.epic_base));
+  }, 90_000);
+
+  test("the Definition of Done runs on the EPIC HEAD, not on the stale story tip", async () => {
+    const ws = await mergedUnjudged();
+    // The epic moved on after S1 merged (a sibling landed), and S1's tip is now
+    // strictly behind it. The DoD is red on the old tip from here on.
+    commitOn(ws, "epic/e1", { "epic-only.txt": "a sibling's work\n" }, "sibling story landed");
+    const worktree = join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`);
+    writeFileSync(join(ws.root, REQUIRE_EPIC_HEAD), "", "utf8");
+    // The instrument: the script's relative path resolves to that flag from the worktree.
+    expect(existsSync(join(worktree, "..", "..", "..", "..", REQUIRE_EPIC_HEAD))).toBe(true);
+    const epicBefore = git(ws, ["rev-parse", "epic/e1"]);
+
+    expect(reopen(ws, "S1", OWED, { asIs: true }).code).toBe(0);
+    reenter(ws, "S1 signed as-is: the review is owed");
+    await next(ws, { at: "2026-08-29T10:10:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(git(ws, ["rev-parse", "epic/e1"])).toBe(epicBefore);
+    const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+    expect(log).toContain("exit 0");
+  }, 90_000);
+
+  test("a review that STANDS still refuses — `changes` over the merged work is not 'never completed'", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "changes"] });
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: blocked");
+    git(ws, ["branch", "-f", storyBranch(ws, "S1"), "epic/e1"]);
+    const reviewersBefore = events(ws).filter((e) => e.type === "agent.spawned" && e.payload.role === "reviewer").length;
+
+    expect(reopen(ws, "S1", OWED, { asIs: true }).code).toBe(0);
+    reenter(ws, "S1 signed as-is over a judged diff");
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+    const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+    expect(log).toContain(AS_IS_NOT_AHEAD_MARK);
+    // And the refusal says WHICH verdict stands, so the operator knows a fix is owed.
+    expect(log).toContain(AS_IS_JUDGED_MARK);
+    expect(log).toContain("`changes`");
+    expect(events(ws).filter((e) => e.type === "agent.spawned" && e.payload.role === "reviewer")).toHaveLength(reviewersBefore);
+  }, 60_000);
+
+  test("the ledger keeps the last merge across a reopen — it is evidence, not a count", async () => {
+    const ws = await mergedUnjudged();
+    const merged = taskDone(ws, "S1")[0];
+    const ledger = readReviewLedger(ws.runDir, "S1");
+    // Two reopen boundaries have passed (attempts, then nothing yet as-is) and
+    // the reset cleared `commit`/`epicBase` — but the merge happened, and the
+    // record of it survives under its own name with the verdict that judged it.
+    expect(ledger.commit).toBeNull();
+    expect(ledger.lastMerge).toEqual({
+      commit: String(merged?.payload.commit),
+      epicBase: String(merged?.payload.epic_base),
+      verdict: "error",
+    });
+  }, 90_000);
+});
+
+// ---------------------------------------------------------------------------
+// gh #295, second half — END.
+// ---------------------------------------------------------------------------
