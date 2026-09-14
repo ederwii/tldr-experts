@@ -1,30 +1,6 @@
 # Changelog
 
-## 0.24.0 — 2026-09-14
-
-### Added
-
-- **The two-session protocol is mechanical where it was chat (#299).** MEASURED over one
-  unattended day (2026-09-13/14, two sessions, ~16 issues): two branches each staged ONE
-  unreleased CHANGELOG heading — `0.22.1` and `0.23.0` — for the same next version, and every
-  per-branch check passed both because the defect only exists on the merged tree; "is a release
-  in flight?" was asked by message four times because `scripts/release.sh` wrote nothing anyone
-  could wait on; and a wave's liveness was read off `ps` and a marker's mtime, once wrongly.
-  Three things change, none of them in `src/`. `scripts/merge-wave.sh` now refuses a MERGED tree
-  carrying more than one `## <v> — unreleased` heading, or one whose version is not above the
-  top dated heading, with **exit 12** — the merge commit is rewound, nothing is pushed, both
-  headings are named; zero unreleased headings (the state right after a release) still merges.
-  `scripts/release.sh` writes `.RELEASE-IN-PROGRESS` at the repo root (pid, host, version,
-  started) for its whole span and removes it on every exit path including a red gate and a
-  signal; the wave WAITS on that marker exactly as it waits on its own lock — same poll, same
-  stale-by-dead-pid rule, same `MW_LOCK_*` budget — and gives up with **exit 13**. And
-  `scripts/merge-wave.sh --status` prints one line, exit 0 either way: the live wave's holder,
-  branch, phase (`merge|gates|push`, now recorded in the lock) and start time, a live release's
-  holder and version, or `idle`. The `maintain` skill gains a §9 for a session that is not the
-  driver — announce the file set first (naming the `build.ts` rule), agree the one unreleased
-  heading before writing it, announce lock/sha/OK line, re-review after a rebase — citing
-  `AGENTS.md` by section; `test/maintain-skill.test.ts` pins the section and its citations.
-  Minor by behaviour: a wave that used to pass now refuses.
+## 0.25.0 — unreleased
 
 ### Fixed
 
@@ -62,6 +38,35 @@
   old-format lock (owner and token only) with a live pid prints `?` for what it never recorded,
   and `ver_gt` orders `1.0.0 > 0.99.0` and `0.10.0 > 0.9.0` numerically — the function is
   lifted from the script's own text for the test, so the pin is on the real implementation.
+
+## 0.24.0 — 2026-09-14
+
+### Added
+
+- **The two-session protocol is mechanical where it was chat (#299).** MEASURED over one
+  unattended day (2026-09-13/14, two sessions, ~16 issues): two branches each staged ONE
+  unreleased CHANGELOG heading — `0.22.1` and `0.23.0` — for the same next version, and every
+  per-branch check passed both because the defect only exists on the merged tree; "is a release
+  in flight?" was asked by message four times because `scripts/release.sh` wrote nothing anyone
+  could wait on; and a wave's liveness was read off `ps` and a marker's mtime, once wrongly.
+  Three things change, none of them in `src/`. `scripts/merge-wave.sh` now refuses a MERGED tree
+  carrying more than one `## <v> — unreleased` heading, or one whose version is not above the
+  top dated heading, with **exit 12** — the merge commit is rewound, nothing is pushed, both
+  headings are named; zero unreleased headings (the state right after a release) still merges.
+  `scripts/release.sh` writes `.RELEASE-IN-PROGRESS` at the repo root (pid, host, version,
+  started) for its whole span and removes it on every exit path including a red gate and a
+  signal; the wave WAITS on that marker exactly as it waits on its own lock — same poll, same
+  stale-by-dead-pid rule, same `MW_LOCK_*` budget — and gives up with **exit 13**. And
+  `scripts/merge-wave.sh --status` prints one line, exit 0 either way: the live wave's holder,
+  branch, phase (`merge|gates|push`, now recorded in the lock) and start time, a live release's
+  holder and version, or `idle`. The `maintain` skill gains a §9 for a session that is not the
+  driver — announce the file set first (naming the `build.ts` rule), agree the one unreleased
+  heading before writing it, announce lock/sha/OK line, re-review after a rebase — citing
+  `AGENTS.md` by section; `test/maintain-skill.test.ts` pins the section and its citations.
+  Minor by behaviour: a wave that used to pass now refuses.
+
+### Fixed
+
 - **A per-story cap now says what it was derived from, and names a lever that moves it (#281).**
   MEASURED on a live unattended run (0.18.2, eight stories): a developer died twice on a **$5.97**
   cap while `03-plan/budget.yml` priced its story at **$14.00** and the 0.18.2 entry below promised
