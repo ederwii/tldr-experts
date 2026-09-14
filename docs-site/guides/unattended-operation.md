@@ -119,7 +119,7 @@ nohup tldrx run auto --run <id> --until-done --max-usd 40 \
 - **`--until-done`** — relaunch the loop in-process after an exit it can do nothing else
   with (a failure past the retry bound, a throw, a refusal with no money behind it), at most
   5 times; never over a person's exit `4`, never over a budget block, never twice over the
-  same last line.
+  same refusal.
 - **`--max-usd 40`** — the loop's own ceiling, spanning every relaunch.
 - **`--wait-answers 8h` / `--wait-gates 8h`** — when something does need a person, poll for
   that long instead of exiting `4` at once; nothing is spent while it waits. On the happy
@@ -626,8 +626,10 @@ over:
 - **Money.** A `budget.blocked` names `remaining_usd < estimate_usd`, and nothing in-process
   moves that ceiling — the stop line says the two figures, and `tldrx budget raise` is yours.
   The loop's own `--max-usd` spans every relaunch rather than resetting with each one.
-- **The same last line twice.** A refusal that repeats verbatim is not one a relaunch moves;
-  one relaunch proves it, and the loop stops rather than hammering it.
+- **The same refusal twice.** A refusal that repeats verbatim is not one a relaunch moves;
+  one relaunch proves it, and the loop stops rather than hammering it. What is compared is the
+  refusal the stop NAMES — not the last line printed, which for a stage death is the same advice
+  about cost every time, and comparing it stopped runs that were making progress.
 
 Put the run id before the flag, pass it as `--run <id>`, or write `--until-done=3`: a bare `--until-done` followed
 by a run id reads the id as its number and refuses it, by name.

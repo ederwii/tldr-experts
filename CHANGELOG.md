@@ -48,6 +48,40 @@
   reads it back. #263's own pin — a dependency parked `todo` still blocks — is untouched. Visible
   in-session too: after a story settles, a dependent that used to sit `blocked` is now the next
   `--prepare`, so the stage stays `running` and names it instead of reaching the gate.
+- **`--until-done` compares the REFUSAL across attempts, not the last line printed (#297).** The
+  guard exists so a loop does not spend its whole relaunch budget hammering a wall, and for whole
+  exit families it could not see a wall at all: every stage death ends with the same literal advice
+  — `cost is recorded, not refunded — retry with …` — and so did every context refusal, every
+  budget refusal, every host-tokens refusal, each of them a string with nothing interpolated in it.
+  Reading `lines[lines.length - 1]` there compared a constant to itself, so the SECOND stage death
+  of any run was declared a verbatim repeat whether the two deaths were the same refusal, different
+  refusals, or measurable progress — and every remaining relaunch was thrown away. Both halves of
+  the guard were wrong at once: it spent nothing on the stuck case it was built for, and spent the
+  budget on the case that was moving. The fix is not a better index — an index is right only for
+  the report shapes that exist the day it is written, and breaks the moment a caller appends
+  another note. A report now NAMES its own refusal (`NextOutcome.signature`), the loop compares
+  that, and it falls back to the last line only where nothing named one (a throw's message, a
+  missing input — reports whose last line already IS their reason; a repeat there is still real
+  evidence, and the bound is a backstop that costs money, not a reading). `run.relaunched` carries
+  the comparand it will compare against next, and its `reason` — the sentence the stop line and the
+  ledger both quote — now names the refusal rather than the advice under it. Executor refusals
+  (`refused: true`) are covered at their ONE pass-through rather than producer by producer: eight
+  producers across the Build and Watch executors leave through a single `out()` call, which now
+  passes the executor's own signature, falling back to `ExecutorOutcome.error` — and four of those
+  sentences had to be corrected before the fallback was worth anything. The question is not what a
+  sentence interpolates but whether it DISTINGUISHES the states a relaunch can move between, and a
+  run comes back to the same repo: naming the repo alone made two different dirty trees one
+  refusal, two different stash failures one refusal, and four structurally different foreign-epic
+  faults one refusal. So the dirty-tree refusal now names the overlapping paths and why each is
+  claimed; the foreign-epic refusal carries one sentence per fault (unreadable claims, an open
+  claimant, nobody's leftover, a leftover that could not be moved) instead of one per branch; the
+  could-not-be-set-aside refusal carries git's own reason, which its printed lines already had; and
+  the red-base refusal names EVERY red command rather than the first in iteration order — measured
+  on two base trees that differ only in their second command, where the printed refusal changed and
+  the comparand did not move a byte. Watch's branch-incoherence refusal, whose `error` is null and
+  whose last line is a literal about `tldrx doctor`, names its faults itself. A ninth producer
+  added tomorrow inherits the door instead of being born blind.
+
 
 ## 0.23.0 — 2026-09-14
 

@@ -3889,7 +3889,12 @@ class BuildSession {
             "  Commit them, or set them aside by hand, then run "
               + `\`${relaunchCommand(this.ctx.mode, this.ctx.runId)}\`.`,
           ],
-          error: `repo \`${row.repo}\` has uncommitted changes that could not be set aside`,
+          // WHY it could not be set aside, which the line above already says and the
+          // comparand did not (gh #297): a run comes back to the same repo, so a
+          // sentence that names only the repo makes two different stash failures the
+          // same refusal.
+          error: `repo \`${row.repo}\` has uncommitted changes that could not be set aside: `
+            + `${outcome.reason ?? "no reason given"}`,
         };
       }
       this.ctx.emit(FOREIGN_ASIDE_EVENT, asidePayload(outcome.stash, reason));

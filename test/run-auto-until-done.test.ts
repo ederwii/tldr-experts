@@ -22,8 +22,11 @@
  *                          and the stop names the two figures. The loop's own `--max-usd`
  *                          spans the whole supervised run: a relaunch does not reset it.
  *   NEVER OVER A PERSON    exit 4 is a person's; `--wait-*` own it; zero relaunches.
- *   NEVER TWICE THE SAME   an attempt whose last line equals the previous attempt's is a
+ *   NEVER TWICE THE SAME   an attempt refused by the SAME WORDS as the one before it is a
  *                          deterministic refusal repeating — one relaunch proves it, then stop.
+ *                          What is compared is the refusal `next` NAMES (gh #297): every stage
+ *                          death ends with the same advice literal, so comparing last lines
+ *                          compared a constant to itself and stopped a run making progress.
  *   BOUNDED, BY NAME       `n` past `MAX_UNTIL_DONE` and a fraction are exit 1, nothing spawned;
  *                          the bare flag means `MAX_UNTIL_DONE`, said in the event's `of`.
  *
@@ -31,12 +34,15 @@
  * and every attempt is counted off that fake's own argv log rather than off a log line.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 import { runAuto, LAST_LINE_CHARS, MAX_UNTIL_DONE, type AutoOptions } from "../src/core/facilitator/runAuto.ts";
 import { runCommand } from "../src/cli/commands/run.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
+import { RunStore } from "../src/core/run/RunStore.ts";
+import { WATCH_PHASE } from "../src/core/watch/index.ts";
 import type { TldrxEvent } from "../src/core/events/Event.ts";
 import { deliveredTo, writeNotifier, workspaceYamlWithNotify } from "./fixtures/facilitator/notifier.ts";
 import {
@@ -302,7 +308,7 @@ describe("never over a person", () => {
   });
 });
 
-describe("never twice over the same last line", () => {
+describe("never twice over the same refusal", () => {
   test("a refusal that repeats verbatim is relaunched once — the proof — and then stops", async () => {
     // `promptMaxBytes: 1` is an exit 2 with no money behind it: the prompt cannot fit, the
     // same way on every attempt. One relaunch shows it repeats; a second would be the loop
@@ -314,6 +320,174 @@ describe("never twice over the same last line", () => {
     const relaunches = relaunched(ws);
     expect(relaunches).toHaveLength(1);
     expect(relaunches[0]?.payload).toMatchObject({ exit: 2, attempt: 1, of: 5 });
+    expect(outcome.lines[outcome.lines.length - 1]).toContain("same as the previous attempt");
+  });
+
+  /**
+   * gh #297. Every `EXIT_AGENT_FAILED` report ends with the SAME advice line — a string
+   * literal with no interpolation (`runNext.ts` `failStage`) — so a guard that compares
+   * the attempt's last line compares a constant to itself and stops the loop on the
+   * second stage death whatever killed it. Here the two deaths are different refusals
+   * (`## Scope` missing, then `## Intent`), so both relaunches must happen and the third
+   * attempt finishes the run.
+   */
+  test("two stage deaths with DIFFERENT reasons are two relaunches — the advice line they share is not the comparison", async () => {
+    const ws = workspace();
+    const without = (heading: string): string => cannedIntent().split(`## ${heading}`).join(`## not-${heading}`);
+    const outputs = (intent: string): string => JSON.stringify({
+      "01-what/intent.md": intent,
+      "01-what/handoff.md": cannedHandoff(),
+      "02-how/handoff.md": cannedHandoff(),
+    });
+    process.env.FAKE_CLAUDE_OUTPUTS = outputs(without("Scope"));
+    let seen = 0;
+    const outcome = await auto(ws, {
+      untilDone: 3,
+      onLine: (line) => {
+        if (!line.startsWith("relaunching")) return;
+        seen += 1;
+        process.env.FAKE_CLAUDE_OUTPUTS = seen === 1 ? outputs(without("Intent")) : outputs(cannedIntent());
+      },
+    });
+    expect(outcome.code).toBe(0);
+    const relaunches = relaunched(ws);
+    expect(relaunches).toHaveLength(2);
+    expect(relaunches.map((event) => event.payload.exit)).toEqual([5, 5]);
+    // The refusals themselves, not the advice both of them end with: the first death is
+    // about `## Scope` and the second about `## Intent`, and the relaunch record says so.
+    expect(String(relaunches[0]?.payload.reason)).toContain("## Scope");
+    expect(String(relaunches[1]?.payload.reason)).toContain("## Intent");
+  });
+
+  /**
+   * The other direction of the same guard, and the one it was built for: two stage deaths
+   * with the SAME refusal are one relaunch — the proof that it repeats — and then a stop.
+   */
+  test("two stage deaths with the SAME reason is one relaunch, then the stop names the repeat", async () => {
+    const ws = workspace();
+    process.env.FAKE_CLAUDE_OUTPUTS = JSON.stringify({
+      "01-what/intent.md": cannedIntent().split("## Scope").join("## not-Scope"),
+      "01-what/handoff.md": cannedHandoff(),
+      "02-how/handoff.md": cannedHandoff(),
+    });
+    const outcome = await auto(ws, { untilDone: 3 });
+    expect(outcome.code).toBe(5);
+    expect(relaunched(ws)).toHaveLength(1);
+    expect(outcome.lines[outcome.lines.length - 1]).toContain("same as the previous attempt");
+  });
+});
+
+/**
+ * A Watch stage whose refusal comes out of the EXECUTOR door (gh #297, round two).
+ *
+ * `runNext` returns every `refused: true` outcome through one pass-through, and Watch's
+ * branch-incoherence refusal is the one producer behind it that carries no `error` and
+ * whose LAST LINE is a literal — `  \`tldrx doctor\` reports every repo whose recorded
+ * default_branch does not resolve.` — identical for two different repos or two different
+ * recorded values. Everything below `01-what` here is the smallest shape that reaches it:
+ * one done story, its epic, a real git repo carrying the recorded epic branch, and a
+ * `default_branch` in `.tldrx/workspace.yml` that the repo has never had.
+ */
+const EPIC_BRANCH = "epic/260901-leaderboard-v2";
+
+function git(dir: string, args: readonly string[]): void {
+  execFileSync("git", [...args], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
+function watchWorkspace(): Made {
+  const made = makeFacilitatorWorkspace({
+    scope: "demo",
+    budgetUsd: 10,
+    stages: [{
+      id: "watch",
+      phase: WATCH_PHASE,
+      budgetUsd: 2,
+      gate: "auto",
+      outputs: [{ path: "handoff.md", sections: ["Findings", "Decisions", "Unknowns", "Evidence ledger"] }],
+    }],
+  });
+  open.push(made);
+  const plan: Record<string, string> = {
+    "03-plan/stories/S1.md": [
+      "---", "version: 1", "id: S1", "epic: E1", 'title: "S1 on E1"', "repo: api", "status: done",
+      "depends_on: []", 'touches: ["src/"]', 'acceptance: ["it works"]', 'test_plan: ["a unit test"]',
+      'evidence: ["npm run test exited 0"]', "---", "", "# S1", "", "## Definition of done", "",
+      "```dod", "true", "```", "",
+    ].join("\n"),
+    "03-plan/epics/E1.md": [
+      "---", "version: 1", "id: E1", 'title: "E1 — a shipped thing"', "repos: [api]",
+      "stories: [S1]", `branch: ${EPIC_BRANCH}`, "status: done", "---", "", "# E1", "",
+    ].join("\n"),
+  };
+  for (const [rel, content] of Object.entries(plan)) {
+    const path = join(made.runDir, rel);
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, content, "utf8");
+  }
+  const store = RunStore.open(made.runDir);
+  store.mutate((run) => ({ ...run, build: { epic_branch: [EPIC_BRANCH], branch_model: "integration" } }));
+  store.save();
+  // A real repo carrying the epic branch: the ONLY thing incoherent is the recorded
+  // `default_branch`, so the refusal is the base-missing one and nothing else.
+  const dir = join(made.root, "api");
+  mkdirSync(dir, { recursive: true });
+  git(dir, ["init", "-b", "main"]);
+  git(dir, ["config", "user.email", "fixture@example.com"]);
+  git(dir, ["config", "user.name", "Fixture"]);
+  writeFileSync(join(dir, "README.md"), "# api\n", "utf8");
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-q", "-m", "base"]);
+  git(dir, ["branch", EPIC_BRANCH]);
+  process.env.PATH = made.binDir;
+  const argvLog = join(made.root, "spawns.jsonl");
+  process.env.FAKE_CLAUDE_ARGV_LOG = argvLog;
+  process.env.FAKE_CLAUDE_RUNDIR = made.runDir;
+  return { ...made, argvLog, outbox: join(made.root, "notified.jsonl") };
+}
+
+/** Rewrite `api`'s recorded `default_branch` — #92's whole setup. */
+function recordDefaultBranch(root: string, branch: string): void {
+  const path = join(root, ".tldrx", "workspace.yml");
+  const text = readFileSync(path, "utf8");
+  let inRepo = false;
+  const out = text.split("\n").map((line) => {
+    if (line.trim().startsWith("- name:")) inRepo = line.trim() === "- name: api";
+    return inRepo && line.trim().startsWith("default_branch:")
+      ? line.replace(/default_branch:.*/, `default_branch: ${branch}`)
+      : line;
+  });
+  writeFileSync(path, out.join("\n"), "utf8");
+}
+
+describe("an executor refusal is compared by what refused, not by the literal under it", () => {
+  test("two DIFFERENT incoherence refusals sharing a last line are two relaunches", async () => {
+    const ws = watchWorkspace();
+    recordDefaultBranch(ws.root, "trunk-one");
+    const outcome = await auto(ws, {
+      untilDone: 2,
+      onLine: (line) => {
+        // A different recorded value on the relaunch: a different refusal, naming a
+        // different branch — and printing the same `tldrx doctor` line at the end.
+        if (line.startsWith("relaunching")) recordDefaultBranch(ws.root, "trunk-two");
+      },
+    });
+    expect(outcome.code).toBe(2);
+    expect(attempts(ws)).toBe(0);
+    const relaunches = relaunched(ws);
+    expect(relaunches).toHaveLength(2);
+    expect(String(relaunches[0]?.payload.reason)).toContain("trunk-one");
+    expect(String(relaunches[1]?.payload.reason)).toContain("trunk-two");
+    // The instrument: both attempts really did end on the same printed line, which is
+    // what made the old comparison blind here.
+    expect(String(relaunches[0]?.payload.last_line)).toBe(String(relaunches[1]?.payload.last_line));
+  });
+
+  test("the SAME incoherence refusal twice is one relaunch, then the stop names the repeat", async () => {
+    const ws = watchWorkspace();
+    recordDefaultBranch(ws.root, "trunk-one");
+    const outcome = await auto(ws, { untilDone: 2 });
+    expect(outcome.code).toBe(2);
+    expect(relaunched(ws)).toHaveLength(1);
     expect(outcome.lines[outcome.lines.length - 1]).toContain("same as the previous attempt");
   });
 });

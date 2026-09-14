@@ -124,7 +124,7 @@ nohup tldrx run auto --run <id> --until-done --max-usd 40 \
 - **`--until-done`** — relanza el bucle en el mismo proceso tras una salida con la que no
   puede hacer nada más (una falla pasado el tope de reintentos, una excepción, un rechazo
   sin dinero detrás), como mucho 5 veces; nunca sobre el `4` de una persona, nunca sobre un
-  bloqueo de presupuesto, nunca dos veces sobre la misma última línea.
+  bloqueo de presupuesto, nunca dos veces sobre el mismo rechazo.
 - **`--max-usd 40`** — el techo propio del bucle, que abarca todos los relanzamientos.
 - **`--wait-answers 8h` / `--wait-gates 8h`** — cuando algo sí necesita a una persona,
   consulta durante ese rato en vez de salir con `4` de inmediato; no se gasta nada mientras
@@ -646,9 +646,11 @@ cosas sobre las que nunca relanza:
   proceso mueve ese techo — la línea de parada dice las dos cifras, y `tldrx budget raise` es
   tuyo. El `--max-usd` propio del bucle abarca todos los relanzamientos en vez de reiniciarse
   con cada uno.
-- **La misma última línea dos veces.** Un rechazo que se repite textualmente no es uno que un
+- **El mismo rechazo dos veces.** Un rechazo que se repite textualmente no es uno que un
   relanzamiento mueva; un relanzamiento lo demuestra, y el bucle se detiene en vez de
-  martillarlo.
+  martillarlo. Lo que se compara es el rechazo que la parada NOMBRA — no la última línea
+  impresa, que en una etapa fallada es siempre el mismo consejo sobre el costo, y compararla
+  detenía runs que sí estaban avanzando.
 
 Pon el id del run antes de la bandera, pásalo como `--run <id>`, o escribe `--until-done=3`: un `--until-done` sin
 valor seguido de un id de run lee el id como su número y lo rechaza, por nombre.

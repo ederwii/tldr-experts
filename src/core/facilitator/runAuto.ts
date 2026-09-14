@@ -257,6 +257,22 @@ function clipForLedger(text: string): string {
 }
 
 /**
+ * What one attempt was refused BY — the value the repeat guard compares across attempts
+ * (gh #297).
+ *
+ * The producer's `signature` when `next` named one, and the attempt's last line when it
+ * did not. Never a position picked out of the middle of the report: an index is right only
+ * for the shapes that exist the day it is written, and the previous one (`lines.length - 1`)
+ * landed on an advice literal that every stage death ends with. The fallback is kept —
+ * rather than "no signature ⇒ relaunch" — because for the reports that name nothing the
+ * last line IS the reason (a throw's message, a missing input), and a repeat of it is real
+ * evidence the loop is stuck; the bound is a backstop that costs money, not a reading.
+ */
+function comparandOf(signature: string | undefined, lines: readonly string[]): string {
+  return signature ?? lines[lines.length - 1] ?? "";
+}
+
+/**
  * The money and the turns as the FIRST attempt found them, carried across every relaunch
  * (gh #252). "Spent by this loop" and the `--max-usd` ceiling are figures about the one
  * command a person typed, not about the attempt that happens to be running: a supervisor
@@ -274,8 +290,8 @@ interface Supervision {
   readonly attempt: number;
   /** Relaunches allowed — `--until-done <n>`. */
   readonly of: number;
-  /** The previous attempt's last line, or null on the first. */
-  readonly previousLastLine: string | null;
+  /** What the previous attempt was refused BY — `comparand` below — or null on the first. */
+  readonly previousComparand: string | null;
   /** The first attempt's baseline, or null until one has been measured. */
   readonly baseline: LoopBaseline | null;
 }
@@ -311,15 +327,24 @@ export interface RelaunchVerdict {
  * ceiling is what refused, and nothing in-process raises it, #232/#244), this loop's own
  * `--max-usd`, its iteration cap, a run whose files disagree with themselves, a usage
  * refusal. Then the bound. Then the one check that catches every deterministic refusal
- * not named above: an attempt whose last line is the previous attempt's verbatim is a
- * refusal repeating, and a second relaunch over it would be the loop hammering a wall.
- * Only then are `1`, `2` and `5` relaunched — the three families the measurement behind
- * gh #252 found a person relaunching by hand.
+ * not named above: an attempt refused BY THE SAME WORDS as the one before it is a refusal
+ * repeating, and a second relaunch over it would be the loop hammering a wall. Only then
+ * are `1`, `2` and `5` relaunched — the three families the measurement behind gh #252
+ * found a person relaunching by hand.
+ *
+ * `comparand` is what that check reads (gh #297). It is `NextOutcome.signature` — the
+ * producer's own sentence for WHY it refused — and the attempt's last line only where
+ * nothing named one. It is deliberately NOT the last line by default: every stage death
+ * ends with the same advice about cost, so a guard reading the last line of an exit 5
+ * compared a constant to itself and stopped every run on its SECOND stage death, whatever
+ * killed it. The reason this returns carries the comparand for the same reason — a
+ * `run.relaunched` that quoted the advice line named nothing a person could act on.
  */
 export function relaunchVerdict(input: {
   readonly code: number;
-  readonly lastLine: string;
-  readonly previousLastLine: string | null;
+  /** What this attempt was refused by — the producer's sentence, or its last line. */
+  readonly comparand: string;
+  readonly previousComparand: string | null;
   readonly held: string | null;
   readonly attempt: number;
   readonly of: number;
@@ -342,10 +367,10 @@ export function relaunchVerdict(input: {
       reason: `the --until-done ${String(input.of)} bound is spent after ${String(input.attempt)} attempts`,
     };
   }
-  if (input.previousLastLine !== null && input.lastLine === input.previousLastLine) {
+  if (input.previousComparand !== null && input.comparand === input.previousComparand) {
     return {
       relaunch: false,
-      reason: "its last line is the same as the previous attempt's — a refusal that repeats "
+      reason: "its refusal is the same as the previous attempt's — a refusal that repeats "
         + "verbatim is not one a relaunch moves",
     };
   }
@@ -354,7 +379,7 @@ export function relaunchVerdict(input: {
     : code === EXIT_REFUSED
       ? "a refusal with no money behind it"
       : "the loop ended with exit 1";
-  return { relaunch: true, reason: `${family}: ${input.lastLine}` };
+  return { relaunch: true, reason: `${family}: ${input.comparand}` };
 }
 
 /**
@@ -399,13 +424,13 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
   // `run auto` could drive a different run the moment a second one was opened.
   let runId = options.runId;
   let baseline: LoopBaseline | null = null;
-  let previousLastLine: string | null = null;
+  let previousComparand: string | null = null;
   for (let attempt = 1; ; attempt++) {
     let outcome: AttemptOutcome;
     try {
       outcome = await runAutoOnce(
         { ...options, runId, onLine: say },
-        { attempt, of: bound, previousLastLine, baseline },
+        { attempt, of: bound, previousComparand, baseline },
       );
     } catch (error) {
       // The attempt's own catch covers the iterating half; this is a throw from before
@@ -418,8 +443,9 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
     runId = outcome.runId ?? runId;
     baseline = outcome.baseline ?? baseline;
     const lastLine = outcome.lines[outcome.lines.length - 1] ?? "";
+    const comparand = comparandOf(outcome.signature, outcome.lines);
     const verdict = outcome.verdict ?? relaunchVerdict({
-      code: outcome.code, lastLine, previousLastLine, held: null, attempt, of: bound, runDir: outcome.runDir,
+      code: outcome.code, comparand, previousComparand, held: null, attempt, of: bound, runDir: outcome.runDir,
     });
     if (!verdict.relaunch) {
       // Said only when there is something to explain: a bound that was used, or an exit
@@ -447,11 +473,15 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
         attempt,
         of: bound,
         last_line: clipForLedger(lastLine),
+        // What the NEXT attempt is compared against — the producer's refusal where there
+        // is one, the last line where there is not (gh #297). Recorded rather than left
+        // to be re-derived: the ledger is where "why did it stop relaunching" is answered.
+        comparand: clipForLedger(comparand),
       },
     });
     say(`relaunching run auto after exit ${String(outcome.code)} — ${verdict.reason} `
       + `(relaunch ${String(attempt)} of ${String(bound)}, --until-done)`);
-    previousLastLine = lastLine;
+    previousComparand = comparand;
   }
 }
 
@@ -469,16 +499,19 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
    * `relaunchVerdict` decide on the exit and the lines alone. Unsupervised, the verdict
    * is null and nothing here changes.
    */
-  const leave = (code: number, held: string | null = null): AttemptOutcome => ({
+  const leave = (code: number, held: string | null = null, signature?: string): AttemptOutcome => ({
     code,
     lines,
+    ...(signature === undefined ? {} : { signature }),
     runId: resolved?.runId ?? null,
     runDir: resolved?.runDir ?? null,
     baseline,
     verdict: supervision === undefined ? null : relaunchVerdict({
       code,
-      lastLine: lines[lines.length - 1] ?? "",
-      previousLastLine: supervision.previousLastLine,
+      // The refusal's own words when `next` named them, and the attempt's last line when
+      // it did not (gh #297) — `comparandOf` is the ONE place that choice is made.
+      comparand: comparandOf(signature, lines),
+      previousComparand: supervision.previousComparand,
       held,
       attempt: supervision.attempt,
       of: supervision.of,
@@ -626,9 +659,14 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
      * notification: an attempt the supervisor is about to run again has not ended the
      * run, so `run.failed` is not sent for it — the last attempt sends the one that counts.
      */
-    const finish = async (code: number, spentUsd: number, held: string | null = null): Promise<AttemptOutcome> => {
+    const finish = async (
+      code: number,
+      spentUsd: number,
+      held: string | null = null,
+      signature?: string,
+    ): Promise<AttemptOutcome> => {
       if (heartbeat !== null) clearInterval(heartbeat);
-      const outcome = leave(code, held ?? budgetBlockedReason(readEvents(log).slice(attemptStart)));
+      const outcome = leave(code, held ?? budgetBlockedReason(readEvents(log).slice(attemptStart)), signature);
       if (outcome.verdict?.relaunch === true) return outcome;
       if (notifier !== null) {
         const run = RunStore.open(runDir).run;
@@ -1100,7 +1138,9 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
             + `— the --retry-failed ${String(retryBound)} bound is spent, and the exit code is still `
             + "5, the failure's own");
         }
-        return await finish(outcome.code, spentByLoop);
+        // `next`'s own signature travels with the exit: what refused this attempt is what
+        // the supervisor compares against the next one (gh #297).
+        return await finish(outcome.code, spentByLoop, null, outcome.signature);
       }
       // Exit 0 with nothing appended and the cursor unmoved would loop forever on a
       // run whose files disagree with themselves. Stop and say so instead.

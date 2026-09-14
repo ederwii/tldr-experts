@@ -97,7 +97,7 @@ function workspace(options: BuildWorkspaceOptions): BuildWorkspace {
 function next(
   ws: BuildWorkspace,
   overrides: Partial<NextOptions> = {},
-): Promise<{ code: number; lines: readonly string[]; stderr?: readonly string[] }> {
+): Promise<{ code: number; lines: readonly string[]; stderr?: readonly string[]; signature?: string }> {
   return runNext({
     root: ws.root,
     dryRun: false,
@@ -1957,6 +1957,44 @@ describe("branch and worktree names carry the run id", () => {
       // One string per assertion: `toMatch` over an ARRAY throws on bun.
       expect(source).not.toMatch(/`story\/\$\{/);
     }
+  });
+});
+
+/**
+ * gh #297 — what a refusal is COMPARED BY when `run auto --until-done` decides whether to
+ * relaunch. The comparand is the refusal's own sentence (`NextOutcome.signature`), and for
+ * the dirty-tree refusal that sentence named only the REPO. A run comes back to the same
+ * repo, so two genuinely different dirty trees — different files, different stories — read
+ * as one refusal repeating and the remaining relaunches were thrown away.
+ */
+describe("the dirty-tree refusal is compared by what is dirty, not by the repo alone (gh #297)", () => {
+  test("two refusals over the same repo, different declared paths, are two different refusals", async () => {
+    const ws = workspace(TWO_WAVES);
+
+    writeFileSync(join(ws.repoDir, "s1.txt"), "the operator's own draft\n", "utf8");
+    const first = await next(ws);
+    expect(first.code).toBe(2);
+
+    rmSync(join(ws.repoDir, "s1.txt"));
+    writeFileSync(join(ws.repoDir, "s2.txt"), "a different draft, a different story\n", "utf8");
+    const second = await next(ws);
+    expect(second.code).toBe(2);
+
+    // The instrument: both refusals really are about the same repo, so the repo name
+    // cannot be what tells them apart.
+    expect(first.signature).toContain("repo `app`");
+    expect(second.signature).toContain("repo `app`");
+    expect(first.signature).toContain("s1.txt");
+    expect(second.signature).toContain("s2.txt");
+    expect(second.signature).not.toBe(first.signature);
+
+    // The other direction, and the one the guard exists for: the SAME dirty tree twice
+    // is the same refusal, byte for byte — otherwise nothing ever stops the loop.
+    rmSync(join(ws.repoDir, "s2.txt"));
+    writeFileSync(join(ws.repoDir, "s1.txt"), "the operator's own draft\n", "utf8");
+    const again = await next(ws);
+    expect(again.code).toBe(2);
+    expect(again.signature).toBe(first.signature);
   });
 });
 

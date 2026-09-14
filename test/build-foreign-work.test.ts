@@ -630,3 +630,44 @@ describe("the index survives the round trip", () => {
     }
   });
 });
+
+/**
+ * gh #297 — two different stash failures over the SAME repo. The refusal's printed lines
+ * carry the reason git gave; the sentence `--until-done` compares did not, so a second,
+ * different failure in the same repo read as the first one repeating.
+ */
+describe("work that could not be set aside is compared by WHY (gh #297)", () => {
+  const lock = (ws: BuildWorkspace, rel: string): string => join(ws.repoDir, ".git", rel);
+
+  test("two different stash failures over the same repo are two different refusals", async () => {
+    const ws = workspace(ONE_STORY);
+    writeFileSync(join(ws.repoDir, "export.csv"), "id,value\n1,2\n", "utf8");
+
+    // A leftover index lock: `git stash push` cannot write the index.
+    writeFileSync(lock(ws, "index.lock"), "", "utf8");
+    const first = await next(ws);
+    rmSync(lock(ws, "index.lock"), { force: true });
+
+    // A leftover stash-ref lock: it gets further and fails elsewhere, with git's own
+    // other sentence.
+    writeFileSync(lock(ws, "refs/stash.lock"), "", "utf8");
+    const second = await next(ws);
+    rmSync(lock(ws, "refs/stash.lock"), { force: true });
+
+    expect(first.code).toBe(2);
+    expect(second.code).toBe(2);
+    expect(first.signature).toContain("could not be set aside");
+    expect(second.signature).toContain("could not be set aside");
+    // Same repo, different reason — and the comparand has to say so.
+    expect(first.signature).toContain("repo `app`");
+    expect(second.signature).toContain("repo `app`");
+    expect(second.signature).not.toBe(first.signature);
+
+    // And the same failure twice is the same refusal, byte for byte.
+    writeFileSync(lock(ws, "index.lock"), "", "utf8");
+    const again = await next(ws);
+    rmSync(lock(ws, "index.lock"), { force: true });
+    expect(again.code).toBe(2);
+    expect(again.signature).toBe(first.signature);
+  });
+});

@@ -771,7 +771,8 @@ After an exit the loop can do nothing else with — a stage failure past the ret
 thrown error, a refusal whose remedy is the same command typed again (`2`) — the same process
 runs the loop again, at most `n` times (bare means 5, the cap), writing `run.relaunched` each
 time. Never over a person's exit `4`, never over a `budget.blocked` or its own `--max-usd`, and
-never twice over the same last line. Pass the run id as `--run <id>`: a bare `--until-done`
+never twice over the same refusal — the refusal itself, not the advice line every stage
+death ends with (gh #297). Pass the run id as `--run <id>`: a bare `--until-done`
 followed by a positional id reads the id as its count and refuses it.
 
 **An `auto` gate is the exception, and it is the same authority the run already granted.** While
