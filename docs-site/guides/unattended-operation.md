@@ -343,7 +343,11 @@ as a plain `done`: `run.finished` reads *"…the loop finished with exit 0 (ok),
 this loop. The run: nothing delivered: 0 of 3 stories; S1 — npm run test exited 127."* The
 same sentence is on `run.yml` as `outcome:`, in `tldrx run status`, on the dashboard and in the
 `tldrx ship` PR body — and `tldrx ship` refuses such a run outright rather than opening a PR
-whose "What shipped" section is empty.
+whose "What shipped" section is empty. It also refuses, exit 2, an epic that carries a story
+the reviewer *rejected*: a story merges into its epic before its review, so a `changes` verdict
+leaves the diff on the branch, and a PR whose body lists that story under "Not done" would still
+carry its code. The refusal names the story, the merge and the reviewer's reason; `tldrx story
+reopen` and a Build re-run are the way through, or a PR opened by hand.
 
 **And a run can end in the PR itself.** Open it with `--ship merge` (or `pr`, or `push`) and
 the moment `run auto` sees the run read `done` it runs `tldrx ship` for you: the epic branch is

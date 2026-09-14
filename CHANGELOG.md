@@ -25,6 +25,31 @@
   no-write developer on a plain reopen — each settled `done` before); the neighbouring fix-round
   tests now land a REAL diff, because the fake developer's default rewrote the bytes the first
   attempt committed, which is #308's shape exactly. Golden byte-identical.
+- **`tldrx ship` refuses an epic carrying a story the reviewer rejected (#282).** MEASURED on a
+  live unattended run (0.18.2, 8 stories), story S5: DoD green, `48f8bdd merge(S5)` on the epic,
+  THEN `check.failed check:review verdict:changes`; the requeue did the same (`7fd2468 merge(S5)`,
+  `changes` again) and the story settled `blocked` — the epic carried, twice, code the reviewer
+  rejected twice. Merging BEFORE the review is design (#166: the reviewer reads the merged diff from
+  the epic base) and every verdict settles with `merged: true`; the defect was downstream. `ship`'s
+  only story refusal was #210's "zero stories done", so with one `done` story beside S5 it pushed
+  the epic and opened the PR with the rejected code in its diff, while the body listed S5 under
+  "Not done" with no word that the diff was there — a record lying in the dangerous direction (§7).
+  Reproduced at `bdc43e7` with the fake agent (`GOLDEN_ROUNDS`, S2 scripted `changes` twice): S1
+  `done`, S2 `blocked`, every S2 `task.done` commit an ancestor of `epic/e1`, and `ship --dry-run`
+  exited 0 printing the `gh pr create` line. Now `ship` asks the ledger's `lastMerge` (#295 — the
+  last `task.done` carrying `commit` and `epic_base`, which survives a reopen precisely so "what
+  does the epic hold" can be asked) for every story not `done`, and a `changes` there is a
+  rejection that stands: exit 2 — a gate DID say no, unlike #210's 1 — naming the story, the merge
+  and the handoff's own reason, with #210's remedy (`tldrx story reopen <id> --note`, re-run Build,
+  or open the PR by hand). Not widened to a merged diff nobody judged (`n-a`/`error`) — that is #311,
+  filed from this change. Guards, all passing before: a `changes` a later attempt merged over and got approved
+  ships; a story whose diff never merged ships; a story parked at `review` under a SIGNED fix list
+  ships with its findings listed. Two mutations of the predicate each redden a different test.
+  Golden byte-identical: nothing in Build changed. The unattended path was already closed one
+  door earlier — the auto gate refuses to self-sign over any story not `done`
+  (`autoGate.ts` `UNFINISHED_STORIES`, pinned in `test/build-executor.test.ts`) — so this reaches
+  a PR only after a person approved the Build gate, which is exactly when the record has to say
+  what the diff contains.
 
 - **A stage-failure line keeps the branch it exists to name when the worktree path is wider than
   the line (#310, #293).** MEASURED 2026-09-14 under a ~115-char session scratchpad, the very place

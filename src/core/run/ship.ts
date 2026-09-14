@@ -104,6 +104,7 @@ import { GH_BIN } from "../adapters/github.ts";
 import { renderShipBody, type OpenFindingRow } from "./shipBody.ts";
 import { latestFixlist, openFindings } from "../build/fixlist.ts";
 import { carriedReportFor, phaseDirsOf, scanStories } from "../build/carriedRows.ts";
+import { readReviewLedger } from "../build/reviewLedger.ts";
 import type { PlanStatus } from "../schemas/planCommon.ts";
 // Spec §3's table, from the file that owns it. This module used to spell the
 // three numbers itself; `EXIT_GATE_REFUSED` is the same 2 every other gate
@@ -115,7 +116,7 @@ import {
 } from "./shipPolicy.ts";
 import type { RunShip } from "./RunFile.ts";
 import {
-  deliveredPhrase, deriveRunOutcome, describeRunOutcome, storiesView,
+  deliveredPhrase, deriveRunOutcome, describeRunOutcome, storiesView, type StoriesView,
 } from "./runOutcome.ts";
 
 /** One external command, with the working directory it must run in. */
@@ -265,6 +266,53 @@ export async function shipRun(options: ShipOptions): Promise<ShipOutcome> {
   // fix lists they own, and the state refusal needs the paths the settled ones
   // declare. Two reads would be two answers to "what did this run plan".
   const stories = runStories(store);
+
+  // A REJECTED DIFF ON THE BRANCH (gh #282).
+  //
+  // Merging into the epic happens BEFORE the review, by design (#166: the
+  // reviewer reads `git diff <epic-base>...<story>` over the merged tree), and
+  // every verdict — `changes` included — settles with the diff still there. So
+  // a story the reviewer rejected, requeued and rejected again is `blocked` with
+  // its code merged into the epic twice: measured on a live 8-story run, S5,
+  // `48f8bdd merge(S5)` then `7fd2468 merge(S5)`, both followed by
+  // `check.failed check:review verdict:changes`. With one story `done` beside it
+  // #210's refusal does not fire, the PR opens with the rejected code in its
+  // diff, and the body lists that story under `## Not done` without one word
+  // that the diff is there — a record lying in the dangerous direction (§7).
+  //
+  // The question is asked of the ledger, not re-derived: `lastMerge` (#295) is
+  // the last `task.done` that watched a merge happen — commit, epic base and the
+  // verdict it settled under — and it survives a `story reopen` precisely so
+  // "what does the epic hold" can be asked after the counters reset. `changes`
+  // there is a rejection that STANDS (the as-is path reads it the same way): a
+  // later attempt that merged and was approved has replaced it, and a story
+  // whose diff never merged — DoD red, conflict, developer died — has none.
+  // `done` stories are not asked: `done` is settled everywhere in this verb.
+  //
+  // Family 2, unlike #210: a gate DID say no — the reviewer is a check
+  // (`check.failed check:review`) and its verdict is what blocked the story.
+  // AFTER #210's refusal on purpose: a run that delivered nothing is refused in
+  // words this cannot improve on, and the remedy is the same one.
+  const rejected = rejectedOnEpic(store.runDir, stories, view);
+  if (rejected.length > 0) {
+    const ids = rejected.map((row) => row.id);
+    return refuse([
+      `${store.runId} carries a story the reviewer rejected, and its diff is on \`${branch}\``,
+      ...rejected.map((row) =>
+        `  ${row.id} — its last merge into the epic (commit ${row.commit.slice(0, 7)} over epic base `
+        + `${row.epicBase.slice(0, 7)}) was judged \`changes\`${row.reason === null ? "" : `: ${row.reason}`}`),
+      "  A story merges into the epic BEFORE its review, so a `changes` verdict leaves the diff on the branch;",
+      `  a PR over \`${branch}\` would carry that code, and its body would list ${ids.join(", ")} under "Not done"`,
+      "  without saying the diff is there.",
+      `  Unblock ${ids.length === 1 ? "it" : "them"} (`
+        + (ids.length === 1
+          ? `\`tldrx story reopen ${ids[0] ?? ""} --note "<why>"\``
+          : `\`tldrx story reopen <id> --note "<why>"\` for each`)
+        + ") and re-run Build so a verdict that stands lands over it,",
+      "  or open the PR by hand if you mean to ship the branch as it stands.",
+    ]);
+  }
+
   const body = writeShipBody(
     store, branch, handoff, stories, new Set(loadWorkspace(options.root).repos.keys()),
   );
@@ -1100,6 +1148,41 @@ interface StateExcuse {
   readonly storyId: string;
   /** The `repo:` the declaring story names — the only repo this excuse answers for. */
   readonly repo: string;
+}
+
+/**
+ * A story that is not `done` whose LAST merge into the epic settled under a
+ * `changes` verdict (gh #282) — the rejected diff is on the branch.
+ *
+ * `reason` is the handoff's own sentence for the story (`storiesView`'s
+ * `unfinished`), or null when there is no view to read one from — the line
+ * then names the merge and the verdict and no reason, rather than inventing one.
+ */
+interface RejectedOnEpic {
+  readonly id: string;
+  readonly commit: string;
+  readonly epicBase: string;
+  readonly reason: string | null;
+}
+
+function rejectedOnEpic(
+  runDir: string,
+  stories: readonly ShipStory[],
+  view: StoriesView | null,
+): readonly RejectedOnEpic[] {
+  const rows: RejectedOnEpic[] = [];
+  for (const story of stories) {
+    if (story.status === "done") continue;
+    const merge = readReviewLedger(runDir, story.id).lastMerge;
+    if (merge === null || merge.verdict !== "changes") continue;
+    rows.push({
+      id: story.id,
+      commit: merge.commit,
+      epicBase: merge.epicBase,
+      reason: view?.unfinished.find((row) => row.id === story.id)?.reason ?? null,
+    });
+  }
+  return rows;
 }
 
 function settledTouches(stories: readonly ShipStory[]): readonly StateExcuse[] {
