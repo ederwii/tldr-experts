@@ -378,9 +378,10 @@ export function storyLedger(
 
   // The lost turns, in log ORDER — the one thing the two passes above do not
   // keep. A spawn opens a slot for its story; a result for that story closes
-  // one; an invocation-terminal event on the spawn's stage turns every slot
-  // still open on that stage into a LOST turn; a spawn still open at the end
-  // of the log is in flight and is left alone. `extraTurns` are this
+  // one — or, arriving late, retires a slot already counted lost; an
+  // invocation-terminal event on the spawn's stage turns every slot still open
+  // on that stage into a LOST turn; a spawn still open at the end of the log is
+  // in flight and is left alone. `extraTurns` are this
   // invocation's own, spawned after the last terminal event by construction,
   // so they never meet a slot this loop could close. Zero on every finished
   // healthy story and every live one, so the ledger is byte-identical there.
@@ -395,7 +396,16 @@ export function storyLedger(
     if (event.type === "agent.result" && inScope(event)) {
       const key = str(event.payload.key);
       if (key === null || !isStory(key, str(event.payload.phase))) continue;
-      open.set(key, Math.max(0, (open.get(key) ?? 0) - 1));
+      // A result is proof the turn was metered, WHENEVER it arrives (review
+      // round 4). One that finds no open slot — an orphaned agent outliving a
+      // crashed or relaunched invocation, appending after the terminal event
+      // already closed its slot as lost — retires a LOST slot instead, so the
+      // same turn is never both the dollars in `measured` and a lost turn in
+      // `unmetered`. With neither open nor lost it is a result nothing spawned,
+      // and the two passes above already treated it as they always did.
+      const opened = open.get(key) ?? 0;
+      if (opened > 0) open.set(key, opened - 1);
+      else if ((lost.get(key) ?? 0) > 0) lost.set(key, (lost.get(key) ?? 0) - 1);
       continue;
     }
     if (!closesAttempt(event)) continue;

@@ -1153,3 +1153,51 @@ describe("#249 round 3 — a spawned turn with no result YET is in flight, not l
     expect(afterReentry.unmeteredTurns).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #249, review round 4: a result that lands AFTER the terminal event already
+// closed its slot as lost — an orphaned agent subprocess outliving a crashed or
+// relaunched invocation and appending late — was counted TWICE: the real dollars
+// in measuredUsd AND one lost turn on the same story. A result is proof the turn
+// was metered, whenever it arrives: with no open slot for its story it retires a
+// LOST one instead. Same single walk, no new vocabulary.
+// ---------------------------------------------------------------------------
+
+describe("#249 round 4 — a late result retires the lost slot it belongs to, never double-counts", () => {
+  function append(ws: BuildWorkspace, ts: string, type: "stage.started" | "stage.failed" | "agent.spawned" | "agent.result", extra: Record<string, unknown>, costUsd = 0): void {
+    const base = type === "agent.spawned"
+      ? { actor: "developer", payload: { phase: "04-build", story: "S1", role: "developer", model: "sonnet", effort: null, max_budget_usd: 1.5 } }
+      : type === "agent.result"
+        ? { actor: "developer", payload: { phase: "04-build", task: "t1", key: "S1", session_id: "late-developer-S1", model: "sonnet", outputs: [], tldrx_version: "0.25.0" } }
+        : { actor: "facilitator", payload: { phase: "04-build", mode: "headless", executor: "04-build", ...extra } };
+    EventLog.forRun(ws.runDir).append({ ts, run: ws.runId, stage: "build", type, cost_usd: costUsd, ...base });
+  }
+
+  test("stage.failed, then the late result: measured $0.25 and NOTHING flagged", () => {
+    const ws = workspace(ONE_STORY);
+    append(ws, "2026-09-14T12:00:00Z", "stage.started", {});
+    append(ws, "2026-09-14T12:00:01Z", "agent.spawned", {});
+    append(ws, "2026-09-14T12:00:02Z", "stage.failed", { reason: "the executor threw" });
+    append(ws, "2026-09-14T12:00:03Z", "agent.result", {}, 0.25);
+
+    const cost = buildStoryCost(ws.runDir)!;
+    const s1 = cost.rows.find((r) => r.story === "S1");
+    expect(s1?.measuredUsd).toBe(0.25);
+    expect(cost.unmeteredTurns).toBe(0);
+    expect(cost.unmeteredStories).toEqual([]);
+    expect(renderStoryCost(cost)).not.toContain(LOWER_BOUND_MARK);
+  });
+
+  test("relaunch: the new stage.started precedes the old attempt's result — still $0.25, nothing flagged", () => {
+    const ws = workspace(ONE_STORY);
+    append(ws, "2026-09-14T12:00:00Z", "stage.started", {});
+    append(ws, "2026-09-14T12:00:01Z", "agent.spawned", {});
+    append(ws, "2026-09-14T13:00:00Z", "stage.started", {});
+    append(ws, "2026-09-14T13:00:01Z", "agent.result", {}, 0.25);
+
+    const cost = buildStoryCost(ws.runDir)!;
+    expect(cost.rows.find((r) => r.story === "S1")?.measuredUsd).toBe(0.25);
+    expect(cost.unmeteredTurns).toBe(0);
+    expect(cost.unmeteredStories).toEqual([]);
+  });
+});

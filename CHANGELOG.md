@@ -62,7 +62,9 @@
   measurement. Pre-merge review round 2 found the events side was NOT labelled — `tldrx cost --stories`
   reads only `agent.result` events, so a story the fault left un-evented came back with no measured cost
   and zero unmetered turns, a silent null at odds with the `budget.spent_usd` run.yml records. Now the
-  story ledger walks the log in order: a spawn opens a slot for its story, a result closes one, and an
+  story ledger walks the log in order: a spawn opens a slot for its story, a result closes one (or, arriving
+  late from an orphaned agent after its slot was already counted lost, retires that lost slot — a result is
+  proof the turn was metered whenever it lands, never both the dollars and a lost turn), and an
   invocation-terminal event on that stage (`stage.done`/`failed`/`skipped`, the executor or record-tasks
   `error`, or a later `stage.started` that superseded it) turns every slot still open into a LOST turn,
   which enters the SAME unmetered/lower-bound door: the story reads as a LOWER BOUND with the turn count,
