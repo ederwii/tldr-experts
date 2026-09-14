@@ -15,6 +15,8 @@ import { remainingWork, renderRemainingWork } from "./remainingWork.ts";
 import { totalSpent, wouldExceed } from "./wouldExceed.ts";
 import { spentFigure, tallyOf, type SpentTally } from "./spentFigure.ts";
 import { shortBy } from "../build/caps.ts";
+import { EventLog } from "../events/EventLog.ts";
+import { givenAwayLines } from "./rebalance.ts";
 
 export interface BudgetPhaseView {
   readonly id: string;
@@ -93,6 +95,13 @@ export interface BudgetView {
    * not a floor at all (`not measured: 9 in-session tasks, 0 metered`).
    */
   readonly metered_tasks: number;
+  /**
+   * ADDITIVE (review of #314): for every phase that GAVE ceiling through `run auto
+   * --rebalance-finished` and is no longer finished, the move and the exact `--take-from` that
+   * returns what is still unspent (`givenAwayLines`). Empty without a `runDir` — there is no
+   * event log to read the moves from — and on every run that never rebalanced.
+   */
+  readonly given_away: readonly string[];
 }
 
 /**
@@ -146,6 +155,7 @@ export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string
   });
 
   const blocked = phases.find((p) => p.blocked && p.is_cursor) ?? phases.find((p) => p.blocked) ?? null;
+  const events = runDir === undefined ? [] : EventLog.forRun(runDir).read();
   return {
     run: run.run,
     title: run.title,
@@ -162,6 +172,7 @@ export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string
     fix_command: blocked === null ? null : raiseCommand(run.run, blocked.id, blocked.short_by_usd),
     unmetered_tasks: tally.unmetered,
     metered_tasks: tally.metered,
+    given_away: budget.phases.flatMap((phase) => givenAwayLines(events, budget, run, run.run, phase.id)),
   };
 }
 
@@ -306,6 +317,7 @@ export function renderBudget(view: BudgetView): string {
       `Or move the money instead of adding it:  ${view.fix_command ?? ""} --take-from <phase>`,
     );
   }
+  if (view.given_away.length > 0) lines.push("", ...view.given_away);
   return lines.join("\n");
 }
 

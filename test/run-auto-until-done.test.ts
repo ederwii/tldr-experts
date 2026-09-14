@@ -43,6 +43,11 @@ import { runCommand } from "../src/cli/commands/run.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { WATCH_PHASE } from "../src/core/watch/index.ts";
+import { GATE_SIGNER_MARKER } from "../src/core/facilitator/gateSigner.ts";
+import { runNext } from "../src/core/facilitator/runNext.ts";
+import { revoke } from "../src/core/run/gates.ts";
+import { buildBudgetView, renderBudget } from "../src/core/budget/budgetView.ts";
+import { planRebalance } from "../src/core/budget/rebalance.ts";
 import type { TldrxEvent } from "../src/core/events/Event.ts";
 import { deliveredTo, writeNotifier, workspaceYamlWithNotify } from "./fixtures/facilitator/notifier.ts";
 import {
@@ -55,6 +60,7 @@ const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
   "FAKE_CLAUDE_RUNDIR", "FAKE_CLAUDE_OUTPUTS", "FAKE_CLAUDE_COST", "FAKE_CLAUDE_IS_ERROR",
   "FAKE_CLAUDE_FAIL_SEQ", "FAKE_CLAUDE_FAIL_COUNTER", "FAKE_CLAUDE_ARGV_LOG", "TLDRX_AGENT_PROVIDER",
+  "FAKE_CLAUDE_ALT_MATCH", "FAKE_CLAUDE_ALT_OUTPUTS",
 ] as const;
 let open: FacilitatorWorkspace[] = [];
 
@@ -159,6 +165,37 @@ function starve(ws: Made, phaseId: string, ceiling: number): void {
   const next = text.replace(pattern, `$1${ceiling.toFixed(2)}`);
   if (next === text) throw new Error(`starve() did not match a phase row for ${phaseId} in budget.yml`);
   writeFileSync(path, next, "utf8");
+}
+
+/** beta on `gates_policy: agent`, with the fake gate-signer writing a note that signs it. */
+function agentGateWorkspace(): Made {
+  const made = makeFacilitatorWorkspace({
+    scope: "demo", budgetUsd: 10, gates: { alpha: "auto", beta: "agent" },
+    stages: [{ ...ALPHA, checks: "[claim-sources]" }, { ...BETA, checks: "[claim-sources]" }],
+  });
+  open.push(made);
+  process.env.PATH = made.binDir;
+  process.env.FAKE_CLAUDE_RUNDIR = made.runDir;
+  process.env.FAKE_CLAUDE_OUTPUTS = JSON.stringify({
+    "01-what/intent.md": cannedIntent(), "01-what/handoff.md": cannedHandoff(), "02-how/handoff.md": cannedHandoff(),
+  });
+  process.env.FAKE_CLAUDE_COST = "0.42";
+  process.env.FAKE_CLAUDE_ALT_MATCH = GATE_SIGNER_MARKER;
+  const gate = "02-how/beta";
+  process.env.FAKE_CLAUDE_ALT_OUTPUTS = JSON.stringify({
+    ".agent/beta/evidence.md": [
+      "---", "version: 1", `gate: ${gate}`, "role: agent", "by: fable", "at: 2026-08-28T22:14:03Z", "verdict: sign",
+      'read: ["02-how/handoff.md"]', "citations: {sampled: 2, of: 4, resolved: 2, refuted: 0}",
+      "touches: {audited: 3, outside_surface: 0, new_areas: []}", "diff_vs_stories: n-a", "caveats: []", "recommend: []",
+      "---", "", `# Gate evidence — ${gate}`, "", "## Read", "- the handoff [src: 02-how/handoff.md:1]", "",
+      "## Citations checked", "- 2 of 4 spot-checked [src: 02-how/handoff.md:4]", "",
+      "## Touches audited", "- 3 paths, all inside the surface [src: .tldrx/workspace.yml:1]", "",
+      "## Verdict", "- SIGN — every declared output is on disk [src: .tldrx/workspace.yml:1]", "",
+    ].join("\n"),
+  });
+  const argvLog = join(made.root, "spawns.jsonl");
+  process.env.FAKE_CLAUDE_ARGV_LOG = argvLog;
+  return { ...made, argvLog, outbox: join(made.root, "notified.jsonl") };
 }
 
 /** The loop's lines with the two per-workspace strings normalised, so two runs compare. */
@@ -282,6 +319,174 @@ describe("never over money", () => {
     expect(estimate).toBeGreaterThan(remaining);
     expect(last).toContain(`remaining_usd $${remaining.toFixed(2)}`);
     expect(last).toContain(`estimate_usd $${estimate.toFixed(2)}`);
+  });
+
+  /**
+   * gh #314. Measured on a field run: 04-build refused $11.07 short while 01-what had finished
+   * $16.25 under, and a person typed `budget raise 04-build 12 --take-from 01-what`. Without
+   * the opt-in nothing moves — a phase ceiling is still a person's decision — but the refusal
+   * now names the finished phase holding the money and the exact move.
+   */
+  test("without --rebalance-finished the refusal stands, and names the finished phase holding unspent ceiling", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    const outcome = await auto(ws, { untilDone: 5 });
+    expect(outcome.code).toBe(2);
+    expect(attempts(ws)).toBe(1);
+    expect(events(ws).filter((event) => event.type === "budget.raised")).toEqual([]);
+    const blocked = events(ws).filter((event) => event.type === "budget.blocked");
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0]?.payload).toMatchObject({ short_usd: 1, finished_unspent_usd: 5.58 });
+    const text = outcome.lines.join("\n");
+    expect(text).toContain(`tldrx budget raise 02-how 1.00 --run ${ws.runId} --take-from 01-what`);
+    expect(text).toContain("--rebalance-finished");
+    expect(readFileSync(join(ws.runDir, "budget.yml"), "utf8")).toContain('{id: "02-how", ceiling_usd: 1.00');
+  });
+
+  test("with --rebalance-finished the shortfall moves out of the finished phase, on the record, and the run finishes", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    const outcome = await auto(ws, { untilDone: 5, rebalanceFinished: true });
+    expect(outcome.code).toBe(0);
+    expect(attempts(ws)).toBe(2);
+    const raised = events(ws).filter((event) => event.type === "budget.raised");
+    expect(raised).toHaveLength(1);
+    expect(raised[0]?.actor).toBe("alan");
+    expect(raised[0]?.payload).toMatchObject({
+      phase: "02-how", amount_usd: 1, take_from: "01-what",
+      phase_ceiling_before: 1, phase_ceiling_after: 2,
+      take_from_ceiling_before: 6, take_from_ceiling_after: 5,
+      run_ceiling_before: 10, run_ceiling_after: 10,
+      source: "run auto --rebalance-finished",
+    });
+    expect(String(raised[0]?.payload.note)).toContain("01-what");
+    expect(events(ws).filter((event) => event.type === "budget.blocked")).toEqual([]);
+    const budgetText = readFileSync(join(ws.runDir, "budget.yml"), "utf8");
+    expect(budgetText).toContain("ceiling_usd: 10.00");
+    expect(budgetText).toContain('{id: "01-what", ceiling_usd: 5.00');
+    expect(budgetText).toContain('{id: "02-how", ceiling_usd: 2.00');
+    expect(outcome.lines.join("\n")).toContain("moved $1.00 from 01-what");
+  });
+
+  test("with --rebalance-finished but too little unspent, nothing moves and the refusal says how short", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    const outcome = await auto(ws, {
+      untilDone: 5,
+      rebalanceFinished: true,
+      // After alpha settles at $0.42, leave 01-what only $0.08 unspent.
+      onLine: (line) => {
+        if (line.startsWith("01-what/alpha") && line.includes("done")) starve(ws, "01-what", 0.5);
+      },
+    });
+    expect(outcome.code).toBe(2);
+    expect(attempts(ws)).toBe(1);
+    expect(events(ws).filter((event) => event.type === "budget.raised")).toEqual([]);
+    const blocked = events(ws).filter((event) => event.type === "budget.blocked");
+    expect(blocked[0]?.payload).toMatchObject({ short_usd: 1, finished_unspent_usd: 0.08, uncovered_usd: 0.92 });
+    expect(outcome.lines.join("\n")).toContain("$0.92 short");
+    expect(outcome.lines[outcome.lines.length - 1]).toContain("$0.92 short");
+  });
+
+  test("with --rebalance-finished, a move that would pass the owner's grant is not made — not even under warn", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    const path = join(ws.runDir, "budget.yml");
+    const text = readFileSync(path, "utf8")
+      .replace('{id: "02-how", ceiling_usd: 1.00, spent_usd: 0.00}', '{id: "02-how", ceiling_usd: 1.00, spent_usd: 0.00, authorized_usd: 1.50}')
+      .replace("on_exceed: block", "on_exceed: block\nauthorized_by: F001\nauthorized_at: \"2026-09-14T00:00:00Z\"\non_grant_exceed: warn");
+    writeFileSync(path, text, "utf8");
+    const outcome = await auto(ws, { untilDone: 5, rebalanceFinished: true });
+    expect(outcome.code).toBe(2);
+    expect(events(ws).filter((event) => event.type === "budget.raised")).toEqual([]);
+    expect(outcome.lines.join("\n")).toContain("F001");
+  });
+
+  test("the CLI flag reaches the loop: `tldrx run auto --rebalance-finished` moves the money and finishes", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    const code = await runCommand.run(["auto", "--rebalance-finished", "--root", ws.root, "--ui", "off"]);
+    expect(code).toBe(0);
+    expect(events(ws).filter((event) => event.type === "budget.raised")).toHaveLength(1);
+  });
+
+  test("the move is written through a fresh store: a long-lived store adopts it without its ceilings winning later saves (#236)", () => {
+    const ws = workspace();
+    const longLived = RunStore.open(ws.runDir);
+    const other = RunStore.open(ws.runDir);
+    other.mutateBudget((b) => ({ ...b, phases: b.phases.map((p) => p.id === "02-how" ? { ...p, ceiling_usd: 2 } : p) }));
+    other.save();
+    longLived.refreshCeilings();
+    expect(longLived.budget.phases.find((p) => p.id === "02-how")?.ceiling_usd).toBe(2);
+    // A person's raise AFTER the adoption must survive the long-lived store's next save.
+    starve(ws, "01-what", 5.5);
+    longLived.save();
+    expect(readFileSync(join(ws.runDir, "budget.yml"), "utf8")).toContain('{id: "01-what", ceiling_usd: 5.50');
+  });
+
+  /**
+   * gh #314, measured before this fix: with beta on `gates_policy: agent` and a signing note, the
+   * control run self-signs beta (`by: fable`); the same run with `--rebalance-finished` moving
+   * $1.00 into 02-how fell to a person with "a ceiling a PERSON moved" and a decision card
+   * headed "a person moved the ceiling" — while the event's actor was the loop's launcher and
+   * its `source` was the flag. The fall-through itself stands (a move made to unblock a stage is
+   * still a budget decision in its window — `started_at` is the loop's `at`, so the move is
+   * always inside it); what it SAYS must name who and what moved the money.
+   */
+  test("an agent gate on the stage a rebalance unblocked falls to a person, attributing the move to the flag, not to a person", async () => {
+    const control = agentGateWorkspace();
+    const signed = await auto(control, { rebalanceFinished: true });
+    expect(signed.code).toBe(0);
+    expect(RunStore.open(control.runDir).run.phases[1]?.stages[0]?.gate.by).toBe("fable");
+
+    const ws = agentGateWorkspace();
+    starve(ws, "02-how", 1);
+    const outcome = await auto(ws, { rebalanceFinished: true });
+    expect(outcome.code).toBe(4);
+    expect(RunStore.open(ws.runDir).run.phases[1]?.stages[0]?.gate.status).toBe("pending");
+    const text = outcome.lines.join("\n");
+    const reason = outcome.lines.find((line) => line.includes("budget-event:")) ?? "";
+    expect(reason).toContain("run auto --rebalance-finished");
+    expect(reason).toContain("launched by alan");
+    expect(reason).toContain("$1.00 from finished 01-what");
+    expect(text).not.toContain("a person moved");
+    expect(text).not.toContain("a ceiling a person moved");
+  });
+
+  /**
+   * Review finding on 2d8917f: a donor that STOPS being finished (its gate revoked) keeps the
+   * ceiling it gave away, and nothing said so. Nothing moves the money back on its own — the
+   * recipient may have spent it — but the revoke, the refusal on that phase and `budget show`
+   * name the earlier move and the exact `--take-from` that returns what is still unspent, and a
+   * later rebalance never takes from the phase again while it is unfinished.
+   */
+  test("a donor re-opened after a rebalance: the move and the give-back command are named, and it is not a donor again", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    expect((await auto(ws, { rebalanceFinished: true })).code).toBe(0);
+    const moved = events(ws).find((event) => event.type === "budget.raised");
+    const giveBack = `tldrx budget raise 01-what 1.00 --run ${ws.runId} --take-from 02-how`;
+
+    const store = RunStore.open(ws.runDir);
+    const revoked = revoke(store, { root: ws.root, actor: "alan", at: "2026-09-14T21:00:00Z", note: "redo" }, "01-what/alpha");
+    const said = revoked.givenAway.join("\n");
+    expect(said).toContain(`01-what gave $1.00 to 02-how`);
+    expect(said).toContain(String(moved?.ts));
+    expect(said).toContain(giveBack);
+
+    const reopened = RunStore.open(ws.runDir);
+    expect(renderBudget(buildBudgetView(reopened.run, reopened.budget, reopened.runDir))).toContain(giveBack);
+    const plan = planRebalance(reopened.budget, reopened.run, "02-how", 1);
+    expect(plan.donors.map((d) => d.phaseId)).not.toContain("01-what");
+    expect(plan.excluded.find((e) => e.phaseId === "01-what")?.reason).toContain("not finished");
+
+    // The re-opened donor is now short itself: its refusal names the move it made.
+    starve(ws, "01-what", 0.5);
+    const refused = await runNext({
+      root: ws.root, dryRun: false, mode: "headless", yolo: false, actor: "alan", at: "2026-09-14T21:00:01Z",
+    });
+    expect(refused.code).toBe(2);
+    expect(refused.lines.join("\n")).toContain(giveBack);
   });
 
   test("`--max-usd` spans the supervised run: a relaunch does not hand the loop a fresh ceiling", async () => {

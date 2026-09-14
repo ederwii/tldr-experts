@@ -21,6 +21,24 @@
   (`tldrx plan schema`) and `seed check` all read; the gate's pass is its own, not
   `validatePlan`'s, so a plan approved before it still loads at Build.
 
+- **`tldrx run auto --rebalance-finished` moves a blocked phase's shortfall out of money a
+  finished phase can no longer spend (#314).** MEASURED on a field run: `04-build` was refused
+  $11.07 short while `01-what` had finished $16.25 under its ceiling and the run total had $141
+  of room; `run auto` stopped and a person typed `budget raise 04-build 12 --take-from 01-what`
+  and relaunched. The move was already sanctioned — nothing looked for it. With the flag, the
+  budget gate moves EXACTLY the shortfall before refusing, out of phases whose every stage is
+  `done`/`skipped`, none stale, priced in `metered-usd` and with no unmetered turn (a lower-bound
+  spend proves nothing about what is left) — so `05-watch` with a stage still to run never gives.
+  It goes through `budget raise --take-from`'s own code, so the run ceiling never grows; it never
+  passes a recorded grant, not even under `on_grant_exceed: warn`; it never makes a partial move.
+  Each move is one `budget.raised` with both phases' before/after, `source` and the launcher as
+  actor. OPT-IN, not a default or a `budget.yml` key, because a phase ceiling is a person's
+  decision about money — the reason `--retry-failed` and `--until-done` never touch exit 2.
+  Without the flag every money refusal now names the finished phases' unspent money and the exact
+  `--take-from` move, and `budget.blocked` records `short_usd`, `finished_unspent_usd` and
+  `uncovered_usd`. An agent gate on the stage a move unblocked still falls to a person, and its
+  reason now names the flag, the launcher and the donor phase instead of "a person moved" it.
+
 ### Fixed
 
 - **`tldrx ship` no longer opens a PR over a stale or red epic (#315).** Four PRs it opened in

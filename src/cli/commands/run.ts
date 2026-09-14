@@ -127,7 +127,7 @@ export const runCommand: Command = {
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
     "                      [--notify-every <duration>] [--wait-answers <duration>]\n" +
     "                      [--wait-gates <duration>] [--prompt-max-bytes <n>] [--max-reads <n>]\n" +
-    "                      [--retry-failed <n>] [--until-done [<n>]]\n" +
+    "                      [--retry-failed <n>] [--until-done [<n>]] [--rebalance-finished]\n" +
     "                  [--yolo] [--parallel <n>] [--gate-agent] [--ui scene|compact|plain|off]\n" +
     "                  [--run <id>] [--root <path>]\n" +
     "       tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>] [--root <path>]\n" +
@@ -358,6 +358,7 @@ async function runAutoLoop(argv: readonly string[]): Promise<number> {
         waitGatesMs: durationFlag(args, "wait-gates"),
         retryFailedStages: retryFailedFlag(args),
         untilDone: untilDoneFlag(args),
+        rebalanceFinished: boolFlag(args, "rebalance-finished"),
         actor: currentActor(),
         at: nowRfc3339(),
         // Erase the view, let the stage line scroll past on stdout, repaint. A

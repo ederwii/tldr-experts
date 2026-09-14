@@ -81,6 +81,27 @@ never mixed into `ceiling_usd`; see [Budgets](/concepts/budgets).
 log keeps who raised it, by how much, and why. Raising a ceiling mid-stage is also one of
 the things that stops an [agent gate](/concepts/gates) from signing itself.
 
+### Money a finished phase can no longer spend
+
+A phase that has finished under its ceiling keeps the difference, and no stage will ever spend
+it. When a later phase is refused on money, the refusal now says so and names the move:
+
+```
+budget: finished phase(s) hold $16.25 unspent (01-what $16.25), which covers the $11.07 shortfall:
+`tldrx budget raise 04-build 11.07 --run <id> --take-from 01-what`, or launch
+`tldrx run auto --rebalance-finished` to make that move on the record automatically.
+```
+
+`tldrx run auto --rebalance-finished` makes exactly that move before refusing, and carries on.
+It is **off by default**: a phase ceiling is a person's decision about money, and the flag is you
+making it for that launch. "Finished" is strict — every stage of the phase `done` or `skipped`,
+none stale, priced in `metered-usd`, and no unmetered turn (whose spend would only be a lower
+bound). A phase with a stage still to run, such as `05-watch` while Build is blocked, never gives.
+It moves only the shortfall, never grows the run ceiling, never passes a recorded grant, and
+records one `budget.raised` per donor with `source: run auto --rebalance-finished` and your name.
+If every finished phase together cannot cover the shortfall, nothing moves and the refusal says
+how short it still is.
+
 ## The three knobs, and which one caps a sub-agent
 
 A raise like the one above moves the **phase ceiling**, and a phase ceiling decides one thing:

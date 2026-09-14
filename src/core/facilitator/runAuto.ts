@@ -79,6 +79,7 @@ import {
 import { GATE_SIGNER_ROLE } from "./gateSigner.ts";
 import { approve } from "../run/gates.ts";
 import { runNext, type NextOutcome } from "./runNext.ts";
+import { REBALANCE_SOURCE } from "../budget/rebalance.ts";
 import { realShipTransport, shipRun } from "../run/ship.ts";
 import { shipWanted } from "../run/shipPolicy.ts";
 
@@ -198,6 +199,19 @@ export interface AutoOptions {
    * previous attempt's, because a refusal that repeats verbatim is not one a relaunch moves.
    */
   readonly untilDone?: number;
+  /**
+   * `--rebalance-finished` (gh #314): before a phase is refused on money, move exactly its
+   * shortfall out of FINISHED phases' unspent ceiling — the `budget raise --take-from` a
+   * person typed by hand on the field run — or move nothing. Passed to every `next` this loop
+   * makes (`NextOptions.rebalanceFinished` says what it will and will not move).
+   *
+   * OPT-IN, and absent means exactly what every launch before it got: a phase ceiling is a
+   * person's decision about money (see `retryFailedStages`), so a loop may only re-split one
+   * when the person who launched it said so, on the command they typed. It never grows the
+   * run ceiling, so a `budget.blocked` it cannot cover is still `held` — nothing else
+   * in-process moves that ceiling.
+   */
+  readonly rebalanceFinished?: boolean;
   /** Called with each line as it happens, so a long loop is not silent. */
   readonly onLine?: (line: string) => void;
 }
@@ -394,10 +408,26 @@ function budgetBlockedReason(fresh: readonly TldrxEvent[]): string | null {
     const remaining = number(payload(event, "remaining_usd"));
     const estimate = number(payload(event, "estimate_usd"));
     return `budget.blocked on ${String(payload(event, "phase") ?? "")}: remaining_usd $${remaining.toFixed(2)} `
-      + `< estimate_usd $${estimate.toFixed(2)} — nothing in-process moves that ceiling; raise it `
+      + `< estimate_usd $${estimate.toFixed(2)}${finishedClause(event)} — nothing in-process moves that ceiling; raise it `
       + "(tldrx budget raise) and launch again";
   }
   return null;
+}
+
+/**
+ * What finished phases held when the brake fired (gh #314), read off the event's additive
+ * fields — empty on an event written before they existed, never a guessed `$0.00`.
+ */
+function finishedClause(event: TldrxEvent): string {
+  const unspent = payload(event, "finished_unspent_usd");
+  const uncovered = payload(event, "uncovered_usd");
+  if (typeof unspent !== "number" || typeof uncovered !== "number") return "";
+  if (uncovered > 0) {
+    return `; finished phases hold $${unspent.toFixed(2)} unspent, $${uncovered.toFixed(2)} short even with all of it`;
+  }
+  return payload(event, "rebalance_finished") === true
+    ? `; finished phases hold $${unspent.toFixed(2)} unspent and the move was not made`
+    : `; finished phases hold $${unspent.toFixed(2)} unspent, enough — --rebalance-finished would move it`;
 }
 
 /**
@@ -895,6 +925,7 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
         parallel: options.parallel,
         promptMaxBytes: options.promptMaxBytes,
         maxReads: options.maxReads,
+        rebalanceFinished: options.rebalanceFinished,
         actor: options.actor,
         at: options.at,
       });
@@ -1564,6 +1595,18 @@ export function stageLines(
         break;
       case "stage.done":
         done = { at, stage: event.stage ?? "", cost: number(payload(event, "cost_usd")) };
+        break;
+      // gh #314: a move `--rebalance-finished` made is said out loud, on the stage it unblocked.
+      case "budget.raised":
+        if (payload(event, "source") === REBALANCE_SOURCE) {
+          lines.push(
+            `${at} … budget: moved $${number(payload(event, "amount_usd")).toFixed(2)} from `
+              + `${String(payload(event, "take_from") ?? "")} (finished) — ${String(payload(event, "phase") ?? "")} `
+              + `$${number(payload(event, "phase_ceiling_before")).toFixed(2)} → `
+              + `$${number(payload(event, "phase_ceiling_after")).toFixed(2)}, run ceiling unchanged at `
+              + `$${number(payload(event, "run_ceiling_after")).toFixed(2)}`,
+          );
+        }
         break;
       default:
         break;

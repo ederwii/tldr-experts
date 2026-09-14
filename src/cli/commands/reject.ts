@@ -88,6 +88,7 @@ export const rejectCommand: Command = {
             + "points at it, and the withdrawn counts are on the `gate.revoked` event",
           );
         }
+        lines.push(...outcome.givenAway);
         lines.push("nothing was deleted and no cost was refunded — `tldrx next` re-runs the stage with the note");
         process.stdout.write(`${lines.join("\n")}\n`);
         return EXIT_OK;

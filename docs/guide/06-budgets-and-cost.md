@@ -313,6 +313,28 @@ output says which happened: the money moved, or the **run** ceiling grew.
 Ceilings are re-read from disk before every write, so a `budget raise` that lands while a
 stage is in flight is no longer silently reverted when that stage saves.
 
+### Unspent money in finished phases (gh #314)
+
+Measured on a field run: `04-build` was refused $11.07 short while `01-what` had finished $16.25
+under its ceiling and the run total had $141 of room; a person typed
+`tldrx budget raise 04-build 12 --take-from 01-what` and relaunched. Every money refusal now
+names finished phases' unspent ceiling and the exact `--take-from` move that covers the
+shortfall, and `budget.blocked` records `short_usd`, `finished_unspent_usd` and `uncovered_usd`.
+
+`tldrx run auto --rebalance-finished` makes that move itself, before refusing. It is an opt-in
+flag, not a default and not a `budget.yml` key: a phase ceiling is a person's decision about
+money (the reason `--retry-failed` and `--until-done` never touch exit 2), so the loop may only
+re-split one when the person who launched it said so, on the command they typed. A phase is a
+donor only when every stage in it is `done` or `skipped`, none is `stale`, it is priced in
+`metered-usd`, none of its task rows is unmetered (a lower-bound spend proves nothing about
+what is left), and it has at least a cent unspent. Donors give in run order, each at most what
+it has left, through `raiseBudget`'s own `--take-from` validation — so the run ceiling never
+grows and no donor is cut below its spend. A move that would put the phase above a recorded
+grant is not made, even under `on_grant_exceed: warn`. A shortfall bigger than every donor
+together moves nothing and the refusal says by how much. Each move is one `budget.raised` with
+`take_from`, both phases' before/after, `source: run auto --rebalance-finished` and the
+launcher as actor.
+
 ## Writing down what the owner authorized
 
 A ceiling says what the run will spend. It has never said what anybody agreed to pay — that

@@ -70,7 +70,7 @@ export function budgetCard(ctx: CardContext, detail: string, money: Money | null
     run: ctx.runId,
     gate: `${ctx.phaseId}/${ctx.stageId}`,
     questions: [],
-    headline: "Budget — a person moved the ceiling while this stage ran",
+    headline: "Budget — the ceiling moved while this stage ran",
     detail: money === null
       ? [detail]
       : [`$${money.spentUsd.toFixed(2)} spent of $${money.ceilingUsd.toFixed(2)}`, detail],

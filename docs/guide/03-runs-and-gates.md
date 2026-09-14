@@ -593,7 +593,7 @@ built. The `carried, unowned:` line is the other half of the same card — see b
 
 ```
 DECISION — 260830-tenancy · 04-build/build
-Budget — a person moved the ceiling while this stage ran
+Budget — the ceiling moved while this stage ran
   $6.20 spent of $8.00
   1 budget event(s) in this stage's window (budget.raised at 2026-08-30T21:04:11Z) — a ceiling a
   person moved to let this stage through is not a ceiling the machine that was blocked may then

@@ -283,6 +283,22 @@ export class RunStore {
     this.budgetMutated = true;
   }
 
+  /**
+   * Adopt the CEILINGS on disk into this store's in-memory budget (gh #314) — the same
+   * merge `save()` performs, taken now instead of at write time.
+   *
+   * For a long-lived store whose run another door just re-priced (`run auto
+   * --rebalance-finished` writes its move through a FRESH store so this one never calls
+   * `mutateBudget` — which would make its ceilings win every later save and revert a
+   * concurrent `budget raise`, #236). Without this, the stage's own gate would judge the
+   * phase against the ceiling it had before the move. A store that DID mutate its budget
+   * keeps its own ceilings, exactly as `save()` would.
+   */
+  refreshCeilings(): void {
+    if (this.budgetMutated) return;
+    this.currentBudget = this.ceilingsToWrite();
+  }
+
   append(event: TldrxEvent): void {
     this.events.append(event);
   }

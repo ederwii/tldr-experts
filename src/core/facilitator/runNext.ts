@@ -38,6 +38,8 @@ import {
   remainingWork, renderRemainingWork, remainingWorkContext, type RemainingWork,
 } from "../budget/remainingWork.ts";
 import { raiseCommand, shortBy } from "../budget/budgetView.ts";
+import { applyRebalance, describeRebalance, givenAwayLines, planRebalance, REBALANCE_SOURCE, type RebalancePlan } from "../budget/rebalance.ts";
+import { raiseGrantVerdict, raisedPayload } from "../budget/raiseBudget.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { closeRun, describeOpenQuestions, describeStateCommit } from "../run/closeRun.ts";
@@ -167,6 +169,15 @@ export interface NextOptions {
    * Undefined ⇒ whatever those say, and 1 if neither does.
    */
   readonly parallel?: number;
+  /**
+   * `run auto --rebalance-finished` (gh #314): when the budget gate would refuse a phase, first
+   * move exactly the shortfall out of FINISHED phases' unspent ceiling (`budget/rebalance.ts`
+   * defines finished), through `budget raise --take-from`'s own validation, recorded as one
+   * `budget.raised` per donor. Never the run ceiling, never past a recorded grant, never a
+   * partial move. Absent ⇒ the gate refuses exactly as it always has. Only `run auto` sets it:
+   * a person at `tldrx next` is shown the same move in the refusal and can type it.
+   */
+  readonly rebalanceFinished?: boolean;
   readonly actor: string;
   readonly at: string;
 }
@@ -1170,36 +1181,153 @@ function budgetRefusal(
     }
     return null;
   }
-  if (phaseRemaining < estimate && store.budget.on_exceed === "block") {
+  // gh #314: with `run auto --rebalance-finished`, try the one move a person made by hand on
+  // the field run — exactly the shortfall, out of finished phases — BEFORE refusing. Only
+  // under `on_exceed: block`: under `warn` nothing refuses, so nothing needs moving.
+  let phaseLeft = phaseRemaining;
+  let declined: string | null = null;
+  if (phaseLeft < estimate && store.budget.on_exceed === "block" && options.rebalanceFinished === true) {
+    const result = rebalanceFinished(store, options, phaseId, stageId, estimate, phaseLeft, notes);
+    declined = result.declined;
+    if (result.moved) phaseLeft = remaining(store.budget, phaseId);
+  }
+  if (phaseLeft < estimate && store.budget.on_exceed === "block") {
+    const short = shortBy(estimate, phaseLeft);
+    const rebalance = planRebalance(store.budget, store.run, phaseId, short);
     store.append(event(options, store.runId, stageId, "budget.blocked", {
       phase: phaseId,
-      remaining_usd: phaseRemaining,
+      remaining_usd: phaseLeft,
       estimate_usd: estimate,
       estimate_basis: work.basis,
       ...(work.basis === "plan"
         ? { static_estimate_usd: work.staticUsd, stories_done: work.done, stories_total: work.total }
         : {}),
       ceiling_usd: store.budget.phases.find((p) => p.id === phaseId)?.ceiling_usd ?? store.budget.ceiling_usd,
+      // ADDITIVE (gh #314): how short, and how much FINISHED phases hold that no stage can
+      // spend again — so a refusal with money sitting in `01-what` says so on the ledger.
+      short_usd: short,
+      finished_unspent_usd: rebalance.finishedUnspentUsd,
+      uncovered_usd: rebalance.uncoveredUsd,
+      rebalance_finished: options.rebalanceFinished === true,
     }));
     // Name the command, not the field. The pilot's hand-edit of `ceiling_usd`
     // under-shot the estimate and the retry was refused a second time.
-    const fix = raiseCommand(store.runId, phaseId, shortBy(estimate, phaseRemaining));
+    const fix = raiseCommand(store.runId, phaseId, short);
     return out(EXIT_REFUSED, [
       ...notes,
       `[tldrx] budget: refusing to start stage "${stageId}" — phase ${phaseId} has ` +
-        `$${phaseRemaining.toFixed(2)} left and ${work.basis === "plan"
+        `$${phaseLeft.toFixed(2)} left and ${work.basis === "plan"
           ? `the remaining work is $${estimate.toFixed(2)}`
           : `the stage estimate is $${estimate.toFixed(2)}`}.`,
       ...(work.basis === "plan"
         ? [renderRemainingWork(work), ...remainingWorkContext(work)]
         : []),
+      ...rebalanceLines(store.runId, rebalance, options.rebalanceFinished === true, declined),
+      ...givenAwayLines(store.events.read(), store.budget, store.run, store.runId, phaseId),
       `Run \`${fix}\` (add \`--take-from <phase>\` to move the money instead of adding it), ` +
         `lower budget_usd in the stage, or set on_exceed: warn.`,
       `See the whole picture first: \`tldrx budget show --run ${store.runId}\`.`,
-    ], [], `${phaseId}/${stageId}: phase ${phaseId} has $${phaseRemaining.toFixed(2)} left and the estimate is $${estimate.toFixed(2)}`);
+    ], [], `${phaseId}/${stageId}: phase ${phaseId} has $${phaseLeft.toFixed(2)} left and the estimate is $${estimate.toFixed(2)}`);
   }
-  warnOnce(store, options, phaseId, stageId, estimate, phaseRemaining, spec.tuning.attempts, notes);
+  warnOnce(store, options, phaseId, stageId, estimate, phaseLeft, spec.tuning.attempts, notes);
   return null;
+}
+
+/**
+ * `run auto --rebalance-finished` (gh #314): move exactly the shortfall out of finished
+ * phases, or move nothing.
+ *
+ * `moved` is true when the phase can now afford the estimate. `declined` is the sentence for
+ * a move the donors COULD cover but that was not made — today only a recorded grant (#170),
+ * which an automatic move never passes, not even under `on_grant_exceed: warn`: `warn` lets a
+ * PERSON write a ceiling past a grant with a sentence, and a loop is not a person.
+ *
+ * The write goes through a FRESH store, never `store.mutateBudget`: a store that mutated its
+ * budget makes its ceilings win every later save (`RunStore.ceilingsToWrite`), and this one
+ * lives for the whole stage — a `budget raise` typed during the Build would be reverted (#236).
+ * The long-lived store then adopts the new ceilings with `refreshCeilings`.
+ */
+function rebalanceFinished(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  stageId: string,
+  estimate: number,
+  phaseLeft: number,
+  notes: string[],
+): { readonly moved: boolean; readonly declined: string | null } {
+  const fresh = RunStore.open(store.runDir);
+  const freshLeft = remaining(fresh.budget, phaseId);
+  if (freshLeft >= estimate) {
+    // Somebody moved the ceiling since this store loaded it. Adopt it; nothing to do.
+    store.refreshCeilings();
+    return { moved: remaining(store.budget, phaseId) >= estimate, declined: null };
+  }
+  const short = shortBy(estimate, Math.min(freshLeft, phaseLeft));
+  const plan = planRebalance(fresh.budget, fresh.run, phaseId, short);
+  if (plan.moves.length === 0) return { moved: false, declined: null };
+  let applied: ReturnType<typeof applyRebalance>;
+  try {
+    applied = applyRebalance(fresh.budget, plan);
+  } catch (error) {
+    return { moved: false, declined: `not moved: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  for (const outcome of applied.outcomes) {
+    const verdict = raiseGrantVerdict(fresh.budget, outcome);
+    if (verdict.exceeds) return { moved: false, declined: `not moved: ${verdict.sentence ?? "above a recorded grant"}` };
+  }
+  fresh.mutateBudget(() => applied.budget);
+  const note = `${describeRebalance(plan)}; ${phaseId} was $${short.toFixed(2)} short of `
+    + `the $${estimate.toFixed(2)} estimate for ${stageId}`;
+  for (const outcome of applied.outcomes) {
+    fresh.append(event(options, store.runId, stageId, "budget.raised", raisedPayload(outcome, {
+      source: REBALANCE_SOURCE,
+      short_usd: short,
+      estimate_usd: estimate,
+      note,
+    }), 0, options.actor));
+  }
+  fresh.save();
+  store.refreshCeilings();
+  const runCeiling = applied.budget.ceiling_usd;
+  for (const outcome of applied.outcomes) {
+    notes.push(
+      `budget: moved $${outcome.amountUsd.toFixed(2)} from ${outcome.takeFrom ?? ""} to ${phaseId} `
+        + `(--rebalance-finished: ${outcome.takeFrom ?? ""} is finished) — run ceiling unchanged at $${runCeiling.toFixed(2)}`,
+    );
+  }
+  return { moved: remaining(store.budget, phaseId) >= estimate, declined: null };
+}
+
+
+/**
+ * What a budget refusal says about finished phases (gh #314) — nothing at all when there is
+ * nothing useful to say, so a refusal on a run with no finished phase reads as it always did.
+ */
+function rebalanceLines(
+  runId: string,
+  plan: RebalancePlan,
+  enabled: boolean,
+  declined: string | null,
+): readonly string[] {
+  const held = describeRebalance(plan);
+  if (declined !== null) return [`budget: ${held} — ${declined}`];
+  if (plan.moves.length > 0) {
+    const moves = plan.moves
+      .map((move) => `\`${raiseCommand(runId, plan.targetPhaseId, move.amountUsd)} --take-from ${move.takeFrom}\``)
+      .join(" then ");
+    return enabled
+      ? [`budget: ${held}, which covers the $${plan.shortUsd.toFixed(2)} shortfall: ${moves}.`]
+      : [
+        `budget: ${held}, which covers the $${plan.shortUsd.toFixed(2)} shortfall: ${moves}, `
+          + "or launch `tldrx run auto --rebalance-finished` to make that move on the record automatically.",
+      ];
+  }
+  if (!enabled && plan.donors.length === 0) return [];
+  return [
+    `budget: ${enabled ? "--rebalance-finished moved nothing — " : ""}${held}, `
+      + `$${plan.uncoveredUsd.toFixed(2)} short of the $${plan.shortUsd.toFixed(2)} shortfall even with all of it.`,
+  ];
 }
 
 /**

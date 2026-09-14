@@ -15,6 +15,7 @@
  *     very different sentences to read back in a week.
  */
 import type { RunBudget } from "./RunBudget.ts";
+import { grantFor, wouldExceedGrant, type GrantVerdict } from "./grant.ts";
 import { totalSpent } from "./wouldExceed.ts";
 
 export class BudgetRaiseError extends Error {}
@@ -33,6 +34,9 @@ export interface RaiseOutcome {
   readonly takeFrom: string | null;
   readonly phaseCeilingBefore: number;
   readonly phaseCeilingAfter: number;
+  /** The donor's ceiling before and after a `--take-from` move; null when nothing was taken. */
+  readonly takeFromCeilingBefore: number | null;
+  readonly takeFromCeilingAfter: number | null;
   readonly runCeilingBefore: number;
   readonly runCeilingAfter: number;
   /** True when the run ceiling had to grow to hold the new phase ceiling. */
@@ -101,9 +105,59 @@ export function raiseBudget(budget: RunBudget, request: RaiseRequest): RaiseOutc
     takeFrom,
     phaseCeilingBefore: target.ceiling_usd,
     phaseCeilingAfter: round(target.ceiling_usd + amount),
+    takeFromCeilingBefore: donor === null ? null : donor.ceiling_usd,
+    takeFromCeilingAfter: donor === null ? null : round(donor.ceiling_usd - amount),
     runCeilingBefore: budget.ceiling_usd,
     runCeilingAfter: runCeiling,
     runCeilingGrew: runCeiling > budget.ceiling_usd,
+  };
+}
+
+/**
+ * The RESULTING ceiling against what the owner authorized (#170) — the one reading, used by
+ * `tldrx budget raise` and by `run auto --rebalance-finished` (gh #314), so the two doors
+ * that move a ceiling cannot disagree about which grant governs the move.
+ *
+ * TWO BRANCHES, and they are not interchangeable. `grantFor` prefers a PHASE grant when the
+ * phase declares one, and a phase grant governs that phase's ceiling — not the run's.
+ * `--take-from` is the case that separates them: it moves money between phases and leaves
+ * the run ceiling exactly where it was, so measuring a phase grant against `runCeilingAfter`
+ * would refuse a move that changed nothing the grant is about. Written out rather than
+ * folded into one expression, because the wrong one is invisible in a diff.
+ */
+export function raiseGrantVerdict(budget: RunBudget, outcome: RaiseOutcome): GrantVerdict {
+  const phaseGrant = grantFor(budget, outcome.phaseId);
+  return phaseGrant !== null && phaseGrant.level === "phase"
+    ? wouldExceedGrant(budget, outcome.phaseId, outcome.phaseCeilingAfter)
+    : wouldExceedGrant(budget, null, outcome.runCeilingAfter);
+}
+
+/**
+ * The `budget.raised` payload (spec §2.9) — one shape for every door that writes one.
+ *
+ * `take_from_ceiling_before` / `_after` are ADDITIVE (gh #314) and omitted when nothing was
+ * taken: a move names its source phase AND what that phase held on either side of it, so a
+ * ledger read a week later shows where the money came from without re-deriving it.
+ */
+export function raisedPayload(
+  outcome: RaiseOutcome,
+  extra: { readonly note: string } & Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const { note, ...rest } = extra;
+  return {
+    phase: outcome.phaseId,
+    amount_usd: outcome.amountUsd,
+    take_from: outcome.takeFrom,
+    phase_ceiling_before: outcome.phaseCeilingBefore,
+    phase_ceiling_after: outcome.phaseCeilingAfter,
+    ...(outcome.takeFrom === null ? {} : {
+      take_from_ceiling_before: outcome.takeFromCeilingBefore,
+      take_from_ceiling_after: outcome.takeFromCeilingAfter,
+    }),
+    run_ceiling_before: outcome.runCeilingBefore,
+    run_ceiling_after: outcome.runCeilingAfter,
+    ...rest,
+    note,
   };
 }
 
