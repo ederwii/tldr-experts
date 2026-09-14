@@ -20,12 +20,13 @@ Other sessions may be working this same repo.
 - `ListAgents` first. If another session is live, exchange **file sets** by message before
   either of you starts: two cycles that touch disjoint files can run at once, two that touch
   `src/core/facilitator/executors/build.ts` cannot.
-- **Never merge while another session's release is running** — and note there is NO detector
-  for that. `scripts/release.sh` writes no marker (only a merge wave does, §2), so this is a
-  question you ASK: `SendMessage` each live peer "is a release in flight?". One signal you can
-  read yourself, and it is a hint rather than a check: a `release: X.Y.Z` commit on
-  `origin/main` with no `vX.Y.Z` tag yet means one is mid-flight. A release moves `main`, tags
-  it and pushes; a merge wave in the middle of that is how a half-released state happens.
+- **Never merge while another session's release is running** — and since #299 that is a
+  file, not a question: `scripts/release.sh` writes `.RELEASE-IN-PROGRESS` at the repo root
+  for its whole span, and `scripts/merge-wave.sh` WAITS on it the way it waits on its own
+  lock (§2, §6). `scripts/merge-wave.sh --status` says who holds the checkout — a wave
+  (holder, branch, phase), a release (holder, version), or `idle` — so "is it alive?" is a
+  command, not a `ps` reading. The one hint the marker cannot give: a `release: X.Y.Z` commit
+  on `origin/main` with no `vX.Y.Z` tag yet means `publish.yml` is still running for it.
 - When a release lands mid-cycle, the released CHANGELOG section becomes immutable
   (`AGENTS.md` §5). Your unreleased bullets move under a NEW `## <next> — unreleased`
   heading; whether that next version is a patch or a minor is the judgement in
@@ -190,3 +191,40 @@ puente, se detiene y pregunta en la terminal. No pregunta nada que pueda medir.
 detenido no deja nada a medias en `main`: los sub-agentes tienen la instrucción de parar antes
 de mergear —y desde #192 también es un bloqueo técnico, porque una rama sin registro de
 revisión no mergea—, y un merge wave interrumpido se deshace solo.
+
+## 9. Worker mode — when you are not the driver
+
+A session, or a subagent the owner's driver spawned, that works this repo BESIDE another
+session is a **worker**: the circuit above still applies, and five announcements are what make
+two of them safe together. Every rule here is `AGENTS.md`'s; this only says WHEN to say what.
+Measured over one unattended day with two sessions (#299), everything that went wrong between
+them was one of these, done by chat after the fact instead of before.
+
+1. **File set before the first edit.** Announce the exact paths you will touch — real paths,
+   checked with `ls`, not a guess at a directory — and wait for the driver's overlap check.
+   `src/core/facilitator/executors/build.ts` is never in two sessions' file sets at once (§12:
+   it is the orchestrator everything imports from, and a rebase across it costs more than the
+   cycle). A file set that changes mid-cycle is announced again the same way.
+2. **One unreleased heading, agreed and NAMED before it is written.** One `## <V> — unreleased`
+   per next version for the whole repo, not per branch: propose `<V>` to the driver, get it
+   back, then write it. Version by behaviour, the judgement in
+   `docs/RELEASING.md` "What to consider (judgement, not automated)": patch for fixes only,
+   minor when a command, file schema or hook changed behaviour. Two unreleased headings on the
+   merged tree, or one at or below the last release,
+   are refused by the wave with **exit 12**, having merged nothing (§2); a CHANGELOG conflict
+   on rebase resolves as the UNION under the one agreed heading (§2, §5).
+3. **The wave, announced three times**: the lock taken (name the branch — a peer reads it with
+   `scripts/merge-wave.sh --status`: holder, branch, phase), the sha you are merging, and the
+   verbatim OK line (`OK <sha> Ran N tests …`) when it lands. A peer asking "is it alive?" gets
+   the `--status` line, never a `ps` reading or a marker's age.
+4. **Re-review after a rebase.** A rebased branch is a different diff and its review record no
+   longer holds — the wave refuses it with exit 10 (§2): have it re-read, update `against:` to
+   the new code head, then wave. Say so when you do; a peer queued behind your wave is queued
+   behind the re-review.
+5. **A release is not yours to start.** Only the driver cuts one, with the owner's approval
+   (§6). While `.RELEASE-IN-PROGRESS` exists the wave waits for you; never remove the marker
+   and never race it — if it looks stale, `scripts/merge-wave.sh --status` says whether its
+   owner is alive.
+
+What a worker never does: merge without the record, rename a heading a peer already agreed,
+touch the shared checkout with anything but the wave (§2), or kill a process it did not start.

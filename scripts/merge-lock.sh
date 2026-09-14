@@ -36,6 +36,28 @@ mw_shared_root() {
 # wave cannot trip its own dirty-tree guard.
 mw_marker_path() { printf '%s/.MERGE-WAVE-IN-PROGRESS\n' "$(mw_shared_root)"; }
 
+# The release's marker (#299), beside the wave's: `scripts/release.sh` writes it at the shared
+# root for its whole span and removes it on every exit path, and a wave WAITS on it exactly
+# as it waits on its own lock. `.gitignore` carries it too — the release's own gate asserts a
+# clean tree, and an unignored marker would fail the release that wrote it.
+mw_release_marker_path() { printf '%s/.RELEASE-IN-PROGRESS\n' "$(mw_shared_root)"; }
+
+# One `key:` line of the release marker, empty when the marker or the line is absent.
+mw_release_field() {
+  sed -n "s/^$1:[[:space:]]*//p" "$(mw_release_marker_path)" 2>/dev/null | sed -n 1p | tr -d '[:space:]'
+}
+
+# "<pid> <host> <epoch>" composed from the release marker — the same shape as a lock's
+# `owner` line, so `mw_dead_owner` answers "is that release still running?" for both. Empty
+# when there is no marker.
+mw_release_owner_of() {
+  local pid host born
+  pid="$(mw_release_field pid)"
+  [ -n "$pid" ] || return 0
+  host="$(mw_release_field host)"; born="$(mw_release_field epoch)"
+  printf '%s %s %s\n' "$pid" "${host:-unknown}" "${born:-0}"
+}
+
 # 0 when this command was typed in the MAIN working tree, 1 from a linked worktree.
 mw_in_shared_checkout() {
   local own
