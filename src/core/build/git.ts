@@ -588,13 +588,23 @@ export class WorktreeBranchMismatchError extends GitError {}
  * The message names BOTH branches and the path on purpose: the operator's next
  * move is `git -C <path> status`, and a mismatch this class can see is one a
  * human has to adjudicate.
+ *
+ * Branches FIRST, path LAST (#310). This sentence reaches the operator, the
+ * `stage.failed` event and the task row through a one-line cap (`oneLine`,
+ * 220 chars), and an absolute worktree path under a session scratchpad is wider
+ * than that on its own: with the path first, the line arrived as `epic worktree
+ * /private/tmp/…/_epic-260829-build-E1 is checked out on \`epic/someb…` — the
+ * branch it exists to name, cut two characters in (measured 2026-09-14). The
+ * cap keeps a line's head and its tail, so the identifiers go at the head and
+ * the path goes last, where what a cut takes is the middle of a directory the
+ * operator already knows the root of.
  */
 export async function assertWorktreeOn(path: string, branch: string, what = "worktree"): Promise<void> {
   const on = await currentBranch(path);
   if (on === branch) return;
   throw new WorktreeBranchMismatchError(
-    `${what} ${path} is checked out on \`${on === "" ? "(no branch)" : on}\`, not \`${branch}\` — `
-    + "refusing to touch it, because a merge here would land on another run's branch",
+    `${what} is checked out on \`${on === "" ? "(no branch)" : on}\`, not \`${branch}\` — `
+    + `refusing to touch it, because a merge here would land on another run's branch — at ${path}`,
   );
 }
 
