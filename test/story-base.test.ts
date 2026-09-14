@@ -871,6 +871,26 @@ describe("(f) a conflict inside the story's touches gets ONE conflict turn (#286
     expect(prompt).toContain("Second story");
   });
 
+  test("a correct resolution that also adds a `=======` heading underline settles done — no false marker", async () => {
+    const ws = sharedWave({}, ["shared.txt", "notes.md"]);
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "shared.txt": "S1's line\n" },
+      S2: { "shared.txt": "S2's line\n" },
+      // A Markdown/RST heading underline in the conflicted file AND in one that
+      // never conflicted: `git diff --check` calls both a leftover marker.
+      "S2#2": { "shared.txt": "S1's line\nS2's line\n\nHeading\n=======\n", "notes.md": "Notes\n=======\n" },
+    });
+    process.env.FAKE_BUILD_COMMIT = JSON.stringify({ "S2#2": "commit" });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"] });
+
+    await next(ws, { parallel: 2 });
+
+    expect(conflictTurns(ws)).toHaveLength(1);
+    expect(storyLog(ws, "S2")).not.toContain("left conflict markers");
+    expect(readFileSync(join(ws.planDir, "stories", "S2.md"), "utf8")).toContain("status: done");
+    expect(git(ws, "show", "epic/e1:notes.md")).toBe("Notes\n=======");
+  });
+
   test("a resolution that leaves conflict markers BLOCKS, naming the file, and never reaches the epic", async () => {
     const ws = sharedWave();
     process.env.FAKE_BUILD_WRITE = JSON.stringify({

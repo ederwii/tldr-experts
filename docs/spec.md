@@ -3795,8 +3795,9 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    PROGRESS (markers and `MERGE_HEAD` in place); the developer prompt names the conflicted files, the story's own
    intent and the stories that landed on the epic since the branch was cut (read off the epic's `merge(<id>): …`
    subjects, or the epic sha when there are none), and says that `git add` + `git commit` close the merge. Before the
-   DoD, a **marker guard** (`leftoverMerge`: `git diff --check <handed>` for `leftover conflict marker`, plus
-   `MERGE_HEAD`) BLOCKS — not requeues — a turn that left a marker anywhere, committed or not, or never closed the
+   DoD, a **marker guard** (`leftoverMerge`: each conflicted file handed, read for a `<<<<<<<` line followed by a
+   `>>>>>>>` line — never a lone `=======`, which is a heading underline as often as a marker — plus `MERGE_HEAD`)
+   BLOCKS — not requeues — a turn that left a conflict in one of those files, committed or not, or never closed the
    merge, naming the files. Refused otherwise, with the reason appended to the block above. Measured on the field run
    that filed it (#286): one conflict in a counted test list on an otherwise-green story, resolved only by a person in a
    scratch worktree, and 1.5 h later the same story conflicting again in four files.

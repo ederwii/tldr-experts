@@ -18,7 +18,7 @@
  * (gh #253). Publishing a branch stays a decision — one the run's `ship:` block
  * records, or a person makes at the keyboard — never a side effect of building.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { runtime } from "../runtime/index.ts";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
@@ -842,33 +842,48 @@ export async function abortOpenMerge(cwd: string): Promise<boolean> {
 
 /** What a conflict turn left behind that must never reach a DoD or a commit (gh #286). */
 export interface LeftoverMerge {
-  /** Files holding a leftover conflict marker, repo-relative, in git's order, each once. */
+  /** Handed conflicted files still holding a `<<<<<<<`…`>>>>>>>` conflict, in the order handed, each once. */
   readonly markers: readonly string[];
   /** `MERGE_HEAD` is still set: the developer never closed the merge. */
   readonly inProgress: boolean;
 }
 
 /**
- * The ONE marker guard (gh #286): leftover conflict markers anywhere in what
- * changed since `since` — committed, staged or only in the working tree — and
- * whether the merge is still open.
+ * The ONE marker guard (gh #286): which of the files the conflict turn was
+ * handed still hold a conflict git left there, and whether the merge is open.
  *
- * `git diff --check <since>` compares the commit to the WORKING TREE, so a
- * marker the developer committed is found exactly like one it left unstaged
- * (MEASURED 2026-09-14 on a scratch repo: `leftover conflict marker` at the same
- * lines unmerged, after `git add`, and after `git commit`, exit 2 each time).
- * It also reports whitespace errors, which are not this guard's business, so
- * only its `leftover conflict marker` lines are read — and its exit code is not,
- * because 2 means "found something" of EITHER kind.
+ * Scoped to `files` — the paths the merge stopped on — because those are the
+ * only files the facilitator put markers in; a developer's own change anywhere
+ * else is the DoD's business, not this guard's. And a conflict is a PAIR — a
+ * `<<<<<<<` line with a `>>>>>>>` line after it — never a lone `=======`: the
+ * first cut read `git diff --check`, which calls every added `=======` a
+ * "leftover conflict marker", and a correct resolution that underlined a
+ * Markdown heading was blocked for good (review of 5dd14e7, reproduced:
+ * `f.md:4: leftover conflict marker`, exit 2).
+ *
+ * The WORKING TREE is read, not a commit: it is what the DoD runs on and what
+ * any commit after it carries, and a marker the developer committed is still in
+ * it. A file the resolution deleted holds nothing.
  */
-export async function leftoverMerge(cwd: string, since: string): Promise<LeftoverMerge> {
-  const checked = await git(["diff", "--check", since], cwd);
-  const markers: string[] = [];
-  for (const line of checked.stdout.split("\n")) {
-    const hit = /^(.+?):\d+: leftover conflict marker$/.exec(line.trim());
-    if (hit?.[1] !== undefined && !markers.includes(hit[1])) markers.push(hit[1]);
-  }
+export async function leftoverMerge(cwd: string, files: readonly string[]): Promise<LeftoverMerge> {
+  const markers = files.filter((file, i) => files.indexOf(file) === i && holdsConflict(join(cwd, file)));
   return { markers, inProgress: await mergeInProgress(cwd) };
+}
+
+/** A `<<<<<<<` marker line followed, later, by a `>>>>>>>` one — git's conflict shape. */
+function holdsConflict(path: string): boolean {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return false;
+  }
+  let opened = false;
+  for (const line of text.split("\n")) {
+    if (/^<{7}(?: |\r?$)/.test(line)) opened = true;
+    else if (opened && /^>{7}(?: |\r?$)/.test(line)) return true;
+  }
+  return false;
 }
 
 /**

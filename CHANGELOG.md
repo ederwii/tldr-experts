@@ -17,8 +17,9 @@
   worktree and the merge left open (markers, `MERGE_HEAD`); the prompt names the files, the
   story's intent and the stories that landed on the epic, and `git add` + `git commit` — verbs the
   developer already holds — close it, with the DoD as judge. A marker guard in `git.ts`
-  (`git diff --check` against the tree handed, plus `MERGE_HEAD`) blocks, never requeues, a turn
-  that left a marker anywhere or never closed the merge, naming the files — without it, measured
+  (each conflicted file handed, read for a `<<<<<<<`…`>>>>>>>` pair — a lone `=======` heading
+  underline is not a marker — plus `MERGE_HEAD`) blocks, never requeues, a turn that left a
+  conflict in one of those files or never closed the merge, naming the files — without it, measured
   by mutation, markers were committed and merged onto the epic as `done`. Anything else still
   blocks exactly as before, with the reason it got no turn appended. The bound is counted from
   `events.jsonl`, so it holds across invocations, and `tldrx replay` says an agent, not a person,
