@@ -69,6 +69,27 @@
   three $2.00 floors plus three developers sum past the ceiling the test proves the wave fits
   inside. The seed-check / plan-gate warning (part 3 of #307) is not in this change.
 
+- **A developer whose DoD goes red gets the story's next attempt, instead of blocking it on the
+  first miss (#313).** Reported in #313's audit of 12 run folders (relayed, not re-measured
+  here): 17 human `tldrx story reopen`s were a red DoD — a snapshot not regenerated, a pinned
+  inventory the story's own change moved, a lint rule — that the developer never got a second
+  look at, each one waiting on a person to read the kept output and type the reopen. MEASURED on
+  `70da3d1` with the fake agent: a story at `attempts: 2` whose attempt 1 left a red DoD ended
+  `blocked` with ONE `task.started`. Mechanism: `settleHalf` blocked on any half-A failure,
+  while the reviewer's `changes` verdict already requeued while `attempt < attempts` — two
+  failures on the merits, one retry budget honoured for only one of them. A red DoD now takes
+  the same bound: the attempt settles back at the status it started from (not `blocked` — it is
+  about to run again) with `the DoD was red on attempt 1 of 2`, keeps its worktree, and the next developer prompt carries the kept output under `## Previous
+  attempt` with the DoD header (#211); the last attempt blocks, saying `the DoD stayed red on 2
+  of 2 attempts` when both were red. Narrow on purpose — a refused developer (#271), a cap death
+  (#277), a REFUSED or absent-binary dod command (#165, #209), no dod commands and a reopen that
+  changed nothing (#308) still block on the first attempt, because a second one buys the same
+  outcome. The attempts a red DoD spent are counted off `events.jsonl`, not memory: review of
+  the first cut MEASURED three red DoDs under `attempts: 2` when a spawn fault ended an
+  invocation between attempts and the next process started counting from zero. No new event,
+  no new field; the host door (`--prepare`/`--commit`) is unchanged. `tldrx learn`'s chapter 5
+  now narrates — and asserts — the two red attempts before the reopen.
+
 ## 0.26.1 — 2026-09-14
 
 ### Changed

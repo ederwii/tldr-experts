@@ -134,7 +134,7 @@ import {
   type ResumableReview, type ReviewLookup, type ReviewWork,
 } from "../../build/reviewBundle.ts";
 import {
-  blockedByFailedDeveloper, formatRetryDecision, narrowFixlist, pendingRefusal, reviewerPromptFor,
+  blockedByFailedDeveloper, dodRedRequeue, formatRetryDecision, narrowFixlist, pendingRefusal, reviewerPromptFor,
   unrecordedBaseLine,
   RecurringFocus, ReviewCounters, type RoundParts,
 } from "../../build/reviewRound.ts";
@@ -216,6 +216,12 @@ interface StoryHalf {
    * half, where `commit` is what half B is about to merge.
    */
   readonly reviewOnly?: { readonly commit: string; readonly epicBase: string };
+  /**
+   * gh #313: `failure` is a red Definition of Done and nothing else — the
+   * developer was neither refused nor killed on its cap. Half B requeues it
+   * while attempts remain (`dodRedRequeue` decides). Absent on every other half.
+   */
+  readonly redDod?: { readonly refused: string | null; readonly budgetDeath: string | null };
 }
 
 /**
@@ -532,6 +538,13 @@ class BuildSession {
    * and same lifetime as `refusals` above, for the same reason.
    */
   private readonly capDeaths = new Map<string, string>();
+  /**
+   * Stories whose LAST attempt settled on a red DoD and was requeued (gh #313).
+   * Set by `settleHalf`, read by `driveStory` and `driveWaveHalves` to decide
+   * whether another developer attempt follows — the red-DoD twin of `review` +
+   * `changes`. Cleared at the top of every attempt, like the two maps above.
+   */
+  private readonly dodRequeued = new Set<string>();
   /**
    * Per story, WHY no reviewer was spawned for it (gh #289) — the stage had less
    * left than a review costs. Same shape and same lifetime as the two maps above,
@@ -1267,6 +1280,12 @@ class BuildSession {
       // same ceiling, would buy the same error twice — the operator raises a cap
       // (or the plan's price) between invocations, and that is the fix.
       if (outcome !== undefined && outcome.developerError !== null) return;
+      // gh #313: a red DoD with attempts left is requeued like a `changes`
+      // verdict — `settleRedDod` decided, and said why on the story's record.
+      if (this.dodRequeued.has(planned.story.id)) {
+        this.lines.push(`  · ${planned.story.id}: the DoD was red — requeued with its output`);
+        continue;
+      }
       if (outcome?.status !== "review") return;
       // Only a real `changes` verdict buys another developer attempt. An errored
       // review leaves the story parked for the NEXT invocation's review-only
@@ -1323,10 +1342,14 @@ class BuildSession {
       // reviewer never judged the diff, and a second developer attempt is the one
       // thing that must NOT follow it.
       const requeued = wave.stories.filter((p) =>
-        halves.has(p.story.id) && this.outcomes.get(p.story.id)?.status === "review"
-        && this.outcomes.get(p.story.id)?.verdict === "changes");
+        halves.has(p.story.id) && (this.dodRequeued.has(p.story.id) || (
+          this.outcomes.get(p.story.id)?.status === "review"
+          && this.outcomes.get(p.story.id)?.verdict === "changes")));
       for (const planned of requeued) {
-        this.lines.push(`  · ${planned.story.id}: reviewer asked for changes — requeued once`);
+        // gh #313: the red-DoD requeue rides the same round as `changes`.
+        this.lines.push(this.dodRequeued.has(planned.story.id)
+          ? `  · ${planned.story.id}: the DoD was red — requeued with its output`
+          : `  · ${planned.story.id}: reviewer asked for changes — requeued once`);
       }
       queue = requeued;
     }
@@ -1576,6 +1599,7 @@ class BuildSession {
     this.refusals.delete(planned.story.id);
     this.capDeaths.delete(planned.story.id);
     this.unfundedReviews.delete(planned.story.id);
+    this.dodRequeued.delete(planned.story.id);
     // And no as-is signature either (gh #279). A story whose reviewer asked for
     // changes over a hand-finished branch is requeued to a REAL developer, and
     // that attempt's record must not say the branch was taken as it stands —
@@ -1761,6 +1785,9 @@ class BuildSession {
         ].join("; and "),
         developerError: null,
         before,
+        // Only a red DoD with commands behind it can be requeued (gh #313); an
+        // empty list is a plan that proves nothing, and stays a block.
+        ...(failing === undefined ? {} : { redDod: { refused: developer.refused, budgetDeath } }),
       };
     }
 
@@ -1789,6 +1816,10 @@ class BuildSession {
     // attempt unspent — see `parkDeveloperFailure`.
     if (half.developerError !== null) {
       await this.parkDeveloperFailure(story, half.developerError, half.cost, half.before);
+      return "settled";
+    }
+    if (half.failure !== null && half.redDod !== undefined) {
+      await this.settleRedDod(story, half.failure, half.cost, dod, half.redDod, half.before);
       return "settled";
     }
     if (half.failure !== null) {
@@ -1913,6 +1944,68 @@ class BuildSession {
 
     // (g)(h) the reviewer, and whatever it decides.
     return await this.reviewAndSettle(story, proven, commit, half.cost, carried, epicShaBefore);
+  }
+
+  /**
+   * gh #313: a red Definition of Done, settled — requeued while attempts remain,
+   * blocked on the last one.
+   *
+   * The red-DoD twin of the `changes` branch in `reviewAndSettle`, and the same
+   * bound: `story.attempt < attempts`, with the attempts a red DoD spent read
+   * back off the ledger. A requeued attempt settles back at the status it
+   * started from — not `review`, because nothing merged and nothing judged it,
+   * and not `blocked`, because it is about to be dispatched again — with its
+   * worktree KEPT, so the next attempt continues in the tree whose output it is
+   * handed (`previousAttemptFor` cites the kept DoD output from the log this
+   * settle writes).
+   *
+   * Every failure that is not a plain red — a refused developer, a cap death, a
+   * refused or absent DoD command — never reaches here with `requeue` true, and
+   * blocks with today's sentence (`dodRedRequeue`).
+   */
+  private async settleRedDod(
+    story: StoryContext,
+    failure: string,
+    cost: number,
+    dod: readonly DodResult[],
+    cause: NonNullable<StoryHalf["redDod"]>,
+    before: PlanStatus,
+  ): Promise<void> {
+    const id = story.planned.story.id;
+    const spent = this.counters.dodRequeuesSpent(this.ctx.runDir, id);
+    const requeue = dodRedRequeue({ dod, ...cause, attempt: story.attempt, attempts: this.attempts });
+    if (requeue) {
+      this.counters.countDodRequeue(id, spent);
+      this.dodRequeued.add(id);
+      // Back to where the attempt found it — `parkDeveloperFailure`'s shape for
+      // the other transient settle — not `blocked`: a `tldrx status`, a dashboard
+      // or a `story reopen` reading the file between the two attempts must not see
+      // a terminal state for a story about to be dispatched again. A process that
+      // dies here leaves the story offerable, and the ledger's `redDodAttempts`
+      // (not this process's memory) is what holds its next attempt to the bound.
+      await this.settle(story, before, {
+        dod, commit: null, merged: false, carried: null, conflicts: [], verdict: "n-a",
+        review: {
+          verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [],
+          formatProblems: [], verdictProblem: null,
+        },
+        keepWorktree: true,
+        cost,
+        reason: `the DoD was red on attempt ${String(story.attempt)} of ${String(this.attempts)}, `
+          + `so the next attempt is handed its output: ${failure}`,
+      });
+      return;
+    }
+    // Attempts that went red in a row in THIS process, this one included. One is
+    // today's block, sentence unchanged; more than one says so, because "blocked
+    // on its DoD" over two paid attempts reads like one.
+    const red = spent + 1;
+    await this.block(
+      story,
+      red > 1 ? `the DoD stayed red on ${String(red)} of ${String(this.attempts)} attempts: ${failure}` : failure,
+      cost,
+      dod,
+    );
   }
 
   /**
@@ -2693,7 +2786,12 @@ class BuildSession {
       worktree,
       branch,
       epicBranch,
-      attempt: Math.min(this.reviewAttempts(planned.story.id) + 1, this.attempts),
+      // Verdicts that cost an attempt, plus attempts this process requeued on a red
+      // DoD (gh #313) — both spend one, and only the first is a review.
+      attempt: Math.min(
+        this.reviewAttempts(planned.story.id) + this.counters.dodRequeuesSpent(this.ctx.runDir, planned.story.id) + 1,
+        this.attempts,
+      ),
       ...(() => {
         const previous = this.previousAttemptFor(planned.story.id);
         return { previousAttempt: previous.text, previousAttemptKind: previous.kind };
@@ -4708,6 +4806,9 @@ class BuildSession {
   private previousAttemptKind(storyId: string): PreviousAttemptKind {
     const outcome = this.outcomes.get(storyId);
     if (outcome !== undefined && outcome.verdict === "changes") return "review";
+    // gh #313: an attempt THIS process requeued on a red DoD is a DoD attempt even
+    // when an earlier one was reviewed — the log the text quotes is the DoD's.
+    if (this.counters.dodRequeuesSpent(this.ctx.runDir, storyId) > 0 && outcome?.verdict === "n-a") return "dod";
     return this.reviewAttempts(storyId) === 0 ? "dod" : "review";
   }
 

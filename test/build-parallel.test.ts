@@ -419,8 +419,10 @@ describe("a story that fails inside a parallel wave", () => {
     const said = outcome.lines.join("\n");
 
     // The siblings were not cancelled: all three developers ran to completion.
+    // S2 twice: a red DoD is requeued while attempts remain (#313), and its lint
+    // is red on every attempt, so the second round fans out S2 alone.
     const devEnds = timeline(dir).filter((e) => e.role === "developer" && e.event === "end");
-    expect(devEnds.map((e) => e.story).sort()).toEqual(["S1", "S2", "S3"]);
+    expect(devEnds.map((e) => e.story).sort()).toEqual(["S1", "S2", "S2", "S3"]);
 
     const story = (id: string): string => readFileSync(join(ws.planDir, "stories", `${id}.md`), "utf8");
     expect(story("S1")).toContain("status: done");

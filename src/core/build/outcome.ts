@@ -489,8 +489,31 @@ export function dodGreen(outcome: Pick<StoryOutcome, "dod">): boolean {
  * this `find` out themselves, and the negation of `dodGreen` has to be read off
  * the SAME predicate or a story can block with no row to name (§7).
  */
-export function dodFailure(dod: readonly DodResult[]): DodResult | undefined {
+export function dodFailure<T extends Pick<DodResult, "status" | "exitCode" | "timedOut">>(
+  dod: readonly T[],
+): T | undefined {
   return dod.find((r) => dodRefused(r) || r.exitCode !== 0 || r.timedOut);
+}
+
+/**
+ * The fields `dodRequeueRed` reads — a `DodResult` has them, and so does the row
+ * `readReviewLedger` rebuilds from a `check.*` event, whose `absent_binary` key
+ * says only THAT the binary was absent, not the rest of `AbsentBinary`.
+ */
+export type RequeueRow = Pick<DodResult, "status" | "exitCode" | "timedOut"> & { readonly absent?: unknown };
+
+/**
+ * Is this DoD red in the one way a second developer attempt could fix (gh #313)?
+ *
+ * Every non-green row RAN — not REFUSED (it would be refused again) and not a
+ * binary ABSENT from the tree (#209, the workspace's `install:`, not the code) —
+ * and there is at least one. ONE predicate, two callers: `dodRedRequeue` decides
+ * the requeue with it, and `readReviewLedger` counts the attempts it spent with
+ * it, so the bound can never be charged for an attempt it would not have granted.
+ */
+export function dodRequeueRed(dod: readonly RequeueRow[]): boolean {
+  const red = dod.filter((r) => dodFailure([r]) !== undefined);
+  return red.length > 0 && red.every((r) => !dodRefused(r) && (r.absent === undefined || r.absent === null));
 }
 
 /**

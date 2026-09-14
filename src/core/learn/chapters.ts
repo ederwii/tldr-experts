@@ -811,7 +811,7 @@ const CHAPTER_5: Chapter = {
     "is `exit 0`. Green proved nothing, and the framework cannot tell the difference — you can.",
     "",
     "So: a second, smaller run, with a real test in it. The developer will get the number wrong,",
-    "the DoD will catch it, and nothing will be merged. Then you put it right one command at a time —",
+    "the DoD will catch it — twice — and nothing will be merged. Then you put it right one command at a time —",
     "and you will not have to guess any of them, because each one is named for you by the one before.",
   ],
   steps: [
@@ -854,7 +854,7 @@ const CHAPTER_5: Chapter = {
     {
       narrate: [
         "Plan was skipped, so Build synthesises one story from the What handoff and gives it the",
-        "DoD this scope calls for: `npm run build`, then `npm run test`. Watch the DoD line.",
+        "DoD this scope calls for: `npm run build`, then `npm run test`. Watch the DoD line — it comes twice.",
       ],
       command: ["next", "{run}"],
       expectExit: [4],
@@ -872,8 +872,11 @@ const CHAPTER_5: Chapter = {
     },
     {
       narrate: [
-        "`blocked`, with the failing command and its output — not `done`, and nothing merged.",
-        "Reopening a story is its own verb, and it takes a note: somebody decided this.",
+        "Red, then red again. A red DoD spends one of the story's two attempts, so the framework handed",
+        "the developer its own failing output and a second go — and it wrote 1720 both times, because it",
+        "believed the number. Both attempts spent: `blocked`, with the failing command and its output —",
+        "not `done`, and nothing merged. What the loop cannot supply is the fact only you know, so",
+        "reopening a story is its own verb, and it takes a note: somebody decided this.",
       ],
       command: [
         "story", "reopen", "S1", "--run", "{run}",
@@ -889,8 +892,8 @@ const CHAPTER_5: Chapter = {
     },
     {
       narrate: [
-        "A stage's budget is spent once. The Build phase has already paid for the attempt that",
-        "failed, so a second one does not start until you give it room — run `next` without this",
+        "A stage's budget is spent once. The Build phase has already paid for the two attempts that",
+        "failed, so another one does not start until you give it room — run `next` without this",
         "and it refuses, printing this very command. Chapter 8 lets you watch that refusal happen.",
         "",
         "The phase moves by the $1.00 you asked for; the RUN ceiling moves to whatever its phases",
@@ -901,10 +904,11 @@ const CHAPTER_5: Chapter = {
     },
     {
       narrate: [
-        "Second attempt — and `attempt 1 of 2` in the output is the cap: a story gets one developer",
-        "turn and one retry, and then it stays `blocked` for a person. (Reopening it by hand, as you",
-        "just did, resets the count — that was your decision, not the loop's.) Same story, same branch:",
-        "the developer starts from the commits the last one made, so the test it wrote judges the fix.",
+        "A third developer turn — yet the output says `attempt 1 of 2`: a red DoD or a reviewer's",
+        "`changes` each spend one of a story's two attempts, and then it stays `blocked` for a person.",
+        "(Reopening it by hand, as you just did, gives it a fresh pair — that was your decision, not the",
+        "loop's.) Same story, same branch: the developer starts from the work the last one left, and",
+        "your note is in its prompt, so the test it wrote judges the fix.",
       ],
       command: ["next", "{run}"],
       expectExit: [4],
@@ -937,8 +941,8 @@ const CHAPTER_5: Chapter = {
   ],
   debrief: [
     "Open `tldrx-work/<run>/events.jsonl`. Every step of that is in it, in order and with its cost:",
-    "the failing DoD's own words, `story.reopened`, `gate.rejected`, `budget.raised`, then the second",
-    "`agent.result`. Nothing was rewritten afterwards to look better than it was.",
+    "the failing DoD's own words on attempt 1 and again on attempt 2, `story.reopened`, `gate.rejected`,",
+    "`budget.raised`, then the third `agent.result`. Nothing was rewritten afterwards to look better than it was.",
     "",
     "`tldrx replay <run>` reads that file back as a narrative. The failure is part of the record.",
   ],
@@ -958,6 +962,24 @@ const CHAPTER_5: Chapter = {
     const events = read(sandbox, join(PROJECT_WORK_DIR, run, "events.jsonl"));
     if (!events.includes("which is not lower than")) {
       failures.push("events.jsonl carries no failing-DoD record — the red attempt did not happen.");
+    }
+    // The narration says the developer got a SECOND go at its own red output before
+    // anybody reopened anything (gh #313): two red DoD records, at attempts 1 and 2,
+    // both ahead of the `story.reopened`.
+    const rows = events.split("\n").filter((line) => line.trim() !== "").map((line) => {
+      try { return JSON.parse(line) as { type?: string; payload?: Record<string, unknown> }; } catch { return {}; }
+    });
+    const reopenAt = rows.findIndex((row) => row.type === "story.reopened");
+    const beforeReopen = reopenAt < 0 ? rows : rows.slice(0, reopenAt);
+    const redBefore = beforeReopen.filter((row) => row.type === "check.failed" && row.payload?.check === "dod"
+      && String(row.payload?.detail ?? "").includes("which is not lower than")).length;
+    const attemptsBefore = beforeReopen.filter((row) => row.type === "task.started" && row.payload?.story === "S1")
+      .map((row) => row.payload?.attempt);
+    if (redBefore !== 2 || attemptsBefore.join(",") !== "1,2") {
+      failures.push(
+        `before the reopen, events.jsonl records ${String(redBefore)} red DoD(s) over attempts `
+        + `[${attemptsBefore.join(", ")}] — the narration promised two, at attempts 1 and 2.`,
+      );
     }
     for (const type of ["story.reopened", "gate.rejected", "budget.raised"]) {
       if (!events.includes(type)) failures.push(`events.jsonl records no \`${type}\` event.`);
