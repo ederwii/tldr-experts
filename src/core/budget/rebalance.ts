@@ -35,6 +35,12 @@ import { raiseBudget, type RaiseOutcome } from "./raiseBudget.ts";
 import { tallyOf } from "./spentFigure.ts";
 import type { RunFile } from "../run/RunFile.ts";
 
+/**
+ * The `source` a `budget.raised` carries when `run auto --rebalance-finished` wrote it — the
+ * one spelling every reader keys on (the loop's stage line, the agent gate's attribution).
+ */
+export const REBALANCE_SOURCE = "run auto --rebalance-finished";
+
 export interface RebalanceDonor {
   readonly phaseId: string;
   readonly unspentUsd: number;

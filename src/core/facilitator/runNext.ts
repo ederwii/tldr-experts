@@ -38,7 +38,7 @@ import {
   remainingWork, renderRemainingWork, remainingWorkContext, type RemainingWork,
 } from "../budget/remainingWork.ts";
 import { raiseCommand, shortBy } from "../budget/budgetView.ts";
-import { applyRebalance, describeRebalance, planRebalance, type RebalancePlan } from "../budget/rebalance.ts";
+import { applyRebalance, describeRebalance, planRebalance, REBALANCE_SOURCE, type RebalancePlan } from "../budget/rebalance.ts";
 import { raiseGrantVerdict, raisedPayload } from "../budget/raiseBudget.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
@@ -1298,8 +1298,6 @@ function rebalanceFinished(
   return { moved: remaining(store.budget, phaseId) >= estimate, declined: null };
 }
 
-/** The `source` a `budget.raised` carries when `run auto --rebalance-finished` wrote it. */
-export const REBALANCE_SOURCE = "run auto --rebalance-finished";
 
 /**
  * What a budget refusal says about finished phases (gh #314) — nothing at all when there is

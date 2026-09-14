@@ -78,7 +78,8 @@ import {
 } from "../notify/notifications.ts";
 import { GATE_SIGNER_ROLE } from "./gateSigner.ts";
 import { approve } from "../run/gates.ts";
-import { REBALANCE_SOURCE, runNext, type NextOutcome } from "./runNext.ts";
+import { runNext, type NextOutcome } from "./runNext.ts";
+import { REBALANCE_SOURCE } from "../budget/rebalance.ts";
 import { realShipTransport, shipRun } from "../run/ship.ts";
 import { shipWanted } from "../run/shipPolicy.ts";
 

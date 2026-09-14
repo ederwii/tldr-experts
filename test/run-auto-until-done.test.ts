@@ -43,6 +43,7 @@ import { runCommand } from "../src/cli/commands/run.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { WATCH_PHASE } from "../src/core/watch/index.ts";
+import { GATE_SIGNER_MARKER } from "../src/core/facilitator/gateSigner.ts";
 import type { TldrxEvent } from "../src/core/events/Event.ts";
 import { deliveredTo, writeNotifier, workspaceYamlWithNotify } from "./fixtures/facilitator/notifier.ts";
 import {
@@ -55,6 +56,7 @@ const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
   "FAKE_CLAUDE_RUNDIR", "FAKE_CLAUDE_OUTPUTS", "FAKE_CLAUDE_COST", "FAKE_CLAUDE_IS_ERROR",
   "FAKE_CLAUDE_FAIL_SEQ", "FAKE_CLAUDE_FAIL_COUNTER", "FAKE_CLAUDE_ARGV_LOG", "TLDRX_AGENT_PROVIDER",
+  "FAKE_CLAUDE_ALT_MATCH", "FAKE_CLAUDE_ALT_OUTPUTS",
 ] as const;
 let open: FacilitatorWorkspace[] = [];
 
@@ -159,6 +161,37 @@ function starve(ws: Made, phaseId: string, ceiling: number): void {
   const next = text.replace(pattern, `$1${ceiling.toFixed(2)}`);
   if (next === text) throw new Error(`starve() did not match a phase row for ${phaseId} in budget.yml`);
   writeFileSync(path, next, "utf8");
+}
+
+/** beta on `gates_policy: agent`, with the fake gate-signer writing a note that signs it. */
+function agentGateWorkspace(): Made {
+  const made = makeFacilitatorWorkspace({
+    scope: "demo", budgetUsd: 10, gates: { alpha: "auto", beta: "agent" },
+    stages: [{ ...ALPHA, checks: "[claim-sources]" }, { ...BETA, checks: "[claim-sources]" }],
+  });
+  open.push(made);
+  process.env.PATH = made.binDir;
+  process.env.FAKE_CLAUDE_RUNDIR = made.runDir;
+  process.env.FAKE_CLAUDE_OUTPUTS = JSON.stringify({
+    "01-what/intent.md": cannedIntent(), "01-what/handoff.md": cannedHandoff(), "02-how/handoff.md": cannedHandoff(),
+  });
+  process.env.FAKE_CLAUDE_COST = "0.42";
+  process.env.FAKE_CLAUDE_ALT_MATCH = GATE_SIGNER_MARKER;
+  const gate = "02-how/beta";
+  process.env.FAKE_CLAUDE_ALT_OUTPUTS = JSON.stringify({
+    ".agent/beta/evidence.md": [
+      "---", "version: 1", `gate: ${gate}`, "role: agent", "by: fable", "at: 2026-08-28T22:14:03Z", "verdict: sign",
+      'read: ["02-how/handoff.md"]', "citations: {sampled: 2, of: 4, resolved: 2, refuted: 0}",
+      "touches: {audited: 3, outside_surface: 0, new_areas: []}", "diff_vs_stories: n-a", "caveats: []", "recommend: []",
+      "---", "", `# Gate evidence — ${gate}`, "", "## Read", "- the handoff [src: 02-how/handoff.md:1]", "",
+      "## Citations checked", "- 2 of 4 spot-checked [src: 02-how/handoff.md:4]", "",
+      "## Touches audited", "- 3 paths, all inside the surface [src: .tldrx/workspace.yml:1]", "",
+      "## Verdict", "- SIGN — every declared output is on disk [src: .tldrx/workspace.yml:1]", "",
+    ].join("\n"),
+  });
+  const argvLog = join(made.root, "spawns.jsonl");
+  process.env.FAKE_CLAUDE_ARGV_LOG = argvLog;
+  return { ...made, argvLog, outbox: join(made.root, "notified.jsonl") };
 }
 
 /** The loop's lines with the two per-workspace strings normalised, so two runs compare. */
@@ -385,6 +418,35 @@ describe("never over money", () => {
     starve(ws, "01-what", 5.5);
     longLived.save();
     expect(readFileSync(join(ws.runDir, "budget.yml"), "utf8")).toContain('{id: "01-what", ceiling_usd: 5.50');
+  });
+
+  /**
+   * gh #314, measured before this fix: with beta on `gates_policy: agent` and a signing note, the
+   * control run self-signs beta (`by: fable`); the same run with `--rebalance-finished` moving
+   * $1.00 into 02-how fell to a person with "a ceiling a PERSON moved" and a decision card
+   * headed "a person moved the ceiling" — while the event's actor was the loop's launcher and
+   * its `source` was the flag. The fall-through itself stands (a move made to unblock a stage is
+   * still a budget decision in its window — `started_at` is the loop's `at`, so the move is
+   * always inside it); what it SAYS must name who and what moved the money.
+   */
+  test("an agent gate on the stage a rebalance unblocked falls to a person, attributing the move to the flag, not to a person", async () => {
+    const control = agentGateWorkspace();
+    const signed = await auto(control, { rebalanceFinished: true });
+    expect(signed.code).toBe(0);
+    expect(RunStore.open(control.runDir).run.phases[1]?.stages[0]?.gate.by).toBe("fable");
+
+    const ws = agentGateWorkspace();
+    starve(ws, "02-how", 1);
+    const outcome = await auto(ws, { rebalanceFinished: true });
+    expect(outcome.code).toBe(4);
+    expect(RunStore.open(ws.runDir).run.phases[1]?.stages[0]?.gate.status).toBe("pending");
+    const text = outcome.lines.join("\n");
+    const reason = outcome.lines.find((line) => line.includes("budget-event:")) ?? "";
+    expect(reason).toContain("run auto --rebalance-finished");
+    expect(reason).toContain("launched by alan");
+    expect(reason).toContain("$1.00 from finished 01-what");
+    expect(text).not.toContain("a person moved");
+    expect(text).not.toContain("a ceiling a person moved");
   });
 
   test("`--max-usd` spans the supervised run: a relaunch does not hand the loop a fresh ceiling", async () => {

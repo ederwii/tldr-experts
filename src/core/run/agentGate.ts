@@ -34,6 +34,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { validateEvidence, type EvidenceValidation } from "../text/evidence.ts";
 import type { SrcContext } from "../text/srcToken.ts";
 import type { TldrxEvent } from "../events/Event.ts";
+import { REBALANCE_SOURCE } from "../budget/rebalance.ts";
 import type { RunGateEvidence } from "./RunFile.ts";
 import { evaluateAutoGate, type AutoGateCondition, type AutoGateInput } from "./autoGate.ts";
 
@@ -86,7 +87,11 @@ export interface AgentGateInput extends AutoGateInput {
   readonly events: readonly TldrxEvent[];
 }
 
-/** The event types that mean a person moved the money while this stage was running. */
+/**
+ * The event types that mean the money moved while this stage was running — by a person
+ * (`tldrx budget raise`), or by `run auto --rebalance-finished` under its launcher's opt-in
+ * (gh #314). `describeBudgetEvents` says which; the fall-through is the same for both.
+ */
 export const BUDGET_DECISION_EVENTS: readonly string[] = ["budget.raised", "budget.blocked"];
 
 export async function evaluateAgentGate(input: AgentGateInput): Promise<AgentGateVerdict> {
@@ -113,7 +118,7 @@ export async function evaluateAgentGate(input: AgentGateInput): Promise<AgentGat
   if (budget.length > 0) {
     fallthroughs.push({
       trigger: "budget-event",
-      detail: `${describeBudgetEvents(budget)} — a ceiling a person moved to let this stage through `
+      detail: `${describeBudgetEvents(budget)} — a ceiling moved to let this stage through `
         + "is not a ceiling the machine that was blocked may then sign off against",
     });
   }
@@ -232,8 +237,24 @@ export function budgetEventsInWindow(
 }
 
 function describeBudgetEvents(events: readonly TldrxEvent[]): string {
-  const named = events.map((event) => `${event.type} at ${event.ts}`).join(", ");
+  const named = events.map(describeBudgetEvent).join(", ");
   return `${String(events.length)} budget event(s) in this stage's window (${named})`;
+}
+
+/**
+ * One event, attributed (gh #314). A raise written by `run auto --rebalance-finished` says so —
+ * the flag, the person who launched the loop, and the finished phase the money came from — and
+ * never reads as a person's hand raise; any other raise names its actor.
+ */
+function describeBudgetEvent(event: TldrxEvent): string {
+  if (event.type !== "budget.raised") return `${event.type} at ${event.ts}`;
+  const payload = event.payload;
+  if (payload.source === REBALANCE_SOURCE) {
+    const amount = typeof payload.amount_usd === "number" ? `$${payload.amount_usd.toFixed(2)}` : "an amount not recorded";
+    return `budget.raised at ${event.ts} by ${REBALANCE_SOURCE} (launched by ${event.actor}): `
+      + `${amount} from finished ${String(payload.take_from ?? "a phase not recorded")}`;
+  }
+  return `budget.raised at ${event.ts} by ${event.actor}`;
 }
 
 /** One line per reason, in the shape `next` prints its refusals in. */

@@ -295,7 +295,7 @@ describe("a card per fallthrough kind", () => {
     );
     expect(renderDecisionCard(card)).toEqual([
       "DECISION — 260830-tenancy · 01-what/what",
-      "Budget — a person moved the ceiling while this stage ran",
+      "Budget — the ceiling moved while this stage ran",
       "  $8.31 spent of $12.00",
       "  1 budget event(s) in this stage's window (budget.raised at 2026-08-30T21:10:00Z)",
       "  tldrx budget show --run 260830-tenancy",
