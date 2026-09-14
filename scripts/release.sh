@@ -11,6 +11,14 @@
 # at the repo root (#299): `scripts/merge-wave.sh` waits on that marker exactly as it waits on
 # its own lock, so "is a release in flight?" is a file and not a question. Removed on every
 # exit path, red gate and signal included: a marker left behind freezes merges for an hour.
+# And the reverse (#304): before that marker, before the first edit, it WAITS on a running
+# wave's lock with the wave's own knobs and dead-owner rule — a release started mid-wave used
+# to edit three files in a tree another process was gating, and the only thing that stopped the
+# commit was the ref hook, which aborts the commit and leaves the edits dirty.
+# Exit codes: 1 a precondition or the gate refused (nothing pushed, the undo is printed) · 14 gave up waiting for a merge wave in flight (#304)
+# 14 and not 1 because nothing was edited and there is nothing to undo; not the wave's own 6
+# because the two scripts' codes are read in the same logs and docs — merge-wave.sh owns 1–13,
+# so the next free number keeps a bare "exit 14" unambiguous across both.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 V="${1:?usage: scripts/release.sh <version> [--tag alpha|beta|stable]}"; TAG="alpha"
@@ -23,17 +31,72 @@ MARKER="$(mw_release_marker_path)"
 trap 'rm -f "$MARKER" "$MARKER.tmp.$$"' EXIT
 trap 'rm -f "$MARKER" "$MARKER.tmp.$$"; exit 130' INT
 trap 'rm -f "$MARKER" "$MARKER.tmp.$$"; exit 143' TERM
+# --- wait on a running wave (#304) -------------------------------------------------------
+# The mirror of merge-wave.sh's wait_for_release, beat for beat: poll the wave's lock, break
+# open one whose owner is dead (re-read after a beat, so a lock a third party just took is not
+# torn down on a stale reading), give up after $WAIT_S. This runs BEFORE the marker and before
+# the first edit: a release that is queued has changed nothing, and a wave that finishes finds
+# the tree exactly as it left it. Only the lock is broken, as the wave breaks it — the dead
+# wave's root marker is overwritten by the next wave and is gitignored for the gate's sake.
+WAIT_S="${MW_LOCK_WAIT_S:-3600}"; POLL_S="${MW_LOCK_POLL_S:-2}"   # MW_LOCK_STALE_S: mw_dead_owner
+waited=0; noted=0
+wave_desc() { printf 'branch %s, pid %s, since %s' "$(cat "$MW_LOCK/branch" 2>/dev/null || echo '?')" "${1%% *}" "$(cat "$MW_LOCK/started" 2>/dev/null || echo '?')"; }
+wait_for_wave() {
+  local o
+  while [ -d "$MW_LOCK" ]; do
+    o="$(mw_owner_of)"
+    if mw_dead_owner "$o"; then
+      sleep 1; waited=$(( waited + 1 ))
+      if [ "$(mw_owner_of)" = "$o" ]; then
+        rm -rf "$MW_LOCK"
+        echo "release.sh: broke open $MW_LOCK — the wave that held it (owner: ${o:-unknown}) is dead" >&2
+      fi
+      continue
+    fi
+    if [ "$waited" -ge "$WAIT_S" ]; then
+      echo "FAIL merge wave in flight: scripts/merge-wave.sh ($(wave_desc "$o")) has held $MW_LOCK for ${waited}s — nothing released, nothing edited. A release waits for a wave, it does not race it (docs/RELEASING.md)."; exit 14
+    fi
+    if [ "$noted" -eq 0 ] || [ $(( waited % 60 )) -lt "$POLL_S" ]; then
+      echo "release.sh: waiting for a merge wave in this checkout ($(wave_desc "$o"), ${waited}s so far)" >&2
+      noted=1
+    fi
+    sleep "$POLL_S"; waited=$(( waited + POLL_S ))
+  done
+  return 0
+}
 # Written whole and MOVED into place, like the wave's marker: a reader must never catch it
-# without the `pid:` line that tells them whether the release is still alive.
-{
-  echo "RELEASE IN PROGRESS — scripts/release.sh $V is running in this checkout; merges wait on this file (docs/RELEASING.md)."
-  echo "version: $V"
-  echo "pid:     $$"
-  echo "host:    $(hostname)"
-  echo "started: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  echo "epoch:   $(date +%s)"
-} > "$MARKER.tmp.$$"
-mv -f "$MARKER.tmp.$$" "$MARKER"
+# without the `pid:` line that tells them whether the release is still alive. `phase:` is the
+# one line that changes (#304): a kept marker means EITHER "queued behind a wave, nothing edited
+# yet" OR "editing/tagging", and a record must not say more than the truth (AGENTS.md §7) — so
+# the marker says which, and the wave's refusal and `--status` print it. `started:`/`epoch:`
+# are what the FIRST write said: the dead-owner rule and a human both want when it began.
+STARTED="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; EPOCH="$(date +%s)"
+write_marker() {
+  {
+    echo "RELEASE IN PROGRESS — scripts/release.sh $V is running in this checkout; merges wait on this file (docs/RELEASING.md)."
+    echo "version: $V"
+    echo "pid:     $$"
+    echo "host:    $(hostname)"
+    echo "started: $STARTED"
+    echo "epoch:   $EPOCH"
+    echo "phase:   $1"
+  } > "$MARKER.tmp.$$"
+  mv -f "$MARKER.tmp.$$" "$MARKER"
+}
+# 1. A wave that already holds the lock finishes — it is never preempted.
+wait_for_wave
+# 2. The marker goes up saying `waiting`: from here a wave yields to this release.
+write_marker waiting
+# 3. A wave that took its lock in the gap between the last poll and the marker: the marker
+#    STAYS and this run waits for the lock to clear — the wave sees the marker and yields (it
+#    hands its lock back after its mkdir, merge-wave.sh). Precedence, not courtesy: if both
+#    sides yielded on the same cadence, the interleaving where each sees the other's token
+#    right after publishing its own is an hour of ping-pong ending in 13 and 14. The doctrine
+#    is the wave's own refusal line — merges wait for a release, they do not race it — so a
+#    release never hands back a marker it wrote. Same budget: $waited carries over.
+wait_for_wave
+# 4. Nothing else holds the checkout: from the next line on, files change.
+write_marker releasing
 # `sed -i` is not portable — BSD demands a suffix argument, GNU must not have one — and this
 # script has to run on the maintainer's Mac and be testable on ubuntu CI. Rewrite through a
 # temp file OUTSIDE the tree and `cat` it back: the file keeps its inode and mode, and no

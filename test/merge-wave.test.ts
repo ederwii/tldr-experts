@@ -18,7 +18,7 @@
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { foreignWaveLogPath } from "./fixtures/foreignWaveLog.ts";
@@ -56,7 +56,9 @@ exit 0
 const CHANGELOG_OK = "# Changelog\n\n## 0.1.1 — unreleased\n\n- work in flight\n\n## 0.1.0 — 2026-01-01\n\n- shipped\n";
 
 const PACKAGE_JSON = JSON.stringify({
-  name: "mw-sandbox", private: true, type: "module",
+  // `version` is the top dated heading's: what shipped, by the file the wave cross-checks the
+  // unreleased heading against since #304 — so every wave here runs that comparison as a control.
+  name: "mw-sandbox", version: "0.1.0", private: true, type: "module",
   scripts: {
     typecheck: "bash gate.sh typecheck",
     build: "bash gate.sh build",
@@ -1704,6 +1706,30 @@ describe("the merged tree carries exactly one unreleased CHANGELOG heading, abov
     expect(originLog(sb)).toEqual(published);
   });
 
+  test("the heading is also checked against package.json: a version already shipped there refuses, naming both figures (#304)", async () => {
+    const sb = sandbox();
+    const published = originLog(sb);
+    // The CHANGELOG is self-consistent — `0.1.1 — unreleased` above `0.1.0 — 2026-01-01` — but
+    // package.json already says 0.1.1 shipped: a release that skipped writing its dated section,
+    // or a hand-edited heading. Two lies from one document must not pass on the document alone.
+    sb.git("checkout", "-q", "-b", "wave-pkg-ahead", "main");
+    const pkg = JSON.parse(readFileSync(join(sb.main, "package.json"), "utf8"));
+    writeFileSync(join(sb.main, "package.json"), `${JSON.stringify({ ...pkg, version: "0.1.1" }, null, 2)}\n`);
+    sb.git("add", "-A");
+    sb.git("commit", "-q", "-m", "wave-pkg-ahead work");
+    reviewRecord(sb, "wave-pkg-ahead");
+    sb.git("checkout", "-q", "main");
+    const run = invoke(sb, "wave-pkg-ahead");
+    const r = await run.done;
+    expectExit(run, r, 12);
+    expect(r.stdout).toContain("FAIL changelog");
+    expect(r.stdout).toContain("## 0.1.1 — unreleased");   // the heading
+    expect(r.stdout).toContain("package.json");            // and what it was measured against
+    expect(r.stdout).toMatch(/package\.json[^\n]*0\.1\.1/);
+    expect(originLog(sb)).toEqual(published);
+    expect(gateShas(sb, "wave-pkg-ahead")).toEqual([]);
+  });
+
   test("the refusal is about the MERGED tree: a branch that merely keeps main's heading merges", async () => {
     const sb = sandbox();
     const run = invoke(sb, "wave-a");
@@ -1734,7 +1760,7 @@ describe("the merged tree carries exactly one unreleased CHANGELOG heading, abov
 const releaseMarkerPath = (sb: Sandbox) => join(sb.main, ".RELEASE-IN-PROGRESS");
 
 /** What `scripts/release.sh` leaves at the shared root for its whole span (#299). */
-function plantRelease(sb: Sandbox, pid: number = process.pid, version = "0.9.9"): void {
+function plantRelease(sb: Sandbox, pid: number = process.pid, version = "0.9.9", phase: string | null = "releasing"): void {
   writeFileSync(releaseMarkerPath(sb), [
     "RELEASE IN PROGRESS — planted by the test",
     `version: ${version}`,
@@ -1742,6 +1768,7 @@ function plantRelease(sb: Sandbox, pid: number = process.pid, version = "0.9.9")
     `host:    ${hostname()}`,
     "started: 2026-09-14T00:00:00Z",
     `epoch:   ${Math.floor(Date.now() / 1000)}`,
+    ...(phase === null ? [] : [`phase:   ${phase}`]),   // null: the pre-#304 marker, no phase line
     "",
   ].join("\n"));
 }
@@ -1756,6 +1783,7 @@ describe("a wave WAITS on a release in flight, the way it waits on its own lock 
     expectExit(run, r, 13);
     expect(r.stdout).toContain("FAIL release in flight");
     expect(r.stdout).toContain("0.9.9");                // which release, not just "a release"
+    expect(r.stdout).toContain("releasing");            // and what it is doing — not merely queued (#304)
     expect(r.stderr).toContain("waiting for a release");
     expect(originLog(sb)).toEqual(before);
     expect(gateShas(sb, "wave-a")).toEqual([]);
@@ -1763,7 +1791,7 @@ describe("a wave WAITS on a release in flight, the way it waits on its own lock 
     expect(existsSync(lockDir(sb))).toBe(false);             // and no lock was left behind
   });
 
-  test("a marker whose release process is dead is broken open, and the merge proceeds", async () => {
+  test("a marker whose release process is dead is broken open, SAID SO, and the merge proceeds — the only recovery from a SIGKILLed release (#304)", async () => {
     const sb = sandbox();
     plantRelease(sb, 999999);                           // a pid nothing on this host is running
     const run = invoke(sb, "wave-a", { MW_LOCK_WAIT_S: "5", MW_LOCK_POLL_S: "1" });
@@ -1771,6 +1799,20 @@ describe("a wave WAITS on a release in flight, the way it waits on its own lock 
     expectExit(run, r, 0);
     expect(r.stdout).toContain("pushed");
     expect(existsSync(releaseMarkerPath(sb))).toBe(false);
+    // release.sh's traps cover INT/TERM only; a SIGKILL or a cut session leaves the marker with
+    // no owner to remove it, and since #304 the release never hands its marker back — so this
+    // dead-owner check is the ONE path that ever clears an orphaned marker, and it says so in
+    // the sentence a human will grep for, naming the marker and the pid. The path is compared
+    // as a FILE, both sides canonicalized: the script prints the root `git worktree list`
+    // answers (`/private/var/…`) while a `tmpdir()` sandbox is spelled through the `/var`
+    // symlink on macOS — the wave's own gates caught the raw comparison on the merged tree.
+    // Canonicalizing only the expectation would pin "the script always prints the canonical
+    // form", a claim about every invocation path; this pins "it names the same file".
+    const said = /^merge-wave: broke open (.+) — the release that held it \(pid 999999\) is dead$/m.exec(r.stderr);
+    expect(said, `no broke-open sentence on stderr:\n${r.stderr}`).not.toBeNull();
+    const printed = said![1]!;
+    expect(basename(printed)).toBe(".RELEASE-IN-PROGRESS");
+    expect(realpathSync(dirname(printed))).toBe(realpathSync(sb.main));   // the marker itself is gone by now
   });
 
   test("when the release finishes, the queued wave goes on to merge", async () => {
@@ -1831,12 +1873,37 @@ describe("`merge-wave.sh --status` answers \"is it alive, and where is it?\" in 
     expect(r.stdout.trim()).toBe("idle");
   });
 
-  test("a release in flight is reported too, since a wave will wait on it", () => {
+  test("an old-format lock (owner and token only) with a LIVE pid reads `?` for what it never recorded — no crash (#304)", () => {
+    const sb = sandbox();
+    holdLock(sb);                                         // this very process; no branch/phase/started files
+    const r = status(sb);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout.trim()).toBe(`holder=${process.pid} branch=? phase=? started=?`);
+  });
+
+  test("a release in flight is reported too, with its phase, since a wave will wait on it", () => {
     const sb = sandbox();
     plantRelease(sb, process.pid, "0.9.9");
     const r = status(sb);
     expect(r.code).toBe(0);
-    expect(r.stdout.trim()).toMatch(/^release holder=\d+ version=0\.9\.9 started=2026-09-14T00:00:00Z$/);
+    expect(r.stdout.trim()).toMatch(/^release holder=\d+ version=0\.9\.9 phase=releasing started=2026-09-14T00:00:00Z$/);
+  });
+
+  test("a release queued behind a wave says so: phase=waiting (#304)", () => {
+    const sb = sandbox();
+    plantRelease(sb, process.pid, "0.9.9", "waiting");
+    const r = status(sb);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toMatch(/^release holder=\d+ version=0\.9\.9 phase=waiting started=2026-09-14T00:00:00Z$/);
+  });
+
+  test("a marker without a phase line (pre-#304) reads `?`, like an old-format lock", () => {
+    const sb = sandbox();
+    plantRelease(sb, process.pid, "0.9.9", null);
+    const r = status(sb);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toMatch(/^release holder=\d+ version=0\.9\.9 phase=\? started=2026-09-14T00:00:00Z$/);
   });
 
   test("the header's exit-code table names every code the script exits with, and nothing else", () => {
@@ -1849,5 +1916,37 @@ describe("`merge-wave.sh --status` answers \"is it alive, and where is it?\" in 
     expect(documented).toEqual(exits);
     expect(exits).toContain(12);
     expect(exits).toContain(13);
+  });
+});
+
+/**
+ * `ver_gt`, the one version comparison in the wave (#299, cross-checked against package.json
+ * since #304), pinned DIRECTLY: the function is lifted out of the script's own text and run, so
+ * what is measured is the real implementation and not a copy. Numeric per component is the
+ * whole point — a lexical compare says `0.9.0 > 0.10.0`, and a padded one gets the major
+ * rollover wrong — so the two cases that would expose either are the ones pinned.
+ */
+describe("ver_gt compares versions numerically per component (#304)", () => {
+  const src = readFileSync(MERGE_WAVE, "utf8");
+  const fn = /^  ver_gt\(\) \{[\s\S]*?^  \}$/m.exec(src)?.[0] ?? "";
+  const verGt = (a: string, b: string): boolean =>
+    spawnSync("bash", ["-c", `${fn}\nver_gt "$1" "$2"`, "ver_gt", a, b], { encoding: "utf8" }).status === 0;
+
+  test("the function is where the test expects it", () => {
+    expect(fn).toContain("local IFS=.");
+  });
+
+  test("1.0.0 > 0.99.0 — the major rollover", () => {
+    expect(verGt("1.0.0", "0.99.0")).toBe(true);
+    expect(verGt("0.99.0", "1.0.0")).toBe(false);
+  });
+
+  test("0.10.0 > 0.9.0 — where a lexical compare gets it backwards", () => {
+    expect(verGt("0.10.0", "0.9.0")).toBe(true);
+    expect(verGt("0.9.0", "0.10.0")).toBe(false);
+  });
+
+  test("equal is not greater", () => {
+    expect(verGt("0.24.0", "0.24.0")).toBe(false);
   });
 });

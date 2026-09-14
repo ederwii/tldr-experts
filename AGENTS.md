@@ -48,10 +48,23 @@ sells: measured over asserted, refused over guessed, named over silent.
   `.RELEASE-IN-PROGRESS` at the repo root for its whole span (pid, version, started; removed on
   every exit path, signals included), the wave polls it with the same knobs, breaks a dead
   owner's marker open, and gives up with **exit 13** — its own code, one per condition — having
-  merged nothing. `scripts/merge-wave.sh --status` prints one line, exit 0 either way:
+  merged nothing. `scripts/merge-wave.sh --status` answers in one line, exit 0 either way:
   `holder=<pid> branch=<b> phase=<merge|gates|push> started=<iso>` for a live wave (read from
-  the lock, which records all four), `release holder=<pid> version=<v> started=<iso>` for a live
-  release, or `idle` — "is it alive?" is that command, never `ps` plus a marker's mtime.
+  the lock, which records all four), `release holder=<pid> version=<v> phase=<waiting|releasing>
+  started=<iso>` for a live release, or `idle` — plus a SECOND line, `release queued: pid <p>
+  version=<v> phase=waiting`, when a live release is queued behind the wave the first line names
+  (#304). "Is it alive?" is that command, never `ps` plus a marker's mtime.
+  And the release waits on the WAVE (#304): `scripts/release.sh` polls `merge-wave.lock` with
+  the same knobs and dead-owner rule BEFORE it writes its marker or edits a file, and gives up
+  with **exit 14** having edited nothing — so the freeze is mutual, not one-directional. The
+  precedence is fixed, not symmetric: a wave that already holds the lock finishes, never
+  preempted; once the release's marker is up, a wave yields to it (a wave that took the lock in
+  the gap hands it back, as it already did) and the release waits for the lock to clear, never
+  handing back a marker it wrote — two sides yielding on the same cadence would ping-pong for
+  the whole budget and end in 13 and 14. An orphaned marker (SIGKILL, cut session — the traps
+  cover INT/TERM only) is cleared by the wave's dead-owner rule alone, and the wave says so.
+  The marker carries `phase: waiting|releasing` so a queued release is not read as one editing
+  (§7); `--status` prints it, and so does the wave's refusal.
 - **A branch merges only with a review record on it: `.review/<branch>.md` (#192).** A fresh
   reviewer that did not write the code reads the branch diff BEFORE the wave, and the record is
   where that verdict lives — a file on the branch, so it lands in the merge commit's tree and
@@ -100,8 +113,9 @@ sells: measured over asserted, refused over guessed, named over silent.
   version, one heading per kind (a duplicate `### Fixed` group has shipped before; don't).
   **The wave enforces the "one section" half on the MERGED tree (#299): more than one
   `## <v> — unreleased` heading, or one whose version is not greater than the top dated
-  heading, refuses with exit 12** — the merge commit is rewound, nothing is pushed, and the
-  refusal names the headings. Two sessions once staged `0.22.1` and `0.23.0` for the same next
+  heading — or than `package.json`'s version (#304; `package.json` is what shipped, and a
+  CHANGELOG checked only against itself passes on two lies from one file) — refuses with
+  exit 12** — the merge commit is rewound, nothing is pushed, and the refusal names both figures. Two sessions once staged `0.22.1` and `0.23.0` for the same next
   version, each branch internally consistent; agree the next version with your peer BEFORE
   writing the heading (`.claude/skills/maintain/SKILL.md` §9 says when).
 - Clean up: remove your worktree and delete your branch after the wave. The branch delete may
@@ -183,6 +197,9 @@ Full checklist: `docs/RELEASING.md`. The shape, so you recognize the moving part
    `main`, tags `v<V>`, pushes the tag. For that whole span it holds `.RELEASE-IN-PROGRESS` at
    the repo root (gitignored; removed on every exit path), and every `scripts/merge-wave.sh`
    waits on it (§2) — merges are frozen while a release is in flight, mechanically (#299).
+   Before any of that it waits on a running wave's lock the same way and refuses with exit 14
+   when it gives up, having edited nothing (#304) — so a release started mid-wave queues behind
+   the wave, and a wave started after the marker queues behind the release (§2 has the order).
 3. The tag triggers `publish.yml` (npm trusted publishing). Watch it (§4 rules), then verify
    `npm view tldr-experts dist-tags` and align any global install. Optionally
    `gh release create v<V> --notes-file <section>` from the CHANGELOG section.

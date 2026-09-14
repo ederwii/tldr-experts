@@ -3,7 +3,11 @@
 # Prints ONE summary line; exits non-zero (and leaves main untouched) on any red gate.
 # merge-wave.sh --status — one line saying who holds the checkout and where they are (#299):
 #   `holder=<pid> branch=<b> phase=<merge|gates|push> started=<iso>` for a live wave,
-#   `release holder=<pid> version=<v> started=<iso>` for a live scripts/release.sh, else `idle`.
+#   `release holder=<pid> version=<v> phase=<waiting|releasing> started=<iso>` for a live
+#   scripts/release.sh (`waiting`: queued behind a wave, nothing edited yet — #304), else `idle`.
+#   The LOCK answers first: while a wave holds it, the first line is the wave's, and a release
+#   queued behind that wave is a SECOND line, `release queued: pid <p> version=<v> phase=waiting`
+#   — the same fact `cat .RELEASE-IN-PROGRESS` shows as its `phase:` line (#304).
 #   Exit 0 either way; a lock or marker whose owner is dead reads as idle.
 #
 # Concurrency (#44). The merge, the gates and the push all happen in ONE shared checkout,
@@ -36,7 +40,7 @@
 #             9 could not snapshot this script before running it
 #             10 no usable review record on the branch (#192)
 #             11 the ref-transaction hook aborted the merge — NOT a conflict (#115)
-#             12 the merged CHANGELOG has two unreleased headings, or one at or below the last release (#299)
+#             12 the merged CHANGELOG has two unreleased headings, or one at or below the last release — by its top dated heading (#299) or by package.json (#304)
 #             13 gave up waiting for a release in flight (#299)
 # One code per condition, deliberately: this table is its own namespace and has nothing to do
 # with `src/cli/exitCodes.ts`'s families (where 2 is a gate refusal). Here 2 is already "merge
@@ -75,11 +79,16 @@ if [ "${1:-}" = "--status" ]; then
   o="$(mw_owner_of)"
   if [ -d "$MW_LOCK" ] && ! mw_dead_owner "$o"; then
     echo "holder=${o%% *} branch=$(cat "$MW_LOCK/branch" 2>/dev/null || echo '?') phase=$(cat "$MW_LOCK/phase" 2>/dev/null || echo '?') started=$(cat "$MW_LOCK/started" 2>/dev/null || echo '?')"
+    # The lock answers first; a release queued behind it (#304) is a second line, never silence.
+    r="$(mw_release_owner_of)"
+    if [ -n "$r" ] && ! mw_dead_owner "$r"; then
+      echo "release queued: pid ${r%% *} version=$(mw_release_field version) phase=$(mw_release_phase)"
+    fi
     exit 0
   fi
   r="$(mw_release_owner_of)"
   if [ -n "$r" ] && ! mw_dead_owner "$r"; then
-    echo "release holder=${r%% *} version=$(mw_release_field version) started=$(mw_release_field started)"
+    echo "release holder=${r%% *} version=$(mw_release_field version) phase=$(mw_release_phase) started=$(mw_release_field started)"
     exit 0
   fi
   echo "idle"; exit 0
@@ -175,15 +184,21 @@ wait_for_release() {
   while r="$(mw_release_owner_of)" && [ -n "$r" ]; do
     if mw_dead_owner "$r"; then
       # Same beat as the lock below: only remove a marker whose owner line has not changed.
+      # Said out loud (#304): release.sh's traps cover INT/TERM only, and since #304 it never
+      # hands its marker back, so this is the ONE path that ever clears a marker a SIGKILL or a
+      # cut session orphaned — a human reading the log must be able to see it happened.
       sleep 1; waited=$(( waited + 1 ))
-      if [ "$(mw_release_owner_of)" = "$r" ]; then rm -f "$(mw_release_marker_path)"; fi
+      if [ "$(mw_release_owner_of)" = "$r" ]; then
+        rm -f "$(mw_release_marker_path)"
+        echo "merge-wave: broke open $(mw_release_marker_path) — the release that held it (pid ${r%% *}) is dead" >&2
+      fi
       continue
     fi
     if [ "$waited" -ge "$WAIT_S" ]; then
-      echo "FAIL release in flight: scripts/release.sh $(mw_release_field version) (pid ${r%% *}, since $(mw_release_field started)) has held $(mw_release_marker_path) for ${waited}s — nothing merged. Merges wait for a release, they do not race it (docs/RELEASING.md)."; exit 13
+      echo "FAIL release in flight: scripts/release.sh $(mw_release_field version) (pid ${r%% *}, since $(mw_release_field started), $(mw_release_phase_text)) has held $(mw_release_marker_path) for ${waited}s — nothing merged. Merges wait for a release, they do not race it (docs/RELEASING.md)."; exit 13
     fi
     if [ "$rnoted" -eq 0 ] || [ $(( waited % 60 )) -lt "$POLL_S" ]; then
-      echo "merge-wave: waiting for a release in this checkout (scripts/release.sh $(mw_release_field version), pid ${r%% *}, ${waited}s so far)" >&2
+      echo "merge-wave: waiting for a release in this checkout (scripts/release.sh $(mw_release_field version), pid ${r%% *}, $(mw_release_phase_text), ${waited}s so far)" >&2
       rnoted=1
     fi
     sleep "$POLL_S"; waited=$(( waited + POLL_S ))
@@ -403,10 +418,23 @@ if [ -f CHANGELOG.md ]; then
   if [ "$N_UNREL" -gt 1 ]; then
     echo "FAIL changelog: the merged CHANGELOG.md carries $N_UNREL unreleased headings ($(printf '%s' "$UNRELEASED" | tr '\n' ';' | sed 's/;/; /g; s/; $//')) — one section per version, both sides' bullets as the UNION under ONE heading (AGENTS.md §2, §5); merge commit rewound, nothing pushed. Agree the next version with your peer BEFORE writing the heading, then rebase and re-review."; exit 12
   fi
-  if [ "$N_UNREL" -eq 1 ] && [ -n "$TOP_DATED" ]; then
-    UV="$(printf '%s' "$UNRELEASED" | awk '{print $2}')"; DV="$(printf '%s' "$TOP_DATED" | awk '{print $2}')"
-    if ! ver_gt "$UV" "$DV"; then
-      echo "FAIL changelog: '$UNRELEASED' is not above the last release ('$TOP_DATED') — the unreleased version must be greater than the top dated one, or release.sh would date a section for a version that already shipped (AGENTS.md §5); merge commit rewound, nothing pushed."; exit 12
+  # Two instruments for "what already shipped", and the heading must be above BOTH (#304): the
+  # CHANGELOG's own top dated heading, and package.json — which is the authority (§9's drift
+  # guard already pins README's top row to it), so a dated section that was never written, or a
+  # heading edited by hand, cannot pass the gate on two lies from one document. Same exit 12:
+  # it is one condition — the unreleased version is not above the last release — measured twice.
+  PKG_V="$(node -p "require('./package.json').version" 2>/dev/null || true)"
+  case "$PKG_V" in *[!0-9.]*|'') PKG_V="" ;; esac
+  if [ "$N_UNREL" -eq 1 ]; then
+    UV="$(printf '%s' "$UNRELEASED" | awk '{print $2}')"
+    if [ -n "$TOP_DATED" ]; then
+      DV="$(printf '%s' "$TOP_DATED" | awk '{print $2}')"
+      if ! ver_gt "$UV" "$DV"; then
+        echo "FAIL changelog: '$UNRELEASED' is not above the last release ('$TOP_DATED') — the unreleased version must be greater than the top dated one, or release.sh would date a section for a version that already shipped (AGENTS.md §5); merge commit rewound, nothing pushed."; exit 12
+      fi
+    fi
+    if [ -n "$PKG_V" ] && ! ver_gt "$UV" "$PKG_V"; then
+      echo "FAIL changelog: '$UNRELEASED' is not above package.json's version ($PKG_V) — package.json is what shipped, whatever the CHANGELOG's dated headings say; a heading at or below it would have release.sh date a section for a version that already exists (AGENTS.md §5); merge commit rewound, nothing pushed."; exit 12
     fi
   fi
 fi

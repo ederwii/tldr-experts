@@ -47,6 +47,19 @@ mw_release_field() {
   sed -n "s/^$1:[[:space:]]*//p" "$(mw_release_marker_path)" 2>/dev/null | sed -n 1p | tr -d '[:space:]'
 }
 
+# The release's `phase:` line as a human reads it (#304): a marker that is up means either a
+# release queued behind a wave that has touched nothing, or one that is editing and tagging —
+# and the wave's refusal, its wait note and `--status` must not say more than the marker knows.
+# `?` for a marker with no phase line (pre-#304), like `--status` says of an old-format lock.
+mw_release_phase() { local p; p="$(mw_release_field phase)"; printf '%s\n' "${p:-?}"; }
+mw_release_phase_text() {
+  case "$(mw_release_phase)" in
+    waiting)   printf 'queued behind a wave, nothing edited yet\n' ;;
+    releasing) printf 'releasing\n' ;;
+    *)         printf 'phase unknown\n' ;;
+  esac
+}
+
 # "<pid> <host> <epoch>" composed from the release marker — the same shape as a lock's
 # `owner` line, so `mw_dead_owner` answers "is that release still running?" for both. Empty
 # when there is no marker.

@@ -23,7 +23,8 @@ Other sessions may be working this same repo.
 - **Never merge while another session's release is running** — and since #299 that is a
   file, not a question: `scripts/release.sh` writes `.RELEASE-IN-PROGRESS` at the repo root
   for its whole span, and `scripts/merge-wave.sh` WAITS on it the way it waits on its own
-  lock (§2, §6). `scripts/merge-wave.sh --status` says who holds the checkout — a wave
+  lock — and the release waits on a running wave's lock before its first edit, exit 14 when it
+  gives up (§2, §6). `scripts/merge-wave.sh --status` says who holds the checkout — a wave
   (holder, branch, phase), a release (holder, version), or `idle` — so "is it alive?" is a
   command, not a `ps` reading. The one hint the marker cannot give: a `release: X.Y.Z` commit
   on `origin/main` with no `vX.Y.Z` tag yet means `publish.yml` is still running for it.
@@ -222,8 +223,9 @@ them was one of these, done by chat after the fact instead of before.
    the new code head, then wave. Say so when you do; a peer queued behind your wave is queued
    behind the re-review.
 5. **A release is not yours to start.** Only the driver cuts one, with the owner's approval
-   (§6). While `.RELEASE-IN-PROGRESS` exists the wave waits for you; never remove the marker
-   and never race it — if it looks stale, `scripts/merge-wave.sh --status` says whether its
+   (§6). While `.RELEASE-IN-PROGRESS` exists the wave waits for you, and while your wave holds
+   its lock the release waits for it (§2) — mutual, mechanical; never remove either marker and
+   never race one — if it looks stale, `scripts/merge-wave.sh --status` says whether its
    owner is alive.
 
 What a worker never does: merge without the record, rename a heading a peer already agreed,

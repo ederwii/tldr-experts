@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.25.0 — unreleased
+
+### Fixed
+
+- **The freeze between a release and a merge wave runs both ways now (#304).** #299 made one
+  direction mechanical — the wave waits on `.RELEASE-IN-PROGRESS` — and left the other as prose:
+  MEASURED by reading `scripts/release.sh` at `a341b4f`, it sourced `merge-lock.sh` only to name
+  its own marker, and nothing between its first line and `git commit` read `merge-wave.lock`. A
+  release started mid-wave edited CHANGELOG, README and package.json in a tree another process
+  was gating, and the only thing that stopped the commit was the ref hook — which aborts the
+  COMMIT and leaves the three edits dirty in the shared checkout, with nothing to roll them back.
+  `release.sh` now WAITS on a running wave's lock before it writes its marker and before its
+  first edit — same `MW_LOCK_*` knobs, same dead-owner rule (a dead wave's lock is broken open
+  and said so on stderr) — and gives up with **exit 14**, having edited nothing. The precedence
+  is fixed rather than symmetric (peer review of this change): a wave holding the lock finishes,
+  never preempted; once the marker is up the release is ahead, a wave that took the lock in the
+  gap hands it back as it already did, and the release waits for the lock to clear WITHOUT
+  handing back its marker — two sides yielding on the same poll cadence would ping-pong for the
+  whole budget and end in 13 and 14; pinned with the gap interleaving built deterministically (a
+  stand-in `mv` plants the lock the instant the marker lands). Which makes the wave's dead-owner
+  check the only thing that ever clears a marker a SIGKILL or a cut session orphaned (the traps
+  cover INT/TERM), so it now says so on stderr, naming the marker and the pid, and that sentence
+  is pinned. And a kept marker means two things — queued and untouched, or editing and tagging —
+  so it carries `phase: waiting|releasing` (rewritten atomically), which `--status` and the wave's
+  refusal print — and while a wave holds the lock, `--status` names the queued release on a
+  second line rather than answering "a wave, nothing else": a record never says more than the
+  truth (§7). The code: 14 rather than 1 because there is nothing to undo, and
+  not the wave's own 6 because the two scripts' codes are read in the same logs, so the next
+  number after the wave's 13 keeps a bare "exit 14" unambiguous. Pinned in both directions with
+  the real scripts: a real wave against a real running release exits 13, a real release against a
+  live wave lock exits 14 with the tree untouched, and a queued release edits nothing until the
+  lock is gone. The wave's exit-12 heading gate now also requires the unreleased version to be
+  above `package.json`'s — the CHANGELOG used to be checked only against its own top dated
+  heading, so a dated section never written, or a heading edited by hand, passed on two lies from
+  one file; `package.json` is what shipped (§9's drift guard already pins README's top row to it).
+  Same exit 12: one condition, measured twice, and the refusal names both figures. Two Minors the
+  #299 review named are pinned rather than fixed, because reading was right: `--status` on an
+  old-format lock (owner and token only) with a live pid prints `?` for what it never recorded,
+  and `ver_gt` orders `1.0.0 > 0.99.0` and `0.10.0 > 0.9.0` numerically — the function is
+  lifted from the script's own text for the test, so the pin is on the real implementation.
+
 ## 0.24.0 — 2026-09-14
 
 ### Added

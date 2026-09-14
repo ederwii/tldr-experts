@@ -13,7 +13,23 @@ which is also why **merges are frozen while a release is in flight**. Since #299
 mechanical: `release.sh` writes `.RELEASE-IN-PROGRESS` at the repo root (pid, version, started)
 for its whole span and removes it on every exit path, and `scripts/merge-wave.sh` waits on that
 marker exactly as it waits on its own lock — poll, stale-by-dead-pid, bounded by the same
-`MW_LOCK_*` knobs, exit 13 when it gives up. `scripts/merge-wave.sh --status` reads either.
+`MW_LOCK_*` knobs, exit 13 when it gives up. Since #304 the freeze runs both ways: `release.sh`
+WAITS on a running wave's lock (`merge-wave.lock` in the git dir, `.MERGE-WAVE-IN-PROGRESS` at
+the root) with the same knobs and the same dead-owner rule BEFORE it writes its marker or edits
+a file, and gives up with **exit 14** having edited nothing — its own code, because
+`merge-wave.sh`'s table owns 1–13 and one number per condition across both scripts keeps a bare
+"exit 14" in a log unambiguous. The precedence is fixed: a wave holding the lock finishes (never
+preempted); once `.RELEASE-IN-PROGRESS` is up the release is ahead — a wave that took the lock in
+the gap hands it back and queues, and the release waits for the lock to clear without ever
+removing its own marker — and because a kept marker then means either "queued, nothing edited
+yet" or "editing and tagging", the marker carries a `phase:` line (`waiting` → `releasing`,
+rewritten atomically), which the wave's refusal and `--status` print rather than reading every
+marker as a release in progress. While a wave holds the lock, `scripts/merge-wave.sh --status`
+answers for the wave on its first line and names a release queued behind it on a second
+(`release queued: pid <p> version=<v> phase=waiting`); `cat .RELEASE-IN-PROGRESS` shows the same
+`phase:` line. Symmetric yielding would ping-pong for the whole budget. A marker a
+SIGKILLed release left behind is cleared only by the wave's dead-owner check, which says so on
+stderr. `scripts/merge-wave.sh --status` reads either.
 
 ## What a release is
 
@@ -92,9 +108,11 @@ That is the whole ceremony. The script refuses to run when the two lines above a
 
 **One unreleased heading, and above the last release.** `CHANGELOG.md` carries exactly one
 `## X.Y.Z — unreleased` heading between releases, and its version is greater than the top dated
-one — `merge-wave.sh` refuses a merged tree that breaks either with exit 12 (`AGENTS.md` §2),
-because two sessions once staged two headings for the same next version, each branch consistent
-on its own. Agree the next version before writing the heading; the choice is the judgement below.
+one AND greater than `package.json`'s (#304 — `package.json` is what shipped, whatever the
+CHANGELOG says about itself) — `merge-wave.sh` refuses a merged tree that breaks any of the three
+with exit 12 (`AGENTS.md` §2), because two sessions once staged two headings for the same next
+version, each branch consistent on its own. Agree the next version before writing the heading;
+the choice is the judgement below.
 
 **`--tag` is not optional in practice.** Omit it and `release.sh` writes `alpha`
 (`scripts/release.sh:12`, `TAG="alpha"`), which stopped being this project's status at 0.4.0 —
