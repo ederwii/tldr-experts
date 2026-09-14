@@ -82,8 +82,20 @@ holds that ordering against a sandbox origin.
 
 ## What to consider (judgement, not automated)
 
-- **Semver for an alpha**: bump *minor* when a command, file schema or hook changes behaviour;
-  *patch* for fixes only. Breaking a `version: 1` file schema is a *major* once we are `beta`.
+- **Patch or minor — by what the release lets you do, not by whether behaviour moved.** A
+  *patch* is fixes, including a fix that makes a command do what it already promised: a refusal
+  where it should have refused, a message that keeps what it should say. A *minor* is a new
+  capability: a new command, flag, file field or schema, hook or event — or a changed meaning of
+  an existing one. Breaking a `version: 1` file schema is a *major* once we are `beta`.
+  Example patch: `tldrx ship` refusing an epic that carries a story the reviewer rejected (#282)
+  — a gate refusing where it should already have refused; no new command, flag or field.
+  Example minor: `tldrx story reopen <id> --as-is` (#279, 0.19.0) — a new flag, something the
+  CLI could not do before. WHY the rule changed (owner decision, 0.26.1): the old wording —
+  "bump minor when a command, file schema or hook changes behaviour; patch for fixes only" —
+  classified almost every fix as a minor, because every fix changes some command's behaviour.
+  Measured with `git tag -l`: v0.19.0 through v0.26.0 are eight tags, all minor, zero patches,
+  while the CHANGELOG sections of 0.21.0, 0.22.0, 0.23.0, 0.25.0 and 0.26.0 carry only
+  `### Fixed`. A version number that cannot say "fixes only" says nothing.
 - **Status tag**: `alpha` until file formats are frozen and two real workspaces have gone
   through Build; `beta` also needs an upgrade path documented; `stable` = 1.0. Releases through
   0.3.1 were `alpha`; 0.4.0 was the first `beta`, so a `version: 1` schema break is a *major* now.

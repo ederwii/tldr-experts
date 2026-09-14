@@ -1,6 +1,23 @@
 # Changelog
 
-## 0.27.0 — unreleased
+## 0.26.1 — unreleased
+
+### Changed
+
+- **A patch is fixes again, and this release is one: 0.26.1, not 0.27.0 (owner decision).**
+  MEASURED with `git tag -l`: v0.19.0 through v0.26.0 are eight releases, every one a minor and
+  none a patch, while 0.21.0, 0.22.0, 0.23.0, 0.25.0 and 0.26.0 carry nothing but `### Fixed`.
+  Mechanism: `docs/RELEASING.md` said "bump minor when a command, file schema or hook changes
+  behaviour; patch for fixes only", and every fix changes some command's behaviour — so the
+  rule had no fix left to call a patch, and the version number stopped telling an upgrader
+  whether a release was safe to take blind. The rule now reads by capability: a *patch* is
+  fixes, including a fix that makes a command do what it already promised (a refusal where it
+  should have refused, a message that keeps what it should say); a *minor* is a new
+  capability — a new command, flag, file field or schema, hook or event, or a changed meaning
+  of an existing one. The maintain skill used to gloss the old rule beside its citation, which
+  made two copies to move; it now cites `docs/RELEASING.md` "What to consider" only, and
+  `test/maintain-skill.test.ts` refuses a skill line that restates what a patch or a minor is
+  (RED on the old gloss, which it quoted).
 
 ### Fixed
 
