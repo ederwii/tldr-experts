@@ -250,6 +250,32 @@ export interface ForeignWorkNote {
  */
 export const MAX_CARRIED_BULLETS = 25;
 
+/**
+ * Where a newline stood in text this document quotes (gh #283).
+ *
+ * The file is line-oriented and so is the reader that checks it: `parseHandoff`
+ * ends a bullet at the first column-0 line, and every list item must END with
+ * its `[src: …]` token. Text the framework embeds verbatim — a refused command
+ * as the developer typed it (`agentEvents.ts` `toolTarget` hands back the Bash
+ * `command` input, wrapped lines and heredocs included), a DoD tail, a reason —
+ * can carry newlines, and a bullet quoting one was two physical lines: the
+ * first with its citation mid-sentence (`trailing-position`) or with none at
+ * all (`unsourced`), the second read as prose. MEASURED twice in one hour on a
+ * live run: the executor wrote the handoff and failed its own `claim-sources`
+ * check on it, exit 5, a `--until-done` relaunch burned each time.
+ *
+ * So every element of the document is made ONE line at the join, and the break
+ * is kept visible rather than erased: `mv a \ ⏎ b` still says the developer
+ * wrapped the line. Nothing is dropped, and the review log beside this file
+ * keeps the command verbatim.
+ */
+export const LINE_BREAK_MARK = "⏎";
+
+/** One physical line, with each newline shown as `LINE_BREAK_MARK`. */
+function asOneLine(line: string): string {
+  return line.replace(/[ \t]*\r?\n[ \t]*/g, ` ${LINE_BREAK_MARK} `);
+}
+
 export function renderBuildHandoff(parts: BuildHandoffParts): string {
   const done = parts.outcomes.filter((o) => o.status === "done");
   const notDone = parts.outcomes.filter((o) => o.status !== "done");
@@ -359,7 +385,8 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
         )),
     "",
   ];
-  return lines.join("\n");
+  // Every element above is one line of the file, whatever text it quotes.
+  return lines.map(asOneLine).join("\n");
 }
 
 /**
