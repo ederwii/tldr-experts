@@ -7,6 +7,7 @@
  * place and both files are revalidated before either touches disk.
  */
 import { existsSync, readFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { basename, join } from "node:path";
 import { parseYaml, parseYamlRepairing, type RepairedYaml } from "../yaml.ts";
 import { EventLog } from "../events/EventLog.ts";
@@ -49,6 +50,11 @@ export class RunStore {
   private current: RunFile;
   private currentBudget: RunBudget;
   /**
+   * `run.yml` as THIS store last read it from disk or wrote it there. `save()`
+   * writes back only what differs between `current` and this — see `runToWrite`.
+   */
+  private loaded: RunFile;
+  /**
    * Did anyone call `mutateBudget`? Only then may this store's CEILINGS win over
    * whatever is on disk at save time — see `save()`.
    */
@@ -61,6 +67,7 @@ export class RunStore {
     readonly events: EventLog,
   ) {
     this.current = run;
+    this.loaded = run;
     this.currentBudget = budget;
   }
 
@@ -240,10 +247,10 @@ export class RunStore {
    * Recompute everything derived, revalidate both files, then write. A validation
    * failure throws BEFORE the first byte lands, so a run is never left half-written.
    *
-   * Three things this does that a plain `writeFileSync` pair did not, all from the
-   * 2026-08-29 resumability audit:
+   * Four things this does that a plain `writeFileSync` pair did not — three from
+   * the 2026-08-29 resumability audit, the fourth from gh #305:
    *
-   * 1. **Under `.tldrx/.lock`.** `budget.yml` is read-modified-written here and by
+   * 1. **Under `.tldrx/.lock`.** Both files are read-modified-written here and by
    *    `budget raise`; without a lock those two interleave.
    * 2. **Ceilings are re-read from disk.** This store may have loaded `budget.yml`
    *    minutes ago. A `budget raise` that landed since is on disk and not in
@@ -257,17 +264,26 @@ export class RunStore {
    *    `writeFileSync` that was killed. Same move `run new` already made for the
    *    run directory (`newRun.ts`). Atomic is not the same as GOOD, though, so
    *    `writeAtomic` also leaves one step back — see `core/fs/writeAtomic.ts`.
+   * 4. **`run.yml` is re-read from disk too, and only what this store CHANGED is
+   *    written over it** (gh #305). Point 2 fixed the lost update for one file
+   *    and left the other: `tldrx run auto` holds one store for the whole of a
+   *    stage — the Build fan-out included — and every save on it wrote `run.yml`
+   *    whole from the copy loaded when the stage began. A `budget raise --stage`
+   *    typed during that stage printed `12.60 → 62.60`, exited 0, and was back at
+   *    12.60 after the loop's next save; the developers were capped on it
+   *    (measured, installed 0.21.0). See `runToWrite` for the rule and what it is
+   *    deliberately not.
    */
   save(): void {
-    const rolled = rollUp(this.current);
-
-    const runValidation = validateRunFile(rolled);
-    if (!runValidation.ok) {
-      const first = runValidation.issues[0];
-      throw new RunStoreError(`refusing to write an invalid run.yml: ${first?.path ?? ""} ${first?.message ?? ""}`);
-    }
-
     withWorkspaceLock(workspaceRootOfRunDir(this.runDir), () => {
+      const rolled = rollUp(this.runToWrite());
+
+      const runValidation = validateRunFile(rolled);
+      if (!runValidation.ok) {
+        const first = runValidation.issues[0];
+        throw new RunStoreError(`refusing to write an invalid run.yml: ${first?.path ?? ""} ${first?.message ?? ""}`);
+      }
+
       const budget = rollUpBudget(this.ceilingsToWrite(), rolled);
       const budgetValidation = validateRunBudget(budget);
       if (!budgetValidation.ok) {
@@ -277,9 +293,57 @@ export class RunStore {
       writeAtomic(join(this.runDir, "budget.yml"), emitBudgetYaml(budget));
       writeAtomic(join(this.runDir, "run.yml"), emitRunYaml(rolled));
       this.current = rolled;
+      this.loaded = rolled;
       this.currentBudget = budget;
       this.budgetMutated = false;
     });
+  }
+
+  /**
+   * The run this save should write: `run.yml` as it is on disk RIGHT NOW, with
+   * only the fields this store changed since it last read or wrote the file
+   * carried over it (`carryChanges`). Falls back to the in-memory copy when the
+   * file is gone, does not parse, does not validate, or is some other run — a
+   * save is not the place to fail over someone else's damage, and it is the same
+   * fallback `ceilingsToWrite` makes for budget.yml.
+   *
+   * This is ownership by CHANGE, not a blind reload-and-merge, and the
+   * distinction is the whole design (gh #305). A blind merge combines two
+   * writers' copies into a state neither asked for. Here every value that lands
+   * on disk was written by the store that changed it, and a store never carries
+   * back a value it only ever loaded — so who owns a field is decided by who
+   * writes it, which spec §2.2 lists: the loop owns the execution record
+   * (statuses, cursor, task rows, costs, the gate it parks on, `build`,
+   * `outcome`, `ship`), external commands own the decisions a person makes
+   * (`stages[].budget_usd`, `cancelled`, gate signatures and rejections,
+   * `gates_policy`, `questions_policy`, `attended_by`). The two sets never
+   * change the same field, so neither can revert the other. Two writers that DO
+   * change one field — a `run cancel --force` marking a stage `cancelled` that a
+   * live loop is still marking `running` — are the case ownership cannot
+   * settle, and that is why `cancelRun` refuses under a live `.lock` unless
+   * forced, rather than this method guessing.
+   *
+   * Every derived field (`status` at all three levels, `cost_usd`, `spent_usd`,
+   * `updated_at`, `last_written_by`) is recomputed by `rollUp` from the MERGED
+   * document, so a roll-up never describes a mix of two moments. A decision
+   * derived from fields with two owners — the economy refusal reads the loop's
+   * spend against an operator's ceiling — records the figures it read beside
+   * the verdict (`budget.blocked` carries `remaining_usd` and `ceiling_usd`; the
+   * auto-gate note carries `budget=$x of $y`), because after this change the
+   * file can legitimately hold a pair no single writer saw side by side.
+   */
+  private runToWrite(): RunFile {
+    const path = join(this.runDir, "run.yml");
+    if (!existsSync(path)) return this.current;
+    try {
+      const doc = parseYaml(readFileSync(path, "utf8"));
+      if (!validateRunFile(doc).ok) return this.current;
+      const onDisk = asRunFile(doc);
+      if (onDisk.run !== this.current.run) return this.current;
+      return carryChanges(onDisk, this.current, this.loaded);
+    } catch {
+      return this.current;
+    }
   }
 
   /**
@@ -380,6 +444,46 @@ function parseStateFile(path: string): RepairedYaml {
       "  a hand-edit is the other way out, and it is the only one that keeps work the backup predates",
     ].join("\n"));
   }
+}
+
+/**
+ * `onDisk` with every field that differs between `mine` and `loaded` taken from
+ * `mine` — top-level keys, then per phase, then per stage, matched by id; a
+ * stage's `tasks` list is one field. A key `mine` dropped is dropped. A phase or
+ * stage `onDisk` does not have is written as `mine` has it (the structure is
+ * fixed at `run new`; this only says what happens if it is not).
+ *
+ * Exported so a test can pin it directly; `RunStore.save()` is its one caller.
+ */
+export function carryChanges(onDisk: RunFile, mine: RunFile, loaded: RunFile): RunFile {
+  const top = carryLevel(onDisk, mine, loaded, ["phases"]);
+  const phases = mine.phases.map((phase) => {
+    const theirs = onDisk.phases.find((p) => p.id === phase.id);
+    const was = loaded.phases.find((p) => p.id === phase.id);
+    if (theirs === undefined || was === undefined) return phase;
+    const stages = phase.stages.map((stage) => {
+      const theirStage = theirs.stages.find((s) => s.id === stage.id);
+      const wasStage = was.stages.find((s) => s.id === stage.id);
+      if (theirStage === undefined || wasStage === undefined) return stage;
+      return carryLevel(theirStage, stage, wasStage, []);
+    });
+    return { ...carryLevel(theirs, phase, was, ["stages"]), stages };
+  });
+  return { ...top, phases };
+}
+
+/** One mapping level of `carryChanges`; `skip` names the keys the caller merges itself. */
+function carryLevel<T extends object>(onDisk: T, mine: T, loaded: T, skip: readonly string[]): T {
+  const out = { ...onDisk } as unknown as Record<string, unknown>;
+  const theirs = mine as unknown as Record<string, unknown>;
+  const was = loaded as unknown as Record<string, unknown>;
+  for (const key of new Set([...Object.keys(theirs), ...Object.keys(was)])) {
+    if (skip.includes(key)) continue;
+    if (isDeepStrictEqual(theirs[key], was[key])) continue;
+    if (theirs[key] === undefined) delete out[key];
+    else out[key] = theirs[key];
+  }
+  return out as unknown as T;
 }
 
 /** Costs up from tasks, statuses up from stages, `updated_at` to now. */

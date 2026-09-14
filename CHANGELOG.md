@@ -30,6 +30,33 @@
   harness: the first attempt's refusal names line, rule and cure; the headless retry's and the
   `--prepare` bundle's prompts carry the marked card; a first attempt carries no section.
 
+- **A `budget raise --stage` typed during a live `run auto` loop no longer evaporates on the loop's
+  next save (#305).** MEASURED in the field on 0.21.0: the command printed `04-build/build budget_usd
+  $12.60 → $62.60`, exited 0, and two hours later `run.yml` read `budget_usd: 12.60` again with the
+  gate note holding the stage on `budget=$35.78 of $12.60` — the developers had been capped on the
+  figure the operator had raised. Not a `budget` bug: a LOST UPDATE on `run.yml`. `RunStore.save()`
+  re-read `budget.yml`'s ceilings from disk before writing (the 2026-08-29 fix) and wrote `run.yml`
+  WHOLE from the copy the store loaded — and `run auto` holds one store for the whole of a stage, the
+  Build fan-out included. Pinned RED through the real writers on today's `main`: the raise reverted
+  (`Expected: 54 / Received: 4`), a `reject --and-continue` beside a held store reverted (`rejected` →
+  `pending`), a `run cancel` beside one lost its `cancelled:` block. `save()` now re-reads `run.yml`
+  under the workspace lock and carries over it ONLY the fields this store changed since it last read
+  or wrote the file; every derived figure is rolled up from the merged document. That is ownership by
+  change, not the blind reload-and-merge the issue warned against: every value on disk was written by
+  the store that changed it, and a store never writes back a value it merely loaded — so the loop,
+  which never touches a stage's `budget_usd`, cannot revert a raise, and the raise, which never touches
+  task rows, cannot revert the ledger. Who changes what is now written down in spec §2.2 — the loop
+  owns the execution record, a person's commands own `budget_usd`, `cancelled`, gate decisions and the
+  policies — and the one field two writers can both change (a stage `status` under `run cancel
+  --force` while a loop still runs it) stays behind `cancelRun`'s existing live-pid refusal rather
+  than being guessed at in a merge. A verdict read across two owners (the loop's spend against an
+  operator's ceiling) already records the figures it read beside itself — `budget.blocked` carries
+  `remaining_usd` and `ceiling_usd`, the auto-gate note carries `budget=$x of $y` — and that is now
+  the stated rule, because the file can legitimately hold a pair no single writer saw together. For
+  the record: `reject` had no live exposure by construction (it refuses anything but
+  `awaiting_gate`/`failed`, by which point the loop's store for that stage is gone) and `run cancel`
+  already refused under a live `.lock` unless forced; both are pinned at store level anyway, because
+  the next writer will not be one of these three.
 - **The freeze between a release and a merge wave runs both ways now (#304).** #299 made one
   direction mechanical — the wave waits on `.RELEASE-IN-PROGRESS` — and left the other as prose:
   MEASURED by reading `scripts/release.sh` at `a341b4f`, it sourced `merge-lock.sh` only to name
@@ -1711,7 +1738,6 @@
   `Verdict: n-a · Reviewer: not recorded` — a prompt asserting a review that never happened.
   One renderer, two headers, chosen by data the executor already has.
 
-
 ## 0.14.3 — 2026-09-10
 
 ### Changed
@@ -1822,7 +1848,6 @@
   than git's quoted-and-escaped rendering of them. This is the first thing tldrx does that
   WRITES to the operator's uncommitted work, and it is the one operation with no undo.
 
-
 ## 0.14.2 — 2026-09-09
 
 ### Fixed
@@ -1844,7 +1869,6 @@
   document's forty citations read `facts.yml` once) is kept and the memory that outlives the
   check is not. The git blob memo is deliberately left per-process: its cap bounds forks, not
   staleness. Resolution rules are unchanged; what changed is when the checker last looked.
-
 
 ## 0.14.1 — 2026-09-09
 
@@ -2298,7 +2322,6 @@
   that back-dated a declaration would make the plan claim it declared a path it did not. Both
   bases render labelled in the Build handoff, in the `tldrx ship` PR body that embeds it, and in
   `tldrx replay`, so the paths outside BOTH readings are the ones a human is pointed at.
-
 
 - **A run now records which tldrx wrote it (#183).** `run.yml`'s `version: 1` is the FILE
   FORMAT's number; nothing anywhere carried the framework's, so across 23 unattended runs on
@@ -4511,7 +4534,6 @@ same amount after it; what changed is that the page now says how big the bound i
   - **The one verb in `plan` that resolves nothing.** No workspace, no run, no disk, no spend — the
     question comes before any of that exists, and is often asked from outside a workspace entirely.
 
-
 - **`tldrx drive [--attended|--unattended]` — the host/driver mandate, shipped (#63).** Every elite
   run of 2026-08-31/09-01 was driven by a session carrying a hand-written playbook, and that playbook
   was the framework's real quality floor. It lived in the owner's chat pastes, so a third party
@@ -6110,7 +6132,6 @@ same amount after it; what changed is that the page now says how big the bound i
   the file whole. Both prompts now show the accepted prose next to the refused bullets, the same
   move the execution-claim rule makes. Whether an unsourced recap bullet should be a warning
   rather than an error is a real question and is deliberately NOT settled here.
-
 
 - **`tldrx expert train` already exits nonzero when a training fails.** The 2026-08-31 batch
   report measured shell `EXIT=0` on all ten invocations, including the three that failed their
@@ -8404,7 +8425,6 @@ refuses to answer it aspirationally.
   re-computes its status, and **exits 1 when either fails**, so CI can see it. It
   catches both ways a card rots: the code moved under a citation, or somebody
   hand-edited `draft` to `verified`.
-
 
 ## 0.1.0 — 2026-08-29
 

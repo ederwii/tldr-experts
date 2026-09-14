@@ -141,8 +141,8 @@ table above lists two modes; the third is additive and projects onto `single` fo
 
 ### 2.2 `tldrx-work/<run>/run.yml`
 
-The execution path and the only resume point. Written by the facilitator alone; read by the dashboard, statusline,
-`run status` and the gate hooks.
+The execution path and the only resume point. Written only through `RunStore.save()` — by the facilitator and by the
+commands listed under **Ownership** below; read by the dashboard, statusline, `run status` and the gate hooks.
 
 ```yaml
 version: 1
@@ -244,6 +244,28 @@ a `ship`, when present, carries all three of `push` (bool), `pr` (bool) and `aut
 block missing one is a schema error, because a default that publishes is the one guess the key exists to forbid — and
 its `pr_urls` / `merge` / `merges` / `shipped_at` are a string list / string / a mapping of strings / string, each checked only when there;
 ≤5 phases, ≤40 stages, ≤200 tasks.
+
+**Ownership — who writes which field, and why a save never carries back what it did not change** (gh #305). Every
+write goes through `RunStore.save()`, and more than one process holds a store at once: `run auto` keeps one open for the
+whole of a stage (the Build fan-out included) while `budget raise --stage`, `reject`, `run cancel`, `run gates set`,
+`run questions set`, `run attend` and `approve` each open their own to write a person's decision. So a save re-reads
+the file under `.tldrx/.lock` and carries over it only the fields THAT store changed since it last read or wrote the
+file — top-level keys, then per phase, then per stage, matched by id; a stage's `tasks` list is one field. A value a
+store merely loaded is never written back. The fields, by who changes them: the LOOP (`next`, `run auto`, the
+executors) — a stage's `status`, `started_at`, `ended_at`, `tasks`, `outputs`, `stale`, the `cursor`, the gate it parks
+on (`gate.status: pending`) and the gates it auto-signs, `build`, `outcome`, `ship`'s record half; a PERSON's command —
+`stages[].budget_usd` (`budget raise --stage`), `cancelled` (`run cancel`), a gate's signature or rejection
+(`approve`, `reject`), `gates_policy` (`run gates set`), `questions_policy` (`run questions set`), `attended_by`
+(`run attend`). Derived fields — `status` at every level, `cost_usd`, `budget.spent_usd`, `updated_at`,
+`last_written_by` — are recomputed from the merged document on every save and are nobody's to write. Two writers
+changing ONE field is the case ownership cannot settle — `run cancel --force` marking `cancelled` a stage a live loop
+is still marking `running` — and it is refused up front (`run cancel` under a live `.lock`) rather than merged. A
+verdict read across two owners records the figures it read beside itself — `budget.blocked` carries `remaining_usd`
+and `ceiling_usd`, the auto-gate note carries `budget=$x of $y` — because after this rule the file may hold a pair
+no single writer saw together. A `run.yml` that is missing, does not parse, or names another run is not merged with:
+the store writes its whole copy, as `budget.yml`'s ceilings (§2.11) already did. Measured before the rule: a
+`budget raise --stage` typed during a live loop printed `$12.60 → $62.60`, exited 0, and was back at `12.60` after the
+loop's next save.
 
 ### 2.3 `.tldrx/stages/<slug>/stage.yml` + `stage.md`
 

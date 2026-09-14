@@ -7,6 +7,8 @@
  *
  *   `.tldrx/memory/facts.yml`   read-modify-write; the next id is `max(id) + 1`
  *   `tldrx-work/<run>/budget.yml` ceilings a concurrent `budget raise` may change
+ *   `tldrx-work/<run>/run.yml`    a stage's `budget_usd`, a `cancelled:`, a gate decision a
+ *                                 concurrent command may write while a loop holds it (#305)
  *
  * Measured in the 2026-08-29 resumability audit: two writers of `facts.yml` each
  * loaded the file, each computed `F001`, and each wrote it — one fact silently
