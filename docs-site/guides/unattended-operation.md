@@ -354,7 +354,11 @@ whose "What shipped" section is empty. It also refuses, exit 2, an epic that car
 the reviewer *rejected*: a story merges into its epic before its review, so a `changes` verdict
 leaves the diff on the branch, and a PR whose body lists that story under "Not done" would still
 carry its code. The refusal names the story, the merge and the reviewer's reason; `tldrx story
-reopen` and a Build re-run are the way through, or a PR opened by hand.
+reopen` and a Build re-run are the way through, or a PR opened by hand. And it will not open a
+PR over a stale or red epic: before anything is pushed it fetches the base, merges it into the
+epic in a throwaway worktree when the epic is behind, and runs the Definition of Done of every
+`done` story on that tree. A conflict or a red command refuses with exit 2, naming the paths or
+the command — the loop stops on a sentence you can act on, not on a red PR.
 
 **And a run can end in the PR itself.** Open it with `--ship merge` (or `pr`, or `push`) and
 the moment `run auto` sees the run read `done` it runs `tldrx ship` for you: the epic branch is

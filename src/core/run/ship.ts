@@ -39,8 +39,9 @@
  *
  * Three properties that shape the code below:
  *
- *   **One repo is byte-identical.** The common case takes the path it always took
- *   — same title, same four lines, and not one extra process. The `gh pr list`
+ *   **One repo is byte-identical but for the gate.** The common case takes the path
+ *   it always took — same title, same four lines plus the `gate:` line #315 added.
+ *   The `gh pr list`
  *   probe exists for re-runnability across several repos and never runs when there
  *   is only one.
  *
@@ -65,6 +66,14 @@
  * an auto-merge with nothing to wait on merges at once, and the record says
  * `absent — no checks to wait on` (§7) rather than merging over silence. The
  * Build phase itself still has no push (spec §5, "Resolve and cut").
+ *
+ * **It will not open a PR over a stale or red epic (gh #315).** Before anything is
+ * pushed or opened, each repo's base is fetched, the epic is checked for it, and
+ * the `done` stories' Definition of Done runs on the tree the PR would merge — the
+ * base merged in when it moved. A conflict or a red command is a refusal (exit 2)
+ * naming the paths or the command. Under `ship.push` a moved base is merged INTO
+ * the epic (forward, never rebased or forced) and travels with the push; without
+ * it the branch is not written to. `freshenAndGate` has the whole contract.
  *
  * **It writes to the run ONLY the record of that decision.** No event, no gate,
  * no cursor, no money. A run with no `ship:` block is read and never written —
@@ -105,12 +114,15 @@ import { renderShipBody, type OpenFindingRow } from "./shipBody.ts";
 import { latestFixlist, openFindings } from "../build/fixlist.ts";
 import { carriedReportFor, phaseDirsOf, scanStories } from "../build/carriedRows.ts";
 import { readReviewLedger } from "../build/reviewLedger.ts";
+import { installCommandFor } from "../build/worktreeDeps.ts";
+import { isAllowedDodCommand, lastMeaningfulLine, splitArgv } from "../../hooks/lib/story.ts";
+import { validateStoryFile } from "../schemas/story.ts";
 import type { PlanStatus } from "../schemas/planCommon.ts";
 // Spec §3's table, from the file that owns it. This module used to spell the
 // three numbers itself; `EXIT_GATE_REFUSED` is the same 2 every other gate
 // refusal in the CLI exits with, and one spelling is what keeps it that way.
 import { EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../../cli/exitCodes.ts";
-import { pushBranch } from "../build/git.ts";
+import { pushBranch, worktreeOn } from "../build/git.ts";
 import {
   MERGE_QUEUED, NO_CHECKS_TO_WAIT_ON, NO_REQUIRED_CHECKS, REQUIREMENTS_UNREADABLE,
 } from "./shipPolicy.ts";
@@ -121,7 +133,11 @@ import {
 
 /** One external command, with the working directory it must run in. */
 export interface ShipTransport {
-  run(cmd: string, args: readonly string[], cwd: string): Promise<{
+  /**
+   * `timeoutMs` is optional and only the gate passes it (gh #315): a workspace's
+   * test suite is not a network call, and `SHIP_TIMEOUT_MS` would kill it.
+   */
+  run(cmd: string, args: readonly string[], cwd: string, timeoutMs?: number): Promise<{
     readonly exitCode: number;
     readonly stdout: string;
     readonly stderr: string;
@@ -131,8 +147,8 @@ export interface ShipTransport {
 /** The real one: the runtime seam, no shell, the caller's environment. */
 export function realShipTransport(): ShipTransport {
   return {
-    async run(cmd, args, cwd) {
-      const out = await runtime.spawn(cmd, args, { cwd, env: process.env, timeoutMs: SHIP_TIMEOUT_MS });
+    async run(cmd, args, cwd, timeoutMs) {
+      const out = await runtime.spawn(cmd, args, { cwd, env: process.env, timeoutMs: timeoutMs ?? SHIP_TIMEOUT_MS });
       return { exitCode: out.timedOut ? 124 : out.exitCode, stdout: out.stdout, stderr: out.stderr };
     },
   };
@@ -140,6 +156,13 @@ export function realShipTransport(): ShipTransport {
 
 /** `gh pr create` talks to a network; two minutes is generous and finite. */
 export const SHIP_TIMEOUT_MS = 120_000;
+
+/**
+ * One gate command's ceiling (gh #315). Thirty minutes is the top of the range the
+ * Build stage's own `timeout_s` runs to (`schemas/stage.ts`), which is the budget a
+ * story's Definition of Done already lives inside — the same commands, once more.
+ */
+export const SHIP_GATE_TIMEOUT_MS = 1_800_000;
 
 export const HANDOFF_FILE = "handoff.md";
 
@@ -362,12 +385,13 @@ async function shipTo(
   if ("code" in repos) return repos;
 
   const excuses = settledTouches(stories);
-  if (pushOnly) return await pushOnlyTo(options, store, branch, repos, excuses, policy);
+  const gate = shipGateOf(options.root, store.runId, stories);
+  if (pushOnly) return await pushOnlyTo(options, store, branch, repos, excuses, policy, gate);
   const only = repos[0];
   if (repos.length === 1 && only !== undefined) {
-    return await shipOne(options, store, branch, only, body, excuses, policy);
+    return await shipOne(options, store, branch, only, body, excuses, policy, gate);
   }
-  return await shipMany(options, store, branch, repos, body, excuses, policy);
+  return await shipMany(options, store, branch, repos, body, excuses, policy, gate);
 }
 
 /**
@@ -385,11 +409,12 @@ async function pushOnlyTo(
   repos: readonly ShipRepo[],
   excuses: readonly StateExcuse[],
   policy: RunShip,
+  gate: ShipGate,
 ): Promise<ShipOutcome> {
   const lines: string[] = [];
   let failed = 0;
   for (const repo of repos) {
-    const prepared = await prepareRepo(options, repo, branch, excuses, policy);
+    const prepared = await prepareRepo(options, repo, branch, excuses, policy, gate);
     if (!prepared.ok) {
       failed += 1;
       lines.push(`\`${repo.name}\` FAILED: ${prepared.lines[0] ?? ""}`, ...prepared.lines.slice(1));
@@ -397,7 +422,7 @@ async function pushOnlyTo(
     }
     lines.push(options.dryRun === true
       ? `would push \`${branch}\` to \`${prepared.remote}\` (${repo.name}) — --dry-run: nothing was pushed.`
-      : `pushed \`${branch}\` to \`${prepared.remote}\` (${repo.name})`);
+      : `pushed \`${branch}\` to \`${prepared.remote}\` (${repo.name})`, ...prepared.notes);
   }
   lines.push(`  ship.pr is false: no PR was opened. \`tldrx ship --run ${store.runId}\` opens one by hand.`);
   const code = failed === 0 ? EXIT_OK : EXIT_GATE_REFUSED;
@@ -422,8 +447,9 @@ async function shipOne(
   body: ShipBody,
   excuses: readonly StateExcuse[],
   policy: RunShip | null,
+  gate: ShipGate,
 ): Promise<ShipOutcome> {
-  const prepared = await prepareRepo(options, repo, branch, excuses, policy);
+  const prepared = await prepareRepo(options, repo, branch, excuses, policy, gate);
   if (!prepared.ok) return refuse(prepared.lines);
   const base = prepared.base;
 
@@ -438,6 +464,7 @@ async function shipOne(
         `  body: ${bodyRecipe(body)} (${String(body.bytes)} B)`,
         `  cwd:  ${repo.dir}`,
         `  ${command}`,
+        ...prepared.notes,
         "  --dry-run: nothing was created.",
       ],
     };
@@ -457,6 +484,7 @@ async function shipOne(
       lines: [
         `a PR for ${store.runId} from \`${branch}\` into \`${base}\` is already open (${repo.name}) — nothing opened twice`,
         `  ${existing}`,
+        ...prepared.notes,
         ...policyLines(prepared, branch, merge),
       ],
       ship: record,
@@ -477,10 +505,11 @@ async function shipOne(
     `opened a PR for ${store.runId} from \`${branch}\` into \`${base}\` (${repo.name})`,
     `  ${url ?? "gh printed no URL — check `gh pr list`"}`,
     `  body: ${bodyRecipe(body)}`,
+    ...prepared.notes,
     `  next: \`tldrx tickets sync --run ${store.runId}\` mirrors the plan's epics and stories, `
       + "if this workspace configures a ticket tool.",
   ];
-  // Without a policy the four lines above are the whole output, byte for byte
+  // Without a policy the lines above are the whole output, byte for byte
   // (`test/ship-multi-repo.test.ts` asserts them) and nothing is written.
   if (policy === null) return { code: EXIT_OK, lines };
 
@@ -799,6 +828,8 @@ interface RepoOutcome {
   readonly detail?: readonly string[];
   /** Under a policy: what `armMerge` did in this repo. Absent without one. */
   readonly merge?: string;
+  /** What the base check and the gate did in this repo (gh #315). Absent on a repo that failed before them. */
+  readonly notes?: readonly string[];
 }
 
 /**
@@ -817,10 +848,11 @@ async function shipMany(
   body: ShipBody,
   excuses: readonly StateExcuse[],
   policy: RunShip | null,
+  gate: ShipGate,
 ): Promise<ShipOutcome> {
   const results: RepoOutcome[] = [];
   for (const repo of repos) {
-    const prepared = await prepareRepo(options, repo, branch, excuses, policy);
+    const prepared = await prepareRepo(options, repo, branch, excuses, policy, gate);
     if (!prepared.ok) {
       results.push({ repo, kind: "failed", detail: prepared.lines });
       continue;
@@ -831,7 +863,7 @@ async function shipMany(
     const command = `gh ${args.map(quote).join(" ")}`;
 
     if (options.dryRun === true) {
-      results.push({ repo, kind: "would", base: prepared.base, command });
+      results.push({ repo, kind: "would", base: prepared.base, command, notes: prepared.notes });
       continue;
     }
 
@@ -843,7 +875,7 @@ async function shipMany(
       // An open PR is not a finished one (review of 1fdc250): under a policy it
       // still owes its merge unless the record says it is queued.
       results.push({
-        repo, kind: "existing", url: already, base: prepared.base,
+        repo, kind: "existing", url: already, base: prepared.base, notes: prepared.notes,
         ...(policy === null ? {} : { merge: await armOrKeep(options, repo, already, policy, previousMerges(store), prepared.base) }),
       });
       continue;
@@ -869,6 +901,7 @@ async function shipMany(
       kind: "opened",
       base: prepared.base,
       url,
+      notes: prepared.notes,
       ...(policy === null ? {} : { merge: await armMerge(options, repo, url ?? null, policy, prepared.base) }),
     });
   }
@@ -924,6 +957,7 @@ function renderMany(
           : [
             `  ${pad(result.repo.name)}  into \`${result.base ?? ""}\` (cwd ${result.repo.dir})`,
             `  ${gap}  ${result.command ?? ""}`,
+            ...(result.notes ?? []).map((line) => `  ${gap}  ${line.trimStart()}`),
           ]),
         "  --dry-run: nothing was created.",
       ],
@@ -938,8 +972,9 @@ function renderMany(
 
   const rows = results.flatMap((result) => {
     const name = pad(result.repo.name);
-    if (result.kind === "opened") return [`  ${name}  ${result.url ?? "gh printed no URL"}`];
-    if (result.kind === "existing") return [`  ${name}  already open: ${result.url ?? ""}`];
+    const notes = (result.notes ?? []).map((line) => `  ${gap}  ${line.trimStart()}`);
+    if (result.kind === "opened") return [`  ${name}  ${result.url ?? "gh printed no URL"}`, ...notes];
+    if (result.kind === "existing") return [`  ${name}  already open: ${result.url ?? ""}`, ...notes];
     return [
       `  ${name}  FAILED: ${result.detail?.[0] ?? ""}`,
       ...(result.detail ?? []).slice(1).map((line) => `  ${gap}  ${line.trimStart()}`),
@@ -987,6 +1022,8 @@ interface Prepared {
   readonly base: string;
   /** `true` when this call pushed the branch — only ever under `ship.push`. */
   readonly pushed: boolean;
+  /** What the base check and the gate did in this repo, as output lines (gh #315). */
+  readonly notes: readonly string[];
 }
 
 /**
@@ -1003,6 +1040,7 @@ async function prepareRepo(
   branch: string,
   excuses: readonly StateExcuse[],
   policy: RunShip | null,
+  gate: ShipGate,
 ): Promise<Prepared | { readonly ok: false; readonly lines: readonly string[] }> {
   const remotes = await listRemotes(options.transport, repo.dir);
   const remote = remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : null;
@@ -1021,42 +1059,12 @@ async function prepareRepo(
     };
   }
 
-  // Under `ship.push` the branch is published HERE, through the one wrapper, and
-  // always — a push of a branch the remote already has at this tip is a no-op,
-  // and one it has at an older tip is exactly the update a ship means. Plain,
-  // never forced: a rejection is git's sentence, quoted, and no PR is opened.
-  let pushed = false;
-  if (policy?.push === true && options.dryRun !== true) {
-    const push = await pushBranch(options.transport, repo.dir, remote, branch);
-    if (!push.ok) {
-      return {
-        ok: false,
-        lines: [
-          `\`git push -u ${remote} ${branch}\` was refused in \`${repo.name}\`, so no PR was opened`,
-          ...(push.detail === "" ? [] : [`  ${push.detail}`]),
-          "  (ship.push is true on this run; the push is plain, never forced — resolve it and run `tldrx ship` again.)",
-        ],
-      };
-    }
-    pushed = true;
-  }
-
-  // Otherwise the branch must ALREADY be on the remote: without `ship.push`, tldrx
-  // does not publish branches. A `--dry-run` under the policy skips the check for
-  // the push it did not make.
-  const onRemote = policy?.push === true && options.dryRun === true
-    ? { exitCode: 0, stdout: "(would push)" }
-    : await options.transport.run("git", ["ls-remote", "--heads", remote, branch], repo.dir);
-  if (onRemote.exitCode !== 0 || onRemote.stdout.trim() === "") {
-    return {
-      ok: false,
-      lines: [
-        `\`${branch}\` is not on \`${remote}\`, and tldrx does not publish branches`,
-        `  push it yourself, then run this again:`,
-        `    git -C ${repo.dir} push -u ${remote} ${branch}`,
-        "  (publishing a branch is a decision, and this run did not record one — `tldrx run new --ship pr` does.)",
-      ],
-    };
+  // Without `ship.push` the branch must ALREADY be on the remote: tldrx does not
+  // publish branches. Asked FIRST, before the gate (gh #315), because it is one
+  // cheap `ls-remote` and the gate is a test suite.
+  if (policy?.push !== true) {
+    const onRemote = await options.transport.run("git", ["ls-remote", "--heads", remote, branch], repo.dir);
+    if (onRemote.exitCode !== 0 || onRemote.stdout.trim() === "") return notOnRemote(repo, remote, branch);
   }
 
   const base = options.base
@@ -1091,7 +1099,290 @@ async function prepareRepo(
       ],
     };
   }
-  return { ok: true, remote, base, pushed };
+  const gated = await freshenAndGate(options, repo, branch, remote, base, policy, gate);
+  if (!gated.ok) return gated;
+
+  // Under `ship.push` the branch is published HERE, through the one wrapper, and
+  // always — a push of a branch the remote already has at this tip is a no-op,
+  // and one it has at an older tip is exactly the update a ship means. Plain,
+  // never forced: a rejection is git's sentence, quoted, and no PR is opened.
+  // AFTER the gate (gh #315): a branch the gate refused is not published either,
+  // and a base the gate merged in travels with this push.
+  let pushed = false;
+  if (policy?.push === true && options.dryRun !== true) {
+    const push = await pushBranch(options.transport, repo.dir, remote, branch);
+    if (!push.ok) {
+      return {
+        ok: false,
+        lines: [
+          `\`git push -u ${remote} ${branch}\` was refused in \`${repo.name}\`, so no PR was opened`,
+          ...(push.detail === "" ? [] : [`  ${push.detail}`]),
+          "  (ship.push is true on this run; the push is plain, never forced — resolve it and run `tldrx ship` again.)",
+        ],
+      };
+    }
+    pushed = true;
+    const onRemote = await options.transport.run("git", ["ls-remote", "--heads", remote, branch], repo.dir);
+    if (onRemote.exitCode !== 0 || onRemote.stdout.trim() === "") return notOnRemote(repo, remote, branch);
+  }
+  return { ok: true, remote, base, pushed, notes: gated.notes };
+}
+
+function notOnRemote(repo: ShipRepo, remote: string, branch: string): { readonly ok: false; readonly lines: readonly string[] } {
+  return {
+    ok: false,
+    lines: [
+      `\`${branch}\` is not on \`${remote}\`, and tldrx does not publish branches`,
+      `  push it yourself, then run this again:`,
+      `    git -C ${repo.dir} push -u ${remote} ${branch}`,
+      "  (publishing a branch is a decision, and this run did not record one — `tldrx run new --ship pr` does.)",
+    ],
+  };
+}
+
+/**
+ * The gate a ship runs, as DATA read once off the run and the workspace (gh #315).
+ *
+ * `commands` is, per repo, the deduped ```dod commands of the stories settled
+ * `done` in it — the full commands Build already held each of them to, now run
+ * once over the tree the PR merges. Not every declared workspace command: a
+ * `commands:` map carries `run:` and `dev:` slots nobody meant as a check, and
+ * choosing among them here would be a second opinion on what the plan's gate is.
+ */
+interface ShipGate {
+  readonly runId: string;
+  readonly commands: ReadonlyMap<string, readonly string[]>;
+  /** `workspace.yml`'s command set — the one allowlist every workspace command obeys. */
+  readonly allowed: ReadonlySet<string>;
+  /** repo → its declared `install:`, run first in the fresh tree the way Build does. */
+  readonly installs: ReadonlyMap<string, string>;
+}
+
+function shipGateOf(root: string, runId: string, stories: readonly ShipStory[]): ShipGate {
+  const workspace = loadWorkspace(root);
+  const commands = new Map<string, string[]>();
+  for (const story of stories) {
+    if (story.status !== "done") continue;
+    const list = commands.get(story.repo) ?? [];
+    for (const command of story.dod) if (!list.includes(command)) list.push(command);
+    commands.set(story.repo, list);
+  }
+  const installs = new Map<string, string>();
+  for (const name of workspace.repos.keys()) {
+    const install = installCommandFor(workspace, name);
+    if (install !== null) installs.set(name, install);
+  }
+  return { runId, commands, allowed: workspace.commands, installs };
+}
+
+type Gated =
+  | { readonly ok: true; readonly notes: readonly string[] }
+  | { readonly ok: false; readonly lines: readonly string[] };
+
+/**
+ * Bring the epic up to date with its base, and run the gate on the tree the PR
+ * would merge — before anything is pushed or opened (gh #315).
+ *
+ * ## Why
+ *
+ * Four PRs `ship` opened in one audit window came back red and needed a person:
+ * an epic cut from a `main` that had moved on, and checks that failed on the tree
+ * the PR really merges. Between choosing `base` and `gh pr create` nothing fetched
+ * the base, asked whether the epic contained it, or ran a workspace command.
+ *
+ * ## What it does, in order, identically under `--dry-run`
+ *
+ *   1. `git fetch <remote> <base>` into `refs/remotes/<remote>/<base>` — the base
+ *      the PR is opened against is the REMOTE's, and a local `main` nobody pulled
+ *      is exactly the stale reading the field shipped from. A fetch that fails is
+ *      a refusal: without it "is the epic current" cannot be answered, and a PR
+ *      opened anyway is the thing this exists to stop.
+ *   2. `git merge-base --is-ancestor` — 0 current, 1 behind, anything else could
+ *      not tell (refused, for the same reason).
+ *   3. When behind or when there is a gate to run: a DETACHED worktree at the epic
+ *      tip, in a fresh temp dir, removed in `finally`. Behind → `git merge --no-ff`
+ *      of the fetched base inside it. A conflict aborts the merge and refuses,
+ *      naming the paths; nothing outside the temp tree moved.
+ *   4. The declared `install:`, then every `done` story's dod command, in that
+ *      tree, through the same byte-equality allowlist and no-shell split every
+ *      workspace command obeys. The first red refuses, naming command and exit.
+ *   5. Green and behind: under `ship.push` the branch is moved FORWARD to the
+ *      merge — `merge --ff-only` in the checkout that has it, or `update-ref`
+ *      with the old tip as the expected value when none does — and the push that
+ *      follows publishes it. Never a rebase, never a force. WITHOUT `ship.push`
+ *      the branch is left where it is: this run recorded no decision to write to
+ *      it. The gate still ran on the merge, which is the tree a `pull_request`
+ *      check builds (inferred from GitHub's merge-ref behaviour, not measured
+ *      here), and the output says the branch is behind.
+ *
+ * `--dry-run` runs 1–4 and skips only the ref move in 5, so a dry run and a real
+ * ship refuse the same epic with the same exit, as #282 made them do.
+ */
+async function freshenAndGate(
+  options: ShipOptions,
+  repo: ShipRepo,
+  branch: string,
+  remote: string,
+  base: string,
+  policy: RunShip | null,
+  gate: ShipGate,
+): Promise<Gated> {
+  const git = (args: readonly string[], cwd = repo.dir, timeoutMs?: number) =>
+    options.transport.run("git", args, cwd, timeoutMs);
+  const baseRef = `refs/remotes/${remote}/${base}`;
+  const baseName = `${remote}/${base}`;
+  const refuseWith = (lines: readonly string[]): Gated => ({ ok: false, lines });
+
+  const fetched = await git(["fetch", "--quiet", remote, `+refs/heads/${base}:${baseRef}`]);
+  if (fetched.exitCode !== 0) {
+    return refuseWith([
+      `could not fetch \`${base}\` from \`${remote}\` in \`${repo.name}\`, so whether \`${branch}\` contains it `
+        + "is unknown — no PR was opened",
+      ...(gitSays(fetched) === "" ? [] : [`  ${gitSays(fetched)}`]),
+      "  a PR over a base nobody checked is how an epic opens red against a `main` that moved; "
+        + "fix the fetch and run `tldrx ship` again.",
+    ]);
+  }
+  const ancestry = await git(["merge-base", "--is-ancestor", baseRef, `refs/heads/${branch}`]);
+  if (ancestry.exitCode !== 0 && ancestry.exitCode !== 1) {
+    return refuseWith([
+      `could not tell whether \`${branch}\` contains \`${baseName}\` in \`${repo.name}\` `
+        + `(\`git merge-base --is-ancestor\` exited ${String(ancestry.exitCode)}) — no PR was opened`,
+      ...(gitSays(ancestry) === "" ? [] : [`  ${gitSays(ancestry)}`]),
+    ]);
+  }
+  const behind = ancestry.exitCode === 1;
+  const commands = gate.commands.get(repo.name) ?? [];
+  const install = gate.installs.get(repo.name) ?? null;
+  const absent = `  gate: no story settled \`done\` in ${repo.name} declares a Definition of Done — nothing was run`;
+  if (!behind && commands.length === 0) return { ok: true, notes: [absent] };
+
+  const baseShort = behind ? (await git(["rev-parse", baseRef])).stdout.trim().slice(0, 7) : "";
+  const tmp = mkdtempSync(join(tmpdir(), "tldrx-ship-gate-"));
+  const tree = join(tmp, "tree");
+  try {
+    const added = await git(["worktree", "add", "--detach", "--quiet", tree, `refs/heads/${branch}`]);
+    if (added.exitCode !== 0) {
+      return refuseWith([
+        `could not open a tree of \`${branch}\` in \`${repo.name}\` to run the gate in — no PR was opened`,
+        ...(gitSays(added) === "" ? [] : [`  ${gitSays(added)}`]),
+      ]);
+    }
+    const oldTip = (await git(["rev-parse", "HEAD"], tree)).stdout.trim();
+
+    if (behind) {
+      const merged = await git(
+        ["merge", "--no-ff", "--no-edit", "-m", `merge ${baseName} into ${branch} (tldrx ship)`, baseRef], tree,
+      );
+      if (merged.exitCode !== 0) {
+        const unmerged = await git(["diff", "--name-only", "--diff-filter=U"], tree);
+        const paths = unmerged.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+        await git(["merge", "--abort"], tree);
+        return refuseWith([
+          paths.length > 0
+            ? `\`${branch}\` conflicts with \`${baseName}\` in \`${repo.name}\`, so no PR was opened — the paths in conflict:`
+            : `merging \`${baseName}\` into \`${branch}\` failed in \`${repo.name}\`, so no PR was opened`,
+          ...(paths.length > 0 ? paths.map((path) => `    ${path}`) : [`  ${gitSays(merged)}`]),
+          `  \`${branch}\` was cut before \`${base}\` moved, and a PR over it would open unmergeable or red.`,
+          `  Merge it on a checkout of the branch — \`git -C ${repo.dir} merge ${baseName}\`, resolve, commit`,
+          "  (a forward merge, never a rebase) — push it, and run `tldrx ship` again.",
+        ]);
+      }
+    }
+
+    const where = behind ? `the merge of \`${baseName}\` into \`${branch}\`` : `the head of \`${branch}\``;
+    const ran: string[] = [];
+    for (const [command, role] of [
+      ...(install === null ? [] : [[install, "install"] as const]),
+      ...commands.map((command) => [command, "dod"] as const),
+    ]) {
+      const refusedBecause = !isAllowedDodCommand(command, gate.allowed)
+        ? "it is not one of .tldrx/workspace.yml's commands"
+        : splitArgv(command) === null ? "it needs a shell, and the gate does not open one" : null;
+      const argv = splitArgv(command) ?? [];
+      if (refusedBecause !== null || argv.length === 0) {
+        return refuseWith([
+          `\`${command}\` could not be run as the gate in \`${repo.name}\` — ${refusedBecause ?? "it is empty"} — no PR was opened`,
+          "  a gate that cannot run is not a green one; declare the command (or wrap it in a script and declare that).",
+        ]);
+      }
+      const out = await options.transport.run(argv[0] ?? "", argv.slice(1), tree, SHIP_GATE_TIMEOUT_MS);
+      if (out.exitCode !== 0) {
+        const said = lastMeaningfulLine(`${out.stdout}\n${out.stderr}`);
+        return refuseWith([
+          `\`${command}\` exited ${String(out.exitCode)}${out.exitCode === 124 ? " (timed out)" : ""} on ${where} `
+            + `in \`${repo.name}\`, so no PR was opened`,
+          ...(said === "" ? [] : [`  ${said}`]),
+          role === "install"
+            ? `  it is the \`install:\` command, run first in the fresh tree the gate runs in, as Build runs it.`
+            : "  it is a done story's Definition of Done; a PR over this tree would open with its checks red.",
+          `  Fix it on \`${branch}\` (or \`tldrx story reopen <id> --note "<why>"\` and re-run Build), `
+            + `then \`tldrx ship --run ${gate.runId}\` again.`,
+        ]);
+      }
+      if (role === "dod") ran.push(`\`${command}\` exit 0`);
+    }
+    const notes: string[] = [commands.length === 0 ? absent : `  gate: ${ran.join(", ")} on ${where}`];
+
+    if (behind) {
+      if (policy?.push !== true) {
+        notes.push(
+          `  \`${branch}\` is behind \`${baseName}\` (${baseShort}); the gate ran on their merge and the branch `
+            + "was left where it is — this run did not set ship.push, so tldrx does not write to it.",
+        );
+      } else if (options.dryRun === true) {
+        notes.push(`  would merge \`${baseName}\` (${baseShort}) into \`${branch}\` — --dry-run: the branch was not moved.`);
+      } else {
+        const newTip = (await git(["rev-parse", "HEAD"], tree)).stdout.trim();
+        const moved = await moveBranch(options, repo, branch, oldTip, newTip);
+        if (moved !== null) {
+          return refuseWith([
+            `could not move \`${branch}\` forward to the merge of \`${baseName}\` in \`${repo.name}\`, so no PR was opened`,
+            `  ${moved}`,
+            `  the merge was green (${newTip.slice(0, 7)}); nothing was pushed. Resolve it and run \`tldrx ship\` again.`,
+          ]);
+        }
+        notes.push(
+          `  merged \`${baseName}\` into \`${branch}\` (${baseShort} → ${newTip.slice(0, 7)}) — `
+            + "a forward merge commit, nothing rewritten",
+        );
+      }
+    }
+    return { ok: true, notes };
+  } finally {
+    await git(["worktree", "remove", "--force", tree]);
+    await git(["worktree", "prune"]);
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Move `branch` from `oldTip` to `newTip`, a descendant of it — or say why not.
+ *
+ * A branch some checkout has out is moved THERE, with `merge --ff-only`, so that
+ * checkout's tree moves with its ref (an `update-ref` under it would leave its
+ * index describing the old commit). A branch nobody has out is moved with
+ * `update-ref <new> <old>`, which git refuses if the tip changed since it was
+ * read. Neither can rewrite anything: both only ever advance to a descendant.
+ */
+async function moveBranch(
+  options: ShipOptions,
+  repo: ShipRepo,
+  branch: string,
+  oldTip: string,
+  newTip: string,
+): Promise<string | null> {
+  // The one reader of "which checkout has this branch out" (`build/git.ts`, gh #272).
+  // A listing that fails answers null, and `update-ref` is then git's to refuse.
+  const checkout = await worktreeOn(repo.dir, branch);
+  const out = checkout === null
+    ? await options.transport.run("git", ["update-ref", `refs/heads/${branch}`, newTip, oldTip], repo.dir)
+    : await options.transport.run("git", ["merge", "--ff-only", newTip], checkout);
+  return out.exitCode === 0 ? null : gitSays(out) || `git exited ${String(out.exitCode)}`;
+}
+
+function gitSays(out: { readonly stdout: string; readonly stderr: string }): string {
+  return firstLine(out.stderr) || firstLine(out.stdout);
 }
 
 /**
@@ -1499,6 +1790,12 @@ interface ShipStory {
   /** `repo:` — the repo its `touches:` are relative to, and the only one they answer for. */
   readonly repo: string;
   readonly touches: readonly string[];
+  /**
+   * The story's ```dod commands, in order (gh #315) — what `ship` runs as the gate
+   * on the tree a PR would merge. Empty when the file has no fence, or could not
+   * be read a second time; the gate then says it ran nothing, never that it passed.
+   */
+  readonly dod: readonly string[];
 }
 
 /**
@@ -1555,8 +1852,17 @@ export function runStories(store: RunStore): readonly ShipStory[] {
   // judged against would eventually stop agreeing. `status` is the only thing
   // `ship` needs that the surface does not carry.
   return scanStories(store.runDir).stories.map((row) => ({
-    id: row.story, status: row.status, repo: row.repo, touches: row.touches,
+    id: row.story, status: row.status, repo: row.repo, touches: row.touches, dod: dodOf(store.runDir, row.rel),
   }));
+}
+
+/** The ```dod fence of one story file, through the ONE parser (`validateStoryFile`). */
+function dodOf(runDir: string, rel: string): readonly string[] {
+  try {
+    return validateStoryFile(readFileSync(join(runDir, rel), "utf8")).dod.commands;
+  } catch {
+    return [];
+  }
 }
 
 /**

@@ -367,7 +367,12 @@ del PR de `tldrx ship` — y `tldrx ship` rechaza un run así en vez de abrir un
 el revisor *rechazó*: una historia se fusiona en su épica antes de la revisión, así que un
 veredicto `changes` deja el diff en la rama, y un PR cuyo cuerpo lista esa historia bajo "Not
 done" igual llevaría su código. El rechazo nombra la historia, la fusión y el motivo del
-revisor; `tldrx story reopen` y volver a correr Build son el camino, o un PR abierto a mano.
+revisor; `tldrx story reopen` y volver a correr Build son el camino, o un PR abierto a mano. Y
+no abre un PR sobre una épica desactualizada o en rojo: antes de publicar nada trae la rama base,
+la fusiona en la épica dentro de un worktree desechable cuando la épica va atrás, y corre sobre
+ese árbol la Definición de Hecho de cada historia en `done`. Un conflicto o un comando en rojo se
+rechaza con salida 2, nombrando las rutas o el comando — el loop se detiene en una frase sobre la
+que se puede actuar, no en un PR en rojo.
 
 **Y un run puede terminar en el PR mismo.** Ábrelo con `--ship merge` (o `pr`, o `push`) y en
 cuanto `run auto` ve el run en `done` corre `tldrx ship` por ti: la rama de la épica se
