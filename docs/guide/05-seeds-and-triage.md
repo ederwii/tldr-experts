@@ -70,12 +70,21 @@ machine can read, as findings (exit `1`) or advisories (printed, exit unchanged)
 - **A story is one agent's turn under one cap** (craft): ≤ ~$15 of work, one repo, one
   branch, one Definition of Done a hook can re-run. If you cannot say which files it
   touches, it is two stories or it is not ready.
-- **Size (patch for #286/#244/#280 — raise when they close):** today plan runs of 3–4
-  stories and ≤2 waves; the framework's measured limit, not a design preference. 1/1 and
+- **Size (patch for #286/#244/#280 — raise when they close):** today plan runs of at most 4
+  stories and 2 waves; the framework's measured limit, not a design preference. 1/1 and
   3/3 runs finished alone; the 8-story run needed four human rescues, and every story that
   waited for a person lost the race against siblings merging into the epic. Over the limit
-  is an `advisory:` from `seed check`, never a refusal — read the CHANGELOG's latest
-  released section for the current number before planning.
+  is an `advisory:` from `seed check`, never a refusal of the SEED — read the CHANGELOG's
+  latest released section for the current number before planning. The plan written from it
+  is held harder (#316): the Plan gate refuses more waves than that unless `waves.yml`
+  records `wave_cap_reason: "<why>"`, and refuses a story scheduled later than its
+  `depends_on` requires. Both numbers live in `src/core/plan/planShape.ts`.
+- **Plan shape (craft, #317/#318/#319):** every story is a vertical slice — reachable from
+  a route or endpoint when its own dod goes green, wiring included; the route trees, guard
+  tables, allow-lists and snapshots that ENUMERATE what a story adds are in its `touches:`
+  from the start; and end-to-end coverage is a harness story first or the e2e command in
+  each UI story's `dod`, never one last story that depends on everything. The full wording
+  is what the Plan stage is given: `tldrx plan schema`, section "Plan shape".
 - **Waves are bounded by shared files, not by a count** (craft): stories touching the same
   counted list / snapshot / registration file chain through `depends_on`; everything else
   may run in parallel.

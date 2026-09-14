@@ -2005,6 +2005,7 @@ waves:
 | `version` | `1` | y | As §0 |
 | `waves[].id` | `^W\d{1,3}$` | y | Unique, and **ascending in file order** — the file order is the execution order |
 | `waves[].stories` | `S<n>[]` (≥1, ≤32) | y | Run in parallel, one worktree each; a story appears in exactly one wave |
+| `wave_cap_reason` | string (one line, ≤512) | n | Why this plan needs more waves than the framework carries per run today (`MAX_WAVES_PER_RUN`, 2 — patch for #286/#244/#280). Additive since #316: absent on every plan written before it, and read by the Plan gate only |
 
 **Validation.** Shape as above (≤32 waves, ≤200 scheduled stories); every scheduled story has a file, and every story
 file is scheduled; and the rule the shape cannot enforce alone — **every story's `depends_on` must be in an EARLIER
@@ -2013,6 +2014,21 @@ agents that overwrite each other. Concept §9: "wave N+1 starts only when wave N
 
 **Where it is enforced.** `tldrx approve` re-runs the `plan` check at the Plan gate, which reads all three artefacts
 together — the only place the cross-file rules can be checked, since each file on its own is well formed.
+
+**The shape (#316, #319).** The same check reads the plan's SHAPE, from `src/core/plan/planShape.ts` — the one file the
+gate, the Plan prompt's `### Plan shape` section (rendered from its `PLAN_SHAPE_RULES`) and `tldrx seed check`'s size
+advisories all read. It REFUSES (a failed check, so `approve` exits 2) a plan with more waves than `MAX_WAVES_PER_RUN`
+unless `wave_cap_reason` is a non-empty line, and a story scheduled in a later wave than its `depends_on` requires — a
+`depends_on: []` story outside W1, or one whose dependencies all finish two waves back. The first is the framework's
+current carry, not a law, so it has a recorded escape; the second has none because the one legitimate reason to wait,
+two stories editing one file (#286), is already a `depends_on` edge. It ADVISES, in the passed detail, when some stories
+of one epic in one repo carry a dod command a sibling does not (#319: an e2e story that depended on everything was
+never reached) — advisory because which stories share a shape is not machine-readable and the evidence is one epic.
+Measured by a planning audit of 9 runs (relayed): 25/54 build-gate rejections were dependency reopens and every
+multi-story plan in one workspace was a one-story-per-wave chain. Vertical slices (#317) and inventory files in
+`touches` (#318) are prompt rules only: no stack-independent name marks a route file, and no changed-file set exists at
+Plan time to compare against — `story.touches_widened` names the drift at Build. Like the budget check this is the
+gate's own and not a pass inside `validatePlan`, so a plan approved before it still loads at Build.
 
 **The fourth artefact.** The same check reads `03-plan/budget.yml` when it exists, through the §2.11 validator every
 reader of it runs (`validateBudget`: `version`, `run`, `ceiling_usd`, `spent_usd`, `per_phase_usd` keyed by story),

@@ -72,6 +72,7 @@ is on disk before it will advance anything. Nothing advances until this is recor
 
 ## Rules
 
+- Cut and schedule the stories by **Plan shape** under Output schemas — the wave cap and its `wave_cap_reason`, every story in the earliest wave its `depends_on` allows, vertical slices, inventory files in `touches`, end-to-end coverage that is not the last story. That section is rendered from the rules the `plan` check enforces; it is not repeated here, so it cannot drift.
 - Every bullet under Findings / Decisions / Unknowns / Evidence ledger is ONE line and ENDS with a source token. A bullet without one is refused by the `claim-sources` gate and the whole stage fails.
 - Each of Findings / Decisions / Unknowns / Evidence ledger must hold at least ONE list item; a section that is genuinely empty is written as `- none [src: absent:<what you looked at>]`, and a prose-only section is refused by the `claim-sources` gate.
 - Source token grammar (exact): `[src: <one or more sources separated by "; ">]` where a source is ONE of:

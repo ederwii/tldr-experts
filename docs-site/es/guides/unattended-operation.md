@@ -63,6 +63,14 @@ run. En Claude Code, `/tldrx-plan` (la segunda skill que escribe `tldrx install 
 va de "quiero X" a semillas que lo pasan. La lista completa de reglas vive en la guía del
 repo, [Writing a seed by hand](https://github.com/ederwii/tldr-experts/blob/main/docs/guide/05-seeds-and-triage.md#writing-a-seed-by-hand).
 
+El plan que se escribe a partir de una semilla se exige más que la semilla. El gate del Plan rechaza más olas de las que
+el framework soporta hoy por run salvo que `waves.yml` registre `wave_cap_reason: "<por qué>"`, y rechaza una historia
+programada en una ola posterior a la que exige su `depends_on`: cada ola extra espera a cada merge anterior, y una
+auditoría de planificación de 9 runs encontró planes armados como cadenas de una historia por ola. También nombra un
+comando de `dod` que llevan algunas historias de una épica y una hermana no. Las reglas que recibe la etapa Plan —
+rebanadas verticales, archivos de inventario en `touches:`, cobertura end-to-end que no sea la última historia — las
+imprime `tldrx plan schema` bajo "Plan shape".
+
 El lugar convencional es `.tldrx/seeds/<nn>-<slug>.md`, commiteado con el resto de
 `.tldrx/`. Una semilla para un defecto de expiración de sesión, cada viñeta bajo el tope:
 

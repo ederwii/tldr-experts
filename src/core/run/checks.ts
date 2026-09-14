@@ -30,6 +30,7 @@ import { buildProgress, BUILD_PHASE } from "./buildProgress.ts";
 import { loadStageSpec } from "../facilitator/stageSpec.ts";
 import { loadWorkspace, repoPath, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { describePlanIssues, validatePlan, writesPlanArtefacts, validatePlanBudget } from "../plan/validatePlan.ts";
+import { validatePlanShape } from "../plan/planShape.ts";
 import { branchModelFor, describeBranchModel } from "../plan/branchModel.ts";
 import { validateRunFile } from "./RunFile.ts";
 import { resolveMany, type PathContext } from "../facilitator/paths.ts";
@@ -383,17 +384,21 @@ function checkPlan(ctx: CheckContext): CheckOutcome {
   // The fourth artefact (#264): a `budget.yml` in a shape the Build reader could
   // not price from used to pass this gate and price nothing one stage later. Its
   // check is the gate's own, not `validatePlan`'s — see `validatePlanBudget`.
-  const issues = [...report.issues, ...validatePlanBudget(planDir)];
+  // The plan's SHAPE (#316/#319) — also the gate's own, never the Build loader's:
+  // a plan approved before these rules existed still builds. See `planShape.ts`.
+  const shape = validatePlanShape(planDir);
+  const issues = [...report.issues, ...validatePlanBudget(planDir), ...shape.issues];
   if (issues.length > 0) {
     return { id: "plan", status: "failed", detail: describePlanIssues(issues) };
   }
   const model = branchModelFor(basename(ctx.runDir), report.epicChain);
   const over = planPricesOverStage(ctx, planDir);
+  const advisories = shape.advisories.map((text) => ` — advisory: ${text}`).join("");
   return {
     id: "plan",
     status: "passed",
     detail: `${report.epicCount} epic(s), ${report.storyCount} story(ies), ${report.waveCount} wave(s)`
-      + ` — ${describeBranchModel(model)}${over === null ? "" : ` — ${over}`}`,
+      + ` — ${describeBranchModel(model)}${over === null ? "" : ` — ${over}`}${advisories}`,
   };
 }
 

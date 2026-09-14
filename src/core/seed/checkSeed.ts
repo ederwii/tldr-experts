@@ -48,6 +48,9 @@ import { parseDodBlock, validateStoryDod } from "../schemas/story.ts";
 import { loadWorkflowPreset, PHASE_IDS, type WorkflowPreset } from "../run/workflowPreset.ts";
 import { describeHandoff, planBudget } from "../run/newRun.ts";
 import { developerCap, reviewerCap, round2, type CapParts } from "../build/caps.ts";
+import {
+  MAX_STORIES_PER_RUN, MAX_WAVES_PER_RUN, storyCountAdvisory, waveCapAdvisory,
+} from "../plan/planShape.ts";
 
 /**
  * The bullet cap the guide states (`docs/guide/05-seeds-and-triage.md`): the
@@ -57,14 +60,13 @@ import { developerCap, reviewerCap, round2, type CapParts } from "../build/caps.
 export const MAX_SEED_BULLET_CHARS = 200;
 
 /**
- * The size the framework carries today — a PATCH, not a craft rule. Raise both
- * when #286 (conflict resolution), #244/#289 (budgets) and #280 (dependency in
- * review) close; the advisory text names them so the number is never read as a
- * design preference.
+ * The size the framework carries today — a PATCH, not a craft rule, and the
+ * SAME numbers the Plan gate refuses on (#316): both live in
+ * `plan/planShape.ts`, and so do the advisory sentences, so a seed and the plan
+ * written from it cannot be held to two different limits.
  */
-export const MAX_STORIES_PER_SEED = 4;
-export const MAX_WAVES_PER_SEED = 2;
-const SIZE_ISSUES = "#286/#244/#280";
+export const MAX_STORIES_PER_SEED = MAX_STORIES_PER_RUN;
+export const MAX_WAVES_PER_SEED = MAX_WAVES_PER_RUN;
 
 export type SeedCheckRule =
   | "bullet-length" | "src-grammar" | "src-resolve"
@@ -174,15 +176,13 @@ export function checkSeed(root: string, seedPath: string, options: SeedCheckOpti
   if (stories.length > MAX_STORIES_PER_SEED) {
     advisories.push({
       file: seed.documents[0]?.rel ?? seed.source, line: 0, rule: "size",
-      text: `${stories.length} stories — today the framework carries ${MAX_STORIES_PER_SEED} per run alone `
-        + `(patch for ${SIZE_ISSUES} — the measured limit, not a design preference); split into two seeds or say why not`,
+      text: storyCountAdvisory(stories.length),
     });
   }
   if (waves > MAX_WAVES_PER_SEED) {
     advisories.push({
       file: seed.documents[0]?.rel ?? seed.source, line: 0, rule: "waves",
-      text: `${waves} waves of dependencies — today the framework carries ${MAX_WAVES_PER_SEED} per run alone `
-        + `(patch for ${SIZE_ISSUES}); a later wave waits on every earlier merge`,
+      text: waveCapAdvisory(waves),
     });
   }
 
