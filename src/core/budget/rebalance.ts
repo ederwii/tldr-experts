@@ -33,6 +33,9 @@
 import { economyFor, type RunBudget } from "./RunBudget.ts";
 import { raiseBudget, type RaiseOutcome } from "./raiseBudget.ts";
 import { tallyOf } from "./spentFigure.ts";
+import { remaining } from "./wouldExceed.ts";
+import { raiseCommand } from "./budgetView.ts";
+import type { TldrxEvent } from "../events/Event.ts";
 import type { RunFile } from "../run/RunFile.ts";
 
 /**
@@ -137,15 +140,61 @@ export function describeRebalance(plan: RebalancePlan): string {
   return `finished phase(s) hold $${plan.finishedUnspentUsd.toFixed(2)} unspent (${held})`;
 }
 
-function notADonor(budget: RunBudget, run: Pick<RunFile, "phases">, phaseId: string): string | null {
+/**
+ * What a phase that GAVE through `--rebalance-finished` and has since stopped being finished
+ * (a revoked gate, a stale mark, a reopen) should tell a person — or nothing (review of #314).
+ *
+ * Read off the `budget.raised` events the moves already wrote (`source`, `take_from`, `phase`,
+ * `amount_usd`, `ts`) and the recipient's `remaining` — no second record of the move. Nothing is
+ * moved back automatically: the recipient may already have spent it, and a second automatic
+ * move over a phase a person just re-opened is a decision nobody made. What is returnable is
+ * `min(given, recipient's unspent)`, and the command that returns it is named exactly.
+ */
+export function givenAwayLines(
+  events: readonly TldrxEvent[],
+  budget: RunBudget,
+  run: Pick<RunFile, "phases">,
+  runId: string,
+  donorPhaseId: string,
+): readonly string[] {
+  if (unfinishedReason(run, donorPhaseId) === null) return [];
+  const gifts = events.filter((event) =>
+    event.type === "budget.raised"
+    && event.payload.source === REBALANCE_SOURCE
+    && event.payload.take_from === donorPhaseId
+    && typeof event.payload.phase === "string"
+    && typeof event.payload.amount_usd === "number");
+  return gifts.map((event) => {
+    const recipient = String(event.payload.phase);
+    const given = Number(event.payload.amount_usd);
+    const unspent = round(Math.max(0, Math.min(given, remaining(budget, recipient))));
+    const head = `budget: ${donorPhaseId} gave $${given.toFixed(2)} to ${recipient} via ${REBALANCE_SOURCE} at ${event.ts} `
+      + "and is no longer finished — nothing moves it back on its own";
+    return unspent < 0.01
+      ? `${head}; ${recipient} has none of it left unspent.`
+      : `${head}; $${unspent.toFixed(2)} of it is still unspent in ${recipient}: `
+        + `\`${raiseCommand(runId, donorPhaseId, unspent)} --take-from ${recipient}\`.`;
+  });
+}
+
+/** Why a phase may still run a stage, or null when every stage is settled and none is stale. */
+function unfinishedReason(run: Pick<RunFile, "phases">, phaseId: string): string | null {
   const phase = run.phases.find((p) => p.id === phaseId);
-  if (phase === undefined || phase.stages.length === 0) return "no stage of it in run.yml, so nothing proves it finished";
+  if (phase === undefined || phase.stages.length === 0) return null;
   const open = phase.stages.filter((s) => !SETTLED.has(s.status));
   if (open.length > 0) {
     return `not finished — ${open.map((s) => `${s.id} is ${s.status}`).join(", ")}`;
   }
   const stale = phase.stages.filter((s) => s.stale === true);
   if (stale.length > 0) return `not finished — ${stale.map((s) => s.id).join(", ")} is stale and will run again`;
+  return null;
+}
+
+function notADonor(budget: RunBudget, run: Pick<RunFile, "phases">, phaseId: string): string | null {
+  const phase = run.phases.find((p) => p.id === phaseId);
+  if (phase === undefined || phase.stages.length === 0) return "no stage of it in run.yml, so nothing proves it finished";
+  const unfinished = unfinishedReason(run, phaseId);
+  if (unfinished !== null) return unfinished;
   if (economyFor(budget, phaseId) !== "metered-usd") return "priced in host-tokens, which are not dollars";
   const unmetered = tallyOf(phase.stages.flatMap((s) => s.tasks)).unmetered;
   if (unmetered > 0) {

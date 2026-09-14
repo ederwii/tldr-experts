@@ -18,6 +18,7 @@ import { loadWorkflowPreset, PresetError, type PlannedStage } from "./workflowPr
 import type { RunStore } from "./RunStore.ts";
 import type { RunFile, RunGate, RunGateEvidence, RunPhase, RunStage } from "./RunFile.ts";
 import { gatePolicyFor } from "./gatePolicy.ts";
+import { givenAwayLines } from "../budget/rebalance.ts";
 import { attributeGate } from "./gateAuthority.ts";
 import { closeRun, type RunCloseOutcome } from "./closeRun.ts";
 import { withRunOutcome } from "./runOutcome.ts";
@@ -294,6 +295,12 @@ export interface RevokeOutcome {
   readonly signedOver: RunGateEvidence | null;
   /** `<phase>/<stage>` of every later stage now marked stale. */
   readonly staled: readonly string[];
+  /**
+   * When the revoked stage's phase had GIVEN ceiling through `run auto --rebalance-finished`
+   * and is now unfinished: one line per move, naming it and the `--take-from` that returns what
+   * is still unspent (review of #314). Empty otherwise. Nothing is moved back.
+   */
+  readonly givenAway: readonly string[];
 }
 
 /**
@@ -414,6 +421,7 @@ export function revoke(store: RunStore, ctx: GateContext, target: string): Revok
   return {
     stage: entry.stage.id, phase: entry.phase.id, note: ctx.note,
     signedBy, signedAt, signedOver, staled: later,
+    givenAway: givenAwayLines(store.events.read(), store.budget, store.run, store.runId, entry.phase.id),
   };
 }
 

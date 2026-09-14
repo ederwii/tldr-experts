@@ -44,6 +44,10 @@ import { EventLog } from "../src/core/events/EventLog.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { WATCH_PHASE } from "../src/core/watch/index.ts";
 import { GATE_SIGNER_MARKER } from "../src/core/facilitator/gateSigner.ts";
+import { runNext } from "../src/core/facilitator/runNext.ts";
+import { revoke } from "../src/core/run/gates.ts";
+import { buildBudgetView, renderBudget } from "../src/core/budget/budgetView.ts";
+import { planRebalance } from "../src/core/budget/rebalance.ts";
 import type { TldrxEvent } from "../src/core/events/Event.ts";
 import { deliveredTo, writeNotifier, workspaceYamlWithNotify } from "./fixtures/facilitator/notifier.ts";
 import {
@@ -447,6 +451,42 @@ describe("never over money", () => {
     expect(reason).toContain("$1.00 from finished 01-what");
     expect(text).not.toContain("a person moved");
     expect(text).not.toContain("a ceiling a person moved");
+  });
+
+  /**
+   * Review finding on 2d8917f: a donor that STOPS being finished (its gate revoked) keeps the
+   * ceiling it gave away, and nothing said so. Nothing moves the money back on its own — the
+   * recipient may have spent it — but the revoke, the refusal on that phase and `budget show`
+   * name the earlier move and the exact `--take-from` that returns what is still unspent, and a
+   * later rebalance never takes from the phase again while it is unfinished.
+   */
+  test("a donor re-opened after a rebalance: the move and the give-back command are named, and it is not a donor again", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    expect((await auto(ws, { rebalanceFinished: true })).code).toBe(0);
+    const moved = events(ws).find((event) => event.type === "budget.raised");
+    const giveBack = `tldrx budget raise 01-what 1.00 --run ${ws.runId} --take-from 02-how`;
+
+    const store = RunStore.open(ws.runDir);
+    const revoked = revoke(store, { root: ws.root, actor: "alan", at: "2026-09-14T21:00:00Z", note: "redo" }, "01-what/alpha");
+    const said = revoked.givenAway.join("\n");
+    expect(said).toContain(`01-what gave $1.00 to 02-how`);
+    expect(said).toContain(String(moved?.ts));
+    expect(said).toContain(giveBack);
+
+    const reopened = RunStore.open(ws.runDir);
+    expect(renderBudget(buildBudgetView(reopened.run, reopened.budget, reopened.runDir))).toContain(giveBack);
+    const plan = planRebalance(reopened.budget, reopened.run, "02-how", 1);
+    expect(plan.donors.map((d) => d.phaseId)).not.toContain("01-what");
+    expect(plan.excluded.find((e) => e.phaseId === "01-what")?.reason).toContain("not finished");
+
+    // The re-opened donor is now short itself: its refusal names the move it made.
+    starve(ws, "01-what", 0.5);
+    const refused = await runNext({
+      root: ws.root, dryRun: false, mode: "headless", yolo: false, actor: "alan", at: "2026-09-14T21:00:01Z",
+    });
+    expect(refused.code).toBe(2);
+    expect(refused.lines.join("\n")).toContain(giveBack);
   });
 
   test("`--max-usd` spans the supervised run: a relaunch does not hand the loop a fresh ceiling", async () => {

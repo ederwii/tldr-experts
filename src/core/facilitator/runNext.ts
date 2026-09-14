@@ -38,7 +38,7 @@ import {
   remainingWork, renderRemainingWork, remainingWorkContext, type RemainingWork,
 } from "../budget/remainingWork.ts";
 import { raiseCommand, shortBy } from "../budget/budgetView.ts";
-import { applyRebalance, describeRebalance, planRebalance, REBALANCE_SOURCE, type RebalancePlan } from "../budget/rebalance.ts";
+import { applyRebalance, describeRebalance, givenAwayLines, planRebalance, REBALANCE_SOURCE, type RebalancePlan } from "../budget/rebalance.ts";
 import { raiseGrantVerdict, raisedPayload } from "../budget/raiseBudget.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
@@ -1223,6 +1223,7 @@ function budgetRefusal(
         ? [renderRemainingWork(work), ...remainingWorkContext(work)]
         : []),
       ...rebalanceLines(store.runId, rebalance, options.rebalanceFinished === true, declined),
+      ...givenAwayLines(store.events.read(), store.budget, store.run, store.runId, phaseId),
       `Run \`${fix}\` (add \`--take-from <phase>\` to move the money instead of adding it), ` +
         `lower budget_usd in the stage, or set on_exceed: warn.`,
       `See the whole picture first: \`tldrx budget show --run ${store.runId}\`.`,
