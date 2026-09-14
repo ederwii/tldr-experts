@@ -77,7 +77,10 @@ import { countCitations, countDeclaredTouches } from "../run/evidenceScope.ts";
 import { withAttendedGuard } from "./attended.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
-import { executorFor, type ExecutorContext, type ExecutorOutcome, type StageExecutor } from "./executors/index.ts";
+import {
+  executorFor, partialTasksOf,
+  type ExecutorContext, type ExecutorOutcome, type ExecutorTask, type StageExecutor,
+} from "./executors/index.ts";
 import { NOT_RESTORED_MARK } from "../build/foreignWork.ts";
 import { planIsSkipped, satisfiedByImplicitPlan } from "../build/implicitPlan.ts";
 import {
@@ -1392,11 +1395,11 @@ async function runExecutor(
 
   // How many rows this stage already had before the executor ran. `failStage`
   // rewrites the LAST row as `failed`, which is right only for a row THIS
-  // invocation put there — and on the throw path below there is never one, since
-  // `ExecutorOutcome.tasks` exists only at return. A retried stage keeps its
-  // earlier attempts' rows (a gate reject, an in-session cycle that finished a
-  // story), so without this floor the throw repainted a `done` turn as `failed`
-  // with an error it did not produce.
+  // invocation put there and did not finish — and on the throw path below the
+  // rows that ARE recorded all finished. A retried stage keeps its earlier
+  // attempts' rows (a gate reject, an in-session cycle that finished a story),
+  // so without this floor the throw repainted a `done` turn as `failed` with an
+  // error it did not produce.
   const tasksBefore = requireStage(store, phaseId, stageId).tasks.length;
 
   let outcome: ExecutorOutcome;
@@ -1409,12 +1412,27 @@ async function runExecutor(
     // record of what it cost.
     //
     // What CAN be recovered here is recovered: the stage is failed by name, the
-    // throw is recorded as an `error` event, and the store is saved. What cannot
-    // is said out loud rather than guessed at — `ExecutorOutcome.tasks` only
-    // exists at RETURN, so a turn the executor completed before the throw has no
-    // row here, and the message says so instead of inventing a count or implying
-    // the ledger is whole.
+    // throw is recorded as an `error` event, and the store is saved. Since #249
+    // that includes the ROWS: `ExecutorOutcome.tasks` only exists at return, so
+    // a turn the executor completed before the throw used to have no row here —
+    // two paid turns on a live run, gone from run.yml, and every ceiling that
+    // derives from recorded spend short by exactly that. An executor now carries
+    // its partial rows on the error (`withPartialTasks`), and they are recorded
+    // FIRST, through the same `recordExecutorTasks` the return path uses. What
+    // still cannot be recovered is said out loud rather than guessed at: the
+    // counts below are measured off the store after the write, never assumed.
     const why = error instanceof Error ? error.message : String(error);
+    const partial = partialTasksOf(error);
+    let recordingFailed: string | null = null;
+    if (partial.length > 0) {
+      try {
+        recordExecutorTasks(store, options, phaseId, stageId, spec, partial);
+      } catch (again) {
+        recordingFailed = again instanceof Error ? again.message : String(again);
+      }
+    }
+    const written = requireStage(store, phaseId, stageId).tasks.length - tasksBefore;
+    const whole = partial.length > 0 && written === partial.length && recordingFailed === null;
     // `detail`, not a bespoke field: `appendCapped` runs this through the SAME
     // `capPayload` every other event does, so a giant thrown message (an error
     // thrown FOR being oversized, say) is bounded by bytes, not characters, and
@@ -1423,12 +1441,27 @@ async function runExecutor(
       phase: phaseId,
       where: "executor",
       detail: why,
-      tasks_recorded: false,
+      // True only when every row the executor had earned is now in run.yml. A
+      // throw that carried no rows says false, as it always did: it may have
+      // been before any turn, or from an executor that does not carry them, and
+      // "not known to be whole" is the honest reading of both (§7).
+      tasks_recorded: whole,
+      rows_written: written,
+      rows_expected: partial.length,
+      ...(recordingFailed === null ? {} : { recording_error: recordingFailed }),
     }, 0);
     store.save();
-    return failStage(store, options, phaseId, stageId,
-      `the executor threw before returning its task rows — this invocation's turn costs are not in run.yml: ${why}`,
-      notes, tasksBefore);
+    const rows = `${String(written)} of ${String(partial.length)}`;
+    const reason = partial.length === 0
+      ? `the executor threw before returning its task rows — this invocation's turn costs are not in run.yml: ${why}`
+      : whole
+        ? `the executor threw after ${String(partial.length)} turn(s) — their rows and costs are in run.yml: ${why}`
+        : `the executor threw after ${String(partial.length)} turn(s) and recording their rows threw too — `
+          + `${rows} rows are in run.yml and the rest are not: ${why}; recording: ${recordingFailed ?? "unknown"}`;
+    // The floor moves past the rows just written: they finished, and repainting
+    // one `failed` with this throw's message would put an error on a turn that
+    // did not produce it (the #234 lesson, this seam).
+    return failStage(store, options, phaseId, stageId, reason, notes, tasksBefore + written);
   }
 
   // The handshake called by the wrong end, and nothing else wrong (gh #82). Its
@@ -1457,7 +1490,7 @@ async function runExecutor(
 
   claimEpicBranches(store, outcome.epicBranches, outcome.branchModel);
   try {
-    recordExecutorTasks(store, options, phaseId, stageId, spec, outcome);
+    recordExecutorTasks(store, options, phaseId, stageId, spec, outcome.tasks);
   } catch (error) {
     // #248, the half the payload cap alone does not fix: this call sits AFTER the
     // executor try/catch above has closed, so a throw here reached
@@ -1550,16 +1583,21 @@ function isSequencingRefusal(outcome: ExecutorOutcome): boolean {
 }
 
 /** One `run.yml` task and one `agent.result` per sub-agent the executor ran. */
+/**
+ * Record an executor's turns as task rows and `agent.result` events — the rows
+ * it RETURNED on the ordinary path, or the rows it CARRIED on a throw (#249).
+ * Takes the rows as DATA, not the outcome, so both callers are the same call.
+ */
 function recordExecutorTasks(
   store: RunStore,
   options: NextOptions,
   phaseId: string,
   stageId: string,
   spec: StageSpec,
-  outcome: ExecutorOutcome,
+  tasks: readonly ExecutorTask[],
 ): void {
   const version = frameworkVersionSync();
-  for (const task of outcome.tasks) {
+  for (const task of tasks) {
     const id = nextTaskId(store, phaseId, stageId);
     // An unmetered task is a HOST turn: nothing here watched it, so `$0.00` would
     // be a measurement and a false one. Same spelling `commitStage` uses for the

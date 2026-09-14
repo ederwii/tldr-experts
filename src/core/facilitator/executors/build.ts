@@ -160,7 +160,7 @@ import {
 } from "../../build/caps.ts";
 import { shortBy, stageRaiseCommand } from "../../budget/budgetView.ts";
 import type { PlanStatus } from "../../schemas/planCommon.ts";
-import type { ExecutorContext, ExecutorOutcome, ExecutorTask } from "./index.ts";
+import { withPartialTasks, type ExecutorContext, type ExecutorOutcome, type ExecutorTask } from "./index.ts";
 
 export const HANDOFF_REL = `${BUILD_PHASE}/handoff.md`;
 /** Run-relative, and the path `mineRuns` looks for — see `build/retroLog.ts`. */
@@ -321,15 +321,27 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
       return await withRestore({ ...outcome, lines: [...session.reportLines, ...outcome.lines] });
     }
     // An error nobody here understands still leaves with the tree it borrowed put
-    // back: the throw is re-raised unchanged, and a restore that itself throws
-    // must not replace it.
+    // back: the throw is re-raised as it was, and a restore that itself throws
+    // must not replace it. It leaves CARRYING the rows this session had already
+    // earned (#249): the caller's catch records them, so a throw after a paid
+    // turn no longer takes that turn's money out of the ledger.
     try {
       await session.restoreForeignWorkAside();
     } catch {
       // Nothing to add: the original error is the one that matters.
     }
-    throw error;
+    throw withPartialTasks(error, session.tasks);
   }
+}
+
+/**
+ * A thrown value's first line, bounded — for a `note` or an advisory that names a
+ * failure and is not itself a field the cap knows how to drop.
+ */
+function firstLine(error: unknown, max = 220): string {
+  const text = error instanceof Error ? error.message : String(error);
+  const line = text.split("\n")[0]?.trim() ?? "";
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
 /** A story's DoD failure re-attributed to the base tree — see `BaseGateFailure`. */
@@ -3781,23 +3793,60 @@ class BuildSession {
     const changed = diff.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "");
     const measured = measuredWidening(changed, declared);
     if (measured === null) return;
-    this.ctx.emit(
-      "story.touches_widened",
-      {
-        story: story.planned.story.id,
-        paths: [...measured.paths],
-        note: measured.note,
-        before: [...measured.before],
-        after: [...measured.after],
-        // ADDITIVE, and the whole of what separates this row from an operator's:
-        // absent means `declared`, which is what every row written before this
-        // field existed is (`build/measuredTouches.ts`).
-        basis: "measured",
-      },
-      0,
-      // Not the operator and not a sub-agent: the framework read this off a diff.
-      "framework",
-    );
+    const id = story.planned.story.id;
+    // Not the operator and not a sub-agent: the framework read this off a diff.
+    const actor = "framework";
+    try {
+      this.ctx.emit(
+        "story.touches_widened",
+        {
+          story: id,
+          paths: [...measured.paths],
+          note: measured.note,
+          before: [...measured.before],
+          after: [...measured.after],
+          // ADDITIVE, and the whole of what separates this row from an operator's:
+          // absent means `declared`, which is what every row written before this
+          // field existed is (`build/measuredTouches.ts`).
+          basis: "measured",
+        },
+        0,
+        actor,
+      );
+      return;
+    } catch (error) {
+      // #249: the emit is the one line above that could throw, and it did — on a
+      // live run, for a payload the cap could not carry — and the throw went out
+      // through `settle`, between the story's `done` on disk and its `task.done`
+      // in the ledger, taking two paid turns' rows with it. "Advisory" has to
+      // cover the emit as much as the git read: what gets recorded instead is a
+      // BOUNDED absence on the same event — the counts, and a note naming why
+      // the lists are not here — so a reader still sees the widening happened
+      // and by how much (§7: absent with a reason, never silent).
+      const why = firstLine(error);
+      try {
+        this.ctx.emit(
+          "story.touches_widened",
+          {
+            story: id,
+            paths_omitted: measured.paths.length,
+            before_omitted: measured.before.length,
+            after_omitted: measured.after.length,
+            note: `${measured.note} — the lists could not be recorded on this event: ${why}`,
+            basis: "measured",
+          },
+          0,
+          actor,
+        );
+      } catch (again) {
+        // The log itself is refusing. The story still settles — this measurement
+        // is advisory — and the loss is said where the operator reads it.
+        this.advisories.push(
+          `${id}: the measured widening of its surface (${String(measured.paths.length)} path(s) outside `
+          + `\`touches:\`) could not be recorded in events.jsonl — ${firstLine(again)}`,
+        );
+      }
+    }
   }
 
   /**

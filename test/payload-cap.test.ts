@@ -22,11 +22,17 @@
  * failed, never a path that does not exist).
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { listCount, measuredWidening } from "../src/core/build/measuredTouches.ts";
 import { capPayload, MAX_PAYLOAD_BYTES, validateEvent } from "../src/core/events/Event.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
+import { buildExecutor } from "../src/core/facilitator/executors/build.ts";
+import type { ExecutorContext } from "../src/core/facilitator/executors/index.ts";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
+import { loadStageSpec } from "../src/core/facilitator/stageSpec.ts";
+import { splitFrontMatter } from "../src/core/schemas/frontMatter.ts";
+import { parseYaml } from "../src/core/yaml.ts";
 import { reject } from "../src/core/run/gates.ts";
 import { REVIEW_DIR } from "../src/core/run/prepared.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
@@ -470,12 +476,11 @@ const MANY_FILES: Record<string, string> = Object.fromEntries(
  * The same one story, with `src/generated` DECLARED as its surface.
  *
  * Deliberate, and worth the sentence: a story that writes 60 files it never
- * declared also emits `story.touches_widened`, whose `paths`/`after` lists are a
+ * declared also emits `story.touches_widened`, whose `paths`/`after` lists were a
  * THIRD uncapped field family — measured here at 7060 bytes, and refused for the
- * same reason `outputs` was. That is a separate defect on a separate event and it
- * is filed, not fixed in this change (AGENTS.md §1). Declaring the surface keeps
- * this test on the seam it is about: the `agent.result` for a turn that wrote a
- * lot of files.
+ * same reason `outputs` was. That was filed as #249 and is fixed below, on its
+ * own seam; declaring the surface here keeps THIS test on the seam it is about:
+ * the `agent.result` for a turn that wrote a lot of files.
  */
 const WIDE_STORY: BuildWorkspaceOptions = {
   stories: [{ id: "S1", epic: "E1", title: "First story", touches: ["src/generated"] }],
@@ -666,5 +671,254 @@ describe("#248 half 3 — a claim already earned is on disk before anything that
     // saved the moment it is earned, one line BEFORE anything that can throw.
     const onDisk = RunStore.open(ws.runDir).run;
     expect(onDisk.build?.epic_branch ?? []).toContain("epic/e1");
+  }, 90_000);
+});
+
+// ---------------------------------------------------------------------------
+// #249: the THIRD field family that overflows in the wild — `story.touches_widened`'s
+// three path lists — and the two seams the throw took with it.
+//
+// Measured on a live 0.24.0 field run (issue comment, 2026-09-14): 32 changed
+// files, 16 declared touches, 13 outside → `paths` 1363 B, `before` 1316 B,
+// `after` 2678 B, `note` 130 B = 5556 B > 4096. `capPayload` knew `detail` and
+// `outputs` by name and nothing else, so the append threw out of
+// `measureSurface` — whose contract says "advisory, never throws" but only
+// guarded git — through `settle`, and `runNext`'s catch failed the stage with
+// `tasks_recorded: false`: the developer's and the reviewer's paid turns never
+// reached run.yml, and the ceilings that derive from recorded spend were short.
+// ---------------------------------------------------------------------------
+
+/** The live incident's shape, rebuilt synthetically: 16 declared, 29 changed, 13 outside. */
+function liveWidening(): { payload: Record<string, unknown>; before: number; after: number; outside: number } {
+  const declared = Array.from({ length: 16 }, (_, i) =>
+    `src/modules/owner-panel/components/panel-section-${String(i).padStart(2, "0")}/index.tsx`);
+  const outside = Array.from({ length: 13 }, (_, i) =>
+    `src/modules/owner-panel/application/use-cases/owner-panel-completion-${String(i).padStart(2, "0")}.ts`);
+  const m = measuredWidening([...declared, ...outside], declared);
+  if (m === null) throw new Error("the synthetic diff must widen");
+  return {
+    payload: { story: "S1", paths: [...m.paths], note: m.note, before: [...m.before], after: [...m.after], basis: "measured" },
+    before: m.before.length,
+    after: m.after.length,
+    outside: m.paths.length,
+  };
+}
+
+describe("capPayload learns the widening's three lists (#249)", () => {
+  test("the live incident's payload validates: the two ends go by COUNT, the paths that fit stay", () => {
+    const live = liveWidening();
+    expect(bytes(live.payload)).toBeGreaterThan(MAX_PAYLOAD_BYTES);
+    const saved: Record<string, string> = {};
+
+    const capped = capPayload(live.payload, (text, field) => {
+      saved[field] = text;
+      return `omitted text saved at 04-build/log/overflow/2026-09-14T11-32-15Z-1-story.touches_widened-${field}.txt`;
+    });
+
+    const v = validateEvent({
+      ts: "2026-09-14T11:32:15Z", run: "r", stage: "build", type: "story.touches_widened",
+      actor: "framework", cost_usd: 0, payload: capped,
+    });
+    expect(v.ok).toBe(true);
+    // `after` — the largest list, and derivable from the other two — goes WHOLE
+    // and named by count, and that alone brings this payload under the cap, so
+    // `before` STAYS: one list at a time and only while still over, exactly as
+    // `outputs` after `detail`. The `(16 → 29 path(s))` every reader renders is
+    // still derivable through `listCount`, and a shortened list would not be.
+    expect(capped.after).toBeUndefined();
+    expect(capped.after_omitted).toBe(live.after);
+    expect(String(capped.after_omitted_reason)).toContain("story.touches_widened-after.txt");
+    expect(saved.after?.split("\n")).toEqual(live.payload.after as string[]);
+    expect(capped.before).toEqual(live.payload.before);
+    expect(capped.before_omitted).toBeUndefined();
+    expect(saved.before).toBeUndefined();
+    expect(listCount(capped, "before")).toBe(live.before);
+    expect(listCount(capped, "after")).toBe(live.after);
+    // The ADDED paths are the reading itself, and they fit once the ends are
+    // named — so they stay, verbatim.
+    expect(capped.paths).toEqual(live.payload.paths);
+    expect(capped.paths_omitted).toBeUndefined();
+    expect(capped.note).toBe(live.payload.note);
+    expect(capped.basis).toBe("measured");
+    expect(bytes(capped)).toBeLessThanOrEqual(MAX_PAYLOAD_BYTES);
+  });
+
+  test("`paths` goes LAST, and only when the payload is still over without the ends", () => {
+    const paths = Array.from({ length: 120 }, (_, i) => `src/generated/module-${String(i).padStart(3, "0")}/very-long-descriptive-name.ts`);
+    const payload = { story: "S1", paths, note: "n", before: ["docs/never"], after: ["docs/never", ...paths], basis: "measured" };
+    const capped = capPayload(payload, (_text, field) => `omitted text saved at x-${field}.txt`);
+    expect(capped.paths).toBeUndefined();
+    expect(capped.paths_omitted).toBe(120);
+    expect(String(capped.paths_omitted_reason)).toContain("x-paths.txt");
+    expect(capped.after_omitted).toBe(121);
+    expect(capped.before_omitted).toBe(1);
+    expect(capped.story).toBe("S1");
+    expect(bytes(capped)).toBeLessThanOrEqual(MAX_PAYLOAD_BYTES);
+  });
+
+  test("an EMPTY end is not dropped — `before: []` on an undeclared story stays, since dropping it buys nothing", () => {
+    const paths = Array.from({ length: 80 }, (_, i) => `src/generated/module-${String(i).padStart(3, "0")}/very-long-descriptive-name.ts`);
+    const payload = { story: "S1", paths, note: "n", before: [], after: [...paths], basis: "measured" };
+    const capped = capPayload(payload, () => "omitted text saved at x.txt");
+    expect(capped.before).toEqual([]);
+    expect(capped.before_omitted).toBeUndefined();
+    expect(capped.after_omitted).toBe(80);
+    expect(capped.paths_omitted).toBe(80);
+    expect(bytes(capped)).toBeLessThanOrEqual(MAX_PAYLOAD_BYTES);
+  });
+
+  test("a `paths_omitted` the writer already put there is ADDED to, not overwritten (`worktree.foreign_work_aside`)", () => {
+    // `foreignWork.ts` caps its own list at 40 and counts the rest in the same key;
+    // when even the 40 clear the cap, the count must say every path the event
+    // does not carry — 40 + the rest — or a reader would under-count the stash.
+    const paths = Array.from({ length: 40 }, (_, i) => `apps/web/src/features/very/long/path/segment/${String(i)}/component-${"x".repeat(60)}.tsx`);
+    const payload = { repo: "app", paths, paths_omitted: 12, stash_ref: "abc", reason: "r" };
+    expect(bytes(payload)).toBeGreaterThan(MAX_PAYLOAD_BYTES);
+    const capped = capPayload(payload, () => "omitted text saved at x.txt");
+    expect(capped.paths).toBeUndefined();
+    expect(capped.paths_omitted).toBe(52);
+    expect(capped.stash_ref).toBe("abc");
+  });
+
+  test("an in-cap widening is the SAME object — every row already written is byte-identical", () => {
+    const payload = { story: "S1", paths: ["a.ts"], note: "n", before: ["b.ts"], after: ["b.ts", "a.ts"], basis: "measured" };
+    expect(capPayload(payload)).toBe(payload);
+  });
+});
+
+describe("#249 — a widening too wide for the cap never kills the money path", () => {
+  test("the story settles `done`, both rows and their money land, and the event names its lists by count", async () => {
+    // ONE story, NOTHING declared, 80 files written: `after` and `paths` are two
+    // copies of 80 long paths and the payload clears the cap on either alone.
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({ S1: MANY_FILES });
+    process.env.FAKE_BUILD_COST = "0.25";
+
+    const outcome = await next(ws);
+
+    expect(outcome.lines.join("\n")).not.toContain("exceeds the 4096 byte cap");
+    const stage = buildStage(ws);
+    expect(stage?.status).not.toBe("failed");
+    const rows = stage?.tasks ?? [];
+    expect(rows.map((t) => t.role).sort()).toEqual(["developer", "reviewer"]);
+    const widened = events(ws).find((e) => e.type === "story.touches_widened");
+    expect(widened).toBeDefined();
+    expect(widened?.payload.paths).toBeUndefined();
+    expect(widened?.payload.paths_omitted).toBe(MANY_FILES_COUNT);
+    // The fixture declares `s1.txt`, so the story's list after the widening is
+    // the 80 it wrote plus the one it declared — and `before` (that one entry)
+    // went by count too, because the payload was still over without `after`.
+    expect(widened?.payload.before_omitted).toBe(1);
+    expect(widened?.payload.after_omitted).toBe(MANY_FILES_COUNT + 1);
+    expect(bytes(widened?.payload as Record<string, unknown>)).toBeLessThanOrEqual(MAX_PAYLOAD_BYTES);
+    const relPath = savedPathIn(String(widened?.payload.paths_omitted_reason));
+    expect(relPath).toMatch(/^04-build\/log\/overflow\/.+-story\.touches_widened-paths\.txt$/);
+    expect(readFileSync(join(ws.runDir, relPath), "utf8").split("\n").length).toBe(MANY_FILES_COUNT);
+    expect(events(ws).some((e) => e.type === "task.done" && e.payload.story === "S1")).toBe(true);
+  }, 90_000);
+});
+
+describe("#249 — measureSurface never throws: the story's row and `done` land whatever the emit does", () => {
+  function directContext(ws: BuildWorkspace, emit: ExecutorContext["emit"]): ExecutorContext {
+    const store = RunStore.open(ws.runDir);
+    return {
+      root: ws.root, runId: store.runId, runDir: ws.runDir, phaseId: "04-build", stageId: "build",
+      spec: loadStageSpec(ws.root, store.run.scope, "build"), repos: store.run.repos,
+      mode: "headless", model: null, effort: null, modelFlag: null, effortFlag: null,
+      costUsd: null, tokens: null, budgetUsd: 8, maxBudgetUsd: 2, yolo: false,
+      at: "2026-08-29T09:00:00Z", keepWorktrees: false, reuseEpic: false, parallel: 1,
+      discardPending: false, review: false, attendedByHost: false, agentCap: () => 2, emit,
+    };
+  }
+
+  function storyStatus(ws: BuildWorkspace, id: string): unknown {
+    const text = readFileSync(join(ws.runDir, "03-plan", "stories", `${id}.md`), "utf8");
+    return (parseYaml(splitFrontMatter(text).raw) as Record<string, unknown>).status;
+  }
+
+  /** The declared `s1.txt` plus one file outside it, so the settle has a widening to record. */
+  const ONE_OUTSIDE = JSON.stringify({ S1: { "s1.txt": "S1 was here\n", "src/extra.ts": "// outside\n" } });
+
+  test("an emit that throws once is replaced by a bounded absence on the SAME event, and task.done follows", async () => {
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_WRITE = ONE_OUTSIDE;
+    const seen: { type: string; payload: Record<string, unknown> }[] = [];
+    // Throws exactly like the cap did: on the widening that carries its lists.
+    // The bounded absence carries none, so it lands.
+    const emit: ExecutorContext["emit"] = (type, payload) => {
+      if (type === "story.touches_widened" && Array.isArray(payload.paths)) {
+        throw new Error("refusing to append an invalid event: payload 5556 bytes exceeds the 4096 byte cap");
+      }
+      seen.push({ type, payload });
+    };
+
+    const outcome = await buildExecutor(directContext(ws, emit));
+
+    expect(outcome.tasks.map((t) => t.role).sort()).toEqual(["developer", "reviewer"]);
+    expect(storyStatus(ws, "S1")).toBe("done");
+    const absence = seen.find((e) => e.type === "story.touches_widened");
+    expect(absence).toBeDefined();
+    expect(absence?.payload.paths).toBeUndefined();
+    expect(absence?.payload.paths_omitted).toBe(1);
+    expect(absence?.payload.before_omitted).toBe(1);
+    expect(absence?.payload.after_omitted).toBe(2);
+    expect(absence?.payload.basis).toBe("measured");
+    expect(String(absence?.payload.note)).toContain("exceeds the 4096 byte cap");
+    const order = seen.map((e) => e.type);
+    expect(order.indexOf("task.done")).toBeGreaterThan(order.indexOf("story.touches_widened"));
+  }, 90_000);
+
+  test("an emit that throws EVERY time still settles the story; the loss is said on stderr", async () => {
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_WRITE = ONE_OUTSIDE;
+    const seen: string[] = [];
+    const emit: ExecutorContext["emit"] = (type) => {
+      if (type === "story.touches_widened") throw new Error("events.jsonl: EACCES");
+      seen.push(type);
+    };
+
+    const outcome = await buildExecutor(directContext(ws, emit));
+
+    expect(outcome.tasks.map((t) => t.role).sort()).toEqual(["developer", "reviewer"]);
+    expect(storyStatus(ws, "S1")).toBe("done");
+    expect(seen).toContain("task.done");
+    expect((outcome.stderr ?? []).join("\n")).toContain("EACCES");
+    expect((outcome.stderr ?? []).join("\n")).toContain("S1");
+  }, 90_000);
+});
+
+describe("#249 — an executor that throws AFTER paid turns hands their rows to the ledger", () => {
+  test("both rows and their money are in run.yml, the stage is `failed`, and the error event says so", async () => {
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_COST = "0.25";
+    // A late throw nothing in the executor catches: `settle` writes the story's
+    // review log at `04-build/log/S1.md` AFTER the developer's and the reviewer's
+    // rows are pushed — a directory in its place makes that write throw EISDIR.
+    // Both readers of that path are tolerant (`staleDependencyHold`,
+    // `priorAttemptLog`), so nothing earlier trips on it.
+    mkdirSync(join(ws.runDir, "04-build", "log", "S1.md"), { recursive: true });
+
+    const outcome = await next(ws);
+
+    expect(outcome.code).toBe(5); // EXIT_AGENT_FAILED — still `--retry-failed`'s family
+    const stage = buildStage(ws);
+    expect(stage?.status).toBe("failed");
+    const rows = stage?.tasks ?? [];
+    expect(rows.map((t) => t.role).sort()).toEqual(["developer", "reviewer"]);
+    // The rows are what the turns produced — not repainted `failed` with an error
+    // they did not produce (the #234 lesson, this seam).
+    expect(rows.every((t) => t.status === "done" && t.error === null)).toBe(true);
+    const paid = rows.reduce((sum, t) => sum + (t.cost_usd ?? 0), 0);
+    expect(paid).toBeGreaterThan(0);
+    // The money direction: the spend every ceiling derives from is not short.
+    expect(RunStore.open(ws.runDir).run.budget.spent_usd).toBe(paid);
+    expect(events(ws).filter((e) => e.type === "agent.result")).toHaveLength(2);
+    const errorEvent = events(ws).find((e) => e.type === "error" && e.payload.where === "executor");
+    expect(errorEvent?.payload.tasks_recorded).toBe(true);
+    expect(errorEvent?.payload.rows_written).toBe(2);
+    expect(errorEvent?.payload.rows_expected).toBe(2);
+    expect(String(errorEvent?.payload.detail)).toContain("EISDIR");
+    expect(outcome.lines.join("\n")).toContain("threw after 2 turn(s)");
+    expect(outcome.lines.join("\n")).not.toContain("not in run.yml");
   }, 90_000);
 });

@@ -19,6 +19,39 @@
   the line was never found; the fallback case is a guard). No record changes shape — nothing
   wrote `error`, so there is no old record to tolerate.
 
+- **A wide story's measured widening no longer kills the invocation that earned it, and an executor that
+  throws after paid turns leaves their rows and their money in `run.yml` (#249).** MEASURED on a live 0.24.0
+  field run: a story with 16 declared touches changed 32 files, and the `story.touches_widened` the framework
+  measures at settle carried `paths`, `before` and `after` — three unbounded path lists, 5556 bytes against
+  the 4096-byte cap. `capPayload` knew `detail` and `outputs` by name and nothing else, so `EventLog.append`
+  threw; `measureSurface`'s "advisory, never throws" contract guarded the git read and not the emit, so the
+  throw went out through `settle` — after the story's `done` was on disk and before its `task.done` was in
+  the ledger — into `runNext`'s catch, which failed the stage with `tasks_recorded: false`: the developer's
+  and the reviewer's paid turns never reached `run.yml`, and every ceiling that derives from recorded spend
+  was short by exactly that, so the next economy refusal that should have fired would not have. Three fixes,
+  one per seam. The cap seam knows the three lists BY NAME in one declared table (`DROPPABLE_LISTS`):
+  `after` first (the largest, and derivable from the other two), then `before`, then `paths` last — each
+  dropped WHOLE and only while the payload is still over, each replaced by `<field>_omitted: N` and the same
+  reason-and-pointer sentence `outputs_omitted` carries, never a shortened list, which would read downstream
+  as the whole one; a `paths_omitted` a writer already put there (`worktree.foreign_work_aside`) is added
+  to, not overwritten. Every reader — `wideningRows`, the Build handoff, `tldrx replay` — renders
+  `(16 → 29 path(s))` from ONE derivation, `listCount`, so a row the cap could not carry reads the same
+  everywhere. `measureSurface` never throws: a refused emit records a bounded absence on the same event (the
+  counts, and a `note` naming the failure), and a log that refuses even that says so on stderr while the
+  story still settles. And the structural half, the expensive one: the Build executor carries the rows it
+  had already earned ON the error it throws (`withPartialTasks` — data on the same object, never a wrapper,
+  so what threw is still what the caller sees), and `runNext`'s catch records them through the same
+  `recordExecutorTasks` the return path uses BEFORE it fails the stage: the `error` event says
+  `tasks_recorded: true` with `rows_written`/`rows_expected` measured off the store after the write, the
+  rows keep their own `done` rather than being repainted with a throw they did not produce, and
+  `budget.spent_usd` is what was paid. Pinned by a real fake-agent build whose settle throws after both turns:
+  MEASURED on that case, the ledger before the fix recorded 0 rows / $0.00 for two paid turns, and after it
+  records 2 rows / $0.50. Which is the sentence an operator needs after this release: the cost half does not
+  just stop losing money, it stops LYING in favour of spend. With paid turns now recorded, ceilings bite
+  earlier — a run that used to reach the end because the ledger counted short may now be refused mid-way,
+  correctly but differently, so a new economy refusal after upgrading is this change working, not a
+  regression to hunt elsewhere.
+
 ## 0.25.0 — 2026-09-14
 
 ### Fixed

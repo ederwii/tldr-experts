@@ -668,11 +668,16 @@ function wideningBullets(rows: readonly WideningRow[]): readonly string[] {
     const more = row.paths.length > NAMED_WIDENED_PATHS
       ? `, +${String(row.paths.length - NAMED_WIDENED_PATHS)} more`
       : "";
+    // #249: the event could not carry its list — the count is what it left, and
+    // the bullet says so rather than rendering an empty `+`.
+    const unlisted = (row.pathsOmitted ?? 0) > 0
+      ? `${row.paths.length === 0 ? "" : ", "}${String(row.pathsOmitted)} path(s) not listed on the event`
+      : "";
     const opening = row.basis === "measured"
       ? `${row.story}'s declared surface was under the work it did (measured)`
       : `${row.story}'s surface was widened by a person (declared)`;
     out.push(
-      `- ${opening}: +${named}${more} `
+      `- ${opening}: +${named}${more}${unlisted} `
       + `(${String(row.before)} → ${String(row.after)} path(s))`
       + `${row.note === "" ? "" : ` — ${row.note}`} [src: events.jsonl:${String(row.line)}]`,
     );

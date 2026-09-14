@@ -1432,6 +1432,15 @@ the operator's verb (§2.13), and a framework that back-dated a declaration woul
 it did not. Why the same event rather than a sibling type: "the surface grew" is one fact, and two types would make
 every reader ask two questions to learn it.
 
+**`story.touches_widened` may arrive with its lists omitted 2026-09-14 (#249).** ADDITIVE, and a row that carries its
+lists is byte-for-byte what it was. A wide story's three lists cleared the 4 KB payload cap (5556 bytes on a 32-file
+story with 16 declared touches, measured live) and the emit seam refused the event — out of a measurement whose
+contract said "advisory", through the settle, taking the invocation's paid turns out of `run.yml` with it. Now the
+seam drops `after`, then `before`, then `paths`, one at a time and only while the payload is still over, leaving
+`<field>_omitted: N` and a `_reason` in each one's place (the `payload` table above), and the measurement never
+throws: a refused emit records the counts and a `note` naming the failure on the same event. A reader falls back
+from a list to the count in its place — `listCount`, one derivation for the handoff, the replay and `wideningRows`.
+
 **`input.truncated` was added 2026-09-09 (#207).** One event per declared input the stage's `inputs_max_bytes`
 budget could not fit whole, appended by the facilitator AT SPAWN — before a cent is spent — with `cost_usd: 0`,
 because a truncation is a fact about the prompt and not a charge. Payload: `stage`, `path` (the declared path, as the
@@ -1564,20 +1573,23 @@ other half. See §5's Build-executor review section for the same fact from the r
 | `payload` | object ≤4 KB | y | Free-form; object nesting ≤3 |
 | `payload.detail_omitted` | str | n | **Additive.** Written by the emit seam INSTEAD of `detail` when the payload would clear the 4096-BYTE cap (bytes, not characters — a thousand astral characters is four thousand bytes). It names the omitted field's byte count, the cap, and where the full text went. The text is saved FIRST — `<phase>/log/overflow/<ts>-<seq>-<type>-detail.txt`, run-relative — and only then is the event built, so the pointer is true by construction rather than a promise about a file written later; a save that fails says it failed instead of naming a path that does not exist, and the counter is what stops two oversize events in the same second from sharing a file. The cap is never raised and the rest of the payload — the verdict included — survives |
 | `payload.outputs_omitted` / `payload.outputs_omitted_reason` | int / str | n | **Additive.** The SECOND field the emit seam knows how to drop, and the pair is written INSTEAD of `outputs` on an `agent.result` whose path list alone clears the cap — a story that writes a few dozen files. `outputs_omitted` is the COUNT the list had; the list is never shortened in place, because a truncated `outputs` reads downstream as the whole list. `outputs_omitted_reason` carries the same sentence `detail_omitted` does, pointing at `<phase>/log/overflow/<ts>-<seq>-<type>-outputs.txt` — the full list, one path per line. `detail` is dropped first where a payload has both, and `outputs` only if the payload is STILL over. The task row in `run.yml` keeps its `outputs` in full: this bounds the EVENT, never the ledger |
+| `payload.after_omitted` / `payload.before_omitted` / `payload.paths_omitted` (each with a `_reason`) | int / str | n | **Additive.** The THIRD family the emit seam knows how to drop — the three path lists on `story.touches_widened` (#249), which carry the story's whole declared list at both ends AND the paths it added, so a wide story clears the cap at about half the file count an `agent.result` does (measured: 5556 bytes on a 32-file story with 16 declared touches). One list at a time and only while the payload is STILL over, in this order: `after` (the largest, and derivable from the other two), then `before`, then `paths` — the reading itself — last. Each is dropped WHOLE and replaced by its COUNT plus the same reason-and-pointer sentence `outputs_omitted_reason` carries, pointing at `<phase>/log/overflow/<ts>-<seq>-story.touches_widened-<field>.txt`. A `paths_omitted` a writer already put there (`worktree.foreign_work_aside` caps its own list at 40 and counts the rest in that key) is ADDED to, never overwritten: the key says every path the event does not carry. Every reader derives the `(before → after path(s))` it renders through ONE reading, `listCount` — the list's length plus the count in its place — so a row the cap could not carry reads the same in the handoff, the replay and `wideningRows`. The event is never lost to the cap: `measureSurface` emits a bounded absence (the counts, and a `note` naming the failure) when even the capped payload is refused, and says so on stderr when the log refuses that too |
 
 **Validation (appended line only).** One-line JSON ≤8 KB; exactly these seven keys; `type` in enum; append-only
 enforced by comparing file byte length before/after — a write that shortens the file is rejected.
 
-**An oversize payload the cap cannot rescue is still refused whole**, and that is the case the two `*_omitted`
-fields do not cover: a payload with neither a `detail` nor an `outputs` to drop, or one whose REMAINDER is already
-over the cap on its own. The seam knows exactly those two fields BY NAME and has no general rule for shrinking
-whatever is biggest — trimming a field it does not understand would be the framework editing its own record — so a
+**An oversize payload the cap cannot rescue is still refused whole**, and that is the case the `*_omitted`
+fields do not cover: a payload with none of `detail`, `outputs`, `after`, `before` or `paths` to drop, or one whose
+REMAINDER is already over the cap on its own. The seam knows exactly those fields BY NAME — the lists in one declared
+table, `DROPPABLE_LISTS` — and has no general rule for shrinking whatever is biggest — trimming a field it does not understand would be the framework editing its own record — so a
 new payload field that can grow without bound is oversize-and-refused until the seam is taught it. The refusal
 throws out of `EventLog.append`, and the two seams that write a turn's events — the executor's `emit` and the
 task-recording call after it — each catch it and fail the stage BY NAME with exit 5 rather than letting it escape
 past the ledger, which is what it used to do, taking the invocation's unsaved task rows and its epic-branch claim
-with it. What was earned and what was lost are both named: an executor that threw before returning has no rows at
-all and the failure says so, while a throw while RECORDING rows says how many of how many reached `run.yml`. An
+with it. What was earned and what was lost are both named: an executor that threw AFTER paid turns carries their rows on
+the error and the catch records them first (#249) — `tasks_recorded: true` with `rows_written`/`rows_expected`
+measured off the store — one that threw before any turn has no rows at all and the failure says so, and a throw
+while RECORDING rows says how many of how many reached `run.yml`. An
 epic branch the invocation claimed is saved the moment it is claimed, so a later throw cannot make the next run
 read its own epic as somebody else's.
 
