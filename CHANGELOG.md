@@ -21,6 +21,17 @@
   (`tldrx plan schema`) and `seed check` all read; the gate's pass is its own, not
   `validatePlan`'s, so a plan approved before it still loads at Build.
 
+### Fixed
+
+- **`tldrx ship` no longer opens a PR over a stale or red epic (#315).** Four PRs it opened in
+  one audit window came back red and needed a person, because between choosing the base and
+  `gh pr create` nothing fetched the base or ran a workspace command. Ship now fetches the base,
+  merges it into the epic in a throwaway worktree when behind, and runs the `done` stories'
+  Definition of Done on that tree; a conflict or a red command refuses (exit 2) naming the
+  paths or the command. Under `ship.push` the base is merged into the epic (forward, never
+  rebased or forced) and pushed with it; without it the branch is untouched. `--dry-run` runs
+  the same checks and exits the same way.
+
 ## 0.26.1 — 2026-09-14
 
 ### Changed
