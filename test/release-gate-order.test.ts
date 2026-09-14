@@ -715,7 +715,11 @@ exit $rc
       // `--status` answers for the LOCK first (a live wave is what a human must not disturb), so in
       // this window it names the gap wave; the queued release's own state is the marker's phase.
       const status = spawnSync("bash", [MERGE_WAVE, "--status"], { cwd: sb.main, encoding: "utf8", env });
-      expect(status.stdout.trim()).toMatch(/^holder=\d+ branch=wave-in-the-gap phase=merge started=/);
+      const lines = status.stdout.trim().split("\n");
+      expect(lines[0]).toMatch(/^holder=\d+ branch=wave-in-the-gap phase=merge started=/);
+      // …and the queued release on a SECOND line, so a reader is not told "a wave, nothing else".
+      expect(lines[1]).toMatch(/^release queued: pid \d+ version=0\.9\.9 phase=waiting$/);
+      expect(lines.length).toBe(2);
       // A real wave arriving now sees the marker first and yields — the release is ahead of it.
       const wave = spawnSync("bash", [MERGE_WAVE, "some-branch", "merge some-branch"], { cwd: sb.main, encoding: "utf8", env });
       expect(wave.status, `${wave.stdout}\n${wave.stderr}`).toBe(13);

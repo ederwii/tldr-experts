@@ -24,7 +24,10 @@ the gap hands it back and queues, and the release waits for the lock to clear wi
 removing its own marker — and because a kept marker then means either "queued, nothing edited
 yet" or "editing and tagging", the marker carries a `phase:` line (`waiting` → `releasing`,
 rewritten atomically), which the wave's refusal and `--status` print rather than reading every
-marker as a release in progress. Symmetric yielding would ping-pong for the whole budget. A marker a
+marker as a release in progress. While a wave holds the lock, `scripts/merge-wave.sh --status`
+answers for the wave on its first line and names a release queued behind it on a second
+(`release queued: pid <p> version=<v> phase=waiting`); `cat .RELEASE-IN-PROGRESS` shows the same
+`phase:` line. Symmetric yielding would ping-pong for the whole budget. A marker a
 SIGKILLed release left behind is cleared only by the wave's dead-owner check, which says so on
 stderr. `scripts/merge-wave.sh --status` reads either.
 

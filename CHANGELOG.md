@@ -24,7 +24,9 @@
   cover INT/TERM), so it now says so on stderr, naming the marker and the pid, and that sentence
   is pinned. And a kept marker means two things — queued and untouched, or editing and tagging —
   so it carries `phase: waiting|releasing` (rewritten atomically), which `--status` and the wave's
-  refusal print: a record never says more than the truth (§7). The code: 14 rather than 1 because there is nothing to undo, and
+  refusal print — and while a wave holds the lock, `--status` names the queued release on a
+  second line rather than answering "a wave, nothing else": a record never says more than the
+  truth (§7). The code: 14 rather than 1 because there is nothing to undo, and
   not the wave's own 6 because the two scripts' codes are read in the same logs, so the next
   number after the wave's 13 keeps a bare "exit 14" unambiguous. Pinned in both directions with
   the real scripts: a real wave against a real running release exits 13, a real release against a

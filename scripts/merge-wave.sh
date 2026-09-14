@@ -5,6 +5,9 @@
 #   `holder=<pid> branch=<b> phase=<merge|gates|push> started=<iso>` for a live wave,
 #   `release holder=<pid> version=<v> phase=<waiting|releasing> started=<iso>` for a live
 #   scripts/release.sh (`waiting`: queued behind a wave, nothing edited yet — #304), else `idle`.
+#   The LOCK answers first: while a wave holds it, the first line is the wave's, and a release
+#   queued behind that wave is a SECOND line, `release queued: pid <p> version=<v> phase=waiting`
+#   — the same fact `cat .RELEASE-IN-PROGRESS` shows as its `phase:` line (#304).
 #   Exit 0 either way; a lock or marker whose owner is dead reads as idle.
 #
 # Concurrency (#44). The merge, the gates and the push all happen in ONE shared checkout,
@@ -76,6 +79,11 @@ if [ "${1:-}" = "--status" ]; then
   o="$(mw_owner_of)"
   if [ -d "$MW_LOCK" ] && ! mw_dead_owner "$o"; then
     echo "holder=${o%% *} branch=$(cat "$MW_LOCK/branch" 2>/dev/null || echo '?') phase=$(cat "$MW_LOCK/phase" 2>/dev/null || echo '?') started=$(cat "$MW_LOCK/started" 2>/dev/null || echo '?')"
+    # The lock answers first; a release queued behind it (#304) is a second line, never silence.
+    r="$(mw_release_owner_of)"
+    if [ -n "$r" ] && ! mw_dead_owner "$r"; then
+      echo "release queued: pid ${r%% *} version=$(mw_release_field version) phase=$(mw_release_phase)"
+    fi
     exit 0
   fi
   r="$(mw_release_owner_of)"
