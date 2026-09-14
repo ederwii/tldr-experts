@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.24.0 — unreleased
+## 0.24.0 — 2026-09-14
 
 ### Added
 
