@@ -86,6 +86,28 @@ en `budget.yml`, que nunca se mezcla con `ceiling_usd`; ver
 guarda quién lo subió, por cuánto y por qué. Subir un techo a media etapa es además una de
 las cosas que impide que una [compuerta agent](/es/concepts/gates) se firme sola.
 
+### Dinero que una fase terminada ya no puede gastar
+
+Una fase que terminó por debajo de su techo se queda con la diferencia, y ninguna etapa la va a
+gastar nunca. Cuando una fase posterior se rechaza por dinero, el rechazo ahora lo dice y nombra
+el movimiento:
+
+```
+budget: finished phase(s) hold $16.25 unspent (01-what $16.25), which covers the $11.07 shortfall:
+`tldrx budget raise 04-build 11.07 --run <id> --take-from 01-what`, or launch
+`tldrx run auto --rebalance-finished` to make that move on the record automatically.
+```
+
+`tldrx run auto --rebalance-finished` hace exactamente ese movimiento antes de rechazar, y sigue.
+Viene **apagado por defecto**: un techo de fase es una decisión de una persona sobre dinero, y el
+flag eres tú tomándola para ese lanzamiento. "Terminada" es estricto — todas las etapas de la fase
+en `done` o `skipped`, ninguna stale, cobrada en `metered-usd` y sin turnos no medidos (cuyo gasto
+solo sería una cota inferior). Una fase con una etapa todavía por correr, como `05-watch` mientras
+Build está bloqueado, nunca aporta. Mueve solo el faltante, nunca sube el techo del run, nunca
+rebasa una autorización registrada, y deja un `budget.raised` por fase donante con
+`source: run auto --rebalance-finished` y tu nombre. Si todas las fases terminadas juntas no cubren
+el faltante, no se mueve nada y el rechazo dice cuánto falta todavía.
+
 ## Las tres perillas, y cuál limita a un sub-agente
 
 Un `raise` como el de arriba mueve el **techo de la fase**, y un techo de fase decide una sola

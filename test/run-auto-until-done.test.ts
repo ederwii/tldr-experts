@@ -284,6 +284,109 @@ describe("never over money", () => {
     expect(last).toContain(`estimate_usd $${estimate.toFixed(2)}`);
   });
 
+  /**
+   * gh #314. Measured on a field run: 04-build refused $11.07 short while 01-what had finished
+   * $16.25 under, and a person typed `budget raise 04-build 12 --take-from 01-what`. Without
+   * the opt-in nothing moves — a phase ceiling is still a person's decision — but the refusal
+   * now names the finished phase holding the money and the exact move.
+   */
+  test("without --rebalance-finished the refusal stands, and names the finished phase holding unspent ceiling", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    const outcome = await auto(ws, { untilDone: 5 });
+    expect(outcome.code).toBe(2);
+    expect(attempts(ws)).toBe(1);
+    expect(events(ws).filter((event) => event.type === "budget.raised")).toEqual([]);
+    const blocked = events(ws).filter((event) => event.type === "budget.blocked");
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0]?.payload).toMatchObject({ short_usd: 1, finished_unspent_usd: 5.58 });
+    const text = outcome.lines.join("\n");
+    expect(text).toContain(`tldrx budget raise 02-how 1.00 --run ${ws.runId} --take-from 01-what`);
+    expect(text).toContain("--rebalance-finished");
+    expect(readFileSync(join(ws.runDir, "budget.yml"), "utf8")).toContain('{id: "02-how", ceiling_usd: 1.00');
+  });
+
+  test("with --rebalance-finished the shortfall moves out of the finished phase, on the record, and the run finishes", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    const outcome = await auto(ws, { untilDone: 5, rebalanceFinished: true });
+    expect(outcome.code).toBe(0);
+    expect(attempts(ws)).toBe(2);
+    const raised = events(ws).filter((event) => event.type === "budget.raised");
+    expect(raised).toHaveLength(1);
+    expect(raised[0]?.actor).toBe("alan");
+    expect(raised[0]?.payload).toMatchObject({
+      phase: "02-how", amount_usd: 1, take_from: "01-what",
+      phase_ceiling_before: 1, phase_ceiling_after: 2,
+      take_from_ceiling_before: 6, take_from_ceiling_after: 5,
+      run_ceiling_before: 10, run_ceiling_after: 10,
+      source: "run auto --rebalance-finished",
+    });
+    expect(String(raised[0]?.payload.note)).toContain("01-what");
+    expect(events(ws).filter((event) => event.type === "budget.blocked")).toEqual([]);
+    const budgetText = readFileSync(join(ws.runDir, "budget.yml"), "utf8");
+    expect(budgetText).toContain("ceiling_usd: 10.00");
+    expect(budgetText).toContain('{id: "01-what", ceiling_usd: 5.00');
+    expect(budgetText).toContain('{id: "02-how", ceiling_usd: 2.00');
+    expect(outcome.lines.join("\n")).toContain("moved $1.00 from 01-what");
+  });
+
+  test("with --rebalance-finished but too little unspent, nothing moves and the refusal says how short", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    const outcome = await auto(ws, {
+      untilDone: 5,
+      rebalanceFinished: true,
+      // After alpha settles at $0.42, leave 01-what only $0.08 unspent.
+      onLine: (line) => {
+        if (line.startsWith("01-what/alpha") && line.includes("done")) starve(ws, "01-what", 0.5);
+      },
+    });
+    expect(outcome.code).toBe(2);
+    expect(attempts(ws)).toBe(1);
+    expect(events(ws).filter((event) => event.type === "budget.raised")).toEqual([]);
+    const blocked = events(ws).filter((event) => event.type === "budget.blocked");
+    expect(blocked[0]?.payload).toMatchObject({ short_usd: 1, finished_unspent_usd: 0.08, uncovered_usd: 0.92 });
+    expect(outcome.lines.join("\n")).toContain("$0.92 short");
+    expect(outcome.lines[outcome.lines.length - 1]).toContain("$0.92 short");
+  });
+
+  test("with --rebalance-finished, a move that would pass the owner's grant is not made — not even under warn", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    const path = join(ws.runDir, "budget.yml");
+    const text = readFileSync(path, "utf8")
+      .replace('{id: "02-how", ceiling_usd: 1.00, spent_usd: 0.00}', '{id: "02-how", ceiling_usd: 1.00, spent_usd: 0.00, authorized_usd: 1.50}')
+      .replace("on_exceed: block", "on_exceed: block\nauthorized_by: F001\nauthorized_at: \"2026-09-14T00:00:00Z\"\non_grant_exceed: warn");
+    writeFileSync(path, text, "utf8");
+    const outcome = await auto(ws, { untilDone: 5, rebalanceFinished: true });
+    expect(outcome.code).toBe(2);
+    expect(events(ws).filter((event) => event.type === "budget.raised")).toEqual([]);
+    expect(outcome.lines.join("\n")).toContain("F001");
+  });
+
+  test("the CLI flag reaches the loop: `tldrx run auto --rebalance-finished` moves the money and finishes", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    const code = await runCommand.run(["auto", "--rebalance-finished", "--root", ws.root, "--ui", "off"]);
+    expect(code).toBe(0);
+    expect(events(ws).filter((event) => event.type === "budget.raised")).toHaveLength(1);
+  });
+
+  test("the move is written through a fresh store: a long-lived store adopts it without its ceilings winning later saves (#236)", () => {
+    const ws = workspace();
+    const longLived = RunStore.open(ws.runDir);
+    const other = RunStore.open(ws.runDir);
+    other.mutateBudget((b) => ({ ...b, phases: b.phases.map((p) => p.id === "02-how" ? { ...p, ceiling_usd: 2 } : p) }));
+    other.save();
+    longLived.refreshCeilings();
+    expect(longLived.budget.phases.find((p) => p.id === "02-how")?.ceiling_usd).toBe(2);
+    // A person's raise AFTER the adoption must survive the long-lived store's next save.
+    starve(ws, "01-what", 5.5);
+    longLived.save();
+    expect(readFileSync(join(ws.runDir, "budget.yml"), "utf8")).toContain('{id: "01-what", ceiling_usd: 5.50');
+  });
+
   test("`--max-usd` spans the supervised run: a relaunch does not hand the loop a fresh ceiling", async () => {
     // alpha fails ($0.42 spent) → exit 5 → relaunched. The second attempt inherits that
     // $0.42: alpha succeeds ($0.84 by this loop), and $0.84 ≥ $0.80 stops it BETWEEN stages.

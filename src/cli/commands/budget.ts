@@ -30,8 +30,8 @@ import { isResolved, resolveRunOrExplain, type RunOrExit } from "../resolveRun.t
 import { buildBudgetView, renderBudget } from "../../core/budget/budgetView.ts";
 import { round2 } from "../../core/build/caps.ts";
 import type { RunFile } from "../../core/run/RunFile.ts";
-import { describeRaise, raiseBudget } from "../../core/budget/raiseBudget.ts";
-import { grantFor, wouldExceedGrant } from "../../core/budget/grant.ts";
+import { describeRaise, raiseBudget, raiseGrantVerdict, raisedPayload } from "../../core/budget/raiseBudget.ts";
+import { wouldExceedGrant } from "../../core/budget/grant.ts";
 import { ON_GRANT_EXCEED, type OnGrantExceed } from "../../core/budget/RunBudget.ts";
 import { FactsStore } from "../../core/facts/FactsStore.ts";
 import { isLive } from "../../core/facts/Fact.ts";
@@ -156,18 +156,9 @@ function budgetRaise(argv: readonly string[]): number {
 
     // The RESULTING ceiling, against what the owner authorized (#170) — checked
     // before anything is written, so a refusal leaves budget.yml byte-identical.
-    //
-    // TWO BRANCHES, and they are not interchangeable. `grantFor` prefers a PHASE
-    // grant when the phase declares one, and a phase grant governs that phase's
-    // ceiling — not the run's. `--take-from` is the case that separates them: it
-    // moves money between phases and leaves the run ceiling exactly where it was,
-    // so measuring a phase grant against `runCeilingAfter` would refuse a move
-    // that changed nothing the grant is about. Written out rather than folded
-    // into one expression, because the wrong one is invisible in a diff.
-    const phaseGrant = grantFor(store.budget, phaseId);
-    const verdict = phaseGrant !== null && phaseGrant.level === "phase"
-      ? wouldExceedGrant(store.budget, phaseId, outcome.phaseCeilingAfter)
-      : wouldExceedGrant(store.budget, null, outcome.runCeilingAfter);
+    // `raiseGrantVerdict` owns which grant governs (phase vs run); `run auto
+    // --rebalance-finished` asks the same function (gh #314).
+    const verdict = raiseGrantVerdict(store.budget, outcome);
     // 2, not 1: this is the owner forbidding a ceiling, not the operator typing
     // something impossible. See this file's header on the two families.
     if (verdict.blocked) {
@@ -214,14 +205,7 @@ function budgetRaise(argv: readonly string[]): number {
       type: "budget.raised",
       actor: currentActor(),
       cost_usd: 0,
-      payload: {
-        phase: outcome.phaseId,
-        amount_usd: outcome.amountUsd,
-        take_from: outcome.takeFrom,
-        phase_ceiling_before: outcome.phaseCeilingBefore,
-        phase_ceiling_after: outcome.phaseCeilingAfter,
-        run_ceiling_before: outcome.runCeilingBefore,
-        run_ceiling_after: outcome.runCeilingAfter,
+      payload: raisedPayload(outcome, {
         // ADDITIVE (gh #244), and omitted on every raise that named no stage —
         // absent means what it has always meant: no spawn ceiling moved.
         ...(stageId === null || stageBefore === null ? {} : {
@@ -230,7 +214,7 @@ function budgetRaise(argv: readonly string[]): number {
           stage_budget_after: round2(stageBefore + amountUsd),
         }),
         note: stringFlag(args, "note") ?? "",
-      },
+      }),
     });
     store.save();
 
