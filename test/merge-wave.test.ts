@@ -1802,11 +1802,17 @@ describe("a wave WAITS on a release in flight, the way it waits on its own lock 
     // release.sh's traps cover INT/TERM only; a SIGKILL or a cut session leaves the marker with
     // no owner to remove it, and since #304 the release never hands its marker back — so this
     // dead-owner check is the ONE path that ever clears an orphaned marker, and it says so in
-    // the sentence a human will grep for, naming the marker and the pid. The path is the one
-    // `git worktree list` answers — CANONICAL (`/private/var/…`), while a `tmpdir()` sandbox is
-    // spelled through the `/var` symlink on macOS: the wave's own gates caught this comparing the
-    // raw spelling, so the expectation is built from the real path of the sandbox root.
-    expect(r.stderr).toContain(`merge-wave: broke open ${join(realpathSync(sb.main), ".RELEASE-IN-PROGRESS")} — the release that held it (pid 999999) is dead`);
+    // the sentence a human will grep for, naming the marker and the pid. The path is compared
+    // as a FILE, both sides canonicalized: the script prints the root `git worktree list`
+    // answers (`/private/var/…`) while a `tmpdir()` sandbox is spelled through the `/var`
+    // symlink on macOS — the wave's own gates caught the raw comparison on the merged tree.
+    // Canonicalizing only the expectation would pin "the script always prints the canonical
+    // form", a claim about every invocation path; this pins "it names the same file".
+    const said = /^merge-wave: broke open (.+) — the release that held it \(pid 999999\) is dead$/m.exec(r.stderr);
+    expect(said, `no broke-open sentence on stderr:\n${r.stderr}`).not.toBeNull();
+    const printed = said![1]!;
+    expect(basename(printed)).toBe(".RELEASE-IN-PROGRESS");
+    expect(realpathSync(dirname(printed))).toBe(realpathSync(sb.main));   // the marker itself is gone by now
   });
 
   test("when the release finishes, the queued wave goes on to merge", async () => {
