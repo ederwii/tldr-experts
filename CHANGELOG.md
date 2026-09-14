@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.23.1 — unreleased
+## 0.24.0 — unreleased
 
 ### Fixed
 
@@ -28,6 +28,26 @@
   so a run already in flight is told too. `shortBy` moved from `budget/budgetView.ts` to
   `build/caps.ts` (re-exported where it was): the plan-price shortfall needs the same round-up, and a
   second copy of a rounding rule is what §7 forbids.
+- **A story whose dependency is at `review` now WAITS instead of being written `blocked`, and a
+  `blocked` row whose reason names a dependency that has since turned `done` is offered again
+  (#280).** Measured on a live unattended run (0.18.2, four stories in four waves, S3 and S4
+  `depends_on: [S2]`): S2 came out of its fix round at `review` — verdict recorded, branch merged
+  into the epic — and the loop parked both dependents `blocked` with `dependency S2 is \`review\`,
+  not \`done\``. Two polls later S2 was `done`; the dependents were still `blocked`, because
+  `blocked` is a terminal row the loop never revisits, and a person had to `story reopen` both.
+  #260's frontier drew one line — `done` runs, anything else blocks — which is right for a
+  dependency that will not land in this loop (`blocked`, or `todo` after its developer died, #263)
+  and wrong for `review`/`in_progress`: that is a story mid-pipeline, re-offered by the very next
+  invocation, and a terminal row over it confused "not yet" with "never". Now such a dependency is
+  a wait — the dependent's row is left untouched at `todo`, no log and no outcome row are written,
+  `## Unknowns` names the wait with the story it waits on, and the next invocation asks again. And
+  the shape every earlier run left on disk is released the same way a dead developer's block is:
+  a `blocked` row whose `## Why it is not done` is a dependency hold, over dependencies that are
+  all `done` now, is offered again — nothing attempted it, so nothing about it was judged; a row a
+  reviewer blocked keeps its verdict. One leaf, `build/dependencyHold.ts`, writes the sentence and
+  reads it back. #263's own pin — a dependency parked `todo` still blocks — is untouched. Visible
+  in-session too: after a story settles, a dependent that used to sit `blocked` is now the next
+  `--prepare`, so the stage stays `running` and names it instead of reaching the gate.
 
 ## 0.23.0 — 2026-09-14
 

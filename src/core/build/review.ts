@@ -469,6 +469,14 @@ function dodLines(r: DodResult): readonly string[] {
 }
 
 /** `04-build/log/<story-id>.md`. Line 1 is the heading, which is what handoffs cite. */
+/**
+ * The log section that carries a story's `reason` — the ONE heading, exported
+ * because `build/dependencyHold.ts` reads it back (#280): a story blocked by a
+ * dependency emits no event and the handoff is rewritten every invocation, so
+ * this section is the record the next invocation has.
+ */
+export const WHY_NOT_DONE_HEADING = "## Why it is not done";
+
 export function renderReviewLog(outcome: StoryOutcome): string {
   const lines = [
     `# Review — ${outcome.id} · ${outcome.title}`,
@@ -560,7 +568,7 @@ export function renderReviewLog(outcome: StoryOutcome): string {
     lines.push("## Uncommitted work rescued", "", ...rescueLines(outcome), "");
   }
   if (outcome.reason !== null) {
-    lines.push("## Why it is not done", "", outcome.reason, "");
+    lines.push(WHY_NOT_DONE_HEADING, "", outcome.reason, "");
   }
   return lines.join("\n");
 }

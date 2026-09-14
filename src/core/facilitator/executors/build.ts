@@ -139,6 +139,10 @@ import {
   RecurringFocus, ReviewCounters, type RoundParts,
 } from "../../build/reviewRound.ts";
 import { readReviewLedger } from "../../build/reviewLedger.ts";
+import {
+  decidingHold, dependencyHoldOfLog, dependencyHoldReason, dependencyIsPending, dependencyWaitLine,
+  dependencyWaitReason, type DependencyHold,
+} from "../../build/dependencyHold.ts";
 import { classifyRefusal, MAX_SEPARATOR_RETRIES, separatorCurePrefix, withCure } from "../../build/refusalKind.ts";
 import { developerGitGrants } from "../../build/developerGrants.ts";
 import type { ReviewerProvenance } from "../../build/reviewerProvenance.ts";
@@ -617,6 +621,13 @@ class BuildSession {
   private readonly preflight: PreflightCache;
   /** How many stories of one wave may be in flight at once. */
   private readonly lanes: number;
+  /**
+   * Stories this pass did NOT start because a dependency is mid-pipeline (#280)
+   * — `review` or `in_progress`, re-offered by the next invocation. A wait
+   * writes nothing to the story file and no outcome row; this is what lets
+   * `## Unknowns` name the wait instead of "no attempt and no reason for it".
+   */
+  private readonly waits = new Map<string, DependencyHold>();
 
   constructor(
     private readonly ctx: ExecutorContext,
@@ -671,6 +682,19 @@ class BuildSession {
           pending.push(planned);
           continue;
         }
+        // A row THIS loop blocked for a dependency that has since landed is not a
+        // verdict on the story — nothing attempted it — so it is offered again
+        // (#280). Every run before that fix left this shape on disk, and the one
+        // it was measured on needed a person to `story reopen` both dependents.
+        const released = status === "blocked" ? this.staleDependencyHold(planned) : null;
+        if (released !== null) {
+          this.lines.push(
+            `  · ${planned.story.id} was \`blocked\` for dependency ${released}, which is now \`done\` — `
+            + "that was never an attempt, so it is offered again",
+          );
+          pending.push(planned);
+          continue;
+        }
         if (status === "done" || status === "blocked") {
           this.lines.push(`  · ${planned.story.id} is already \`${status}\` — left alone`);
           continue;
@@ -690,9 +714,17 @@ class BuildSession {
         // it exactly: ONE derivation (`blockingDependency`), asked per story, on
         // whatever number of lanes the operator chose. #260's own direction is
         // kept — a story that depends on NOTHING still runs after a parked one.
+        //
+        // TWO KINDS OF HOLD, since #280. A dependency that will not land in this
+        // loop blocks the story with the reason; one at `review`/`in_progress`
+        // is mid-pipeline and re-offered next invocation, so the dependent WAITS
+        // — row untouched, asked again — because `blocked` is terminal here and
+        // a terminal row over a story that is one re-review from `done` is what
+        // left two dependents for a person to reopen (`build/dependencyHold.ts`).
         const held = this.blockingDependency(planned);
         if (held !== null) {
-          this.blockOnDependency(planned, held);
+          if (dependencyIsPending(held.status)) this.waitOnDependency(planned, held);
+          else this.blockOnDependency(planned, held);
           continue;
         }
         this.noteIfReopened(planned, status);
@@ -2244,25 +2276,60 @@ class BuildSession {
    *
    * `waves.yml` guarantees a dependency lands in an EARLIER wave
    * (`plan/validatePlan.ts`), so at the moment this is asked every dependency has
-   * already had its turn and its status is final. Anything but `done` holds the
-   * story: `blocked` is the case #260 is about, and a dependency left at `todo`,
-   * `in_progress` or `review` is work that did not land either — a story fanning
-   * out over it is the same false start, and a frontier that let it through
-   * because the status was not the one word it checked for would be reading a
-   * label rather than the fact.
+   * already had its turn. Anything but `done` holds the story: `blocked` is the
+   * case #260 is about, and a dependency left at `todo`, `in_progress` or
+   * `review` is work that did not land either — a story fanning out over it is
+   * the same false start, and a frontier that let it through because the status
+   * was not the one word it checked for would be reading a label rather than
+   * the fact. WHAT the hold does — block, or wait (#280) — is the caller's
+   * question, and `decidingHold` answers which of several holds it is asked of.
    *
    * A `depends_on` id no story answers to is NOT treated as a hold: `validatePlan`
    * already refuses a plan with a dangling dependency, so inventing a reason here
    * would be this file's second opinion about that (§7).
    */
-  private blockingDependency(planned: PlannedStory): { id: string; status: PlanStatus } | null {
+  private blockingDependency(planned: PlannedStory): DependencyHold | null {
+    const holds: DependencyHold[] = [];
     for (const id of planned.story.depends_on) {
       const dependency = this.plan.stories.get(id);
       if (dependency === undefined) continue;
       const status = this.statusOf(dependency);
-      if (status !== "done") return { id, status };
+      if (status !== "done") holds.push({ id, status });
     }
-    return null;
+    return decidingHold(holds);
+  }
+
+  /**
+   * A story whose dependency is mid-pipeline waits (#280): nothing is written —
+   * not the story file, not an outcome row — and the next invocation asks the
+   * frontier again, by which time the dependency has had its re-review or its
+   * fix round. The wait is remembered for this pass only, so the report and
+   * `## Unknowns` name it instead of calling it a story with no reason.
+   */
+  private waitOnDependency(planned: PlannedStory, held: DependencyHold): void {
+    this.waits.set(planned.story.id, held);
+    this.lines.push(dependencyWaitLine(planned.story.id, held));
+  }
+
+  /**
+   * The dependency a `blocked` story's own log says blocked it, when that
+   * dependency — and every other one — is now `done`; null otherwise (#280).
+   *
+   * Read off the log because that is the only record `blockOnDependency` leaves
+   * that outlives the process (it emits no event: there was no attempt to
+   * close). A row a reviewer blocked, or one the loop blocked for a dependency
+   * that is STILL not `done`, returns null and stays exactly where it is.
+   */
+  private staleDependencyHold(planned: PlannedStory): string | null {
+    const path = join(this.ctx.runDir, BUILD_PHASE, LOG_DIR, `${planned.story.id}.md`);
+    let named: string | null;
+    try {
+      named = dependencyHoldOfLog(readFileSync(path, "utf8"));
+    } catch {
+      return null;
+    }
+    if (named === null) return null;
+    return this.blockingDependency(planned) === null ? named : null;
   }
 
   /**
@@ -2282,17 +2349,11 @@ class BuildSession {
    * (`run/runOutcome.ts`) — the whole point of recording a reason instead of
    * leaving the gate held by a `todo` nobody can act on (#239).
    */
-  private blockOnDependency(
-    planned: PlannedStory,
-    held: { id: string; status: PlanStatus },
-  ): void {
+  private blockOnDependency(planned: PlannedStory, held: DependencyHold): void {
     const id = planned.story.id;
-    // ONE sentence, and the `blocked` case is the one the issue's shape names, so
-    // it reads exactly as specified rather than through a status-substituting
-    // template that would say `dependency S7 is blocked`.
-    const reason = held.status === "blocked"
-      ? `dependency ${held.id} blocked`
-      : `dependency ${held.id} is \`${held.status}\`, not \`done\``;
+    // ONE sentence, written and read back by `build/dependencyHold.ts` (#280):
+    // the next invocation recognises this row by it.
+    const reason = dependencyHoldReason(held);
     const epic = this.plan.epics.get(planned.story.epic);
     const outcome: StoryOutcome = {
       id,
@@ -3415,12 +3476,17 @@ class BuildSession {
     for (const wave of this.plan.waves) {
       for (const planned of wave.stories) {
         if (named.has(planned.story.id)) continue;
+        const wait = this.waits.get(planned.story.id);
         rows.push({
           id: planned.story.id,
           rel: this.plan.implicit ? IMPLICIT_PLAN_REL : planned.rel,
           status: this.statusOf(planned),
-          reason: "this stage recorded no attempt and no reason for it — "
-            + "nothing here says the work was done, and nothing says why it was not",
+          // A wait IS a reason (#280); the residue below is the one there is no
+          // reason for.
+          reason: wait !== undefined
+            ? dependencyWaitReason(wait)
+            : "this stage recorded no attempt and no reason for it — "
+              + "nothing here says the work was done, and nothing says why it was not",
         });
       }
     }
@@ -3892,9 +3958,10 @@ class BuildSession {
         const status = this.statusOf(planned);
         if (status === "done") continue;
         // `blocked` is terminal in-run — unless what blocked it was a developer
-        // that never ran, in which case the story was never really attempted and
-        // is owed the turn it did not get.
-        if (status === "blocked" && this.blockedByFailedDeveloper(planned) === null) continue;
+        // that never ran, or a dependency that has since landed (#280): in both
+        // the story was never really attempted and is owed the turn it did not get.
+        if (status === "blocked" && this.blockedByFailedDeveloper(planned) === null
+          && this.staleDependencyHold(planned) === null) continue;
         rows.push(planned);
       }
     }

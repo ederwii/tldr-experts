@@ -3993,7 +3993,17 @@ alone; the sequential path is the DEFAULT and is what `run auto` runs, and there
 that died on its own cap was followed one second later by the dependent of the next wave, which then reached `done`
 over an epic branch its dependency had put nothing on — the audit record lying in the dangerous direction (§2.13).
 Any dependency that is not `done` holds a story, whatever parked it; a story that depends on nothing still runs after
-one, which is #260's own direction and unchanged.
+one, which is #260's own direction and unchanged. **A hold is a block or a wait (#280).** A dependency that will not
+become `done` in this loop — `blocked`, or `todo` after its developer died — BLOCKS the dependent as above. A
+dependency at `review` or `in_progress` is a story mid-pipeline in this loop, re-offered by the very next invocation
+(a re-review, a fix round), and the dependent WAITS: its row is left untouched at `todo`, no log and no outcome row
+are written, `04-build/handoff.md`'s `## Unknowns` names the wait with the story it waits on, and the next invocation
+asks the frontier again. Measured before this rule: two dependents were written `blocked` behind a story at `review`,
+that story was `done` two polls later, and both dependents stayed `blocked` — a terminal row nothing revisits — until a
+person `story reopen`ed them. And a `blocked` row whose recorded reason (`## Why it is not done` in its log) is a
+dependency hold over a dependency that is NOW `done` is offered again by the next invocation, like a row a dead
+developer blocked: nothing attempted it, so nothing about it was judged. A row a reviewer blocked keeps its verdict.
+The sentence and its reader are one derivation, `build/dependencyHold.ts`.
 
 **The budget does not change.** `worstCaseShares` is already `stories × MAX_ATTEMPTS × (1 + REVIEWER_SHARE)` across
 the whole plan, so the sum of every cap the executor can hand out is ≤ the stage ceiling however the attempts fall —

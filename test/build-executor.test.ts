@@ -34,6 +34,11 @@ import { reviewBundleKeyOf, reviewWorkFromBundle, writeReviewBundle } from "../s
 import type { PlannedStory } from "../src/core/build/plan.ts";
 import { endsWithToken } from "../src/core/text/srcToken.ts";
 import { UNFINISHED_STORIES } from "../src/core/run/autoGate.ts";
+import {
+  decidingHold, dependencyHoldOfLog, dependencyHoldReason, dependencyNamedByHold, dependencyWaitLine,
+  dependencyWaitReason,
+} from "../src/core/build/dependencyHold.ts";
+import { WHY_NOT_DONE_HEADING } from "../src/core/build/review.ts";
 import { approve, reject } from "../src/core/run/gates.ts";
 import { updateStoryFront, evidenceFor } from "../src/core/build/storyFile.ts";
 import { renderBuildProgress, buildProgress } from "../src/core/run/buildProgress.ts";
@@ -4388,6 +4393,169 @@ describe("a story whose dependency was parked by a dead developer (gh #263)", ()
     expect(story(ws, "S1")).toContain("status: todo");
     expect(events(ws).some((e) => e.type === "task.started" && e.payload.story === "S2")).toBe(true);
     expect(story(ws, "S2")).toContain("status: done");
+  }, 90_000);
+});
+
+/**
+ * gh #280 — a dependency at `review` is a WAIT, not a block.
+ *
+ * Measured on a live unattended run (0.18.2, four stories in four waves, S3 and
+ * S4 `depends_on: [S2]`): S2 came out of its fix round at `review` — verdict
+ * recorded, branch merged into the epic — and when the loop reached the later
+ * waves both dependents were parked `blocked` with `dependency S2 is \`review\`,
+ * not \`done\``. Two invocations later S2 was `done`, and the dependents were
+ * STILL `blocked`: `blocked` is a terminal row (`already \`blocked\` — left
+ * alone`), nothing revisits it, and a person had to `story reopen` both.
+ *
+ * #260's frontier drew one line — `done` runs, anything else blocks — and that
+ * is right for a dependency that will NOT become `done` in this loop (`blocked`,
+ * or `todo` after a developer died: #263). It is wrong for `review` and
+ * `in_progress`: that is a story mid-pipeline in THIS loop, re-offered by the
+ * very next invocation (`pendingStories` includes both), and a dependent that
+ * records a terminal `blocked` over it has confused "not yet" with "never".
+ *
+ * Two halves, both pinned here. The dependent of a `review` story is left `todo`
+ * — a wait needs the row untouched — and is built by the next invocation once
+ * the dependency is `done`, with no person in between. And a `blocked` row whose
+ * recorded reason names a dependency that is NOW `done` (the shape every run
+ * before this fix left on disk) is offered again rather than left alone.
+ * #263's own pin — a dependency parked `todo` still blocks — is untouched.
+ */
+describe("a story whose dependency is at `review` waits instead of blocking (gh #280)", () => {
+  const DIED = "Reached maximum budget ($0.26)";
+
+  /** W1 = [S1], W2 = [S2 depends_on S1]. */
+  function twoWaves(): BuildWorkspace {
+    return workspace({
+      stories: [
+        { id: "S1", epic: "E1", title: "First" },
+        { id: "S2", epic: "E1", title: "Second, in the next wave", dependsOn: ["S1"] },
+      ],
+      epics: [{ id: "E1", stories: ["S1", "S2"], branch: "epic/e1" }],
+      waves: [["S1"], ["S2"]],
+    });
+  }
+
+  /** S1's FIRST reviewer dies, so S1 parks at `review`; every later one works. */
+  function parkS1AtReview(): void {
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "reviewer:S1#1";
+  }
+
+  function reenter(ws: BuildWorkspace, note: string): void {
+    reject(RunStore.open(ws.runDir), { root: ws.root, actor: "alan", at: "2026-08-29T10:00:00Z", note });
+  }
+
+  function started(ws: BuildWorkspace, id: string): boolean {
+    return events(ws).some((e) => e.type === "task.started" && e.payload.story === id);
+  }
+
+  test("the dependent stays `todo` this pass and is built by the next invocation once the dependency is `done`", async () => {
+    const ws = twoWaves();
+    parkS1AtReview();
+
+    const first = await next(ws);
+
+    // S1 is exactly where an errored review parks it: merged, unjudged.
+    expect(story(ws, "S1")).toContain("status: review");
+    // The defect: S2 was recorded `blocked` — a terminal row — over a story that
+    // is one re-review away from `done`. A wait leaves the row untouched.
+    expect(started(ws, "S2")).toBe(false);
+    expect(story(ws, "S2")).toContain("status: todo");
+    const said = first.lines.join("\n");
+    expect(said).not.toContain("S2 was not started");
+    expect(said).toContain(dependencyWaitLine("S2", { id: "S1", status: "review" }));
+    // No outcome row, but not silence either (#260): `## Unknowns` names the
+    // wait, with the story it waits on, in place of "no attempt and no reason".
+    const handoff = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    expect(handoff).toContain(`S2 was scheduled and never started, and is still \`todo\` — ${dependencyWaitReason({ id: "S1", status: "review" })}`);
+    expect(handoff).not.toContain("S2 was scheduled and never started, and is still `todo` — this stage recorded no attempt");
+    // And no log was written for it: a wait is not an attempt and not a verdict.
+    expect(existsSync(join(ws.runDir, "04-build", "log", "S2.md"))).toBe(false);
+    // Nothing is `blocked`, so the gate has no `blocked_story` to send anyone at.
+    const gate = events(ws).find((e) => e.type === "gate.requested");
+    expect(gate?.payload.blocked_story).toBeUndefined();
+
+    // The loop's next turn: S1's review is re-run and lands; S2 is then owed
+    // its turn — with nobody having reopened anything.
+    reenter(ws, "the reviewer died");
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(started(ws, "S2")).toBe(true);
+    expect(story(ws, "S2")).toContain("status: done");
+  }, 90_000);
+
+  test("a `blocked` row whose reason names a dependency that is now `done` is offered again, not left alone", async () => {
+    const ws = twoWaves();
+    parkS1AtReview();
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: review");
+
+    // The shape every run before this fix left on disk (and the one the issue
+    // measured): S2 `blocked` with the dependency reason in its log.
+    writeFileSync(join(ws.planDir, "stories", "S2.md"), story(ws, "S2").replace("status: todo", "status: blocked"), "utf8");
+    const logDir = join(ws.runDir, "04-build", "log");
+    mkdirSync(logDir, { recursive: true });
+    writeFileSync(join(logDir, "S2.md"), [
+      "# Review — S2 · Second, in the next wave", "",
+      "- Verdict: **n-a**", "- Story status: `blocked`", "- Attempt: 0", "",
+      WHY_NOT_DONE_HEADING, "", dependencyHoldReason({ id: "S1", status: "review" }), "",
+    ].join("\n"), "utf8");
+
+    reenter(ws, "the reviewer died");
+    const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(started(ws, "S2")).toBe(true);
+    expect(story(ws, "S2")).toContain("status: done");
+    const said = again.lines.join("\n");
+    expect(said).not.toContain("S2 is already `blocked` — left alone");
+    expect(said).toContain("S2 was `blocked` for dependency S1, which is now `done`");
+  }, 90_000);
+
+  test("the recorded sentence is read back by the one function that writes it — and nothing else is", () => {
+    // Both shapes `blockOnDependency` writes round-trip.
+    expect(dependencyNamedByHold(dependencyHoldReason({ id: "S7", status: "blocked" }))).toBe("S7");
+    expect(dependencyNamedByHold(dependencyHoldReason({ id: "S2", status: "review" }))).toBe("S2");
+    expect(dependencyNamedByHold(dependencyHoldReason({ id: "S2", status: "todo" }))).toBe("S2");
+    // A reviewer's own words are not a dependency hold, even when they contain one.
+    expect(dependencyNamedByHold("the reviewer asked for changes twice: dependency S1 blocked the tests")).toBeNull();
+    expect(dependencyNamedByHold("")).toBeNull();
+    // The log parser reads exactly the `## Why it is not done` section.
+    const log = ["# Review — S3", "", "- Verdict: **n-a**", "", "## Findings", "", "- none", "",
+      WHY_NOT_DONE_HEADING, "", "dependency S2 blocked", ""].join("\n");
+    expect(dependencyHoldOfLog(log)).toBe("S2");
+    expect(dependencyHoldOfLog(log.replace("dependency S2 blocked", "npm run test exited 1"))).toBeNull();
+    expect(dependencyHoldOfLog("# Review — S3\n\n- Verdict: **approve**\n")).toBeNull();
+    // A terminal hold decides over a pending one, whatever the order.
+    expect(decidingHold([{ id: "S1", status: "review" }, { id: "S0", status: "blocked" }])).toEqual({ id: "S0", status: "blocked" });
+    expect(decidingHold([{ id: "S1", status: "review" }, { id: "S0", status: "in_progress" }])).toEqual({ id: "S1", status: "review" });
+    expect(decidingHold([])).toBeNull();
+  });
+
+  test("a `blocked` row whose reason is its OWN (not a dependency) is still left alone", async () => {
+    const ws = twoWaves();
+    parkS1AtReview();
+    await next(ws);
+
+    writeFileSync(join(ws.planDir, "stories", "S2.md"), story(ws, "S2").replace("status: todo", "status: blocked"), "utf8");
+    const logDir = join(ws.runDir, "04-build", "log");
+    mkdirSync(logDir, { recursive: true });
+    writeFileSync(join(logDir, "S2.md"), [
+      "# Review — S2 · Second, in the next wave", "",
+      "- Verdict: **changes**", "- Story status: `blocked`", "- Attempt: 2", "",
+      "## Why it is not done", "", "the reviewer asked for changes twice: still wrong", "",
+    ].join("\n"), "utf8");
+
+    reenter(ws, "the reviewer died");
+    const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(started(ws, "S2")).toBe(false);
+    expect(story(ws, "S2")).toContain("status: blocked");
+    expect(again.lines.join("\n")).toContain("S2 is already `blocked` — left alone");
   }, 90_000);
 });
 
