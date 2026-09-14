@@ -25,7 +25,9 @@ import { readReviewLedger, MAX_ATTEMPTS } from "../src/core/facilitator/executor
 import { reopenStory } from "../src/core/run/reopenStory.ts";
 import { storyCommand } from "../src/cli/commands/story.ts";
 import { storyBranchOf } from "../src/core/plan/branchModel.ts";
-import { AS_IS_JUDGED_MARK, AS_IS_MARK, AS_IS_NOT_AHEAD_MARK, AS_IS_REVIEW_ONLY_MARK } from "../src/core/build/outcome.ts";
+import {
+  AS_IS_JUDGED_MARK, AS_IS_MARK, AS_IS_NOT_AHEAD_MARK, AS_IS_REVIEW_ONLY_MARK, NO_DIFF_MARK,
+} from "../src/core/build/outcome.ts";
 import { reject } from "../src/core/run/gates.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
@@ -488,6 +490,8 @@ describe("the build executor picks a reopened story back up", () => {
     expect(story(ws, "S1")).toContain("status: blocked");
 
     reopen(ws, "S1", WHY);
+    // The reopened attempt lands a diff (#308: one that does not is refused).
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({ "S1#3": { "s1.txt": "S1, after the reopen\n" } });
     reenter(ws, "S1 was reopened");
     const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
 
@@ -508,6 +512,10 @@ describe("the build executor picks a reopened story back up", () => {
     expect(story(ws, "S1")).toContain("status: blocked");
 
     reopen(ws, "S1", WHY);
+    // Both reopened attempts land a diff, so it is the two verdicts that block it.
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      "S1#3": { "s1.txt": "S1, third\n" }, "S1#4": { "s1.txt": "S1, fourth\n" },
+    });
     reenter(ws, "S1 was reopened");
     await next(ws, { at: "2026-08-29T10:05:00Z" });
 
@@ -617,6 +625,9 @@ describe("a done story reopened for a named fix (#58)", () => {
     const ws = await done();
     const before = events(ws).length;
     forFix(ws, "S1", DEFECT);
+    // A fix that LANDS: the tree moves. The fake's default rewrites the bytes the
+    // first attempt committed, which is #308's no-diff shape and is refused now.
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({ S1: { "s1.txt": "S1 was here, and setDisplayName is retried\n" } });
     reenter(ws, "S1 has a defect to fix");
     await next(ws, { at: "2026-08-29T10:05:00Z" });
 
@@ -632,11 +643,84 @@ describe("a done story reopened for a named fix (#58)", () => {
   test("a fix a reviewer refuses does NOT go done — the handshake still gates it", async () => {
     const ws = await done();
     forFix(ws, "S1", DEFECT);
+    // A diff on every attempt, so it is the REVIEWER that blocks it, not #308's gate.
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      "S1#2": { "s1.txt": "S1, second try\n" }, "S1#3": { "s1.txt": "S1, third try\n" },
+    });
     process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "changes"] });
     reenter(ws, "S1 has a defect to fix");
     await next(ws, { at: "2026-08-29T10:05:00Z" });
 
     expect(story(ws, "S1")).toContain("status: blocked");
+  }, 60_000);
+
+  /**
+   * gh #308, measured live: a fix round whose developer read the file, said it
+   * "already satisfies every acceptance criterion" and changed nothing settled
+   * the story `done` again — `commitIfDirty` hands back the OLD head on a clean
+   * tree, so the "no commit to review" gate never fired, the merge was a no-op
+   * and the ledger closed the fix round on `done` alone. $1.69 bought nothing
+   * and reported success. A person's note names a concrete gap; a tree that did
+   * not move cannot have closed it.
+   */
+  test("a fix round whose developer lands no diff is refused, not settled done (#308)", async () => {
+    const ws = await done();
+    const epicBefore = git(ws, ["rev-parse", "epic/e1"]);
+    const before = events(ws).length;
+    forFix(ws, "S1", DEFECT);
+    // The live shape: the developer touches nothing.
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({ S1: {} });
+    reenter(ws, "S1 has a defect to fix");
+    const out = await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+    const after = events(ws).slice(before);
+    const settled = after.filter((e) => e.type === "task.done");
+    expect(settled.map((e) => e.payload.status)).toEqual(["blocked"]);
+    // No DoD was paid for and no reviewer was asked to judge an empty diff.
+    expect(after.filter((e) => e.payload.check === "dod")).toHaveLength(0);
+    expect(after.filter((e) => e.payload.check === "review")).toHaveLength(0);
+    // The epic did not move, and the refusal names the note the person signed.
+    expect(git(ws, ["rev-parse", "epic/e1"])).toBe(epicBefore);
+    const said = out.lines.join("\n");
+    expect(said).toContain(NO_DIFF_MARK);
+    expect(said).toContain(DEFECT);
+    expect(readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8")).toContain(NO_DIFF_MARK);
+    // The fix round is STILL OPEN — nothing landed, so nothing closed it.
+    expect(readReviewLedger(ws.runDir, "S1").fixRound).not.toBeNull();
+  }, 60_000);
+
+  /** The same bytes rewritten are the same tree: `isDirty` sees nothing, and neither may the settle. */
+  test("a fix round whose developer rewrites the same bytes is the same refusal (#308)", async () => {
+    const ws = await done();
+    forFix(ws, "S1", DEFECT);
+    // The fake's default: `s1.txt` with the content the first attempt already committed.
+    reenter(ws, "S1 has a defect to fix");
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+    expect(readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8")).toContain(NO_DIFF_MARK);
+  }, 60_000);
+
+  /** A plain reopen carries a note too, and the same tree cannot have answered it either. */
+  test("a plain reopen whose developer lands no diff is refused the same way (#308)", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "changes", "approve"] });
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: blocked");
+
+    reopen(ws, "S1", WHY);
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({ S1: {} });
+    reenter(ws, "S1 was reopened");
+    const before = events(ws).length;
+    const out = await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+    expect(events(ws).slice(before).filter((e) => e.payload.check === "review")).toHaveLength(0);
+    const said = out.lines.join("\n");
+    expect(said).toContain(NO_DIFF_MARK);
+    expect(said).toContain(WHY);
   }, 60_000);
 
   /**
@@ -703,6 +787,7 @@ describe("a done story reopened for a named fix (#58)", () => {
     test("a fix round that landed is closed, and a later defect may open another", async () => {
       const ws = await done();
       forFix(ws, "S1", DEFECT);
+      process.env.FAKE_BUILD_WRITE = JSON.stringify({ S1: { "s1.txt": "S1 was here, fixed\n" } });
       reenter(ws, "S1 has a defect to fix");
       await next(ws, { at: "2026-08-29T10:05:00Z" });
       expect(story(ws, "S1")).toContain("status: done");

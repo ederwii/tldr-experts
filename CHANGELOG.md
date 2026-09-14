@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.27.0 — unreleased
+
+### Fixed
+
+- **A Build fix round whose developer lands no diff is refused, not settled `done` (#308).**
+  MEASURED live on a client workspace (0.24.0, two `--for-fix` reopens, one Build re-run): the
+  developer read the file, said it "already satisfies every acceptance criterion", spent $1.69
+  across two spawns and changed nothing — and the stage closed with the story `done`, the epic
+  head unchanged and every gap the reopen note named still in the tree. Mechanism, confirmed at
+  `f1c9aa8`: `commitIfDirty` hands back the OLD head sha on a clean tree, so `settleHalf`'s "no
+  commit to review" gate never fired, `mergeNoFf` was a no-op on an already-merged tip, and the
+  ledger closes a fix round on `done` alone. `workSince` — the "did the tree move since the one
+  the developer was handed" comparison the two refusal branches already use — was never asked on
+  the success path, where a fix round is precisely the case "nothing changed and the DoD is still
+  green" looks normal, because that tree was accepted once already. Now, for a story a PERSON put
+  back with a note — a fix round or a plain reopen, off the ledger — `buildHalf` asks it BEFORE
+  the DoD: no work, and the attempt blocks with the existing `task.done`/`blocked` vocabulary and
+  a reason that carries the note's first line (`NO_DIFF_MARK`, exported and pinned) — no DoD paid
+  for, no reviewer asked to judge an empty diff, the fix round still open because nothing landed.
+  A first attempt that lands nothing is deliberately NOT gated: "added nothing — identical to the
+  epic" is a pinned rendering decision, not this defect. Three RED tests in
+  `test/story-reopen.test.ts` (no-write developer on a fix round, the same bytes rewritten, a
+  no-write developer on a plain reopen — each settled `done` before); the neighbouring fix-round
+  tests now land a REAL diff, because the fake developer's default rewrote the bytes the first
+  attempt committed, which is #308's shape exactly. Golden byte-identical.
+
 ## 0.26.0 — 2026-09-14
 
 ### Fixed

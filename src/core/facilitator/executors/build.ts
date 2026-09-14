@@ -91,7 +91,7 @@ import {
 } from "../../build/review.ts";
 import {
   AS_IS_MARK, AS_IS_REVIEW_ONLY_MARK, asIsNotAheadReason, DEVELOPER_FAILED, dodFailure, dodFailureReason, dodGreen, dodRefused,
-  reviewNeverCompleted, reviewStillOwed,
+  noDiffAfterReopenReason, reviewNeverCompleted, reviewStillOwed,
   type AsIsSettlement, type DodResult, type RescuedWork, type StoryOutcome,
 } from "../../build/outcome.ts";
 import {
@@ -1701,6 +1701,35 @@ class BuildSession {
       };
     }
 
+    // (d¾) gh #308: a story a PERSON put back with a note — a fix round or a
+    // plain reopen — whose developer changed nothing since the tree it was
+    // handed. Measured live: a `--for-fix` developer read the file, said it
+    // "already satisfies every acceptance criterion", spent $1.69 and changed
+    // nothing; the DoD below was green on the tree that was already accepted
+    // once, `commitIfDirty` handed back the OLD head (a clean tree has one), the
+    // merge was a no-op and the ledger closed the fix round on `done` alone. The
+    // note names a concrete gap, and a tree that did not move cannot have closed
+    // it — so BEFORE the DoD (its own build step must not count as work, and
+    // there is nothing to pay it for), the same `workSince` the two refusal
+    // branches above use decides: no work, and the attempt is refused with the
+    // note's first line in the sentence. Only a reopened story: a first attempt
+    // that lands nothing is rendered honestly as "added nothing" and reviewed
+    // (build-executor: "honest merge rendering"), which is a pinned decision,
+    // not this defect.
+    const reopen = this.reopenFor(planned);
+    if (reopen !== null) {
+      const proven = await workSince({
+        workspaceRoot: this.workspace.root, repoDir: story.repoDir, worktree: story.worktree, since: handed,
+      });
+      if (!proven) {
+        return {
+          story, cost: spent, dod: [], commit: null,
+          failure: noDiffAfterReopenReason({ handed, ...reopen }),
+          developerError: null, before,
+        };
+      }
+    }
+
     // (e) the Definition of Done, re-run in the story's own worktree.
     //
     // An EMPTY dod is the one case the two kinds of plan answer differently: a
@@ -2348,6 +2377,21 @@ class BuildSession {
       `  · ${planned.story.id} was reopened by ${ledger.reopened.actor} (${ledger.reopened.note}) — `
       + `the verdicts before that do not count against it, so it runs as attempt 1 of ${String(this.attempts)}`,
     );
+  }
+
+  /**
+   * The note a PERSON put this story back with, or null when nobody did (#308).
+   *
+   * Off the ledger, like `noteIfReopened`: a reopen is an event, and a second
+   * `tldrx` invocation remembers nothing else. An OPEN fix round wins over the
+   * last plain reopen — it is the named defect still owed, and a plain reopen
+   * granting more attempts does not close it (`reviewLedger.ts`, `fixRound`).
+   */
+  private reopenFor(planned: PlannedStory): { note: string; actor: string; fix: boolean } | null {
+    const ledger = readReviewLedger(this.ctx.runDir, planned.story.id);
+    if (ledger.fixRound !== null) return { note: ledger.fixRound.note, actor: ledger.fixRound.actor, fix: true };
+    if (ledger.reopened !== null) return { note: ledger.reopened.note, actor: ledger.reopened.actor, fix: false };
+    return null;
   }
 
   /**

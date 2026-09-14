@@ -181,4 +181,6 @@ that — undoing finished work is a decision about the stage — but one named d
 opens a **fix round**: `tldrx story reopen S11 --for-fix --note "which defect"`. No attempt
 is consumed, the fix passes the same definition of done and the same reviewer, the
 acceptance criteria are not touched, and only one round may be open at a time. It exists so
-that an accepted defect does not cost every other story in the stage its closure.
+that an accepted defect does not cost every other story in the stage its closure. A developer
+that reads the story and changes nothing does not close it: the tree it was handed is the tree
+it left, so the attempt blocks with your note in the reason, and the round stays open.
