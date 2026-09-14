@@ -272,11 +272,16 @@ describe("the emit seam under a real build run — an oversized reviewer verdict
 
     // `store.save()` ran: a FRESH read off disk (not the in-memory `RunStore`
     // this invocation held) shows the story settled and the epic merge stood.
-    // The stage itself moves to `awaiting_gate` — S2 is next in line and that is
-    // a legitimate reason to stop, not the throw this test guards against.
+    // The stage itself stays `running` — S2 is next in line and the host owes it
+    // a `--prepare`; that is a legitimate reason to stop, not the throw this
+    // test guards against. (Until gh #280 this read `awaiting_gate`, and only
+    // because the headless pass in `stallAtReview` had written S2 `blocked`
+    // behind S1 at `review` — the defect #280 fixed. S2 now waits at `todo`, so
+    // after S1 settles it is genuinely next, which is what the line says.)
     const onDisk = RunStore.open(ws.runDir).run;
     const stage = onDisk.phases.find((p) => p.id === "04-build")?.stages.find((s) => s.id === "build");
-    expect(stage?.status).toBe("awaiting_gate");
+    expect(stage?.status).toBe("running");
+    expect(settled.lines.join("\n")).toContain("S2 is next — run `tldrx next --prepare`");
     const storyMd = readFileSync(join(ws.planDir, "stories", "S1.md"), "utf8");
     expect(storyMd).toContain("status: done");
   }, 60_000);
