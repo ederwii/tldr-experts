@@ -65,14 +65,34 @@ export interface WatcherEpicOnly extends ValidationIssue {
 }
 
 /**
+ * What to cite when the thing named is not a line of code (gh #301).
+ *
+ * Measured on two field runs: a `## Where` item naming a PostgreSQL table carried
+ * no `[src: …]` at all, twice per run, while the migration defining that table was
+ * cited two lines above under `## Signal`. The rule said "every item is sourced"
+ * and the grammar listed five source kinds; neither said which kind a table, a
+ * queue or a dashboard takes. This sentence is that answer, and it is ONE
+ * sentence on purpose: the writer's brief (`watchPrompt.ts`) teaches it and the
+ * validator's refusal repeats it, so a retry armed with the refusal is armed with
+ * the cure rather than with the rule restated.
+ */
+export const NON_FILE_SOURCE_CURE =
+  "a table, queue, dashboard or console is not a line of code, so cite the file that defines it "
+  + "(the migration, model or config, as `<repo>:<path>:<line>`) or the `F<n>` fact that names it";
+
+/**
  * The one message an unsourced item on a card gets, wherever it sits.
  *
  * A constant rather than two string literals because gh #212 gave `## Query` a
  * sourced form: the bullets under the four checked sections and the `Query: none`
  * line are the SAME rule, and a reader who has learned the sentence at one of them
  * must not meet a second wording at the other.
+ *
+ * It names the cure as well as the rule (gh #301): the refusal used to be the
+ * retry's only feedback, and "every item is sourced" told a writer that had
+ * already read that rule nothing it did not know.
  */
-export const NO_SRC_TOKEN_ISSUE = "no `[src: …]` token — every item on a card is sourced";
+export const NO_SRC_TOKEN_ISSUE = `no \`[src: …]\` token — every item on a card is sourced; ${NON_FILE_SOURCE_CURE}`;
 
 /**
  * What a `Query: none` earns on a card that had something to query all along.
@@ -418,11 +438,17 @@ export function setWatcherStatus(text: string, status: WatcherStatus): string {
   return text;
 }
 
+/**
+ * One issue, one line: `L<n> <section>: <message>`. The stage's failure line and
+ * the retry prompt's marked list (gh #301) both print it, so it is derived once.
+ */
+export function describeWatcherIssue(issue: WatcherIssue): string {
+  return `L${String(issue.line)}${issue.path === "" ? "" : ` ${issue.path}`}: ${issue.message}`;
+}
+
 /** One line per issue, ready for a check `detail` or a CLI report. */
 export function describeWatcherIssues(issues: readonly WatcherIssue[], max = 5): readonly string[] {
-  const shown = issues.slice(0, max).map((issue) =>
-    `  L${String(issue.line)}${issue.path === "" ? "" : ` ${issue.path}`}: ${issue.message}`,
-  );
+  const shown = issues.slice(0, max).map((issue) => `  ${describeWatcherIssue(issue)}`);
   const rest = issues.length - shown.length;
   return rest > 0 ? [...shown, `  (+${String(rest)} more)`] : shown;
 }

@@ -4,6 +4,32 @@
 
 ### Fixed
 
+- **A Watch card refused for an unsourced `## Where` item comes back to its writer, marked, instead
+  of being rewritten blind (#301).** MEASURED on two unattended field runs the same night: the
+  `05-watch` writer named a PostgreSQL table under `## Where` with no `[src: …]` at all — twice per
+  run, on both workspaces, once on two cards in one run — while the migration defining that table
+  was cited two lines above under `## Signal`. Three things let it through. The rule said "every
+  item is sourced" and listed five source kinds, and nowhere said which kind a table, queue or
+  dashboard takes (`stage.md`, the feature brief and the template each showed a file or a fact,
+  never a place). The refusal, `no [src: …] token — every item on a card is sourced`, restated the
+  rule and named no cure. And the retry re-ran `tldrx next` from scratch: `featurePrompt` took no
+  previous-card parameter, the refusal was written to the operator's terminal and never into the
+  next prompt, and attempt 2 on run A moved the failure from L21+L22 to L19 — an independent
+  re-generation, not a repair. A person hand-edited the card and recorded the stage twice. Now:
+  ONE sentence, `NON_FILE_SOURCE_CURE`, says what a place cites (the migration, model or config
+  that defines it, or the fact that names it), and the writer's brief teaches it with one worked
+  example while the validator's refusal repeats it verbatim — one derivation, so a retry armed with
+  the refusal is armed with the cure. And the retry's prompt carries `## Previous attempt` (the
+  same heading, H3 and 32 KB cap as the one-agent path, now constants in `prompt.ts`): the card on
+  disk re-read by the parser that refused it, each refused line as `L<n> <section>: <message>`
+  with the line quoted as written, and the card inlined under "edit, do not restart". Re-validated
+  at prompt time rather than replayed from `run.yml`, so a card a person has since fixed shows no
+  stale marks; a first attempt has no card and no section, so its prompt is unchanged. The model
+  pin stays `haiku`: nothing measured says the model cannot follow the rule — it was never told
+  the rule for this case, and the retry was never shown its own card. Pinned by the fake-agent
+  harness: the first attempt's refusal names line, rule and cure; the headless retry's and the
+  `--prepare` bundle's prompts carry the marked card; a first attempt carries no section.
+
 - **The freeze between a release and a merge wave runs both ways now (#304).** #299 made one
   direction mechanical — the wave waits on `.RELEASE-IN-PROGRESS` — and left the other as prose:
   MEASURED by reading `scripts/release.sh` at `a341b4f`, it sourced `merge-lock.sh` only to name

@@ -7,7 +7,8 @@ export type { ItemOwner } from "./itemOwner.ts";
 export type { Watcher, WatcherStatus, WatcherSectionName } from "./Watcher.ts";
 export {
   parseWatcherCard, queryBlock, setWatcherStatus, describeWatcherIssues,
-  describeUnmergedRefs, unmergedRefsOf, NO_SRC_TOKEN_ISSUE, QUERY_NONE_NOT_EARNED_ISSUE, QUERY_NOT_PASTEABLE_ISSUE,
+  describeUnmergedRefs, unmergedRefsOf, describeWatcherIssue, NO_SRC_TOKEN_ISSUE, NON_FILE_SOURCE_CURE,
+  QUERY_NONE_NOT_EARNED_ISSUE, QUERY_NOT_PASTEABLE_ISSUE,
 } from "./watcherFile.ts";
 export type { WatcherCard, WatcherEpicOnly, WatcherIssue, WatcherQuery } from "./watcherFile.ts";
 export { collectFeatures, featureId, PLAN_PHASE } from "./features.ts";
@@ -16,7 +17,10 @@ export { epicDiff, renderDiffs, readRepoBases, GIT_BIN, MAX_DIFF_BYTES, WORKSPAC
 export type { RepoDiff, DiffRequest, RepoBase } from "./epicDiff.ts";
 export { recordedEpicBranch } from "./recordedBranch.ts";
 export type { RecordedBranch, RecordedBuild } from "./recordedBranch.ts";
-export { featureInputs, featureBrief, renderWatchFacts, watcherRelPath, WATCH_FACT_AREAS } from "./watchPrompt.ts";
+export {
+  featureInputs, featureBrief, previousCard, renderWatchFacts, watcherRelPath, WATCH_FACT_AREAS,
+} from "./watchPrompt.ts";
+export type { PreviousCardOptions } from "./watchPrompt.ts";
 export { renderWatchHandoff, NO_STORIES_SRC } from "./renderWatchHandoff.ts";
 export type { WrittenCard, HandoffContext } from "./renderWatchHandoff.ts";
 export {

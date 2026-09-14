@@ -38,9 +38,14 @@ status: draft                # draft | verified — verified only when Signal ha
 
 ## Where
 
-> The dashboard, log stream, table or query console this is read in.
+> The dashboard, log stream, table or query console this is read in. A place is
+> cited like a line: a table, queue, dashboard or console is not a line of code,
+> so cite the file that DEFINES it — the migration, model or config — or the
+> `F<n>` fact that names it. An item with no token is refused, however obvious
+> the place.
 
 - Application Insights → `traces`, filtered to the message above [src: F014]
+- PostgreSQL `leaderboard_refreshes` table, read with `psql` — no dashboard reads it yet [src: api:db/migrations/0007_leaderboard_refreshes.sql:1]
 
 ## Healthy baseline
 

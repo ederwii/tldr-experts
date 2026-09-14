@@ -24,10 +24,11 @@ import { RunStore } from "../../run/RunStore.ts";
 import { applyCheckContracts } from "../checkContracts.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../../hooks/lib/workspace.ts";
+import type { SrcContext } from "../../text/srcToken.ts";
 import { collectFeatures, PLAN_PHASE, type Feature } from "../../watch/features.ts";
 import { epicDiff, readRepoBases, WORKSPACE_YML, type RepoDiff } from "../../watch/epicDiff.ts";
 import { recordedEpicBranch, type RecordedBuild } from "../../watch/recordedBranch.ts";
-import { featureBrief, featureInputs, watcherRelPath } from "../../watch/watchPrompt.ts";
+import { featureBrief, featureInputs, previousCard, watcherRelPath } from "../../watch/watchPrompt.ts";
 import {
   describeUnmergedRefs, describeWatcherIssues, parseWatcherCard, setWatcherStatus,
 } from "../../watch/watcherFile.ts";
@@ -118,6 +119,13 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
   // the prompt is history, and a branch deleted (or a workspace re-detected)
   // between `--prepare` and here would otherwise refuse a turn that has nothing
   // left to get wrong.
+  // ONE source context for the whole stage: the retry prompt re-reads a refused
+  // card with it (gh #301) and the validation below judges the new card with it,
+  // so a citation is marked as refused in the prompt iff it would be refused
+  // again. `{ epicRefs: true }`: this stage's whole subject is the epic's unmerged
+  // code (#16), so its citations must resolve from the recorded ref and not from
+  // a worktree that outlives nothing (#140).
+  const srcCtx = toSrcContext(loadWorkspace(ctx.root), ctx.runDir, { epicRefs: true });
   let prompts: readonly string[] = [];
   if (ctx.mode !== "commit") {
     const build = recordedBuild(ctx.runDir);
@@ -132,7 +140,7 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
         signature: incoherent.signature,
       };
     }
-    prompts = features.map((feature, i) => featurePrompt(ctx, feature, diffs[i] ?? []));
+    prompts = features.map((feature, i) => featurePrompt(ctx, feature, diffs[i] ?? [], srcCtx));
   }
 
   if (ctx.mode === "prepare") return prepare(ctx, features, prompts);
@@ -175,10 +183,6 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
   }
 
   // --- validate every card off disk, then stamp its status ------------------
-  // `{ epicRefs: true }`: this stage's whole subject is the epic's unmerged code
-  // (#16), so its citations must resolve from the recorded ref and not from a
-  // worktree that outlives nothing (#140).
-  const srcCtx = toSrcContext(loadWorkspace(ctx.root), ctx.runDir, { epicRefs: true });
   const written: WrittenCard[] = [];
   for (const feature of features) {
     const rel = watcherRelPath(feature.id);
@@ -297,7 +301,12 @@ function collectResults(
 
 // --- prompt ----------------------------------------------------------------
 
-function featurePrompt(ctx: ExecutorContext, feature: Feature, diffs: readonly RepoDiff[]): string {
+function featurePrompt(
+  ctx: ExecutorContext,
+  feature: Feature,
+  diffs: readonly RepoDiff[],
+  srcCtx: SrcContext,
+): string {
   const facts = FactsStore.loadOrEmpty(factsPath(ctx.root)).facts;
   // Per-file resolution, and a refusal rather than an empty body (gh #39).
   //
@@ -341,6 +350,10 @@ function featurePrompt(ctx: ExecutorContext, feature: Feature, diffs: readonly R
     },
     experts: bundles.experts,
     inputs: featureInputs({ root: ctx.root, runDir: ctx.runDir, feature, diffs, facts }),
+    // A retry after a refused card is a correction pass, not a fresh start (gh
+    // #301): the card on disk, re-validated, its refused lines marked. Empty — and
+    // then no heading at all — on a first attempt, so that prompt is unchanged.
+    previousAttempt: previousCard({ runDir: ctx.runDir, feature, ctx: srcCtx }),
   });
   return replaceSection(body, "Feature", featureBrief(feature));
 }
