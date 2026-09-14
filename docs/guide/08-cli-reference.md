@@ -432,7 +432,7 @@ Every relaunch is a `run.relaunched` event carrying the exit it recovered from, 
 and the bound, and `run.finished` / `run.failed` go out once, from the last attempt. It
 never relaunches over exit `4` (a person's — the `--wait-*` flags own it), over a
 `budget.blocked` or the loop's own `--max-usd` (nothing in-process moves a ceiling, and
-`--max-usd` spans every relaunch rather than resetting), or twice over the same last line.
+`--max-usd` spans every relaunch rather than resetting), or twice over the same refusal.
 Put the run id before the flag, or write `--until-done=3`. `n` outside `0..5` and a
 fraction are exit `1`, by name.
 

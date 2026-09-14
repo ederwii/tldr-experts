@@ -176,6 +176,24 @@ export interface NextOutcome {
    * instruction for the host session.
    */
   readonly stderr?: readonly string[];
+  /**
+   * WHY this outcome happened, in the producer's own words — the sentence a supervisor
+   * compares across attempts to decide whether a refusal is repeating (gh #297).
+   *
+   * It exists because the last line of a report is NOT that sentence. Every
+   * `EXIT_AGENT_FAILED` ends with the same advice about cost, every context refusal with
+   * the same "or raise the ceiling deliberately", every budget refusal with the same
+   * "See the whole picture first" — string literals with nothing interpolated. A guard
+   * reading `lines[lines.length - 1]` there compares a constant to itself: it declares the
+   * SECOND stage death of a run a verbatim repeat whatever killed it, and throws the rest
+   * of a `--until-done` budget away. Reading a position was the bug; reading a value the
+   * producer NAMES is the fix, and it does not move when a caller appends another note.
+   *
+   * Absent where nothing names it — a report whose last line already IS its reason (a
+   * missing input, a message a throw carried). `runAuto` falls back to that line there,
+   * which is what it always compared; the fallback is a weaker reading, never a wrong one.
+   */
+  readonly signature?: string;
 }
 
 const EXIT_OK = 0;
@@ -327,7 +345,7 @@ function preparedRefusal(store: RunStore, options: NextOptions, notes: string[])
     `  finish it:  run ${where}/prompt.md, write ${where}/result.json, then \`tldrx next --commit ${store.runId}\``,
     `  drop it:    \`tldrx reject --run ${store.runId} --note "…"\``,
     `  redo it:    \`tldrx next --discard-pending\` (throws the bundle away and runs the stage again)`,
-  ]);
+  ], [], `${entry.phase.id}/${entry.stage.id} has a --prepare bundle waiting and nothing is holding the run`);
 }
 
 /**
@@ -541,7 +559,10 @@ async function runStage(
   // A refusal, not a warning, and BEFORE the money: over `prompt_max_bytes` the
   // stage does not start. Nothing has been written or spent at this point.
   if (ledger.overLimit) {
-    return out(EXIT_REFUSED, [...notes, ...renderRefusal(ledger, stageId)]);
+    // The first line of the refusal, which names the stage and the two byte figures — the
+    // rest is advice about how to shrink it, and its last line is a literal (gh #297).
+    const refusal = renderRefusal(ledger, stageId);
+    return out(EXIT_REFUSED, [...notes, ...refusal], [], refusal[0]);
   }
   const providerAdvisory = providerBudgetAdvisory(agentProvider(), cap);
   const advisories = [
@@ -1031,7 +1052,7 @@ async function preconditionRefusal(
       // the retry — and this line used to tell the operator `ready` regardless, a
       // claim the file did not hold (gh #25). Unchanged when the stage IS ready.
       `Fix it and run the same command again: the stage is still \`${stageStatusOf(store, phaseId, stageId)}\` and nothing was spent.`,
-    ]);
+    ], [], `${phaseId}/${stageId}: precondition \`${precondition.id}\` is red — ${ran.detail}`);
   }
   return null;
 }
@@ -1093,7 +1114,7 @@ function economyRefusal(
       + `($${ceiling.toFixed(2)} is not dollars a spawn may`,
     "spend) and this invocation is headless. Either run it in-session (tldrx next --prepare), or set the",
     `phase to \`economy: metered-usd\` and re-price it (tldrx budget raise ${phaseId} <usd>).`,
-  ]);
+  ], [], `${phaseId}/${stageId}: refusing to spawn — ${phaseId} is priced in \`host-tokens\` ($${ceiling.toFixed(2)}) and this invocation is headless`);
 }
 
 function budgetRefusal(
@@ -1169,7 +1190,7 @@ function budgetRefusal(
       `Run \`${fix}\` (add \`--take-from <phase>\` to move the money instead of adding it), ` +
         `lower budget_usd in the stage, or set on_exceed: warn.`,
       `See the whole picture first: \`tldrx budget show --run ${store.runId}\`.`,
-    ]);
+    ], [], `${phaseId}/${stageId}: phase ${phaseId} has $${phaseRemaining.toFixed(2)} left and the estimate is $${estimate.toFixed(2)}`);
   }
   warnOnce(store, options, phaseId, stageId, estimate, phaseRemaining, spec.tuning.attempts, notes);
   return null;
@@ -1761,7 +1782,7 @@ async function commitStage(
         + "`<!-- id: Qn | status: open | area: … | asked_by: … | asked_at: … -->` line under it.",
       "As written they are invisible: the gate would read this file as \"0 open\" and sign itself.",
       `Fix: \`tldrx questions lint --run ${store.runId} --fix\`, then \`tldrx next --commit\` again.`,
-    ]);
+    ], [], `${phaseId}/questions.md has ${String(unreadable.length)} unreadable question(s): ${unreadable.join(", ")}`);
   }
 
   return await finishStage(store, options, phaseId, stageId, spec, notes);
@@ -2231,11 +2252,14 @@ function failStage(
   }));
   store.append(event(options, store.runId, stageId, "stage.failed", { phase: phaseId, reason: oneLine(reason) }));
   store.save();
+  // The SIGNATURE is the failure's own sentence, not the line after it: the advice below
+  // is a literal every stage death in this repo ends with, and a supervisor comparing it
+  // across attempts compares a constant to itself (gh #297).
   return out(EXIT_AGENT_FAILED, [
     ...notes,
     `${phaseId}/${stageId} failed: ${oneLine(reason)}`,
     `cost is recorded, not refunded — retry with \`tldrx next\`, or \`tldrx reject --note "…"\``,
-  ]);
+  ], [], `${phaseId}/${stageId} failed: ${oneLine(reason)}`);
 }
 
 // --- prompt ----------------------------------------------------------------
@@ -2943,7 +2967,7 @@ function hostTokensNote(
       + `and has declared ${String(tokens.spent)} of ${String(tokens.ceiling)} allowed.`,
     "Raise that phase's ceiling in budget.yml (under this economy the number is a TOKEN allowance), "
       + "or set `on_host_tokens_exceed: warn` to go back to a note.",
-  ]);
+  ], [], `${phaseId}/${stageId}: phase ${phaseId} has declared ${String(tokens.spent)} of ${String(tokens.ceiling)} allowed host-tokens`);
 }
 
 /** Declared `tokens:` recorded against one phase of a run (issue #22 (b)). */
@@ -3168,10 +3192,20 @@ export function cacheSplit(
  * `build/foreignWork.ts`'s, so the sentence and the rule that moves it cannot
  * drift apart. Every other report is byte-identical: no line carries the marker.
  */
-function out(code: number, lines: readonly string[], stderr: readonly string[] = []): NextOutcome {
+function out(
+  code: number,
+  lines: readonly string[],
+  stderr: readonly string[] = [],
+  signature?: string,
+): NextOutcome {
   const held = lines.filter((line) => line.includes(NOT_RESTORED_MARK));
   const ordered = held.length === 0
     ? lines
     : [...lines.filter((line) => !line.includes(NOT_RESTORED_MARK)), ...held];
-  return stderr.length === 0 ? { code, lines: ordered } : { code, lines: ordered, stderr };
+  return {
+    code,
+    lines: ordered,
+    ...(stderr.length === 0 ? {} : { stderr }),
+    ...(signature === undefined ? {} : { signature }),
+  };
 }

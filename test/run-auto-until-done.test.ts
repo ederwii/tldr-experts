@@ -22,8 +22,11 @@
  *                          and the stop names the two figures. The loop's own `--max-usd`
  *                          spans the whole supervised run: a relaunch does not reset it.
  *   NEVER OVER A PERSON    exit 4 is a person's; `--wait-*` own it; zero relaunches.
- *   NEVER TWICE THE SAME   an attempt whose last line equals the previous attempt's is a
+ *   NEVER TWICE THE SAME   an attempt refused by the SAME WORDS as the one before it is a
  *                          deterministic refusal repeating — one relaunch proves it, then stop.
+ *                          What is compared is the refusal `next` NAMES (gh #297): every stage
+ *                          death ends with the same advice literal, so comparing last lines
+ *                          compared a constant to itself and stopped a run making progress.
  *   BOUNDED, BY NAME       `n` past `MAX_UNTIL_DONE` and a fraction are exit 1, nothing spawned;
  *                          the bare flag means `MAX_UNTIL_DONE`, said in the event's `of`.
  *
@@ -302,7 +305,7 @@ describe("never over a person", () => {
   });
 });
 
-describe("never twice over the same last line", () => {
+describe("never twice over the same refusal", () => {
   test("a refusal that repeats verbatim is relaunched once — the proof — and then stops", async () => {
     // `promptMaxBytes: 1` is an exit 2 with no money behind it: the prompt cannot fit, the
     // same way on every attempt. One relaunch shows it repeats; a second would be the loop
@@ -314,6 +317,59 @@ describe("never twice over the same last line", () => {
     const relaunches = relaunched(ws);
     expect(relaunches).toHaveLength(1);
     expect(relaunches[0]?.payload).toMatchObject({ exit: 2, attempt: 1, of: 5 });
+    expect(outcome.lines[outcome.lines.length - 1]).toContain("same as the previous attempt");
+  });
+
+  /**
+   * gh #297. Every `EXIT_AGENT_FAILED` report ends with the SAME advice line — a string
+   * literal with no interpolation (`runNext.ts` `failStage`) — so a guard that compares
+   * the attempt's last line compares a constant to itself and stops the loop on the
+   * second stage death whatever killed it. Here the two deaths are different refusals
+   * (`## Scope` missing, then `## Intent`), so both relaunches must happen and the third
+   * attempt finishes the run.
+   */
+  test("two stage deaths with DIFFERENT reasons are two relaunches — the advice line they share is not the comparison", async () => {
+    const ws = workspace();
+    const without = (heading: string): string => cannedIntent().split(`## ${heading}`).join(`## not-${heading}`);
+    const outputs = (intent: string): string => JSON.stringify({
+      "01-what/intent.md": intent,
+      "01-what/handoff.md": cannedHandoff(),
+      "02-how/handoff.md": cannedHandoff(),
+    });
+    process.env.FAKE_CLAUDE_OUTPUTS = outputs(without("Scope"));
+    let seen = 0;
+    const outcome = await auto(ws, {
+      untilDone: 3,
+      onLine: (line) => {
+        if (!line.startsWith("relaunching")) return;
+        seen += 1;
+        process.env.FAKE_CLAUDE_OUTPUTS = seen === 1 ? outputs(without("Intent")) : outputs(cannedIntent());
+      },
+    });
+    expect(outcome.code).toBe(0);
+    const relaunches = relaunched(ws);
+    expect(relaunches).toHaveLength(2);
+    expect(relaunches.map((event) => event.payload.exit)).toEqual([5, 5]);
+    // The refusals themselves, not the advice both of them end with: the first death is
+    // about `## Scope` and the second about `## Intent`, and the relaunch record says so.
+    expect(String(relaunches[0]?.payload.reason)).toContain("## Scope");
+    expect(String(relaunches[1]?.payload.reason)).toContain("## Intent");
+  });
+
+  /**
+   * The other direction of the same guard, and the one it was built for: two stage deaths
+   * with the SAME refusal are one relaunch — the proof that it repeats — and then a stop.
+   */
+  test("two stage deaths with the SAME reason is one relaunch, then the stop names the repeat", async () => {
+    const ws = workspace();
+    process.env.FAKE_CLAUDE_OUTPUTS = JSON.stringify({
+      "01-what/intent.md": cannedIntent().split("## Scope").join("## not-Scope"),
+      "01-what/handoff.md": cannedHandoff(),
+      "02-how/handoff.md": cannedHandoff(),
+    });
+    const outcome = await auto(ws, { untilDone: 3 });
+    expect(outcome.code).toBe(5);
+    expect(relaunched(ws)).toHaveLength(1);
     expect(outcome.lines[outcome.lines.length - 1]).toContain("same as the previous attempt");
   });
 });
