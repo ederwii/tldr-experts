@@ -27,6 +27,7 @@ import { renderFixlist, type FixFinding } from "../src/core/build/fixlist.ts";
 import { carriedReportFor, phaseDirsOf, type CarriedRow } from "../src/core/build/carriedRows.ts";
 import { renderShipBody } from "../src/core/run/shipBody.ts";
 import { storyRetroLines } from "../src/core/build/retroLog.ts";
+import { OUTCOME_ALREADY_REPORTED } from "../src/core/build/refusalKind.ts";
 import { buildReviewerPrompt } from "../src/core/build/prompts.ts";
 import { DOD_REFUSAL_FALLBACK, dodGreen, type StoryOutcome } from "../src/core/build/outcome.ts";
 import { reviewBundleKeyOf, reviewWorkFromBundle, writeReviewBundle } from "../src/core/build/reviewBundle.ts";
@@ -174,6 +175,9 @@ describe("the executor registry", () => {
       "Read", "Write", "Edit", "Glob", "Grep",
       "Bash(npm run test)", "Bash(npm run test *)", "Bash(git add *)", "Bash(git commit *)",
       "Bash(git rm *)", "Bash(git mv *)", "Bash(git restore *)",
+      // gh #287: the read verbs. A developer could write its tree and not look at
+      // it, and one died on `git -C <worktree> log --oneline -5`.
+      "Bash(git status *)", "Bash(git log *)", "Bash(git diff *)", "Bash(git show *)",
     ]);
     expect(developerTools([]).some((tool: string) => tool.startsWith("Bash(git push"))).toBe(false);
     expect(REVIEWER_TOOLS).toEqual(["Read", "Grep", "Glob", "Bash(git diff *)"]);
@@ -3861,9 +3865,11 @@ describe("a refusal after the developer committed (gh #271)", () => {
   // ONCE with the cure in front of the prompt; the fake refuses the retry too
   // (its `S1` key is every spawn), so the story still blocks on ONE attempt —
   // two spawns, and the reason says the cure was stated and refused.
+  // gh #294: `PLUMBED` redirects its output to a file, so the cure also says why
+  // capturing it was unnecessary — the WHY the three field attempts never got.
   const BLOCKED_AFTER_RETRY = `${BLOCKED_WITH_PLUMBED} beyond the one re-spawn with the cure stated, which was `
     + "refused too. The cure: run each command alone — shell separators split a line into subcommands that "
-    + "each need their own grant";
+    + `each need their own grant. The exit code is not lost by dropping it: ${OUTCOME_ALREADY_REPORTED}`;
   for (const [work, why, rootIsRepo] of [
     ["empty-commit", "HEAD moved but the tree is identical to the base", false],
     ["state-only", "only the framework's own state dir was written", true],

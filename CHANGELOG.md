@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.22.0 — unreleased
+
+### Fixed
+
+- **A developer may now READ its own tree, `git -C` is refused on purpose, and every cure says
+  WHY it is a cure (#287, #294).** Two issues, one edit, because they are the same defect seen
+  twice. The developer's git allowance held `add`, `commit`, `rm`, `mv`, `restore` and **no read
+  verb at all** — it could write its worktree and never look at it. Measured on a live
+  unattended run: a developer ran `git -C <worktree> log --oneline -5`, was refused, was
+  re-spawned with the cure, was refused again, and the story died — ~$5 for a command that
+  changes nothing. `status`, `log`, `diff` and `show` join the ONE constant the grant, the
+  prompt's list and the refusal classifier all read (`build/developerGrants.ts`), so all three
+  gained them in the same edit. **`-C <path>` (and `--git-dir`, `--work-tree`) stays ungranted
+  as a decision, and the code now says so**: `-C` points git at ANY directory — the epic
+  worktree, another story's worktree, the shared checkout — so granting it would turn a read
+  verb into a read of trees the story does not own, and a mutating verb into a write there. It
+  is its own refusal kind (`elsewhere`) whose cure is "drop `-C <path>` and run git from your
+  own worktree", never "ask for `-C`". The second half is the reason these shipped together:
+  the three cures we had — "run each command alone" (#278), "run `git log` from your own
+  worktree" (#287), "don't append `echo`" (#294) — all said WHAT and none said WHY, and an agent
+  that does not know why finds another way to do the same thing. #294 is the proof: three
+  consecutive developers on ONE story appended `; echo "EXIT:$?"` to a DoD command, each was
+  refused, and the cure kept telling them to separate the commands — but from their side the
+  `echo` was not an extra command, it was HOW you read an exit code, so they re-added it. A
+  `separator` classification now carries `capturing` (the chain exists only to capture the
+  outcome: an `echo` naming `$?`, or a redirect of the command's own output), and that cure, the
+  retry prefix and the developer prompt all append the same one clause, from one constant: the
+  facilitator re-runs the Definition of Done after you and records each command's exit code, so
+  the number the `echo` would print is written down whether you capture it or not. That
+  clause says only what this repo measures (`build/dodRunner.ts`) and only what holds for every
+  provider: whether an agent's own execution tool hands the exit code back to the model is a
+  property of the provider's CLI — measured for Claude Code's `Bash` tool, established nowhere
+  for `codex exec` — and the sentence goes into the prompt BOTH providers read, so asserting it
+  would have been this very bug one level up, a plausible explanation instead of a true one. The
+  developer prompt goldens moved for exactly those two paragraphs.
+
 ## 0.21.0 — 2026-09-13
 
 ### Fixed

@@ -758,7 +758,7 @@ medido en dos runs reales en un día: seis rechazos, cada uno una cadena de shel
 persona lo reabrió — la razón registrada conserva la oración de arriba y le agrega
 `The cure: …`: "run each command alone — shell separators split a line into subcommands that
 each need their own grant" para una cadena, "`git checkout` is not granted; use
-`git restore <path>`" para un verbo con equivalente permitido, "`git status` is not granted"
+`git restore <path>`" para un verbo con equivalente permitido, "`git stash` is not granted"
 para uno sin equivalente. Una línea encadenada sin trabajo en el árbol se vuelve a lanzar UNA vez dentro
 del mismo intento, con la línea rechazada y la regla como primeras líneas del prompt; ese turno
 queda en `run.yml` y en `events.jsonl` como cualquier otro (`agent.spawned` lleva
@@ -766,6 +766,27 @@ queda en `run.yml` y en `events.jsonl` como cualquier otro (`agent.spawned` llev
 diciéndolo. Un verbo no permitido nunca se reintenta — seguiría sin estar permitido. El prompt
 del developer ahora lista los verbos exactos de git que tiene y nombra `git restore <path>`
 como la forma de restaurar un archivo.
+
+**El developer murió leyendo su propia historia — y por una cura que ya le habían dado.** Dos
+mitades de lo mismo, desde gh #287 y gh #294. La allowance no tenía ningún verbo de lectura: un
+developer podía escribir su worktree y no mirarlo, y uno que corrió
+`git -C <worktree> log --oneline -5` fue rechazado, relanzado con la cura, rechazado otra vez, y
+se llevó la historia por delante — por un comando que no cambia nada. Ahora `git status`,
+`git log`, `git diff` y `git show` están concedidos. **`-C <path>` no lo está, a propósito**:
+apunta git a cualquier directorio — el worktree del epic, el de otra historia, tu propio
+checkout — así que la cura es "soltá `-C <path>` y corré git desde tu propio worktree", nunca
+"pedí `-C`". La otra mitad es por qué una cura que sólo dice QUÉ no pega: tres developers
+seguidos en una misma historia le agregaron `; echo "EXIT:$?"` a un comando del DoD para leer el
+código de salida, y "run each command alone" respondía una pregunta que ninguno estaba haciendo
+— para ellos el `echo` no era un segundo comando, era CÓMO se lee un código de salida. Así que a
+una cadena que existe sólo para capturar el resultado (un `echo` que nombra `$?`, una
+redirección de la salida del propio comando) ahora se le dice lo que la vuelve innecesaria: el
+facilitador vuelve a correr la Definition of Done después del developer y registra el código de
+salida de cada comando, así que el número que el `echo` imprimiría queda anotado lo capture o
+no. Esa cláusula dice sólo lo que está medido acá y vale para cualquier
+proveedor — lo que la herramienta de ejecución del agente le devuelve al modelo es asunto del
+CLI de cada proveedor, y el prompt es compartido. El prompt del developer dice lo mismo, desde
+la misma constante.
 
 **Una historia necesita un comando que tu workspace nunca declaró.** Medido en una ejecución real
 sin supervisión: una historia cuyo criterio de aceptación exigía que la migración fuera *generada por

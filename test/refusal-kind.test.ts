@@ -15,7 +15,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  classifyRefusal, MAX_SEPARATOR_RETRIES, refusalCure, separatorCurePrefix,
+  classifyRefusal, MAX_SEPARATOR_RETRIES, OUTCOME_ALREADY_REPORTED, refusalCure, separatorCurePrefix,
 } from "../src/core/build/refusalKind.ts";
 import { DEVELOPER_GIT_VERBS, developerGitGrants } from "../src/core/build/developerGrants.ts";
 import { developerTools, permissionBlockReason } from "../src/core/facilitator/executors/build.ts";
@@ -79,12 +79,12 @@ describe("unquotedShellSeparator — the tokenizer `splitArgv` already has, aske
 
 describe("classifyRefusal (gh #278)", () => {
   test("every field line with a chain is `separator`, named by its first separator", () => {
-    expect(classifyRefusal(FIELD.checkoutChain)).toEqual({ kind: "separator", separator: "&&" });
-    expect(classifyRefusal(FIELD.mergeTreePipe)).toEqual({ kind: "separator", separator: "2>&1" });
-    expect(classifyRefusal(FIELD.gateEcho)).toEqual({ kind: "separator", separator: ";" });
-    expect(classifyRefusal(FIELD.gateRedirect)).toEqual({ kind: "separator", separator: ">" });
-    expect(classifyRefusal(FIELD.diffSubst)).toEqual({ kind: "separator", separator: "<" });
-    expect(classifyRefusal(FIELD.revParse)).toEqual({ kind: "separator", separator: ";" });
+    expect(classifyRefusal(FIELD.checkoutChain)).toEqual({ kind: "separator", separator: "&&", capturing: false });
+    expect(classifyRefusal(FIELD.mergeTreePipe)).toEqual({ kind: "separator", separator: "2>&1", capturing: true });
+    expect(classifyRefusal(FIELD.gateEcho)).toEqual({ kind: "separator", separator: ";", capturing: true });
+    expect(classifyRefusal(FIELD.gateRedirect)).toEqual({ kind: "separator", separator: ">", capturing: true });
+    expect(classifyRefusal(FIELD.diffSubst)).toEqual({ kind: "separator", separator: "<", capturing: false });
+    expect(classifyRefusal(FIELD.revParse)).toEqual({ kind: "separator", separator: ";", capturing: false });
   });
 
   test("a chain is `separator` even when its first fragment is also an ungranted verb — the chain is what runs first", () => {
@@ -107,8 +107,10 @@ describe("classifyRefusal (gh #278)", () => {
   });
 
   test("an ungranted verb with NO granted equivalent says so, and invents none", () => {
-    expect(classifyRefusal("git status")).toEqual({ kind: "verb", verb: "status", equivalent: null });
-    expect(classifyRefusal("git log -1 -- f")).toEqual({ kind: "verb", verb: "log", equivalent: null });
+    // `git status` and `git log` were on this list until #287 granted them; the
+    // verbs that remain ungranted are the ones that move history or another tree.
+    expect(classifyRefusal("git rev-parse HEAD")).toEqual({ kind: "verb", verb: "rev-parse", equivalent: null });
+    expect(classifyRefusal("git stash")).toEqual({ kind: "verb", verb: "stash", equivalent: null });
     expect(classifyRefusal("git merge-tree epic HEAD")).toEqual({ kind: "verb", verb: "merge-tree", equivalent: null });
     // A branch switch is not a file restore: no equivalent is offered for it.
     expect(classifyRefusal("git checkout -b topic")).toEqual({ kind: "verb", verb: "checkout", equivalent: null });
@@ -121,9 +123,11 @@ describe("classifyRefusal (gh #278)", () => {
     expect(classifyRefusal("git commit -m 'a; b'")).toEqual({ kind: "unknown" });
   });
 
-  test("a non-git line with no separator, and a git line with a global option before the verb, are `unknown`", () => {
+  test("a non-git line with no separator is `unknown`; a `-C` line is its OWN kind (gh #287)", () => {
     expect(classifyRefusal("sha256sum src/f.cs")).toEqual({ kind: "unknown" });
-    expect(classifyRefusal("git -C /elsewhere rm -- o.txt")).toEqual({ kind: "unknown" });
+    // Until #287 this classified as `unknown` and the developer was told nothing.
+    expect(classifyRefusal("git -C /elsewhere rm -- o.txt")).toEqual({ kind: "elsewhere", option: "-C" });
+    expect(classifyRefusal("git --git-dir=/elsewhere/.git log")).toEqual({ kind: "elsewhere", option: "--git-dir" });
     expect(classifyRefusal("")).toEqual({ kind: "unknown" });
   });
 
@@ -141,14 +145,21 @@ describe("classifyRefusal (gh #278)", () => {
 
 describe("refusalCure — the sentence each kind appends", () => {
   test("separator: run each command alone, and why", () => {
-    expect(refusalCure(classifyRefusal(FIELD.gateEcho))).toBe(
+    expect(refusalCure(classifyRefusal("git add -A && git commit -m x"))).toBe(
       "run each command alone — shell separators split a line into subcommands that each need their own grant",
+    );
+    // gh #294: the field line's chain is a CAPTURE, so the cure also says why the capture is unneeded.
+    expect(refusalCure(classifyRefusal(FIELD.gateEcho))).toBe(
+      "run each command alone — shell separators split a line into subcommands that each need their own "
+      + `grant. The exit code is not lost by dropping it: ${OUTCOME_ALREADY_REPORTED}`,
     );
   });
 
   test("verb with an equivalent names it; without one it names only the refusal", () => {
     expect(refusalCure(classifyRefusal("git checkout -- f"))).toBe("`git checkout` is not granted; use `git restore <path>`");
-    expect(refusalCure(classifyRefusal("git status"))).toBe("`git status` is not granted");
+    expect(refusalCure(classifyRefusal("git stash"))).toBe("`git stash` is not granted");
+    // `git status` is granted since #287, so the classifier claims no cure for it.
+    expect(refusalCure(classifyRefusal("git status"))).toBe("");
   });
 
   test("unknown: nothing is appended", () => {
@@ -165,7 +176,8 @@ describe("refusalCure — the sentence each kind appends", () => {
     expect(permissionBlockReason("git rm -- unused.txt")).toBe(BASE_FOR("git rm -- unused.txt"));
     expect(permissionBlockReason(FIELD.gateEcho)).toBe(
       `${BASE_FOR(FIELD.gateEcho)}. The cure: run each command alone — shell separators split a line `
-      + "into subcommands that each need their own grant",
+      + "into subcommands that each need their own grant. The exit code is not lost by dropping it: "
+      + `${OUTCOME_ALREADY_REPORTED}`,
     );
     expect(permissionBlockReason("git checkout -- f")).toBe(
       `${BASE_FOR("git checkout -- f")}. The cure: \`git checkout\` is not granted; use \`git restore <path>\``,
@@ -259,5 +271,76 @@ describe("the developer prompt's git verbs (gh #278)", () => {
   test("the list in the prompt is rendered from the constant, so the two cannot drift", () => {
     const source = readFileSync(join(import.meta.dir, "..", "src", "core", "build", "prompts.ts"), "utf8");
     expect(source).toContain("DEVELOPER_GIT_VERBS");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// gh #287 / gh #294 — a developer may READ its own tree, and every cure says WHY.
+// ---------------------------------------------------------------------------
+
+/** The read-only verbs, as #287 measured them missing. Not derived: the point is the LIST. */
+const READ_VERBS = ["status", "log", "diff", "show"] as const;
+
+describe("the developer holds the read-only git verbs (gh #287)", () => {
+  test("each read verb is granted, so a developer can look at its own tree", () => {
+    for (const verb of READ_VERBS) {
+      expect(developerTools([])).toContain(`Bash(git ${verb} *)`);
+      expect(DEVELOPER_GIT_VERBS as readonly string[]).toContain(verb);
+    }
+  });
+
+  test("a refused read verb is no longer blamed on the allowance", () => {
+    // The field line from #287, with the `-C` dropped: it is granted now.
+    expect(classifyRefusal("git log --oneline -5")).toEqual({ kind: "unknown" });
+    expect(classifyRefusal("git status")).toEqual({ kind: "unknown" });
+  });
+
+  test("`git -C <path>` is refused DELIBERATELY and the cure names the reason", () => {
+    expect(classifyRefusal("git -C /w/260913-r-S5 log --oneline -5")).toEqual({
+      kind: "elsewhere", option: "-C",
+    });
+    const cure = refusalCure(classifyRefusal("git -C /w/260913-r-S5 log --oneline -5"));
+    expect(cure).toContain("-C");
+    // The WHY, not only the WHAT: the next reader must not add `-C` to the grant.
+    expect(cure).toContain("points git at another directory");
+    expect(cure).toContain("Your working directory already is the worktree");
+  });
+});
+
+describe("a cure says WHY, not only what (gh #294)", () => {
+  test("an `echo $?` tail is told the exit code is already reported to it", () => {
+    const cure = refusalCure(classifyRefusal('scripts/gate/test.sh; echo "EXIT_STATUS_MARKER:$?"'));
+    expect(cure).toContain("each need their own grant");
+    expect(cure).toContain("records each command's exit code");
+  });
+
+  test("a redirect-to-file capture is told the same thing", () => {
+    expect(refusalCure(classifyRefusal("scripts/gate/test.sh > /tmp/s2_test.log 2>&1")))
+      .toContain("records each command's exit code");
+  });
+
+  test("a chain that is NOT an exit-code idiom keeps the plain separator cure", () => {
+    expect(refusalCure(classifyRefusal("git add -A && git commit -m x"))).toBe(
+      "run each command alone — shell separators split a line into subcommands that each need their own grant",
+    );
+  });
+
+  test("the retry prefix put in front of the prompt carries the same why", () => {
+    const prefix = separatorCurePrefix('scripts/gate/test.sh; echo "GATE_TEST_EXIT=$?"');
+    expect(prefix).toContain("records each command's exit code");
+  });
+});
+
+describe("the developer prompt's cures carry a why-clause (gh #287, gh #294)", () => {
+  test("the read verbs are listed, and `-C` is named as the thing not to reach for", () => {
+    const text = prompt();
+    expect(text).toContain("`git restore <path>` is how to put a file back");
+    for (const verb of READ_VERBS) expect(text).toContain(`\`git ${verb}\``);
+    expect(text).toContain("`-C <path>`");
+    expect(text).toContain("points git at another directory");
+  });
+
+  test("the DoD rule says why the echo is unnecessary, not only that it is refused", () => {
+    expect(prompt()).toContain("records each command's exit code");
   });
 });
