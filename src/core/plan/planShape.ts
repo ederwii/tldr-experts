@@ -210,7 +210,7 @@ export function validatePlanShape(planDir: string): PlanShapeReport {
 
   const groups = new Map<string, Read[]>();
   for (const story of stories.values()) {
-    const key = `${story.epic} ${story.repo}`;
+    const key = `${story.epic}/${story.repo}`;
     groups.set(key, [...(groups.get(key) ?? []), story]);
   }
   for (const group of [...groups.values()].sort((a, b) => groupKey(a).localeCompare(groupKey(b)))) {
@@ -230,7 +230,7 @@ export function validatePlanShape(planDir: string): PlanShapeReport {
 }
 
 function groupKey(group: readonly { readonly epic: string; readonly repo: string }[]): string {
-  return `${group[0]?.epic ?? ""} ${group[0]?.repo ?? ""}`;
+  return `${group[0]?.epic ?? ""}/${group[0]?.repo ?? ""}`;
 }
 
 function byStoryId(a: string, b: string): number {
