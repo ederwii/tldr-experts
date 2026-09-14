@@ -35,6 +35,25 @@
   opinion on the same bytes — which is also why the #279 pin test (two `changes` over a reset
   branch) is untouched. The issue proposed "any verdict but `approve`"; that would have flipped that
   pin, so the boundary shipped is the one in the issue's title: the review never completed.
+- **A turn's failure record can no longer borrow the word `success` from the provider (#296).**
+  MEASURED on two live unattended runs while the account sat over its usage limit: both a
+  developer and a reviewer died with `claude exited 1 with is_error=true: success`. That line is
+  two layers' verdicts concatenated and nothing reconciling them — our `is_error` beside the
+  provider's own `subtype`, which was the literal `"success"` — and the ONLY human-readable word
+  on it was the one that was wrong. Tomorrow's reader learns the story failed; the truth is it
+  never ran, which is exactly the direction §7 forbids an audit record to lie in. `describe()`
+  is reached only for a FAILURE, so a subtype asserting the turn succeeded cannot be that
+  failure's reason: it is now refused as a reason and reported as the contradiction it is —
+  `claude exited 1 with is_error=true: no reason named (the provider's own subtype said
+  "success")` — keeping BOTH facts rather than dropping either, because a record that hides the
+  disagreement is only marginally better than one that resolves it wrongly. A failure with no
+  reason anywhere now says `no reason named` instead of trailing off after the exit code. A
+  reason the provider DID name (`Reached maximum budget ($0.26)`) and a genuine error subtype
+  (`error_during_execution`) are printed exactly as before. **This does not classify the limit
+  and does not change any retry**: what `subtype`, `errors[]` or HTTP status either provider
+  emits on a quota limit is still unmeasured, and a detector built on a guessed signal is a
+  detector that never fires — so the record is fixed today and the cause stays honestly unnamed
+  until the raw document of a rate-limited turn is captured.
 
 ## 0.22.0 — 2026-09-14
 
