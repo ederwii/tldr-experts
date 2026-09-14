@@ -189,4 +189,6 @@ sobre la etapa —, pero un defecto concreto en ella abre una **ronda de arreglo
 `tldrx story reopen S11 --for-fix --note "which defect"`. No se consume ningún intento, el
 arreglo pasa el mismo DoD y el mismo revisor, no se tocan los criterios de aceptación, y
 solo puede haber una ronda abierta a la vez. Existe para que un defecto aceptado no le
-cueste el cierre a todas las demás stories de la etapa.
+cueste el cierre a todas las demás stories de la etapa. Un developer que lee la story y no
+cambia nada no la cierra: el árbol que recibió es el árbol que dejó, así que el intento se
+bloquea con tu nota en el motivo, y la ronda sigue abierta.

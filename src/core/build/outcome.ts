@@ -8,6 +8,7 @@
 import type { PlanStatus } from "../schemas/planCommon.ts";
 import type { ReviewerProvenance } from "./reviewerProvenance.ts";
 import { binaryAbsentReason, type AbsentBinary } from "./worktreeDeps.ts";
+import { firstLine } from "./git.ts";
 
 /**
  * What the reviewer said — and, for `error`, that it never got to say anything.
@@ -351,6 +352,44 @@ export const AS_IS_JUDGED_MARK = "the last review of that work stands";
  * `AS_IS_MARK` on purpose — "the branch was taken" would be false here.
  */
 export const AS_IS_REVIEW_ONLY_MARK = "the review was run AS IT STANDS — nothing was merged and no developer was spawned";
+
+/**
+ * The marker in the refusal of a developer attempt on a story a PERSON put back
+ * — a fix round or a plain reopen — whose tree is the one it was handed (#308).
+ *
+ * Its own constant for the reason every marker here is: a test asserts THIS,
+ * not a word of English innocent prose could carry, and the operator line and
+ * the story's `reason:` cannot drift apart.
+ */
+export const NO_DIFF_MARK = "the developer produced no diff";
+
+/**
+ * Why a reopened story's attempt was refused before its DoD ran: the developer
+ * changed nothing since the tree it was handed (#308).
+ *
+ * Measured live: a `--for-fix` round whose developer read the file, said it
+ * "already satisfies every acceptance criterion", and spent $1.69 changing
+ * nothing — and the story settled `done` again, because `commitIfDirty` hands
+ * back the OLD head on a clean tree and the "no commit to review" gate never saw
+ * it. A person's note names a concrete gap; a tree that did not move cannot have
+ * closed it, so the attempt is refused with the note's first line in the
+ * sentence. The same shape as `asIsNotAheadReason`: what was measured, what the
+ * person signed, what to do next.
+ */
+export function noDiffAfterReopenReason(parts: {
+  /** HEAD of the story worktree BEFORE the developer was spawned. */
+  readonly handed: string;
+  readonly note: string;
+  readonly actor: string;
+  /** True when the open round is `--for-fix` — the wording names the fix round. */
+  readonly fix: boolean;
+}): string {
+  const round = parts.fix ? "the fix round" : "the reopen";
+  return `${NO_DIFF_MARK}: the tree is the one it was handed (\`${parts.handed.slice(0, 7)}\`), `
+    + `and ${round} ${parts.actor} signed says \`${firstLine(parts.note)}\`. `
+    + "Nothing changed, so nothing could have landed it — no DoD ran and no reviewer was spawned. "
+    + "Reopen it with a note that names what the developer has to change";
+}
 
 /**
  * Why an as-is settlement was refused before it ran a thing.
