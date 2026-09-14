@@ -3,10 +3,12 @@
  * the bound on a fix-list verdict, the bound on a malformed envelope — and the
  * three counters those bounds are kept in.
  *
- * `ReviewCounters` is three separate maps ON PURPOSE. A requeue bound, a fix-list
+ * `ReviewCounters` is separate maps ON PURPOSE. A requeue bound, a fix-list
  * bound and a format-retry bound count three different things and are reset on
  * three different events; the class docstring says it again where the maps are,
  * because merging any two is the defect this module is most able to introduce.
+ * A fourth, the attempts requeued on a red DoD (gh #313), is not a review at all
+ * and lives beside them for exactly that reason — it must never be read as one.
  *
  * Everything here takes DATA, never a session: `runDir` for the ledger side of a
  * bound, an operator-line array to append to, and one `ReviewCounters` the
@@ -25,7 +27,7 @@ import {
   isFormatRejection, MAX_FORMAT_RETRIES, renderFormatRefusal, type Review,
 } from "./review.ts";
 import { readReviewLedger } from "./reviewLedger.ts";
-import { DEVELOPER_FAILED, type DodResult, type StoryOutcome } from "./outcome.ts";
+import { DEVELOPER_FAILED, dodFailure, dodRefused, type DodResult, type StoryOutcome } from "./outcome.ts";
 
 /**
  * The three bounds a review round is held to, each counting a DIFFERENT thing,
@@ -125,6 +127,69 @@ export class ReviewCounters {
   closeEnvelopeRound(storyId: string): void {
     this.formatRetries.set(storyId, 0);
   }
+
+  /**
+   * Developer attempts THIS process requeued on a red Definition of Done (gh #313)
+   * — the fourth thing counted here, and a fourth map for the reason the other
+   * three are separate: a red DoD spends an attempt the way a `changes` verdict
+   * does, but it is not a verdict, and adding it to `reviews` would tell every
+   * reader of `verdicts` that a reviewer judged a diff nobody reviewed.
+   *
+   * Deliberately WITHOUT a ledger fallback, and the one hole that leaves is named
+   * here rather than discovered. A requeued attempt settles `blocked` before the
+   * next one starts, so a process that dies between the two leaves a story no
+   * invocation offers again, and a `story reopen` hands out a fresh run of
+   * attempts anyway. The exception is a next attempt whose developer never RAN
+   * (spawn error, transport fault): it parks back at `blocked` with nothing run,
+   * `blockedByFailedDeveloper` offers it again in a LATER process, and that
+   * process counts from attempt 1 — a turn that never ran bought no information,
+   * which is the rule that path already follows. Counting it from the log would
+   * need a derivation in `readReviewLedger`, not a fourth copy here.
+   */
+  private readonly dodRequeues = new Map<string, number>();
+
+  /** How many attempts THIS process has already requeued on a red DoD. */
+  dodRequeuesSpent(storyId: string): number {
+    return this.dodRequeues.get(storyId) ?? 0;
+  }
+
+  /** One more attempt spent on a red DoD and requeued — `dodRedRequeue` decides which. */
+  countDodRequeue(storyId: string): void {
+    this.dodRequeues.set(storyId, this.dodRequeuesSpent(storyId) + 1);
+  }
+}
+
+/**
+ * Is this half-A failure a red Definition of Done a SECOND developer attempt could
+ * turn green (gh #313)?
+ *
+ * Measured across 12 run folders: 17 human reopens were exactly this — a suite,
+ * a snapshot, a pinned inventory the developer's own change moved — and each one
+ * needed a person to read the kept output and type `tldrx story reopen`. The
+ * reviewer's `changes` verdict already requeues while `attempt < attempts`; this
+ * is the same bound over the other way an attempt can fail on its merits.
+ *
+ * Narrow on purpose. Every row that is not green must have RUN and exited non-zero
+ * (or timed out): a REFUSED command would be refused again, and a binary ABSENT
+ * from the tree (gh #209) is the workspace's `install:`, not the developer's code.
+ * And the developer must have been neither refused at the permission layer nor
+ * killed on its cap — both are causes the same allowance and the same ceiling
+ * would reproduce on the next attempt, so they block on the first one as before.
+ * An empty `dod` is a plan that proves nothing and never requeues.
+ */
+export function dodRedRequeue(parts: {
+  readonly dod: readonly DodResult[];
+  readonly refused: string | null;
+  readonly budgetDeath: string | null;
+  readonly attempt: number;
+  readonly attempts: number;
+}): boolean {
+  if (parts.refused !== null || parts.budgetDeath !== null) return false;
+  if (parts.attempt >= parts.attempts) return false;
+  // `dodFailure` over one row: the non-green predicate stays in ONE place (§7).
+  const red = parts.dod.filter((r) => dodFailure([r]) !== undefined);
+  return red.length > 0
+    && red.every((r) => !dodRefused(r) && (r.absent === undefined || r.absent === null));
 }
 
 /**

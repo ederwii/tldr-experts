@@ -3817,6 +3817,19 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    the diff consumes the requeue. Headless re-runs it by spawning; `--prepare` writes the
    reviewer bundle for the host and stops (see "the second delegable role" below).
 
+   **A red DoD takes the same bound (#313).** A developer whose Definition of Done goes red — every non-green row RAN
+   and exited non-zero or timed out — is requeued while `attempt < attempts`, instead of blocking on the first miss:
+   the attempt settles `blocked` with `the DoD was red on attempt <n> of <m>` (its `task.done` is the ordinary one, no
+   new event or field), the story worktree is KEPT so the next attempt continues in that tree, and the next developer
+   prompt carries the kept output under `## Previous attempt` with the DoD header (#211). The last attempt blocks as
+   before, and when more than one attempt in a row went red its reason says `the DoD stayed red on <n> of <m>
+   attempts`. Everything that is not a plain red still blocks on the first attempt, because a second one would buy
+   the same outcome: a developer refused at the permission layer (#271) or killed on its cap (#277), a REFUSED dod
+   command (#165), a binary absent from the tree (#209), a story with no dod commands, a reopened story whose
+   developer changed nothing (#308). Measured reason: 17 human `story reopen`s over 12 run folders were a red DoD the
+   developer's own attempt never got a second look at. Headless only: the host door (`--prepare`/`--commit`) is
+   unchanged.
+
    **A FORMAT-refused envelope is re-prompted, not charged (#78, #79).** An envelope Build cannot read falls to
    `changes` as above — but that is a fault in the reviewer's REPORT, not in the diff, and charging the story one of
    its two attempts for it conflates the instrument with the result (measured 2026-09-01 on
@@ -3837,7 +3850,7 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    CONTENT, a red DoD, a second fix-list round refused by its own bound, and any refusal the format index does not
    claim all keep the cost they had.
 
-**Blast radius is one story.** A red DoD, a merge conflict or a failed sub-agent blocks that story only; the epic
+**Blast radius is one story.** A red DoD (once its attempts are spent), a merge conflict or a failed sub-agent blocks that story only; the epic
 carries on with the next, and so does the wave. **The phase never ships:** no epic is merged into a default branch, so
 the stage forces `gate: approve` whatever the stage file says, and the handoff lists the epic branches ready to merge
 per repo. `04-build/handoff.md` is written by the executor from what it measured — Findings cite
