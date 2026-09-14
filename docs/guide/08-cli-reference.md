@@ -1556,6 +1556,29 @@ A `changes` that a later attempt merged over and got approved is not a rejection
 diff never merged — DoD red, a conflict, a developer that died — has nothing to refuse; a story
 parked at `review` under a *signed* fix list ships, with its findings listed under
 `## Open findings`. `--dry-run` is refused in the same words.
+
+**It will not open a PR over a stale or red epic** — exit `2` (#315). Four PRs `ship` opened
+in one audit window came back red and needed a person: an epic cut from a `main` that had since
+moved, and checks that failed on the tree the PR really merges. So, per repo, before anything is
+pushed or opened, `ship` fetches the base from the remote, asks whether the epic contains it,
+and in a throwaway worktree merges it in when it does not, then runs the repo's `install:` and
+the Definition of Done of every story settled `done` there:
+
+```
+`npm run test` exited 1 on the merge of `origin/main` into `epic/scoring` in `app`, so no PR was opened
+  FAIL src/score.test.ts > rounds half up
+  it is a done story's Definition of Done; a PR over this tree would open with its checks red.
+  Fix it on `epic/scoring` (or `tldrx story reopen <id> --note "<why>"` and re-run Build), then `tldrx ship --run 260909-scoring` again.
+```
+
+A conflict refuses naming the paths, and a fetch that fails refuses too. When the gate is green
+and the epic was behind, a run opened with `--ship push|pr|merge` gets the base merged *into*
+the epic — a forward merge commit, never a rebase, never a force — and pushed with it; a run
+without it keeps its branch exactly where it was and is told it is behind. The PR's output
+carries a `gate:` line naming what ran. `--dry-run` runs the same fetch, merge and gate and
+exits the same way; it moves no branch, pushes nothing and opens nothing. The gate is the plan's
+own: a check that exists only in the remote's CI — a coverage threshold, say — is still the
+CI's to catch.
 Exits: `0` `1` `2` `3`.
 
 ## `tldrx watch`

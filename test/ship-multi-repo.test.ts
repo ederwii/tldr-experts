@@ -281,11 +281,13 @@ describe("tldrx ship across the repos a chained run shares a branch name in (#66
    * It used to read `body: 04-build/handoff.md`, which was true while the handoff
    * WAS the body. It stopped being true when the body became a rendered document
    * with the handoff as one section of it, so the line now says what the body is
-   * rather than naming a file it merely contains. The rest of the block is still
+   * rather than naming a file it merely contains. #315 ADDED one line, `gate:`, saying
+ * which Definition of Done ran on the tree the PR merges — a PR opened over a gate
+ * nobody can see ran is the silence that issue is about. The rest of the block is still
    * asserted as exact strings, which is what makes "we did not change the common
    * case" a claim this test can make.
    */
-  test("one repo prints exactly the four lines it always did (the common case)", async () => {
+  test("one repo prints exactly its four lines, plus the gate line (the common case)", async () => {
     const ws = workspace();
     readyToShip(ws, [ws.repoDir]);
     const transport = healthy();
@@ -296,6 +298,8 @@ describe("tldrx ship across the repos a chained run shares a branch name in (#66
       `opened a PR for ${ws.runId} from \`${BRANCH}\` into \`main\` (app)`,
       "  https://github.com/ederwii/app/pull/7",
       "  body: rendered from 04-build/handoff.md · no open findings",
+      // gh #315: the gate ran on the tree the PR merges, and the output says what it ran.
+      `  gate: \`npm run test\` exit 0 on the head of \`${BRANCH}\``,
       `  next: \`tldrx tickets sync --run ${ws.runId}\` mirrors the plan's epics and stories, `
         + "if this workspace configures a ticket tool.",
     ]);
