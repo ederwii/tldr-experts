@@ -64,12 +64,34 @@ export function basisOf(payload: Readonly<Record<string, unknown>>): WideningBas
   return payload.basis === "measured" ? "measured" : "declared";
 }
 
+/**
+ * How long a payload list is — the list's own length, PLUS the count the emit
+ * seam (or the writer) left in `<field>_omitted` when it could not carry the
+ * list (#249). The ONE derivation of "count of a list-or-omitted" (AGENTS.md §7):
+ * `wideningRows`, the handoff and the replay all render `(before → after
+ * path(s))` from it, so a widening too wide for the 4 KB cap reads the same in
+ * every one of them. A count that is not a number is not a count — 0, never a
+ * parsed guess.
+ */
+export function listCount(payload: Readonly<Record<string, unknown>>, field: string): number {
+  const list = payload[field];
+  const omitted = payload[`${field}_omitted`];
+  return (Array.isArray(list) ? list.length : 0) + (typeof omitted === "number" ? omitted : 0);
+}
+
 /** One widening, as a reader needs it: who said so, what grew, and by how much. */
 export interface WideningRow {
   readonly story: string;
   readonly basis: WideningBasis;
-  /** The paths this widening ADDED. */
+  /** The paths this widening ADDED — those the event carries. */
   readonly paths: readonly string[];
+  /**
+   * How many ADDED paths the event does NOT carry (#249): the emit seam dropped
+   * the list whole when it would not fit the cap and left `paths_omitted` in its
+   * place. Present only when non-zero, so a row written before the field existed
+   * is byte-identical to what it was.
+   */
+  readonly pathsOmitted?: number;
   /** Sizes, not lists: a handoff bullet is bounded and the lists are in the log. */
   readonly before: number;
   readonly after: number;
@@ -124,8 +146,11 @@ export function wideningRows(eventsText: string): readonly WideningRow[] {
       story: typeof payload.story === "string" ? payload.story : "?",
       basis: basisOf(payload),
       paths: stringList(payload.paths),
-      before: stringList(payload.before).length,
-      after: stringList(payload.after).length,
+      ...(typeof payload.paths_omitted === "number" && payload.paths_omitted > 0
+        ? { pathsOmitted: payload.paths_omitted }
+        : {}),
+      before: listCount(payload, "before"),
+      after: listCount(payload, "after"),
       note: typeof payload.note === "string" ? payload.note : "",
       line: i + 1,
     });

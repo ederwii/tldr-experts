@@ -333,6 +333,34 @@ export interface ExecutorOutcome {
 export type StageExecutor = (ctx: ExecutorContext) => Promise<ExecutorOutcome>;
 
 /**
+ * The rows an executor had ALREADY earned when it threw (#249).
+ *
+ * `ExecutorOutcome.tasks` exists only at return, so a throw after a paid turn
+ * used to take that turn's row and its money with it: the developer and the
+ * reviewer had run, `run.yml` said nothing, and every ceiling that derives from
+ * recorded spend was short by exactly what was lost — the next economy refusal
+ * that should have fired did not. An executor that throws carries its partial
+ * rows on the error itself, as DATA, and `runNext`'s catch records them before
+ * it fails the stage. Attached to the SAME error object, never a wrapper: what
+ * threw is still what the caller sees (`instanceof` included).
+ */
+const PARTIAL_TASKS = Symbol.for("tldrx.partialTasks");
+
+export function withPartialTasks(error: unknown, tasks: readonly ExecutorTask[]): unknown {
+  if (tasks.length === 0) return error;
+  const carrier = typeof error === "object" && error !== null ? error : new Error(String(error));
+  Object.defineProperty(carrier, PARTIAL_TASKS, { value: [...tasks], enumerable: false, configurable: true });
+  return carrier;
+}
+
+/** The rows a thrown error carries, or none — a throw with no rows is what it always was. */
+export function partialTasksOf(error: unknown): readonly ExecutorTask[] {
+  if (typeof error !== "object" || error === null) return [];
+  const tasks = (error as Record<symbol, unknown>)[PARTIAL_TASKS];
+  return Array.isArray(tasks) ? (tasks as readonly ExecutorTask[]) : [];
+}
+
+/**
  * Phase id -> executor. Keyed on the phase rather than the stage id so a team that
  * renames `watch` to `observe` in its own `.tldrx/stages/` keeps the behaviour:
  * the phase folder is what spec §1 fixes, the stage slug is not.

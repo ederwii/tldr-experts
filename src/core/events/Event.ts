@@ -265,15 +265,18 @@ export function validateEvent(input: unknown): ValidationResult {
 /**
  * Fit a payload inside the §2.9 cap by NAMING what was left out, not by raising it.
  *
- * TWO fields overflow in practice, and this function knows exactly those two —
- * by NAME, one branch each, in the order below. It has no general rule for
- * "shrink whatever is biggest": trimming a field it does not understand would be
- * the framework editing its own record, and a payload oversized for any other
- * reason still comes back untouched and is still refused by the append.
+ * THREE field families overflow in practice, and this function knows exactly
+ * those — by NAME, in the order below, each list in one declared table
+ * (`DROPPABLE_LISTS`). It has no general rule for "shrink whatever is biggest":
+ * trimming a field it does not understand would be the framework editing its own
+ * record, and a payload oversized for any other reason still comes back untouched
+ * and is still refused by the append.
  *
- *   1. `detail` — a reviewer's verdict prose, copied into
- *      `check.passed`/`check.failed` (#160). Prose is the first thing to go: it
- *      is the field a ledger does not read, and the VERDICT beside it survives.
+ *   1. The prose (`DROPPABLE_PROSE`): `recording_error`, the second free-text
+ *      field on the executor-throw `error` event, then `detail` — a reviewer's
+ *      verdict copied into `check.passed`/`check.failed` (#160), or a throw's
+ *      message. Prose is the first thing to go: it is the field a ledger does
+ *      not read, and the VERDICT beside it survives.
  *   2. `outputs` — every run-relative path a turn wrote, on `agent.result`
  *      (#248). A story with a few dozen files clears 4096 bytes on that array
  *      alone, and the live incident that filed #248 lost a whole invocation's
@@ -281,10 +284,25 @@ export function validateEvent(input: unknown): ValidationResult {
  *      truncated `outputs` would read downstream as the entire list, which is
  *      the invented value AGENTS.md §7 bans. The full list goes to `save`, one
  *      path per line.
+ *   3. `after`, then `before`, then `paths` — the three path lists on
+ *      `story.touches_widened` (#249). A wide story carries its whole declared
+ *      list at both ends AND the paths it added, three copies of much the same
+ *      list, so it crosses the cap at about half the file count an `agent.result`
+ *      does — measured at 5556 bytes on a 32-file story with 16 declared touches,
+ *      and it was the first thing to die on a wide story. Same treatment as
+ *      `outputs`, one list at a time and only while the payload is STILL over:
+ *      `after` first (the largest, and derivable from the other two), `before`
+ *      next, and `paths` — the reading itself — last. Every reader of that event
+ *      already renders `(before → after path(s))` from counts, so the counts are
+ *      what survive. A `<field>_omitted` a WRITER already put there
+ *      (`foreignWork.ts` caps its own `paths` at 40 and counts the rest in that
+ *      key) is ADDED to, not overwritten: the key says every path the event does
+ *      not carry.
  *
- * Adding a THIRD field is a deliberate edit here, not something that happens by
- * itself: a new payload field that can grow without bound (a `usage` block, a
- * findings array) is oversized-and-refused until this function is taught it.
+ * Adding a FOURTH field is a deliberate edit here, not something that happens by
+ * itself: a new payload field that can grow without bound (a findings array) is
+ * oversized-and-refused until this function is taught it — a row in
+ * `DROPPABLE_LISTS` if it is a list, a branch if it is not.
  *
  * Neither drop GUARANTEES the result fits — if the rest of the payload alone is
  * already over the cap, the named absence is added to a payload that is still
@@ -322,27 +340,57 @@ export function capPayload(
 
   let current = payload;
 
-  // 1. The prose.
-  if (typeof current.detail === "string") {
-    const { detail: dropped, ...rest } = current;
-    current = { ...rest, detail_omitted: named(byteSize(current), dropped, "detail") };
+  // 1. The prose, in table order — each replaced by `<field>_omitted`, and the
+  //    function returns the moment the payload fits.
+  for (const field of DROPPABLE_PROSE) {
+    const dropped = current[field];
+    if (typeof dropped !== "string") continue;
+    const { [field]: _gone, ...rest } = current;
+    current = { ...rest, [`${field}_omitted`]: named(byteSize(current), dropped, field) };
     if (byteSize(current) <= MAX_PAYLOAD_BYTES) return current;
   }
 
-  // 2. The path list — only when there is one, since dropping an empty array
-  //    buys nothing and would leave a misleading `outputs_omitted: 0` behind.
-  if (Array.isArray(current.outputs) && current.outputs.length > 0) {
-    const { outputs: dropped, ...rest } = current;
-    const list = dropped as readonly unknown[];
+  // 2–3. The path lists, in table order — each only when there is one, since
+  //    dropping an empty array buys nothing and would leave a misleading
+  //    `<field>_omitted: 0` behind, and each only while the payload is STILL over.
+  for (const field of DROPPABLE_LISTS) {
+    if (byteSize(current) <= MAX_PAYLOAD_BYTES) return current;
+    const list = current[field];
+    if (!Array.isArray(list) || list.length === 0) continue;
+    const { [field]: dropped, ...rest } = current;
+    const already = current[`${field}_omitted`];
     current = {
       ...rest,
-      outputs_omitted: list.length,
-      outputs_omitted_reason: named(byteSize(current), list.map((p) => String(p)).join("\n"), "outputs"),
+      [`${field}_omitted`]: list.length + (typeof already === "number" ? already : 0),
+      [`${field}_omitted_reason`]: named(
+        byteSize(current),
+        (dropped as readonly unknown[]).map((p) => String(p)).join("\n"),
+        field,
+      ),
     };
   }
 
   return current;
 }
+
+/**
+ * The list-valued payload fields `capPayload` may drop, in the order it tries
+ * them. ONE table, so "which fields does the seam know" has one answer and a new
+ * unbounded list is one row here rather than a fourth hand-written branch.
+ */
+export const DROPPABLE_LISTS = ["outputs", "after", "before", "paths"] as const;
+
+/**
+ * The prose-valued payload fields `capPayload` may drop, in the order it tries
+ * them: `recording_error` — the SECOND free-text field the executor-throw
+ * `error` event carries (#249, review round 1), which used to sail past the cap
+ * and could throw the very seam that was saying what went wrong — and then
+ * `detail` (a verdict's or a throw's text, #160). The secondary failure goes
+ * before the primary one: on an event carrying both, the throw's own message is
+ * the one a reader came for. Every other event carries `detail` alone, so its
+ * treatment is byte-for-byte what it was.
+ */
+export const DROPPABLE_PROSE = ["recording_error", "detail"] as const;
 
 function byteSize(payload: Readonly<Record<string, unknown>>): number {
   return Buffer.byteLength(JSON.stringify(payload), "utf8");

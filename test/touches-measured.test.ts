@@ -32,7 +32,7 @@ import { EventLog } from "../src/core/events/EventLog.ts";
 import { validateEvent } from "../src/core/events/Event.ts";
 import { loadRun, renderReplay } from "../src/core/replay/index.ts";
 import {
-  basisOf, measuredWidening, MEASURED_NOTE_TAIL, wideningRows,
+  basisOf, listCount, measuredWidening, MEASURED_NOTE_TAIL, wideningRows,
 } from "../src/core/build/measuredTouches.ts";
 import { renderBuildHandoff } from "../src/core/build/handoff.ts";
 import { splitFrontMatter } from "../src/core/schemas/frontMatter.ts";
@@ -293,5 +293,62 @@ describe("the comparison itself", () => {
 
   test("no change at all is not a widening", () => {
     expect(measuredWidening([], ["src/in.ts"])).toBeNull();
+  });
+});
+
+describe("a widening whose lists were too wide for the cap still renders by COUNT (#249)", () => {
+  /**
+   * `capPayload` drops `before`/`after` (and, last, `paths`) WHOLE and leaves
+   * `<field>_omitted: N` in their place. Every reader here rendered counts
+   * already — `(16 → 29 path(s))` — so the counts are what they fall back to,
+   * through ONE derivation (`listCount`) rather than three private `.length`s.
+   */
+  const OMITTED = {
+    type: "story.touches_widened", actor: "framework",
+    payload: {
+      story: "S1", note: "13 of 29 changed files fell outside the declared touches", basis: "measured",
+      before_omitted: 16, before_omitted_reason: "1316 bytes exceeds the 4096-byte cap — omitted text saved at 04-build/log/overflow/x-before.txt",
+      after_omitted: 29, after_omitted_reason: "2678 bytes exceeds the 4096-byte cap — omitted text saved at 04-build/log/overflow/x-after.txt",
+      paths_omitted: 13, paths_omitted_reason: "1363 bytes exceeds the 4096-byte cap — omitted text saved at 04-build/log/overflow/x-paths.txt",
+    },
+  };
+
+  test("listCount reads a list's length, or the count left in its place, or 0", () => {
+    expect(listCount({ before: ["a", "b"] }, "before")).toBe(2);
+    expect(listCount({ before_omitted: 16 }, "before")).toBe(16);
+    expect(listCount({ before: ["a"], before_omitted: 16 }, "before")).toBe(17);
+    expect(listCount({}, "before")).toBe(0);
+    expect(listCount({ before_omitted: "16" }, "before")).toBe(0);
+  });
+
+  test("wideningRows carries the counts and says how many added paths it could not list", () => {
+    const rows = wideningRows(jsonl([{ type: "run.created", actor: "alan", payload: {} }, OMITTED]));
+    expect(rows).toEqual([{
+      story: "S1", basis: "measured", paths: [], pathsOmitted: 13, before: 16, after: 29,
+      note: "13 of 29 changed files fell outside the declared touches", line: 2,
+    }]);
+  });
+
+  test("the handoff bullet renders `(16 → 29 path(s))` and names the unlisted count", () => {
+    const rendered = renderBuildHandoff({
+      runId: "260914-x", stageId: "04-build", model: null, costUsd: 0, budgetUsd: 1,
+      at: "2026-09-14T09:00:00Z", outcomes: [], epics: [],
+      widenings: wideningRows(jsonl([OMITTED])),
+    });
+    expect(rendered).toContain("(16 → 29 path(s))");
+    expect(rendered).toContain("13 path(s) not listed on the event");
+    expect(rendered).toContain("[src: events.jsonl:1]");
+  });
+
+  test("the replay narrative renders the same counts", () => {
+    const ws = workspace(UNDER_DECLARED);
+    EventLog.forRun(ws.runDir).append({
+      ts: "2026-09-14T12:00:00Z", run: ws.runId, stage: "build", type: "story.touches_widened",
+      actor: "framework", cost_usd: 0, payload: OMITTED.payload,
+    });
+    const text = renderReplay(loadRun(ws.root, ws.runId)!);
+    expect(text).toContain("WIDENED by framework (measured)");
+    expect(text).toContain("(16 → 29 path(s))");
+    expect(text).toContain("13 path(s) not listed on the event");
   });
 });

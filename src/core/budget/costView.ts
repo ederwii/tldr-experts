@@ -319,6 +319,21 @@ export function storyLedger(
   const ceilings = new Map<string, number>();
   const measured = new Map<string, number>();
   const unmetered = new Map<string, number>();
+  // Per story, the turns `agent.spawned` named that no `agent.result` has
+  // answered — split by whether anything can STILL answer them (#249, review
+  // rounds 2 and 3). A spawn whose invocation has since written its terminal
+  // event on that stage, or that a later `stage.started` superseded, is LOST:
+  // the double fault where run.yml has the rows and the events log has none.
+  // Those turns are UNMETERED here — their cost is in run.yml, not derivable per
+  // story from the events (a task row carries no story key), so the figure is a
+  // LOWER BOUND and enters the SAME door as any other unmetered turn rather than
+  // reading as a confident null. A spawn with nothing terminal after it is a
+  // turn IN FLIGHT — every healthy mid-run read of this ledger — and is not
+  // counted as anything: not lost, not unmetered, no new word for it. Events
+  // carry no attempt id (measured), so the walk's own order is the attempt.
+  const open = new Map<string, number>();
+  const openStage = new Map<string, string | null>();
+  const lost = new Map<string, number>();
   const storyKeys = new Set<string>();
   const storyPhases = new Set<string>();
   let excluded = 0;
@@ -361,6 +376,49 @@ export function storyLedger(
     else measured.set(turn.key, round((measured.get(turn.key) ?? 0) + turn.costUsd));
   }
 
+  // The lost turns, in log ORDER — the one thing the two passes above do not
+  // keep. A spawn opens a slot for its story; a result for that story closes
+  // one — or, arriving late, retires a slot already counted lost; an
+  // invocation-terminal event on the spawn's stage turns every slot still open
+  // on that stage into a LOST turn; a spawn still open at the end of the log is
+  // in flight and is left alone. `extraTurns` are this
+  // invocation's own, spawned after the last terminal event by construction,
+  // so they never meet a slot this loop could close. Zero on every finished
+  // healthy story and every live one, so the ledger is byte-identical there.
+  for (const event of events) {
+    if (event.type === "agent.spawned" && inScope(event)) {
+      const story = str(event.payload.story);
+      if (story === null) continue;
+      open.set(story, (open.get(story) ?? 0) + 1);
+      openStage.set(story, event.stage);
+      continue;
+    }
+    if (event.type === "agent.result" && inScope(event)) {
+      const key = str(event.payload.key);
+      if (key === null || !isStory(key, str(event.payload.phase))) continue;
+      // A result is proof the turn was metered, WHENEVER it arrives (review
+      // round 4). One that finds no open slot — an orphaned agent outliving a
+      // crashed or relaunched invocation, appending after the terminal event
+      // already closed its slot as lost — retires a LOST slot instead, so the
+      // same turn is never both the dollars in `measured` and a lost turn in
+      // `unmetered`. With neither open nor lost it is a result nothing spawned,
+      // and the two passes above already treated it as they always did.
+      const opened = open.get(key) ?? 0;
+      if (opened > 0) open.set(key, opened - 1);
+      else if ((lost.get(key) ?? 0) > 0) lost.set(key, (lost.get(key) ?? 0) - 1);
+      continue;
+    }
+    if (!closesAttempt(event)) continue;
+    for (const [story, count] of open) {
+      if (count === 0 || openStage.get(story) !== event.stage) continue;
+      lost.set(story, (lost.get(story) ?? 0) + count);
+      open.set(story, 0);
+    }
+  }
+  for (const [story, count] of lost) {
+    if (count > 0) unmetered.set(story, (unmetered.get(story) ?? 0) + count);
+  }
+
   return {
     rows: order.map((story) => ({
       story,
@@ -371,6 +429,23 @@ export function storyLedger(
     excluded,
     events: events.length,
   };
+}
+
+/**
+ * Does this event end the invocation that owned the stage's open spawns — so a
+ * spawn with no result by now will never get one? The stage's own terminal
+ * events; the two `error` seams `runNext` writes when an executor threw or its
+ * rows could not be recorded (each is followed by a `stage.failed`, but the
+ * `error` is the record of the loss itself); and a `stage.started`, which
+ * supersedes whatever an earlier invocation left open — a crash nothing wrote
+ * down, then a re-entry.
+ */
+function closesAttempt(event: TldrxEvent): boolean {
+  if (event.type === "stage.started" || event.type === "stage.done"
+    || event.type === "stage.failed" || event.type === "stage.skipped") return true;
+  if (event.type !== "error") return false;
+  const where = str(event.payload.where);
+  return where === "executor" || where === "record-tasks";
 }
 
 /**
@@ -596,7 +671,7 @@ function storyVerdict(cost: StoryCost): string {
     return "no total: a story above is missing one side, and an absent figure is not summed as zero.";
   }
   if (floor) {
-    return `no verdict: ${turns} unmetered, so at least one story's measurement is a LOWER BOUND `
+    return `no verdict: ${turns} unmetered, so at least one story's measurement is a ${LOWER_BOUND_MARK} `
       + "— an unmetered turn could put it over a spawn ceiling this cannot see.";
   }
   return "every story measured inside the spawn ceilings it was given.";
@@ -655,7 +730,7 @@ export function renderStoryCost(cost: StoryCost): string {
   if (cost.unmeteredStories.length > 0) {
     lines.push(
       `  ${cost.unmeteredStories.join(", ")}: ${plural(cost.unmeteredTurns, "turn")} UNMETERED, so `
-      + "that measurement is a LOWER BOUND, not a total.",
+      + `that measurement is a ${LOWER_BOUND_MARK}, not a total.`,
     );
   }
   if (cost.excludedKeyedResults > 0) lines.push(`  ${excludedLine(cost)}`);
@@ -763,6 +838,12 @@ function readBudget(runDir: string): RunBudget | null {
 const ECONOMY_WIDTH = 12;
 const DASH = "—";
 const NOT_RECORDED = "not recorded";
+/**
+ * The words every lower-bound sentence in this file carries — exported so a test
+ * asserts the marker, not a bare English phrase innocent prose could satisfy
+ * (AGENTS.md §8). Lifted verbatim from `budgetView.ts`: one wording, three screens.
+ */
+export const LOWER_BOUND_MARK = "LOWER BOUND";
 
 /**
  * The four counters in one column group — the same order at every level — plus

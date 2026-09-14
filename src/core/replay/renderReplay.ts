@@ -5,7 +5,7 @@
  * `run.yml`. Nothing is inferred: a line appears because an event was logged, and
  * a stage with no events says so rather than being narrated from its status.
  */
-import { basisOf } from "../build/measuredTouches.ts";
+import { basisOf, listCount } from "../build/measuredTouches.ts";
 import { openBlocks, parseQuestions } from "../text/index.ts";
 import { parseEvidence } from "../text/evidence.ts";
 import { skippedNote } from "../events/EventLog.ts";
@@ -235,8 +235,8 @@ function bullet(item: NumberedEvent, trail: Map<string, ReviewerProvenance | nul
     case "story.touches_widened":
       return `${prefix}story ${text(payload.story) || "?"}'s \`touches:\` WIDENED by ${actor}`
         + ` (${basisOf(payload)})`
-        + ` — +${pathList(payload.paths)}`
-        + ` (${String(lengthOf(payload.before))} → ${String(lengthOf(payload.after))} path(s))`
+        + ` — +${widenedPaths(payload)}`
+        + ` (${String(listCount(payload, "before"))} → ${String(listCount(payload, "after"))} path(s))`
         + `${note(payload.note)}`;
     // The one event in the set that records tldrx moving a ref (design §F.2). A
     // narrative that showed a story's diff base change with nothing in between
@@ -335,7 +335,18 @@ function bullet(item: NumberedEvent, trail: Map<string, ReviewerProvenance | nul
       return `${prefix}UNREADABLE ${text(payload.path) || "result.json"}`
         + ` — ${text(payload.error) || "no parse error recorded"}`
         + " (nothing failed; rewrite it and run the same command again)";
-    case "error": return `${prefix}error: ${text(payload.message) || "no message recorded"}`;
+    // The executor-throw `error` writes `detail` (or `detail_omitted` when the
+    // cap trimmed it), never `message` — this line read a field the event has
+    // never carried (#249, review round 1). It REPORTS the counts the event
+    // carries and sums nothing: a reconstruction is labelled at the surface,
+    // never fused with the measured figures below it.
+    case "error": {
+      const what = text(payload.detail) || text(payload.detail_omitted) || text(payload.message) || "no message recorded";
+      const rows = typeof payload.rows_expected === "number"
+        ? ` (${String(payload.rows_written ?? "?")} of ${String(payload.rows_expected)} task rows recorded)`
+        : "";
+      return `${prefix}error: ${what}${rows}`;
+    }
     default: return null;
   }
 }
@@ -432,9 +443,17 @@ function pathList(value: unknown): string {
   return items.length === 0 ? "?" : items.join(", ");
 }
 
-/** How long a payload list is, or 0 when the payload does not carry one. */
-function lengthOf(value: unknown): number {
-  return Array.isArray(value) ? value.length : 0;
+/**
+ * The paths a widening added, as the event carries them — or, when the emit seam
+ * dropped the list to fit the cap (#249), the count it left in `paths_omitted`.
+ */
+function widenedPaths(payload: Readonly<Record<string, unknown>>): string {
+  const listed = pathList(payload.paths);
+  const omitted = typeof payload.paths_omitted === "number" && payload.paths_omitted > 0
+    ? `${String(payload.paths_omitted)} path(s) not listed on the event`
+    : "";
+  if (omitted === "") return listed;
+  return listed === "?" ? omitted : `${listed}, ${omitted}`;
 }
 
 /**
