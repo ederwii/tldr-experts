@@ -183,8 +183,12 @@ etapas posteriores que ya habían corrido quedan marcadas `stale`: sus archivos 
 disco y dejan de contar como vigentes. No se borra nada, y no se reembolsa nada.
 
 Cuando con lo que no estás de acuerdo es con una sola *story* de Build,
-`tldrx story reopen <id> --note "…"` le da a esa story otra tanda de intentos y no toca
-nada más. Una story que ya está `done` se niega — deshacer trabajo terminado es una decisión
+`tldrx story reopen <id> --note "…"` le da a esa story otra tanda de intentos. Las únicas
+otras stories que mueve son las que esa story retenía por sí sola: reabrir una story `blocked`
+devuelve a `todo` cada dependiente cuyo único bloqueo era esa dependencia (y las que esperan
+detrás de ellas), cada una con su propio registro firmado y sin consumir intento; un
+dependiente que sigue retenido por cualquier otra cosa sigue `blocked`, y la salida dice por
+qué. Una story que ya está `done` se niega — deshacer trabajo terminado es una decisión
 sobre la etapa —, pero un defecto concreto en ella abre una **ronda de arreglo**:
 `tldrx story reopen S11 --for-fix --note "which defect"`. No se consume ningún intento, el
 arreglo pasa el mismo DoD y el mismo revisor, no se tocan los criterios de aceptación, y
