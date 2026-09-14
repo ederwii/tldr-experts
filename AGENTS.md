@@ -48,10 +48,12 @@ sells: measured over asserted, refused over guessed, named over silent.
   `.RELEASE-IN-PROGRESS` at the repo root for its whole span (pid, version, started; removed on
   every exit path, signals included), the wave polls it with the same knobs, breaks a dead
   owner's marker open, and gives up with **exit 13** — its own code, one per condition — having
-  merged nothing. `scripts/merge-wave.sh --status` prints one line, exit 0 either way:
+  merged nothing. `scripts/merge-wave.sh --status` answers in one line, exit 0 either way:
   `holder=<pid> branch=<b> phase=<merge|gates|push> started=<iso>` for a live wave (read from
-  the lock, which records all four), `release holder=<pid> version=<v> started=<iso>` for a live
-  release, or `idle` — "is it alive?" is that command, never `ps` plus a marker's mtime.
+  the lock, which records all four), `release holder=<pid> version=<v> phase=<waiting|releasing>
+  started=<iso>` for a live release, or `idle` — plus a SECOND line, `release queued: pid <p>
+  version=<v> phase=waiting`, when a live release is queued behind the wave the first line names
+  (#304). "Is it alive?" is that command, never `ps` plus a marker's mtime.
   And the release waits on the WAVE (#304): `scripts/release.sh` polls `merge-wave.lock` with
   the same knobs and dead-owner rule BEFORE it writes its marker or edits a file, and gives up
   with **exit 14** having edited nothing — so the freeze is mutual, not one-directional. The
