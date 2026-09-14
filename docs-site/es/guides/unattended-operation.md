@@ -355,7 +355,11 @@ compuertas `auto`.
 loop. The run: nothing delivered: 0 of 3 stories; S1 — npm run test exited 127."* La misma
 frase queda en `run.yml` como `outcome:`, en `tldrx run status`, en el tablero y en el cuerpo
 del PR de `tldrx ship` — y `tldrx ship` rechaza un run así en vez de abrir un PR cuya sección
-"What shipped" está vacía.
+"What shipped" está vacía. También rechaza, con salida 2, una épica que lleva una historia que
+el revisor *rechazó*: una historia se fusiona en su épica antes de la revisión, así que un
+veredicto `changes` deja el diff en la rama, y un PR cuyo cuerpo lista esa historia bajo "Not
+done" igual llevaría su código. El rechazo nombra la historia, la fusión y el motivo del
+revisor; `tldrx story reopen` y volver a correr Build son el camino, o un PR abierto a mano.
 
 **Y un run puede terminar en el PR mismo.** Ábrelo con `--ship merge` (o `pr`, o `push`) y en
 cuanto `run auto` ve el run en `done` corre `tldrx ship` por ti: la rama de la épica se

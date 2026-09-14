@@ -1532,6 +1532,30 @@ handoff's `## Findings`:
 `--dry-run` is refused in exactly the same words. A run that delivered at least one story
 ships as it always did, and its PR body now opens with an **Outcome** line —
 `partial: 1 of 3 stories delivered; S2 — …` — so a reviewer reads the ratio before the list.
+
+**It refuses an epic carrying a story the reviewer rejected** — exit `2`, because here a gate
+did say no (#282). A story merges into its epic *before* its review, by design — the reviewer
+reads the merged diff from the epic base — so a `changes` verdict leaves the diff on the branch,
+and a story sent back twice sits `blocked` with its code merged twice. With one story `done`
+beside it, the refusal above does not fire and the PR would open with the rejected code in its
+diff while the body listed the story under "Not done" with no word that the diff was there. So
+`ship` reads the ledger's last merge for every story not `done` — the last `task.done` carrying
+`commit` and `epic_base` — and refuses, naming the story, that merge and the handoff's reason:
+
+```
+260909-scoring carries a story the reviewer rejected, and its diff is on `epic/scoring`
+  S5 — its last merge into the epic (commit 7fd2468 over epic base 48f8bdd) was judged `changes`: the reviewer asked for changes twice: …
+  A story merges into the epic BEFORE its review, so a `changes` verdict leaves the diff on the branch;
+  a PR over `epic/scoring` would carry that code, and its body would list S5 under "Not done"
+  without saying the diff is there.
+  Unblock it (`tldrx story reopen S5 --note "<why>"`) and re-run Build so a verdict that stands lands over it,
+  or open the PR by hand if you mean to ship the branch as it stands.
+```
+
+A `changes` that a later attempt merged over and got approved is not a rejection; a story whose
+diff never merged — DoD red, a conflict, a developer that died — has nothing to refuse; a story
+parked at `review` under a *signed* fix list ships, with its findings listed under
+`## Open findings`. `--dry-run` is refused in the same words.
 Exits: `0` `1` `2` `3`.
 
 ## `tldrx watch`
