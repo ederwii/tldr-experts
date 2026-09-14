@@ -1760,7 +1760,7 @@ describe("the merged tree carries exactly one unreleased CHANGELOG heading, abov
 const releaseMarkerPath = (sb: Sandbox) => join(sb.main, ".RELEASE-IN-PROGRESS");
 
 /** What `scripts/release.sh` leaves at the shared root for its whole span (#299). */
-function plantRelease(sb: Sandbox, pid: number = process.pid, version = "0.9.9"): void {
+function plantRelease(sb: Sandbox, pid: number = process.pid, version = "0.9.9", phase: string | null = "releasing"): void {
   writeFileSync(releaseMarkerPath(sb), [
     "RELEASE IN PROGRESS — planted by the test",
     `version: ${version}`,
@@ -1768,6 +1768,7 @@ function plantRelease(sb: Sandbox, pid: number = process.pid, version = "0.9.9")
     `host:    ${hostname()}`,
     "started: 2026-09-14T00:00:00Z",
     `epoch:   ${Math.floor(Date.now() / 1000)}`,
+    ...(phase === null ? [] : [`phase:   ${phase}`]),   // null: the pre-#304 marker, no phase line
     "",
   ].join("\n"));
 }
@@ -1782,6 +1783,7 @@ describe("a wave WAITS on a release in flight, the way it waits on its own lock 
     expectExit(run, r, 13);
     expect(r.stdout).toContain("FAIL release in flight");
     expect(r.stdout).toContain("0.9.9");                // which release, not just "a release"
+    expect(r.stdout).toContain("releasing");            // and what it is doing — not merely queued (#304)
     expect(r.stderr).toContain("waiting for a release");
     expect(originLog(sb)).toEqual(before);
     expect(gateShas(sb, "wave-a")).toEqual([]);
@@ -1871,12 +1873,28 @@ describe("`merge-wave.sh --status` answers \"is it alive, and where is it?\" in 
     expect(r.stdout.trim()).toBe(`holder=${process.pid} branch=? phase=? started=?`);
   });
 
-  test("a release in flight is reported too, since a wave will wait on it", () => {
+  test("a release in flight is reported too, with its phase, since a wave will wait on it", () => {
     const sb = sandbox();
     plantRelease(sb, process.pid, "0.9.9");
     const r = status(sb);
     expect(r.code).toBe(0);
-    expect(r.stdout.trim()).toMatch(/^release holder=\d+ version=0\.9\.9 started=2026-09-14T00:00:00Z$/);
+    expect(r.stdout.trim()).toMatch(/^release holder=\d+ version=0\.9\.9 phase=releasing started=2026-09-14T00:00:00Z$/);
+  });
+
+  test("a release queued behind a wave says so: phase=waiting (#304)", () => {
+    const sb = sandbox();
+    plantRelease(sb, process.pid, "0.9.9", "waiting");
+    const r = status(sb);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toMatch(/^release holder=\d+ version=0\.9\.9 phase=waiting started=2026-09-14T00:00:00Z$/);
+  });
+
+  test("a marker without a phase line (pre-#304) reads `?`, like an old-format lock", () => {
+    const sb = sandbox();
+    plantRelease(sb, process.pid, "0.9.9", null);
+    const r = status(sb);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toMatch(/^release holder=\d+ version=0\.9\.9 phase=\? started=2026-09-14T00:00:00Z$/);
   });
 
   test("the header's exit-code table names every code the script exits with, and nothing else", () => {

@@ -21,7 +21,10 @@ a file, and gives up with **exit 14** having edited nothing — its own code, be
 "exit 14" in a log unambiguous. The precedence is fixed: a wave holding the lock finishes (never
 preempted); once `.RELEASE-IN-PROGRESS` is up the release is ahead — a wave that took the lock in
 the gap hands it back and queues, and the release waits for the lock to clear without ever
-removing its own marker. Symmetric yielding would ping-pong for the whole budget. A marker a
+removing its own marker — and because a kept marker then means either "queued, nothing edited
+yet" or "editing and tagging", the marker carries a `phase:` line (`waiting` → `releasing`,
+rewritten atomically), which the wave's refusal and `--status` print rather than reading every
+marker as a release in progress. Symmetric yielding would ping-pong for the whole budget. A marker a
 SIGKILLed release left behind is cleared only by the wave's dead-owner check, which says so on
 stderr. `scripts/merge-wave.sh --status` reads either.
 

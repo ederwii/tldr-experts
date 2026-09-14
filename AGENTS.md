@@ -61,6 +61,8 @@ sells: measured over asserted, refused over guessed, named over silent.
   handing back a marker it wrote — two sides yielding on the same cadence would ping-pong for
   the whole budget and end in 13 and 14. An orphaned marker (SIGKILL, cut session — the traps
   cover INT/TERM only) is cleared by the wave's dead-owner rule alone, and the wave says so.
+  The marker carries `phase: waiting|releasing` so a queued release is not read as one editing
+  (§7); `--status` prints it, and so does the wave's refusal.
 - **A branch merges only with a review record on it: `.review/<branch>.md` (#192).** A fresh
   reviewer that did not write the code reads the branch diff BEFORE the wave, and the record is
   where that verdict lives — a file on the branch, so it lands in the merge commit's tree and

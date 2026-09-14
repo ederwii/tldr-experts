@@ -3,7 +3,8 @@
 # Prints ONE summary line; exits non-zero (and leaves main untouched) on any red gate.
 # merge-wave.sh --status — one line saying who holds the checkout and where they are (#299):
 #   `holder=<pid> branch=<b> phase=<merge|gates|push> started=<iso>` for a live wave,
-#   `release holder=<pid> version=<v> started=<iso>` for a live scripts/release.sh, else `idle`.
+#   `release holder=<pid> version=<v> phase=<waiting|releasing> started=<iso>` for a live
+#   scripts/release.sh (`waiting`: queued behind a wave, nothing edited yet — #304), else `idle`.
 #   Exit 0 either way; a lock or marker whose owner is dead reads as idle.
 #
 # Concurrency (#44). The merge, the gates and the push all happen in ONE shared checkout,
@@ -79,7 +80,7 @@ if [ "${1:-}" = "--status" ]; then
   fi
   r="$(mw_release_owner_of)"
   if [ -n "$r" ] && ! mw_dead_owner "$r"; then
-    echo "release holder=${r%% *} version=$(mw_release_field version) started=$(mw_release_field started)"
+    echo "release holder=${r%% *} version=$(mw_release_field version) phase=$(mw_release_phase) started=$(mw_release_field started)"
     exit 0
   fi
   echo "idle"; exit 0
@@ -186,10 +187,10 @@ wait_for_release() {
       continue
     fi
     if [ "$waited" -ge "$WAIT_S" ]; then
-      echo "FAIL release in flight: scripts/release.sh $(mw_release_field version) (pid ${r%% *}, since $(mw_release_field started)) has held $(mw_release_marker_path) for ${waited}s — nothing merged. Merges wait for a release, they do not race it (docs/RELEASING.md)."; exit 13
+      echo "FAIL release in flight: scripts/release.sh $(mw_release_field version) (pid ${r%% *}, since $(mw_release_field started), $(mw_release_phase_text)) has held $(mw_release_marker_path) for ${waited}s — nothing merged. Merges wait for a release, they do not race it (docs/RELEASING.md)."; exit 13
     fi
     if [ "$rnoted" -eq 0 ] || [ $(( waited % 60 )) -lt "$POLL_S" ]; then
-      echo "merge-wave: waiting for a release in this checkout (scripts/release.sh $(mw_release_field version), pid ${r%% *}, ${waited}s so far)" >&2
+      echo "merge-wave: waiting for a release in this checkout (scripts/release.sh $(mw_release_field version), pid ${r%% *}, $(mw_release_phase_text), ${waited}s so far)" >&2
       rnoted=1
     fi
     sleep "$POLL_S"; waited=$(( waited + POLL_S ))

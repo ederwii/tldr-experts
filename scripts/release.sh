@@ -64,19 +64,29 @@ wait_for_wave() {
   done
   return 0
 }
+# Written whole and MOVED into place, like the wave's marker: a reader must never catch it
+# without the `pid:` line that tells them whether the release is still alive. `phase:` is the
+# one line that changes (#304): a kept marker means EITHER "queued behind a wave, nothing edited
+# yet" OR "editing/tagging", and a record must not say more than the truth (AGENTS.md §7) — so
+# the marker says which, and the wave's refusal and `--status` print it. `started:`/`epoch:`
+# are what the FIRST write said: the dead-owner rule and a human both want when it began.
+STARTED="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; EPOCH="$(date +%s)"
+write_marker() {
+  {
+    echo "RELEASE IN PROGRESS — scripts/release.sh $V is running in this checkout; merges wait on this file (docs/RELEASING.md)."
+    echo "version: $V"
+    echo "pid:     $$"
+    echo "host:    $(hostname)"
+    echo "started: $STARTED"
+    echo "epoch:   $EPOCH"
+    echo "phase:   $1"
+  } > "$MARKER.tmp.$$"
+  mv -f "$MARKER.tmp.$$" "$MARKER"
+}
 # 1. A wave that already holds the lock finishes — it is never preempted.
 wait_for_wave
-# 2. Written whole and MOVED into place, like the wave's marker: a reader must never catch it
-#    without the `pid:` line that tells them whether the release is still alive.
-{
-  echo "RELEASE IN PROGRESS — scripts/release.sh $V is running in this checkout; merges wait on this file (docs/RELEASING.md)."
-  echo "version: $V"
-  echo "pid:     $$"
-  echo "host:    $(hostname)"
-  echo "started: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  echo "epoch:   $(date +%s)"
-} > "$MARKER.tmp.$$"
-mv -f "$MARKER.tmp.$$" "$MARKER"
+# 2. The marker goes up saying `waiting`: from here a wave yields to this release.
+write_marker waiting
 # 3. A wave that took its lock in the gap between the last poll and the marker: the marker
 #    STAYS and this run waits for the lock to clear — the wave sees the marker and yields (it
 #    hands its lock back after its mkdir, merge-wave.sh). Precedence, not courtesy: if both
@@ -85,6 +95,8 @@ mv -f "$MARKER.tmp.$$" "$MARKER"
 #    is the wave's own refusal line — merges wait for a release, they do not race it — so a
 #    release never hands back a marker it wrote. Same budget: $waited carries over.
 wait_for_wave
+# 4. Nothing else holds the checkout: from the next line on, files change.
+write_marker releasing
 # `sed -i` is not portable — BSD demands a suffix argument, GNU must not have one — and this
 # script has to run on the maintainer's Mac and be testable on ubuntu CI. Rewrite through a
 # temp file OUTSIDE the tree and `cat` it back: the file keeps its inode and mode, and no

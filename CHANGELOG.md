@@ -46,7 +46,9 @@
   stand-in `mv` plants the lock the instant the marker lands). Which makes the wave's dead-owner
   check the only thing that ever clears a marker a SIGKILL or a cut session orphaned (the traps
   cover INT/TERM), so it now says so on stderr, naming the marker and the pid, and that sentence
-  is pinned. The code: 14 rather than 1 because there is nothing to undo, and
+  is pinned. And a kept marker means two things — queued and untouched, or editing and tagging —
+  so it carries `phase: waiting|releasing` (rewritten atomically), which `--status` and the wave's
+  refusal print: a record never says more than the truth (§7). The code: 14 rather than 1 because there is nothing to undo, and
   not the wave's own 6 because the two scripts' codes are read in the same logs, so the next
   number after the wave's 13 keeps a bare "exit 14" unambiguous. Pinned in both directions with
   the real scripts: a real wave against a real running release exits 13, a real release against a

@@ -619,13 +619,15 @@ describe("release.sh waits on a running merge wave before it touches the tree (#
    * A stand-in `mv` that plants a wave lock the instant the release marker lands — the ONE
    * `mv` in release.sh is the marker's (`grep -n '\\bmv\\b' scripts/*.sh`), so this is the gap
    * interleaving constructed deterministically: the lock exists before release.sh's very next
-   * line runs, with no sleep on either side. The lock is `merge-wave.sh`'s own shape.
+   * line runs, with no sleep on either side. The lock is `merge-wave.sh`'s own shape. Planted
+   * ONCE, keyed on a once-file: the marker is rewritten by `mv` again when its phase changes.
    */
   const MV_STUB = `#!/usr/bin/env bash
 /bin/mv "$@"; rc=$?
 for last; do :; done
 case "$last" in *.RELEASE-IN-PROGRESS)
-  if [ -n "\${PLANT_WAVE_LOCK:-}" ] && [ ! -d "$PLANT_WAVE_LOCK" ]; then
+  if [ -n "\${PLANT_WAVE_LOCK:-}" ] && [ ! -f "$PLANT_WAVE_LOCK.planted" ]; then
+    : > "$PLANT_WAVE_LOCK.planted"
     mkdir -p "$PLANT_WAVE_LOCK"
     printf 'token-of-another-invocation\n' > "$PLANT_WAVE_LOCK/token"
     printf 'wave-in-the-gap\n' > "$PLANT_WAVE_LOCK/branch"
@@ -706,17 +708,27 @@ exit $rc
       expect(existsSync(releaseMarker(sb)), "release.sh handed its marker back instead of keeping precedence").toBe(true);
       expect(existsSync(lockDir(sb))).toBe(true);
       expectUntouched(sb, before);
-      // A real wave arriving now sees the marker first and yields — the release is ahead of it.
+      // A kept marker means two things now — queued and untouched, or editing/tagging — so the
+      // marker SAYS which (§7: a record never says more than the truth), and every reader prints it.
+      expect(readFileSync(releaseMarker(sb), "utf8")).toMatch(/^phase:\s+waiting$/m);
       const env = { ...process.env, TMPDIR: sb.dir, MW_LOCK_WAIT_S: "1", MW_LOCK_POLL_S: "1" };
+      // `--status` answers for the LOCK first (a live wave is what a human must not disturb), so in
+      // this window it names the gap wave; the queued release's own state is the marker's phase.
+      const status = spawnSync("bash", [MERGE_WAVE, "--status"], { cwd: sb.main, encoding: "utf8", env });
+      expect(status.stdout.trim()).toMatch(/^holder=\d+ branch=wave-in-the-gap phase=merge started=/);
+      // A real wave arriving now sees the marker first and yields — the release is ahead of it.
       const wave = spawnSync("bash", [MERGE_WAVE, "some-branch", "merge some-branch"], { cwd: sb.main, encoding: "utf8", env });
       expect(wave.status, `${wave.stdout}\n${wave.stderr}`).toBe(13);
       expect(wave.stdout).toContain("FAIL release in flight");
+      expect(wave.stdout).toContain("queued behind a wave, nothing edited yet");
       expect(existsSync(releaseMarker(sb))).toBe(true);   // still there after the wave looked
       rmSync(lockDir(sb), { recursive: true });            // the gap wave yielding, by hand
       const r = await live.done;
       expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
       expect(originTags(sb)).toEqual([`v${V}`]);
       expect(seenByGates(sb)).toContain(`version: ${V}`);  // and the gates ran under that same marker
+      expect(seenByGates(sb)).toMatch(/^phase:\s+releasing$/m);   // which by then said so
+      expect(seenByGates(sb)).not.toMatch(/^phase:\s+waiting$/m);
       expect(existsSync(releaseMarker(sb))).toBe(false);
     } finally {
       live.kill();
@@ -732,7 +744,7 @@ exit $rc
     const env = { ...process.env, TMPDIR: sb.dir, MW_LOCK_WAIT_S: "1", MW_LOCK_POLL_S: "1" };
     const status = spawnSync("bash", [MERGE_WAVE, "--status"], { cwd: sb.main, encoding: "utf8", env });
     expect(status.status).toBe(0);
-    expect(status.stdout.trim()).toMatch(new RegExp(`^release holder=\\d+ version=${V.replace(/\./g, "\\.")} started=`));
+    expect(status.stdout.trim()).toMatch(new RegExp(`^release holder=\\d+ version=${V.replace(/\./g, "\\.")} phase=releasing started=`));
     const wave = spawnSync("bash", [MERGE_WAVE, "some-branch", "merge some-branch"], { cwd: sb.main, encoding: "utf8", env });
     expect(wave.status, `${wave.stdout}\n${wave.stderr}`).toBe(13);
     expect(wave.stdout).toContain("FAIL release in flight");
