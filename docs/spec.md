@@ -258,12 +258,22 @@ on (`gate.status: pending`) and the gates it auto-signs, `build`, `outcome`, `sh
 (`approve`, `reject`), `gates_policy` (`run gates set`), `questions_policy` (`run questions set`), `attended_by`
 (`run attend`). Derived fields — `status` at every level, `cost_usd`, `budget.spent_usd`, `updated_at`,
 `last_written_by` — are recomputed from the merged document on every save and are nobody's to write. Two writers
-changing ONE field is the case ownership cannot settle — `run cancel --force` marking `cancelled` a stage a live loop
-is still marking `running` — and it is refused up front (`run cancel` under a live `.lock`) rather than merged. A
-verdict read across two owners records the figures it read beside itself — `budget.blocked` carries `remaining_usd`
+changing ONE field — `run cancel --force` marking `cancelled` a stage a live loop is still marking `running` (without
+`--force` the cancel is refused under a live `.lock`) — has a declared winner: **`cancelled` is terminal and wins.**
+A save that finds a `cancelled:` it neither loaded nor wrote keeps, from disk, the run's `cursor` and every cancelled
+stage's `status`/`started_at`/`ended_at`, still carries its own `tasks` rows (those turns happened), answers
+`cancelledUnder: true`, says so on stderr, and every later save from that store keeps the same rule. The process
+obeys the file: the Build executor asks `RunStore.cancelledOnDisk` before every spawn (each story attempt, each
+parallel lane, the reviewer — a story whose review the cancel pre-empted parks at `review` with an `n-a` verdict
+naming it), and `tldrx next` stops after the save that merged the cancel, exit 0, the same outcome a `next` on an
+already-cancelled run reports. A verdict read across two owners records the figures it read beside itself — `budget.blocked` carries `remaining_usd`
 and `ceiling_usd`, the auto-gate note carries `budget=$x of $y` — because after this rule the file may hold a pair
-no single writer saw together. A `run.yml` that is missing, does not parse, or names another run is not merged with:
-the store writes its whole copy, as `budget.yml`'s ceilings (§2.11) already did. Measured before the rule: a
+no single writer saw together. A `run.yml` that is missing is merged with nothing, silently — there was no external
+write to lose. One that exists but does not parse or does not validate cannot be merged with, so the store writes its
+whole copy (as `budget.yml`'s ceilings, §2.11, already did) and SAYS SO on stderr, naming the reason and the `.bak`
+beside the file that holds what was replaced — that is the one case an external write may have been destroyed, and
+it is never silent. One that records another run is refused outright: the save throws, naming both ids and the path,
+and writes nothing. Measured before the rule: a
 `budget raise --stage` typed during a live loop printed `$12.60 → $62.60`, exited 0, and was back at `12.60` after the
 loop's next save.
 

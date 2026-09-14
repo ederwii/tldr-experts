@@ -20,9 +20,10 @@
  * `cancelRun()`. No process is spawned.
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { RunStore } from "../src/core/run/RunStore.ts";
+import { RunStore, RunStoreError } from "../src/core/run/RunStore.ts";
+import { backupPathFor } from "../src/core/fs/writeAtomic.ts";
 import { createRun } from "../src/core/run/newRun.ts";
 import { reject } from "../src/core/run/gates.ts";
 import { cancelRun } from "../src/core/run/rescue.ts";
@@ -175,15 +176,114 @@ describe("run.yml survives an external write while a loop's RunStore is held (#3
     }
   });
 
-  test("a save writes the whole in-memory run when run.yml on disk is unreadable — never fails over someone else's damage", () => {
+  /** Swap stderr for a buffer; the fallback line under test writes there and nowhere else. */
+  function captureStderr<T>(fn: () => T): { result: T; stderr: string } {
+    const original = process.stderr.write.bind(process.stderr);
+    let stderr = "";
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      stderr += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      return { result: fn(), stderr };
+    } finally {
+      process.stderr.write = original;
+    }
+  }
+
+  const UNUSABLE: readonly { readonly why: string; readonly bytes: string }[] = [
+    { why: "does not parse", bytes: "version: 1\nrun: [broken" },
+    { why: "parses but does not validate", bytes: "version: 1\nrun: not-a-run-id\n" },
+  ];
+  for (const { why, bytes } of UNUSABLE) {
+    test(`run.yml on disk ${why}: the in-memory run is written whole, the broken bytes stay beside it as .bak, and stderr says so — never silently`, () => {
+      const ws = openRun();
+      try {
+        const held = RunStore.find(ws.root, ws.runId)!;
+        const path = join(ws.runDir, "run.yml");
+        writeFileSync(path, bytes, "utf8");
+        held.mutate((run) => loopProgress(run, ws.phaseId, ws.stageId));
+        const { stderr } = captureStderr(() => held.save());
+        const after = RunStore.find(ws.root, ws.runId)!.run;
+        expect(stageOf(after, ws.phaseId, ws.stageId).status).toBe("running");
+        // The same convention the repair path uses: the replaced version is one step back.
+        expect(existsSync(backupPathFor(path))).toBe(true);
+        expect(readFileSync(backupPathFor(path), "utf8")).toBe(bytes);
+        expect(stderr).toContain(path);
+        expect(stderr).toContain("written whole");
+        expect(stderr).toContain(backupPathFor(path));
+      } finally {
+        ws.dispose();
+      }
+    });
+  }
+
+  test("run.yml on disk records ANOTHER run: the save refuses, names both ids and the path, and writes nothing", () => {
     const ws = openRun();
     try {
       const held = RunStore.find(ws.root, ws.runId)!;
-      writeFileSync(join(ws.runDir, "run.yml"), "version: 1\nrun: [broken", "utf8");
+      const path = join(ws.runDir, "run.yml");
+      const foreign = readFileSync(path, "utf8").replace(`run: "${ws.runId}"`, 'run: "260101-someone-else"');
+      expect(foreign).not.toBe(readFileSync(path, "utf8"));
+      writeFileSync(path, foreign, "utf8");
+      const budgetBefore = readFileSync(join(ws.runDir, "budget.yml"), "utf8");
       held.mutate((run) => loopProgress(run, ws.phaseId, ws.stageId));
-      held.save();
+      let thrown: unknown = null;
+      try {
+        held.save();
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(RunStoreError);
+      const message = (thrown as Error).message;
+      expect(message).toContain("260101-someone-else");
+      expect(message).toContain(ws.runId);
+      expect(message).toContain(path);
+      expect(readFileSync(path, "utf8")).toBe(foreign);
+      expect(readFileSync(join(ws.runDir, "budget.yml"), "utf8")).toBe(budgetBefore);
+      expect(existsSync(backupPathFor(path))).toBe(false);
+    } finally {
+      ws.dispose();
+    }
+  });
+
+  test("the reviewer's collision: a forced cancel under a live .lock, then the held store marks that stage running — cancelled wins the file, the task row still lands, and the save says so", () => {
+    const ws = openRun();
+    try {
+      const held = RunStore.find(ws.root, ws.runId)!;
+      // A REAL live lock: the loop's `next` holds the run. Without --force the
+      // cancel is refused (pinned in resumability.test.ts); --force is the
+      // operator overriding that, and it is the one shared field two writers
+      // then both change.
+      writeFileSync(join(ws.runDir, ".lock"), JSON.stringify({ pid: process.pid, at: AT }), "utf8");
+      expect(cancelRun({ root: ws.root, runId: ws.runId, note: "stop", force: false, actor: "alan", at: AT }).code).toBe(2);
+      expect(cancelRun({ root: ws.root, runId: ws.runId, note: "stop", force: true, actor: "alan", at: AT }).code).toBe(0);
+      expect(stageOf(RunStore.find(ws.root, ws.runId)!.run, ws.phaseId, ws.stageId).status).toBe("cancelled");
+
+      // The loop's store, unaware, marks the SAME stage running and records a turn.
+      held.mutate((run) => loopProgress(run, ws.phaseId, ws.stageId));
+      const { result, stderr } = captureStderr(() => held.save());
+
+      // Cancelled is terminal and wins: the stage stays `cancelled`, the run stays
+      // `cancelled`, and the turn that happened is still in the ledger.
       const after = RunStore.find(ws.root, ws.runId)!.run;
-      expect(stageOf(after, ws.phaseId, ws.stageId).status).toBe("running");
+      expect(after.status).toBe("cancelled");
+      expect(after.cancelled).toMatchObject({ by: "alan", note: "stop" });
+      const stage = stageOf(after, ws.phaseId, ws.stageId);
+      expect(stage.status).toBe("cancelled");
+      expect(stage.tasks).toHaveLength(1);
+      expect(stage.tasks[0]!.id).toBe("t1");
+      // And the process is told, both ways: the save's own answer, and stderr.
+      expect(result.cancelledUnder).toBe(true);
+      expect(held.cancelledUnder).toBe(true);
+      expect(held.run.status).toBe("cancelled");
+      expect(stderr).toContain(ws.runId);
+      expect(stderr).toContain("cancelled");
+
+      // Sticky for the life of the store: a later status change from it is not carried either.
+      held.mutate((run) => withStage(run, ws.phaseId, ws.stageId, (s) => ({ ...s, status: "done", ended_at: AT })));
+      held.save();
+      expect(stageOf(RunStore.find(ws.root, ws.runId)!.run, ws.phaseId, ws.stageId).status).toBe("cancelled");
     } finally {
       ws.dispose();
     }
