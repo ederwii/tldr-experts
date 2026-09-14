@@ -268,6 +268,19 @@ export interface ExecutorOutcome {
   /** One line, for `stage.error`. Null when `ok`. */
   readonly error: string | null;
   /**
+   * WHY this outcome refused, in the executor's own words — what a supervisor compares
+   * across attempts (`NextOutcome.signature`, gh #297).
+   *
+   * `runNext` passes it through the ONE `refused: true` door every executor refusal goes
+   * out of, falling back to `error` — which names the repo, branch, command or story at
+   * fault on every refusal that has one — and to the report's last line where neither
+   * exists. So an executor sets this ONLY when its refusal is not distinguished by either:
+   * today that is Watch's branch-incoherence refusal, whose `error` is null and whose last
+   * line is a literal about `tldrx doctor`. The point of the door is that a ninth producer
+   * added tomorrow inherits the fallback instead of being born blind.
+   */
+  readonly signature?: string;
+  /**
    * Force the gate type, whatever the stage file says. Build sets `approve`:
    * concept §9 ends the phase at "epic merges to main after integration tests +
    * human gate", and a stage file spelling `gate: auto` would otherwise let a run

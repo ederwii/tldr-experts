@@ -126,7 +126,10 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
     if (incoherent !== null) {
       return {
         ok: false, awaiting: false, tasks: [], costUsd: 0, outputs: [],
-        lines: incoherent, error: null, refused: true,
+        lines: incoherent.lines, error: null, refused: true,
+        // `error` is null here and the last line is the `tldrx doctor` literal, so this is
+        // the one refusal that must name its own comparand (gh #297).
+        signature: incoherent.signature,
       };
     }
     prompts = features.map((feature, i) => featurePrompt(ctx, feature, diffs[i] ?? []));
@@ -402,11 +405,24 @@ function recordedBuild(runDir: string): RecordedBuild | undefined {
  * correct `build.epic_branch`, correct `default_branch`), not work that went
  * wrong.
  */
+/**
+ * The refusal's lines and, beside them, the FAULTS it is about (gh #297).
+ *
+ * Two of these refusals that name different repos print the same last line — the
+ * `tldrx doctor` sentence is a literal, and the block naming the repo is above it — and
+ * this outcome carries no `error` for the pass-through to fall back on. So the fault list
+ * is named here, by the code that computed it, rather than read off a line position.
+ */
+interface Incoherence {
+  readonly lines: readonly string[];
+  readonly signature: string;
+}
+
 function branchIncoherence(
   ctx: ExecutorContext,
   features: readonly Feature[],
   diffs: readonly (readonly RepoDiff[])[],
-): readonly string[] | null {
+): Incoherence | null {
   const owned: { diff: RepoDiff; owner: string }[] = [];
   for (const [i, list] of diffs.entries()) {
     for (const diff of list) {
@@ -468,7 +484,17 @@ function branchIncoherence(
       ...rest,
     );
   }
-  return out;
+  // EVERY fault, not just the one the opening line names: a second refusal that differs
+  // only in its second fault is a different refusal, and a supervisor that compared the
+  // openings would call the two the same.
+  const faults = [
+    ...bases.map((row) => `base \`${row.diff.base}\` missing in \`${row.diff.repo}\``),
+    ...branches.map((row) => `branch \`${row.diff.branch}\` (${row.owner}) missing in \`${row.diff.repo}\``),
+  ];
+  return {
+    lines: out,
+    signature: `${ctx.phaseId}/${ctx.stageId} refuses to start: ${faults.join("; ")}`,
+  };
 }
 
 /** One row per repo — the first one seen. A broken base is a fact about the REPO. */

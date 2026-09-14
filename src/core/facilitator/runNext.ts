@@ -1449,7 +1449,7 @@ async function runExecutor(
     }
     // Exit 1, matching `commitStage`'s refusal for the same mistake on a
     // single-agent stage: spec §3's "you asked for something impossible".
-    return out(EXIT_USAGE, [...notes, ...outcome.lines]);
+    return out(EXIT_USAGE, [...notes, ...outcome.lines], [], executorSignature(outcome));
   }
 
   claimEpicBranches(store, outcome.epicBranches, outcome.branchModel);
@@ -1495,7 +1495,7 @@ async function runExecutor(
   if (outcome.refused === true) {
     setStatus(store, phaseId, stageId, "ready");
     store.save();
-    return out(EXIT_REFUSED, [...notes, ...outcome.lines]);
+    return out(EXIT_REFUSED, [...notes, ...outcome.lines], [], executorSignature(outcome));
   }
   if (!outcome.ok) {
     return failStage(store, options, phaseId, stageId, outcome.error ?? "the executor failed", notes);
@@ -3192,6 +3192,21 @@ export function cacheSplit(
  * `build/foreignWork.ts`'s, so the sentence and the rule that moves it cannot
  * drift apart. Every other report is byte-identical: no line carries the marker.
  */
+/**
+ * What an executor refusal was refused BY, for the repeat guard (gh #297).
+ *
+ * These two `out()` calls are the ONE door every `refused: true` outcome leaves through —
+ * eight producers today between `executors/build.ts` and `executors/watch.ts` — so the
+ * choice is made HERE rather than signed producer by producer: a ninth added tomorrow
+ * inherits it instead of being born blind, which is the whole shape of this fix. The
+ * executor's own `signature` first; then `error`, which every refusal that has one uses to
+ * name the repo, branch, command or story at fault (measured across all eight); then
+ * nothing, and `runAuto` falls back to the last line as it always did.
+ */
+function executorSignature(outcome: ExecutorOutcome): string | undefined {
+  return outcome.signature ?? outcome.error ?? undefined;
+}
+
 function out(
   code: number,
   lines: readonly string[],

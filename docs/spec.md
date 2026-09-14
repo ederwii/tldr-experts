@@ -3294,6 +3294,8 @@ themselves, a usage refusal such as an attended run; the bound; and an attempt R
 one before it — a refusal repeating, which one relaunch has already proved and a second would only hammer. What
 those words are is the producer's to say, not a line position's (gh #297): a report names its own refusal
 (`NextOutcome.signature`) and the loop compares that, falling back to the last line only where nothing named one.
+Executor refusals are named at their single pass-through: `ExecutorOutcome.signature`, else that outcome's `error`,
+which names the repo, branch, command or story at fault.
 Comparing the last line was blind for whole exit families — every stage death ends with the same literal advice
 about cost — so a run stopped relaunching on its SECOND stage death whatever had killed it.
 Without the flag the loop is byte-identical to what it was, and a throw still reaches `fail()` as exit `1`.

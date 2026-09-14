@@ -64,7 +64,14 @@
   missing input — reports whose last line already IS their reason; a repeat there is still real
   evidence, and the bound is a backstop that costs money, not a reading). `run.relaunched` carries
   the comparand it will compare against next, and its `reason` — the sentence the stop line and the
-  ledger both quote — now names the refusal rather than the advice under it.
+  ledger both quote — now names the refusal rather than the advice under it. Executor refusals
+  (`refused: true`) are covered at their ONE pass-through rather than producer by producer: eight
+  producers across the Build and Watch executors leave through a single `out()` call, which now
+  passes the executor's own signature, falling back to `ExecutorOutcome.error` — measured across all
+  eight, it names the repo, branch, command or story at fault wherever it is not null. Watch's
+  branch-incoherence refusal is the one whose `error` IS null and whose last line is a literal about
+  `tldrx doctor`, so it names its faults itself. A ninth producer added tomorrow inherits the door
+  instead of being born blind.
 
 
 ## 0.23.0 — 2026-09-14
