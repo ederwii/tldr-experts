@@ -15,9 +15,11 @@
  * `claude` first on PATH (AGENTS.md §8).
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dodOutputRel } from "../src/core/build/dodOutput.ts";
+import { readReviewLedger } from "../src/core/build/reviewLedger.ts";
 import { runNext } from "../src/core/facilitator/runNext.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { reject } from "../src/core/run/gates.ts";
@@ -276,5 +278,36 @@ describe("#313 · every other half-A failure still blocks on the first attempt",
     const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
     expect(log).toContain("exited 1");
     expect(log).not.toContain("the DoD was red on attempt");
+  });
+});
+
+describe("#313 · the ledger counts only the attempts a red DoD could have requeued", () => {
+  /**
+   * Re-review Minor on fdeb58c: `redDodAttempts` counted ANY non-green dod row,
+   * so a REFUSED command or a binary ABSENT from the tree — attempts
+   * `dodRedRequeue` never treats as requeue-eligible — spent the bound a later
+   * resume is held to. One predicate now answers both (`dodRequeueRed`).
+   */
+  function ledgerOver(row: Record<string, unknown>): number {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-313-ledger-"));
+    const lines = [
+      { type: "task.started", payload: { story: "S1", attempt: 1 } },
+      { type: "check.failed", payload: { check: "dod", story: "S1", command: "npm run test", ...row } },
+      { type: "task.done", payload: { story: "S1", status: "blocked", verdict: "n-a", commit: null, attempt: 1 } },
+    ].map((e) => JSON.stringify(e)).join("\n");
+    writeFileSync(join(dir, "events.jsonl"), `${lines}\n`, "utf8");
+    return readReviewLedger(dir, "S1").redDodAttempts;
+  }
+
+  test("a plain red row spends one attempt", () => {
+    expect(ledgerOver({ exit_code: 1, detail: "FAIL test_x" })).toBe(1);
+  });
+
+  test("a REFUSED row spends none — the resume that follows still has its attempts", () => {
+    expect(ledgerOver({ refused: "not one of workspace.yml's commands", detail: "refused" })).toBe(0);
+  });
+
+  test("a row whose binary was ABSENT from the tree spends none (#209)", () => {
+    expect(ledgerOver({ exit_code: 127, absent_binary: "jest", detail: "sh: jest: command not found" })).toBe(0);
   });
 });

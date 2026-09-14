@@ -11,7 +11,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEVELOPER_FAILED, dodFailure, type DodResult } from "./outcome.ts";
+import { DEVELOPER_FAILED, dodRequeueRed, type DodResult, type RequeueRow } from "./outcome.ts";
 import { looksLikeReviewerError } from "./review.ts";
 import { provenanceFromPayload, verdictReviewer, type ReviewerProvenance } from "./reviewerProvenance.ts";
 
@@ -253,6 +253,10 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   // run, where the wrongly-prepared "attempt 2" left S1 with no DoD at all.
   let dod: DodResult[] = [];
   let current: DodResult[] = [];
+  // gh #313: `current` again, carrying whether each row's binary was ABSENT — the
+  // one fact `dodRequeueRed` reads that a rebuilt `DodResult` has no honest way
+  // to hold (the event names the binary, not the rest of `AbsentBinary`).
+  let currentRequeue: RequeueRow[] = [];
   // Survives `story.reopened` — see the field's docstring: it is evidence, not a
   // count, and a reopen resets what counts against the story, not what the tree
   // last measured.
@@ -299,6 +303,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
       epicBase = null;
       dod = [];
       current = [];
+      currentRequeue = [];
       developerErroredWith = null;
       ranACheck = false;
       sawReviewer = false;
@@ -341,6 +346,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     if (event.type === "task.started") {
       if (current.length > 0) dod = current;
       current = [];
+      currentRequeue = [];
       // Everything the developer side asks is about the LAST attempt, so every
       // attempt starts the question again. An attempt that RUNS clears the
       // failure the one before it recorded.
@@ -381,12 +387,12 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
       asIs = null;
       // The COMPAT shape, decided at the moment the attempt ended: blocked with
       // nothing to show for itself and nothing that could have judged it.
-      // gh #313: the attempt a red DoD spent. `dodFailure` is the one non-green
-      // predicate (§7); `current` is this attempt's rows, reset at its task.started.
+      // gh #313: the attempt a red DoD spent — judged by `dodRequeueRed`, the SAME
+      // predicate that grants the requeue (§7), over this attempt's rows.
       if (
         payload.verdict === "n-a"
         && (payload.commit === null || payload.commit === undefined || payload.commit === "")
-        && dodFailure(current) !== undefined
+        && dodRequeueRed(currentRequeue)
       ) redDodAttempts++;
       blockedWithNothingRun = payload.status === "blocked"
         && payload.verdict === "n-a"
@@ -443,6 +449,10 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
             ...(typeof payload.output_line === "number" ? { outputLine: payload.output_line } : {}),
           }
           : {}),
+      });
+      currentRequeue.push({
+        ...(current.at(-1) as DodResult),
+        ...(typeof payload.absent_binary === "string" ? { absent: true } : {}),
       });
       if (typeof payload.output_path === "string" && payload.output_path !== "") {
         lastDodOutputPath = payload.output_path;

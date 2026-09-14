@@ -27,7 +27,7 @@ import {
   isFormatRejection, MAX_FORMAT_RETRIES, renderFormatRefusal, type Review,
 } from "./review.ts";
 import { readReviewLedger } from "./reviewLedger.ts";
-import { DEVELOPER_FAILED, dodFailure, dodRefused, type DodResult, type StoryOutcome } from "./outcome.ts";
+import { DEVELOPER_FAILED, dodRequeueRed, type DodResult, type StoryOutcome } from "./outcome.ts";
 
 /**
  * The three bounds a review round is held to, each counting a DIFFERENT thing,
@@ -181,10 +181,8 @@ export function dodRedRequeue(parts: {
 }): boolean {
   if (parts.refused !== null || parts.budgetDeath !== null) return false;
   if (parts.attempt >= parts.attempts) return false;
-  // `dodFailure` over one row: the non-green predicate stays in ONE place (§7).
-  const red = parts.dod.filter((r) => dodFailure([r]) !== undefined);
-  return red.length > 0
-    && red.every((r) => !dodRefused(r) && (r.absent === undefined || r.absent === null));
+  // The row predicate lives in ONE place (§7) — the ledger counts spent attempts with it.
+  return dodRequeueRed(parts.dod);
 }
 
 /**
