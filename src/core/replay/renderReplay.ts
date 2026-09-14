@@ -21,6 +21,11 @@ import {
 } from "./loadRun.ts";
 import type { RunPhase, RunStage } from "./RunDocument.ts";
 
+/** What a `stage.failed` narrative line starts with, after its timestamp. */
+export const STAGE_FAILED_MARKER = "FAILED: ";
+/** The fallback when a `stage.failed` / `stage.skipped` event carries no reason. */
+export const NO_REASON_RECORDED = "no reason recorded";
+
 export function renderReplay(loaded: LoadedRun): string {
   const run = loaded.run;
   const out: string[] = [
@@ -183,8 +188,12 @@ function bullet(item: NumberedEvent, trail: Map<string, ReviewerProvenance | nul
     case "phase.done": return `${prefix}phase done`;
     case "stage.started": return `${prefix}started (${actor})`;
     case "stage.done": return `${prefix}ended`;
-    case "stage.failed": return `${prefix}FAILED: ${text(payload.error) || "no reason recorded"}`;
-    case "stage.skipped": return `${prefix}skipped: ${text(payload.reason) || "no reason recorded"}`;
+    // `reason`, the field the ONLY writer sets (`runNext.ts`, the fail path — and the
+    // same field `stage.skipped` carries one line down). This read `payload.error`, a
+    // field no writer in the tree's history ever set, so every failed stage replayed
+    // as the fallback whatever it died of (#309; the same drift #249 found once).
+    case "stage.failed": return `${prefix}${STAGE_FAILED_MARKER}${text(payload.reason) || NO_REASON_RECORDED}`;
+    case "stage.skipped": return `${prefix}skipped: ${text(payload.reason) || NO_REASON_RECORDED}`;
     case "question.asked": return `${prefix}${q || "a question"} asked by ${actor}: ${text(payload.question)}`.trimEnd();
     case "question.answered": return `${prefix}${q || "a question"} answered by ${actor}: ${text(payload.answer)}`.trimEnd();
     case "gate.requested": return `${prefix}gate requested`;

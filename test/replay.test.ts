@@ -1,6 +1,7 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { listRuns, loadRun, renderReplay } from "../src/core/replay/index.ts";
+import { NO_REASON_RECORDED, STAGE_FAILED_MARKER } from "../src/core/replay/renderReplay.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { EXIT_NOT_FOUND, EXIT_OK } from "../src/cli/exitCodes.ts";
 import { VIEWS_FIXTURE, VIEWS_RUN } from "./fixtures/views/tempViews.ts";
@@ -113,5 +114,41 @@ describe("tldrx replay", () => {
     expect(run.code).toBe(EXIT_NOT_FOUND);
     expect(run.stderr).toContain("not found");
     expect(run.stdout).toBe("");
+  });
+});
+
+describe("stage.failed rendering (#309)", () => {
+  // The ONLY writer of `stage.failed` (`runNext.ts`, the `fail` path) carries the
+  // failure as `payload.reason`; the renderer read `payload.error`, which no writer
+  // ever set, so every failed stage replayed as the fallback regardless of why it
+  // died. The event is fed by hand — the fixture run has no failed stage — and the
+  // reason is a token no fixture prose could contain, so the assertion cannot pass
+  // on an innocent sentence.
+  const REASON = "agent exited 137 after 2 turns [#309-reason-token]";
+  const started = loaded.events.find((item) => item.event.type === "stage.started")!;
+  const failed = {
+    ...loaded,
+    events: [
+      ...loaded.events,
+      {
+        line: loaded.events.length + 1,
+        event: { ...started.event, ts: "2026-09-01T14:00:00Z", type: "stage.failed", payload: { phase: "02-how", reason: REASON } },
+      },
+    ],
+  } as typeof loaded;
+
+  test("the FAILED line carries the reason the event recorded, never the fallback", () => {
+    const rendered = renderReplay(failed);
+    const line = rendered.split("\n").find((candidate) => candidate.includes(REASON));
+    expect(line).toBe(`- 2026-09-01T14:00:00Z — ${STAGE_FAILED_MARKER}${REASON}`);
+    expect(rendered).not.toContain(NO_REASON_RECORDED);
+  });
+
+  test("a stage.failed with no reason at all still says so, rather than printing nothing", () => {
+    const bare = {
+      ...failed,
+      events: [...loaded.events, { ...failed.events.at(-1)!, event: { ...failed.events.at(-1)!.event, payload: { phase: "02-how" } } }],
+    } as typeof loaded;
+    expect(renderReplay(bare)).toContain(`${STAGE_FAILED_MARKER}${NO_REASON_RECORDED}`);
   });
 });
