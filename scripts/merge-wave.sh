@@ -36,7 +36,7 @@
 #             9 could not snapshot this script before running it
 #             10 no usable review record on the branch (#192)
 #             11 the ref-transaction hook aborted the merge — NOT a conflict (#115)
-#             12 the merged CHANGELOG has two unreleased headings, or one at or below the last release (#299)
+#             12 the merged CHANGELOG has two unreleased headings, or one at or below the last release — by its top dated heading (#299) or by package.json (#304)
 #             13 gave up waiting for a release in flight (#299)
 # One code per condition, deliberately: this table is its own namespace and has nothing to do
 # with `src/cli/exitCodes.ts`'s families (where 2 is a gate refusal). Here 2 is already "merge
@@ -403,10 +403,23 @@ if [ -f CHANGELOG.md ]; then
   if [ "$N_UNREL" -gt 1 ]; then
     echo "FAIL changelog: the merged CHANGELOG.md carries $N_UNREL unreleased headings ($(printf '%s' "$UNRELEASED" | tr '\n' ';' | sed 's/;/; /g; s/; $//')) — one section per version, both sides' bullets as the UNION under ONE heading (AGENTS.md §2, §5); merge commit rewound, nothing pushed. Agree the next version with your peer BEFORE writing the heading, then rebase and re-review."; exit 12
   fi
-  if [ "$N_UNREL" -eq 1 ] && [ -n "$TOP_DATED" ]; then
-    UV="$(printf '%s' "$UNRELEASED" | awk '{print $2}')"; DV="$(printf '%s' "$TOP_DATED" | awk '{print $2}')"
-    if ! ver_gt "$UV" "$DV"; then
-      echo "FAIL changelog: '$UNRELEASED' is not above the last release ('$TOP_DATED') — the unreleased version must be greater than the top dated one, or release.sh would date a section for a version that already shipped (AGENTS.md §5); merge commit rewound, nothing pushed."; exit 12
+  # Two instruments for "what already shipped", and the heading must be above BOTH (#304): the
+  # CHANGELOG's own top dated heading, and package.json — which is the authority (§9's drift
+  # guard already pins README's top row to it), so a dated section that was never written, or a
+  # heading edited by hand, cannot pass the gate on two lies from one document. Same exit 12:
+  # it is one condition — the unreleased version is not above the last release — measured twice.
+  PKG_V="$(node -p "require('./package.json').version" 2>/dev/null || true)"
+  case "$PKG_V" in *[!0-9.]*|'') PKG_V="" ;; esac
+  if [ "$N_UNREL" -eq 1 ]; then
+    UV="$(printf '%s' "$UNRELEASED" | awk '{print $2}')"
+    if [ -n "$TOP_DATED" ]; then
+      DV="$(printf '%s' "$TOP_DATED" | awk '{print $2}')"
+      if ! ver_gt "$UV" "$DV"; then
+        echo "FAIL changelog: '$UNRELEASED' is not above the last release ('$TOP_DATED') — the unreleased version must be greater than the top dated one, or release.sh would date a section for a version that already shipped (AGENTS.md §5); merge commit rewound, nothing pushed."; exit 12
+      fi
+    fi
+    if [ -n "$PKG_V" ] && ! ver_gt "$UV" "$PKG_V"; then
+      echo "FAIL changelog: '$UNRELEASED' is not above package.json's version ($PKG_V) — package.json is what shipped, whatever the CHANGELOG's dated headings say; a heading at or below it would have release.sh date a section for a version that already exists (AGENTS.md §5); merge commit rewound, nothing pushed."; exit 12
     fi
   fi
 fi

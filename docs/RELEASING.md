@@ -13,7 +13,12 @@ which is also why **merges are frozen while a release is in flight**. Since #299
 mechanical: `release.sh` writes `.RELEASE-IN-PROGRESS` at the repo root (pid, version, started)
 for its whole span and removes it on every exit path, and `scripts/merge-wave.sh` waits on that
 marker exactly as it waits on its own lock — poll, stale-by-dead-pid, bounded by the same
-`MW_LOCK_*` knobs, exit 13 when it gives up. `scripts/merge-wave.sh --status` reads either.
+`MW_LOCK_*` knobs, exit 13 when it gives up. Since #304 the freeze runs both ways: `release.sh`
+WAITS on a running wave's lock (`merge-wave.lock` in the git dir, `.MERGE-WAVE-IN-PROGRESS` at
+the root) with the same knobs and the same dead-owner rule BEFORE it writes its marker or edits
+a file, and gives up with **exit 14** having edited nothing — its own code, because
+`merge-wave.sh`'s table owns 1–13 and one number per condition across both scripts keeps a bare
+"exit 14" in a log unambiguous. `scripts/merge-wave.sh --status` reads either.
 
 ## What a release is
 
@@ -92,9 +97,11 @@ That is the whole ceremony. The script refuses to run when the two lines above a
 
 **One unreleased heading, and above the last release.** `CHANGELOG.md` carries exactly one
 `## X.Y.Z — unreleased` heading between releases, and its version is greater than the top dated
-one — `merge-wave.sh` refuses a merged tree that breaks either with exit 12 (`AGENTS.md` §2),
-because two sessions once staged two headings for the same next version, each branch consistent
-on its own. Agree the next version before writing the heading; the choice is the judgement below.
+one AND greater than `package.json`'s (#304 — `package.json` is what shipped, whatever the
+CHANGELOG says about itself) — `merge-wave.sh` refuses a merged tree that breaks any of the three
+with exit 12 (`AGENTS.md` §2), because two sessions once staged two headings for the same next
+version, each branch consistent on its own. Agree the next version before writing the heading;
+the choice is the judgement below.
 
 **`--tag` is not optional in practice.** Omit it and `release.sh` writes `alpha`
 (`scripts/release.sh:12`, `TAG="alpha"`), which stopped being this project's status at 0.4.0 —

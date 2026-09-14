@@ -56,7 +56,9 @@ exit 0
 const CHANGELOG_OK = "# Changelog\n\n## 0.1.1 — unreleased\n\n- work in flight\n\n## 0.1.0 — 2026-01-01\n\n- shipped\n";
 
 const PACKAGE_JSON = JSON.stringify({
-  name: "mw-sandbox", private: true, type: "module",
+  // `version` is the top dated heading's: what shipped, by the file the wave cross-checks the
+  // unreleased heading against since #304 — so every wave here runs that comparison as a control.
+  name: "mw-sandbox", version: "0.1.0", private: true, type: "module",
   scripts: {
     typecheck: "bash gate.sh typecheck",
     build: "bash gate.sh build",
@@ -1704,6 +1706,30 @@ describe("the merged tree carries exactly one unreleased CHANGELOG heading, abov
     expect(originLog(sb)).toEqual(published);
   });
 
+  test("the heading is also checked against package.json: a version already shipped there refuses, naming both figures (#304)", async () => {
+    const sb = sandbox();
+    const published = originLog(sb);
+    // The CHANGELOG is self-consistent — `0.1.1 — unreleased` above `0.1.0 — 2026-01-01` — but
+    // package.json already says 0.1.1 shipped: a release that skipped writing its dated section,
+    // or a hand-edited heading. Two lies from one document must not pass on the document alone.
+    sb.git("checkout", "-q", "-b", "wave-pkg-ahead", "main");
+    const pkg = JSON.parse(readFileSync(join(sb.main, "package.json"), "utf8"));
+    writeFileSync(join(sb.main, "package.json"), `${JSON.stringify({ ...pkg, version: "0.1.1" }, null, 2)}\n`);
+    sb.git("add", "-A");
+    sb.git("commit", "-q", "-m", "wave-pkg-ahead work");
+    reviewRecord(sb, "wave-pkg-ahead");
+    sb.git("checkout", "-q", "main");
+    const run = invoke(sb, "wave-pkg-ahead");
+    const r = await run.done;
+    expectExit(run, r, 12);
+    expect(r.stdout).toContain("FAIL changelog");
+    expect(r.stdout).toContain("## 0.1.1 — unreleased");   // the heading
+    expect(r.stdout).toContain("package.json");            // and what it was measured against
+    expect(r.stdout).toMatch(/package\.json[^\n]*0\.1\.1/);
+    expect(originLog(sb)).toEqual(published);
+    expect(gateShas(sb, "wave-pkg-ahead")).toEqual([]);
+  });
+
   test("the refusal is about the MERGED tree: a branch that merely keeps main's heading merges", async () => {
     const sb = sandbox();
     const run = invoke(sb, "wave-a");
@@ -1831,6 +1857,15 @@ describe("`merge-wave.sh --status` answers \"is it alive, and where is it?\" in 
     expect(r.stdout.trim()).toBe("idle");
   });
 
+  test("an old-format lock (owner and token only) with a LIVE pid reads `?` for what it never recorded — no crash (#304)", () => {
+    const sb = sandbox();
+    holdLock(sb);                                         // this very process; no branch/phase/started files
+    const r = status(sb);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout.trim()).toBe(`holder=${process.pid} branch=? phase=? started=?`);
+  });
+
   test("a release in flight is reported too, since a wave will wait on it", () => {
     const sb = sandbox();
     plantRelease(sb, process.pid, "0.9.9");
@@ -1849,5 +1884,37 @@ describe("`merge-wave.sh --status` answers \"is it alive, and where is it?\" in 
     expect(documented).toEqual(exits);
     expect(exits).toContain(12);
     expect(exits).toContain(13);
+  });
+});
+
+/**
+ * `ver_gt`, the one version comparison in the wave (#299, cross-checked against package.json
+ * since #304), pinned DIRECTLY: the function is lifted out of the script's own text and run, so
+ * what is measured is the real implementation and not a copy. Numeric per component is the
+ * whole point — a lexical compare says `0.9.0 > 0.10.0`, and a padded one gets the major
+ * rollover wrong — so the two cases that would expose either are the ones pinned.
+ */
+describe("ver_gt compares versions numerically per component (#304)", () => {
+  const src = readFileSync(MERGE_WAVE, "utf8");
+  const fn = /^  ver_gt\(\) \{[\s\S]*?^  \}$/m.exec(src)?.[0] ?? "";
+  const verGt = (a: string, b: string): boolean =>
+    spawnSync("bash", ["-c", `${fn}\nver_gt "$1" "$2"`, "ver_gt", a, b], { encoding: "utf8" }).status === 0;
+
+  test("the function is where the test expects it", () => {
+    expect(fn).toContain("local IFS=.");
+  });
+
+  test("1.0.0 > 0.99.0 — the major rollover", () => {
+    expect(verGt("1.0.0", "0.99.0")).toBe(true);
+    expect(verGt("0.99.0", "1.0.0")).toBe(false);
+  });
+
+  test("0.10.0 > 0.9.0 — where a lexical compare gets it backwards", () => {
+    expect(verGt("0.10.0", "0.9.0")).toBe(true);
+    expect(verGt("0.9.0", "0.10.0")).toBe(false);
+  });
+
+  test("equal is not greater", () => {
+    expect(verGt("0.24.0", "0.24.0")).toBe(false);
   });
 });

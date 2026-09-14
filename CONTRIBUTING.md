@@ -50,7 +50,8 @@ the shared checkout and re-runs every gate before pushing. It exits `1` dirty tr
 conflict · `3` red gate · `4` push failed · `5` HEAD moved during the gates · `6` gave up waiting
 for the lock · `7` the gated commit is not a fast-forward of `origin/main` · `10` no usable
 review record on the branch · `11` the ref-transaction hook aborted the merge · `12` the merged
-CHANGELOG has two unreleased headings, or one at or below the last release · `13` gave up
+CHANGELOG has two unreleased headings, or one at or below the last release (by its top dated
+heading or by `package.json`) · `13` gave up
 waiting for a release in flight — and on every one of them `main` is left unpushed. That script is
 for the maintainer's own multi-agent workflow; a fork's PR does not use it, and you do not need
 it. The review record it asks for is `.review/<branch>.md` on the branch, carrying the verdict,
@@ -94,7 +95,10 @@ So the convention above is still the thing that keeps this repository working. T
 only makes the most expensive way of breaking it fail loudly instead of silently.
 
 Releases are `scripts/release.sh X.Y.Z --tag <alpha|beta|stable>` and nothing else — a
-PreToolUse hook denies hand-made `git tag` and `npm publish`. See `docs/RELEASING.md`.
+PreToolUse hook denies hand-made `git tag` and `npm publish`. It exits `1` when a precondition
+or the gate refuses (nothing pushed, the undo printed) and `14` when it gave up waiting on a
+running merge wave (#304) — it waits on the wave's lock before its first edit, as the wave waits
+on its marker, so the two never run in one checkout. See `docs/RELEASING.md`.
 
 ## Tests: red first, and a test that can fail
 

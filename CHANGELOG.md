@@ -28,6 +28,30 @@
 
 ### Fixed
 
+- **The freeze between a release and a merge wave runs both ways now (#304).** #299 made one
+  direction mechanical — the wave waits on `.RELEASE-IN-PROGRESS` — and left the other as prose:
+  MEASURED by reading `scripts/release.sh` at `a341b4f`, it sourced `merge-lock.sh` only to name
+  its own marker, and nothing between its first line and `git commit` read `merge-wave.lock`. A
+  release started mid-wave edited CHANGELOG, README and package.json in a tree another process
+  was gating, and the only thing that stopped the commit was the ref hook — which aborts the
+  COMMIT and leaves the three edits dirty in the shared checkout, with nothing to roll them back.
+  `release.sh` now WAITS on a running wave's lock before it writes its marker and before its
+  first edit — same `MW_LOCK_*` knobs, same dead-owner rule (a dead wave's lock is broken open
+  and said so on stderr), same hand-back when a wave takes the lock in the gap — and gives up
+  with **exit 14**, having edited nothing: 14 rather than 1 because there is nothing to undo, and
+  not the wave's own 6 because the two scripts' codes are read in the same logs, so the next
+  number after the wave's 13 keeps a bare "exit 14" unambiguous. Pinned in both directions with
+  the real scripts: a real wave against a real running release exits 13, a real release against a
+  live wave lock exits 14 with the tree untouched, and a queued release edits nothing until the
+  lock is gone. The wave's exit-12 heading gate now also requires the unreleased version to be
+  above `package.json`'s — the CHANGELOG used to be checked only against its own top dated
+  heading, so a dated section never written, or a heading edited by hand, passed on two lies from
+  one file; `package.json` is what shipped (§9's drift guard already pins README's top row to it).
+  Same exit 12: one condition, measured twice, and the refusal names both figures. Two Minors the
+  #299 review named are pinned rather than fixed, because reading was right: `--status` on an
+  old-format lock (owner and token only) with a live pid prints `?` for what it never recorded,
+  and `ver_gt` orders `1.0.0 > 0.99.0` and `0.10.0 > 0.9.0` numerically — the function is
+  lifted from the script's own text for the test, so the pin is on the real implementation.
 - **A per-story cap now says what it was derived from, and names a lever that moves it (#281).**
   MEASURED on a live unattended run (0.18.2, eight stories): a developer died twice on a **$5.97**
   cap while `03-plan/budget.yml` priced its story at **$14.00** and the 0.18.2 entry below promised
