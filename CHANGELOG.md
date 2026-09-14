@@ -60,13 +60,17 @@
   `blocked` with ONE `task.started`. Mechanism: `settleHalf` blocked on any half-A failure,
   while the reviewer's `changes` verdict already requeued while `attempt < attempts` — two
   failures on the merits, one retry budget honoured for only one of them. A red DoD now takes
-  the same bound: the attempt settles `blocked` with `the DoD was red on attempt 1 of 2`, keeps
-  its worktree, and the next developer prompt carries the kept output under `## Previous
+  the same bound: the attempt settles back at the status it started from (not `blocked` — it is
+  about to run again) with `the DoD was red on attempt 1 of 2`, keeps its worktree, and the next developer prompt carries the kept output under `## Previous
   attempt` with the DoD header (#211); the last attempt blocks, saying `the DoD stayed red on 2
   of 2 attempts` when both were red. Narrow on purpose — a refused developer (#271), a cap death
   (#277), a REFUSED or absent-binary dod command (#165, #209), no dod commands and a reopen that
   changed nothing (#308) still block on the first attempt, because a second one buys the same
-  outcome. No new event, no new field; the host door (`--prepare`/`--commit`) is unchanged.
+  outcome. The attempts a red DoD spent are counted off `events.jsonl`, not memory: review of
+  the first cut MEASURED three red DoDs under `attempts: 2` when a spawn fault ended an
+  invocation between attempts and the next process started counting from zero. No new event,
+  no new field; the host door (`--prepare`/`--commit`) is unchanged. `tldrx learn`'s chapter 5
+  now narrates — and asserts — the two red attempts before the reopen.
 
 ## 0.26.1 — 2026-09-14
 

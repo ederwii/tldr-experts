@@ -20,6 +20,8 @@ import { join } from "node:path";
 import { dodOutputRel } from "../src/core/build/dodOutput.ts";
 import { runNext } from "../src/core/facilitator/runNext.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
+import { reject } from "../src/core/run/gates.ts";
+import { RunStore } from "../src/core/run/RunStore.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
@@ -28,7 +30,7 @@ setDefaultTimeout(spawnTestTimeout());
 const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
   "FAKE_BUILD_WRITE", "FAKE_BUILD_VERDICTS", "FAKE_BUILD_COST", "FAKE_BUILD_STATE",
-  "FAKE_BUILD_PROMPT_DIR", "FAKE_BUILD_FAIL", "FAKE_BUILD_FAIL_WORK",
+  "FAKE_BUILD_PROMPT_DIR", "FAKE_BUILD_FAIL", "FAKE_BUILD_FAIL_WORK", "FAKE_BUILD_FAIL_REASON",
   "FAKE_BUILD_DENIED", "FAKE_BUILD_DENIED_WORK",
 ] as const;
 
@@ -136,7 +138,7 @@ describe("#313 · a red DoD requeues the story while attempts remain", () => {
     expect(events(ws).some((e) => e.type === "story.reopened")).toBe(false);
     // Attempt 1 settled on the record, with no new event type and no new field.
     const settled = events(ws).filter((e) => e.type === "task.done" && e.payload.story === "S1");
-    expect(settled.map((e) => [e.payload.attempt, e.payload.status])).toEqual([[1, "blocked"], [2, "done"]]);
+    expect(settled.map((e) => [e.payload.attempt, e.payload.status])).toEqual([[1, "todo"], [2, "done"]]);
 
     const second = readFileSync(join(promptDir, "developer-S1-2.md"), "utf8");
     const firstPrompt = readFileSync(join(promptDir, "developer-S1-1.md"), "utf8");
@@ -197,6 +199,47 @@ describe("#313 · a red DoD requeues the story while attempts remain", () => {
     expect(startedAttempts(ws, "S2")).toEqual([1]);
     expect(story(ws, "S1")).toContain("status: done");
     expect(story(ws, "S2")).toContain("status: done");
+  });
+});
+
+describe("#313 · the attempts bound holds across processes", () => {
+  /**
+   * Review finding on the first cut: the red-DoD requeue count lived in memory.
+   * Attempt 1 red → requeued; attempt 2's developer never RAN (a spawn fault),
+   * which parks the story and ends the invocation; the NEXT invocation is a fresh
+   * process, and a counter that starts at 0 there hands the story a whole new run
+   * of attempts — repeatable without bound. The count is read off `events.jsonl`.
+   */
+  test("a spawn fault between attempts does not buy a fresh run of attempts in the next invocation", async () => {
+    const ws = workspace(one({ testScript: RED_ONLY_AFTER_DEVELOPER }));
+    // The SECOND developer spawn dies without running; every other one delivers.
+    process.env.FAKE_BUILD_FAIL = "developer:S1#2";
+    // A TRANSPORT fault, not a cap death: a cap death over the kept tree is work
+    // the DoD decides (#277), and that path already blocks.
+    process.env.FAKE_BUILD_FAIL_REASON = "API Error: Connection reset by peer";
+
+    // Three invocations, the stage sent back from its gate between each — the
+    // way an operator (or `run auto --and-continue`) re-runs a Build stage.
+    for (let i = 0; i < 3; i++) {
+      if (i > 0) {
+        reject(RunStore.open(ws.runDir), {
+          root: ws.root, actor: "alan", at: `2026-09-14T09:0${String(i)}:00Z`, note: "run the stage again",
+        });
+      }
+      await next(ws);
+    }
+
+    // Developer turns that RAN are the ones whose DoD was measured. With
+    // `attempts: 2` there may be at most two of them, whatever the process count.
+    const measured = events(ws).filter((e) => e.type === "check.failed" && e.payload.check === "dod"
+      && e.payload.story === "S1").length;
+    expect(measured).toBeLessThanOrEqual(2);
+    const started = startedAttempts(ws, "S1");
+    expect(Math.max(...(started as number[]))).toBeLessThanOrEqual(2);
+    expect(started.at(-1)).toBe(2);
+    expect(story(ws, "S1")).toContain("status: blocked");
+    const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+    expect(log).toContain("the DoD stayed red on 2 of 2 attempts");
   });
 });
 

@@ -11,7 +11,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEVELOPER_FAILED, type DodResult } from "./outcome.ts";
+import { DEVELOPER_FAILED, dodFailure, type DodResult } from "./outcome.ts";
 import { looksLikeReviewerError } from "./review.ts";
 import { provenanceFromPayload, verdictReviewer, type ReviewerProvenance } from "./reviewerProvenance.ts";
 
@@ -202,6 +202,20 @@ export interface ReviewLedger {
    * before a reopen does not describe the run of attempts starting at it.
    */
   readonly reviewer: ReviewerProvenance | null;
+  /**
+   * Developer attempts that settled on a Definition of Done that did not prove
+   * the story, with nothing committed — the attempts a red DoD SPENT (gh #313).
+   *
+   * Read from the log for the reason every bound here is: a red DoD requeues the
+   * story while `attempt < attempts`, and a count only the process remembered
+   * handed a story a fresh run of attempts every time an invocation ended between
+   * two of them (review finding on #313's first cut: a spawn fault on attempt 2,
+   * then a new process, measured at three red DoDs under `attempts: 2`). An
+   * attempt counts at its `task.done` — `verdict: n-a`, no `commit`, and a
+   * non-green `dod` row under it — whatever status it settled at. Cleared by
+   * `story.reopened` with every other count here.
+   */
+  readonly redDodAttempts: number;
 }
 
 /** Everything the two resume paths and the requeue counter need, in one pass. */
@@ -211,11 +225,12 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     verdicts: 0, fixlistRounds: 0, erroredWith: null, commit: null, epicBase: null, dod: [],
     lastDodOutputPath: null,
     developerErroredWith: null, blockedWithNothingRun: false, reopened: null, asIs: null, lastMerge: null, fixRound: null,
-    formatRetries: 0, formatRefusal: null, reviewer: null,
+    formatRetries: 0, formatRefusal: null, reviewer: null, redDodAttempts: 0,
   };
   if (!existsSync(path)) return empty;
 
   let verdicts = 0;
+  let redDodAttempts = 0;
   let fixlistRounds = 0;
   let erroredWith: string | null = null;
   let commit: string | null = null;
@@ -277,6 +292,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     // `cost` and `retro`, and the reopen event itself records the count it reset.
     if (event.type === "story.reopened") {
       verdicts = 0;
+      redDodAttempts = 0;
       fixlistRounds = 0;
       erroredWith = null;
       commit = null;
@@ -365,6 +381,13 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
       asIs = null;
       // The COMPAT shape, decided at the moment the attempt ended: blocked with
       // nothing to show for itself and nothing that could have judged it.
+      // gh #313: the attempt a red DoD spent. `dodFailure` is the one non-green
+      // predicate (§7); `current` is this attempt's rows, reset at its task.started.
+      if (
+        payload.verdict === "n-a"
+        && (payload.commit === null || payload.commit === undefined || payload.commit === "")
+        && dodFailure(current) !== undefined
+      ) redDodAttempts++;
       blockedWithNothingRun = payload.status === "blocked"
         && payload.verdict === "n-a"
         && (payload.commit === null || payload.commit === undefined || payload.commit === "")
@@ -469,6 +492,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     lastMerge,
     fixRound,
     formatRetries,
+    redDodAttempts,
     formatRefusal,
     reviewer,
   };

@@ -1819,7 +1819,7 @@ class BuildSession {
       return "settled";
     }
     if (half.failure !== null && half.redDod !== undefined) {
-      await this.settleRedDod(story, half.failure, half.cost, dod, half.redDod);
+      await this.settleRedDod(story, half.failure, half.cost, dod, half.redDod, half.before);
       return "settled";
     }
     if (half.failure !== null) {
@@ -1951,12 +1951,13 @@ class BuildSession {
    * blocked on the last one.
    *
    * The red-DoD twin of the `changes` branch in `reviewAndSettle`, and the same
-   * bound: `story.attempt < attempts`. A requeued attempt settles `blocked` — not
-   * `review`, because nothing merged and nothing judged it — with its worktree
-   * KEPT, so the next attempt continues in the tree whose output it is handed
-   * (`previousAttemptFor` cites the kept DoD output from the log this settle
-   * writes). Blocked is also the honest resting place if the process dies before
-   * the next attempt starts: exactly where a red DoD always left the story.
+   * bound: `story.attempt < attempts`, with the attempts a red DoD spent read
+   * back off the ledger. A requeued attempt settles back at the status it
+   * started from — not `review`, because nothing merged and nothing judged it,
+   * and not `blocked`, because it is about to be dispatched again — with its
+   * worktree KEPT, so the next attempt continues in the tree whose output it is
+   * handed (`previousAttemptFor` cites the kept DoD output from the log this
+   * settle writes).
    *
    * Every failure that is not a plain red — a refused developer, a cap death, a
    * refused or absent DoD command — never reaches here with `requeue` true, and
@@ -1968,13 +1969,21 @@ class BuildSession {
     cost: number,
     dod: readonly DodResult[],
     cause: NonNullable<StoryHalf["redDod"]>,
+    before: PlanStatus,
   ): Promise<void> {
     const id = story.planned.story.id;
+    const spent = this.counters.dodRequeuesSpent(this.ctx.runDir, id);
     const requeue = dodRedRequeue({ dod, ...cause, attempt: story.attempt, attempts: this.attempts });
     if (requeue) {
-      this.counters.countDodRequeue(id);
+      this.counters.countDodRequeue(id, spent);
       this.dodRequeued.add(id);
-      await this.settle(story, "blocked", {
+      // Back to where the attempt found it — `parkDeveloperFailure`'s shape for
+      // the other transient settle — not `blocked`: a `tldrx status`, a dashboard
+      // or a `story reopen` reading the file between the two attempts must not see
+      // a terminal state for a story about to be dispatched again. A process that
+      // dies here leaves the story offerable, and the ledger's `redDodAttempts`
+      // (not this process's memory) is what holds its next attempt to the bound.
+      await this.settle(story, before, {
         dod, commit: null, merged: false, carried: null, conflicts: [], verdict: "n-a",
         review: {
           verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [],
@@ -1990,7 +1999,7 @@ class BuildSession {
     // Attempts that went red in a row in THIS process, this one included. One is
     // today's block, sentence unchanged; more than one says so, because "blocked
     // on its DoD" over two paid attempts reads like one.
-    const red = this.counters.dodRequeuesSpent(id) + 1;
+    const red = spent + 1;
     await this.block(
       story,
       red > 1 ? `the DoD stayed red on ${String(red)} of ${String(this.attempts)} attempts: ${failure}` : failure,
@@ -2780,7 +2789,7 @@ class BuildSession {
       // Verdicts that cost an attempt, plus attempts this process requeued on a red
       // DoD (gh #313) — both spend one, and only the first is a review.
       attempt: Math.min(
-        this.reviewAttempts(planned.story.id) + this.counters.dodRequeuesSpent(planned.story.id) + 1,
+        this.reviewAttempts(planned.story.id) + this.counters.dodRequeuesSpent(this.ctx.runDir, planned.story.id) + 1,
         this.attempts,
       ),
       ...(() => {
@@ -4799,7 +4808,7 @@ class BuildSession {
     if (outcome !== undefined && outcome.verdict === "changes") return "review";
     // gh #313: an attempt THIS process requeued on a red DoD is a DoD attempt even
     // when an earlier one was reviewed — the log the text quotes is the DoD's.
-    if (this.counters.dodRequeuesSpent(storyId) > 0 && outcome?.verdict === "n-a") return "dod";
+    if (this.counters.dodRequeuesSpent(this.ctx.runDir, storyId) > 0 && outcome?.verdict === "n-a") return "dod";
     return this.reviewAttempts(storyId) === 0 ? "dod" : "review";
   }
 

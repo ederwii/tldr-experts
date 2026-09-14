@@ -3819,8 +3819,11 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
 
    **A red DoD takes the same bound (#313).** A developer whose Definition of Done goes red — every non-green row RAN
    and exited non-zero or timed out — is requeued while `attempt < attempts`, instead of blocking on the first miss:
-   the attempt settles `blocked` with `the DoD was red on attempt <n> of <m>` (its `task.done` is the ordinary one, no
-   new event or field), the story worktree is KEPT so the next attempt continues in that tree, and the next developer
+   the attempt settles back at the status it started from — never `blocked`, since it is about to be dispatched
+   again — with `the DoD was red on attempt <n> of <m>` (its `task.done` is the ordinary one, no new event or field),
+   the attempts a red DoD spent are counted off `events.jsonl` (a `task.done` with `verdict: n-a`, no `commit` and a
+   non-green `dod` row under it, reset by `story.reopened`) so the bound holds across invocations, the story worktree
+   is KEPT so the next attempt continues in that tree, and the next developer
    prompt carries the kept output under `## Previous attempt` with the DoD header (#211). The last attempt blocks as
    before, and when more than one attempt in a row went red its reason says `the DoD stayed red on <n> of <m>
    attempts`. Everything that is not a plain red still blocks on the first attempt, because a second one would buy

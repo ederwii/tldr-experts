@@ -129,33 +129,28 @@ export class ReviewCounters {
   }
 
   /**
-   * Developer attempts THIS process requeued on a red Definition of Done (gh #313)
-   * — the fourth thing counted here, and a fourth map for the reason the other
-   * three are separate: a red DoD spends an attempt the way a `changes` verdict
-   * does, but it is not a verdict, and adding it to `reviews` would tell every
-   * reader of `verdicts` that a reviewer judged a diff nobody reviewed.
+   * Developer attempts a red Definition of Done has spent, per story, as THIS
+   * process has allocated them (gh #313) — the fourth thing counted here, and a
+   * fourth map for the reason the other three are separate: a red DoD spends an
+   * attempt the way a `changes` verdict does, but it is not a verdict, and adding
+   * it to `reviews` would tell every reader of `verdicts` that a reviewer judged a
+   * diff nobody reviewed.
    *
-   * Deliberately WITHOUT a ledger fallback, and the one hole that leaves is named
-   * here rather than discovered. A requeued attempt settles `blocked` before the
-   * next one starts, so a process that dies between the two leaves a story no
-   * invocation offers again, and a `story reopen` hands out a fresh run of
-   * attempts anyway. The exception is a next attempt whose developer never RAN
-   * (spawn error, transport fault): it parks back at `blocked` with nothing run,
-   * `blockedByFailedDeveloper` offers it again in a LATER process, and that
-   * process counts from attempt 1 — a turn that never ran bought no information,
-   * which is the rule that path already follows. Counting it from the log would
-   * need a derivation in `readReviewLedger`, not a fourth copy here.
+   * Read through `dodRequeuesSpent`, which falls back to the ledger's
+   * `redDodAttempts` — the same two-source shape as `verdicts`, and for the reason
+   * the first cut of this map proved: a bound only the process remembered gave a
+   * story a fresh run of attempts every time an invocation ended between two.
    */
   private readonly dodRequeues = new Map<string, number>();
 
-  /** How many attempts THIS process has already requeued on a red DoD. */
-  dodRequeuesSpent(storyId: string): number {
-    return this.dodRequeues.get(storyId) ?? 0;
+  /** Attempts a red DoD has already spent on this story — this process first, then the ledger. */
+  dodRequeuesSpent(runDir: string, storyId: string): number {
+    return this.dodRequeues.get(storyId) ?? readReviewLedger(runDir, storyId).redDodAttempts;
   }
 
-  /** One more attempt spent on a red DoD and requeued — `dodRedRequeue` decides which. */
-  countDodRequeue(storyId: string): void {
-    this.dodRequeues.set(storyId, this.dodRequeuesSpent(storyId) + 1);
+  /** Allocate the attempt a red DoD just spent — `dodRedRequeue` decides when one is requeued. */
+  countDodRequeue(storyId: string, spent: number): void {
+    this.dodRequeues.set(storyId, spent + 1);
   }
 }
 
