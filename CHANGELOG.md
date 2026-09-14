@@ -62,11 +62,15 @@
   measurement. Pre-merge review round 2 found the events side was NOT labelled — `tldrx cost --stories`
   reads only `agent.result` events, so a story the fault left un-evented came back with no measured cost
   and zero unmetered turns, a silent null at odds with the `budget.spent_usd` run.yml records. Now the
-  story ledger counts, per story, the turns `agent.spawned` named against the ones a result or this
-  invocation accounts for, and enters the difference through the SAME unmetered/lower-bound door: a story
-  whose turns were spawned but never evented reads as a LOWER BOUND with the turn count, not a confident
-  zero (the dollars are in run.yml; a task row carries no story key, so they are named absent per story,
-  never invented). `tldrx replay`
+  story ledger walks the log in order: a spawn opens a slot for its story, a result closes one, and an
+  invocation-terminal event on that stage (`stage.done`/`failed`/`skipped`, the executor or record-tasks
+  `error`, or a later `stage.started` that superseded it) turns every slot still open into a LOST turn,
+  which enters the SAME unmetered/lower-bound door: the story reads as a LOWER BOUND with the turn count,
+  not a confident zero (the dollars are in run.yml; a task row carries no story key, so they are named
+  absent per story, never invented). A spawn with nothing terminal after it is a turn IN FLIGHT — every
+  healthy mid-run read of `tldrx cost` and of the handoff — and is counted as nothing, review round 3's
+  finding: `spawned − accounted` alone had flagged every live build as a lower bound. Events carry no
+  attempt id, so the log's own order is the attempt scope. `tldrx replay`
   renders the error line from `detail` (it read `message`, a field the event never carried) and reports
   `rows_written` of `rows_expected` — reports, never sums.
 

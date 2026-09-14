@@ -1592,9 +1592,11 @@ the error and the catch records them first (#249) — `tasks_recorded: true` wit
 so, and a throw while RECORDING rows says how many of how many reached `run.yml`. Every row is written to the
 store BEFORE any `agent.result` is appended and the store is SAVED before the `error` event is emitted, so a
 recording failure is an events failure that leaves `run.yml` whole — the spend surfaces read rows and print a
-measurement; and `tldrx cost --stories`, which reads the events, counts the turns `agent.spawned` named against
-the ones a result accounts for and labels a story whose turns were spawned but never evented a LOWER BOUND (the
-same unmetered door), so the two money surfaces cannot diverge in silence; the
+measurement; and `tldrx cost --stories`, which reads the events, walks them in order — a spawn opens a slot for
+its story, a result closes one, and an invocation-terminal event on that stage (`stage.done`/`failed`/`skipped`,
+the executor or record-tasks `error`, or a superseding `stage.started`) turns the slots still open into LOST
+turns — and labels the story a LOWER BOUND through the same unmetered door, so the two money surfaces cannot
+diverge in silence; a spawn with nothing terminal after it is in flight and counts as nothing; the
 `error` event's `recording_error` (prose the cap trims like `detail`) says why the events are short. An
 epic branch the invocation claimed is saved the moment it is claimed, so a later throw cannot make the next run
 read its own epic as somebody else's.

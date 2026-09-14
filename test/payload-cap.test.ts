@@ -26,7 +26,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { listCount, measuredWidening } from "../src/core/build/measuredTouches.ts";
 import { spendBasisOf } from "../src/core/budget/spendBasis.ts";
-import { buildStoryCost, renderStoryCost } from "../src/core/budget/costView.ts";
+import { buildStoryCost, LOWER_BOUND_MARK, renderStoryCost } from "../src/core/budget/costView.ts";
 import { capPayload, MAX_PAYLOAD_BYTES, validateEvent } from "../src/core/events/Event.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { buildExecutor } from "../src/core/facilitator/executors/build.ts";
@@ -1095,4 +1095,61 @@ describe("#249 round 2 — the story ledger names the lost turns instead of a si
     const s1 = cost!.rows.find((r) => r.story === "S1");
     expect(s1?.measuredUsd).toBe(0.5);
   }, 90_000);
+});
+
+// ---------------------------------------------------------------------------
+// #249, review round 3: `spawned − accounted` cannot tell "result lost to the
+// fault" from "turn still running". A bare `agent.spawned` with no result YET
+// is every healthy mid-flight build — and `tldrx cost`, `--stories` and the
+// handoff's per-story table are mid-run tools by design. A turn is LOST only
+// when nothing can still deliver its result: the invocation that spawned it has
+// written its terminal event on that stage (`stage.done`/`failed`/`skipped`,
+// an `error` from the executor or record-tasks seam) or a later `stage.started`
+// has superseded it. Events carry no attempt id (measured: none in
+// `EVENT_TYPES`' payloads), so the walk's own order is the attempt scope.
+// ---------------------------------------------------------------------------
+
+describe("#249 round 3 — a spawned turn with no result YET is in flight, not lost", () => {
+  function spawned(ws: BuildWorkspace, ts: string): void {
+    EventLog.forRun(ws.runDir).append({
+      ts, run: ws.runId, stage: "build", type: "agent.spawned", actor: "developer", cost_usd: 0,
+      payload: { phase: "04-build", story: "S1", role: "developer", model: "sonnet", effort: null, max_budget_usd: 1.5 },
+    });
+  }
+  function stageEvent(ws: BuildWorkspace, ts: string, type: "stage.started" | "stage.failed", payload: Record<string, unknown>): void {
+    EventLog.forRun(ws.runDir).append({ ts, run: ws.runId, stage: "build", type, actor: "facilitator", cost_usd: 0, payload });
+  }
+
+  test("the reviewer's repro: one bare agent.spawned on the live attempt is NOT unmetered and carries no lower-bound marker", () => {
+    const ws = workspace(ONE_STORY);
+    stageEvent(ws, "2026-09-14T12:00:00Z", "stage.started", { phase: "04-build", mode: "headless", executor: "04-build" });
+    spawned(ws, "2026-09-14T12:00:01Z");
+
+    const cost = buildStoryCost(ws.runDir);
+    expect(cost).not.toBeNull();
+    expect(cost!.rows.map((r) => r.story)).toEqual(["S1"]);
+    expect(cost!.unmeteredStories).toEqual([]);
+    expect(cost!.unmeteredTurns).toBe(0);
+    expect(renderStoryCost(cost!)).not.toContain(LOWER_BOUND_MARK);
+  });
+
+  test("the same spawn is LOST once its stage has failed — and once a later stage.started has superseded it", () => {
+    const failed = workspace(ONE_STORY);
+    stageEvent(failed, "2026-09-14T12:00:00Z", "stage.started", { phase: "04-build", mode: "headless", executor: "04-build" });
+    spawned(failed, "2026-09-14T12:00:01Z");
+    stageEvent(failed, "2026-09-14T12:00:02Z", "stage.failed", { phase: "04-build", reason: "the executor threw" });
+    const afterFailure = buildStoryCost(failed.runDir)!;
+    expect(afterFailure.unmeteredStories).toEqual(["S1"]);
+    expect(afterFailure.unmeteredTurns).toBe(1);
+    expect(renderStoryCost(afterFailure)).toContain(LOWER_BOUND_MARK);
+
+    const superseded = workspace(ONE_STORY);
+    stageEvent(superseded, "2026-09-14T12:00:00Z", "stage.started", { phase: "04-build", mode: "headless", executor: "04-build" });
+    spawned(superseded, "2026-09-14T12:00:01Z");
+    // A crash nothing wrote down, then the operator re-entered the stage.
+    stageEvent(superseded, "2026-09-14T13:00:00Z", "stage.started", { phase: "04-build", mode: "headless", executor: "04-build" });
+    const afterReentry = buildStoryCost(superseded.runDir)!;
+    expect(afterReentry.unmeteredStories).toEqual(["S1"]);
+    expect(afterReentry.unmeteredTurns).toBe(1);
+  });
 });
