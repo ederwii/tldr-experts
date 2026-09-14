@@ -4010,6 +4010,17 @@ that story was `done` two polls later, and both dependents stayed `blocked` — 
 person `story reopen`ed them. And a `blocked` row whose recorded reason (`## Why it is not done` in its log) is a
 dependency hold over a dependency that is NOW `done` is offered again by the next invocation, like a row a dead
 developer blocked: nothing attempted it, so nothing about it was judged. A row a reviewer blocked keeps its verdict.
+**The in-session doors ask the same frontier (#300).** `tldrx next --prepare` walks the pending stories in wave
+order and does per story what the loop does: a terminal hold records the dependent `blocked` with the same sentence,
+a pending hold leaves it `todo` and is named in `## Unknowns`, and the first story with no hold is the one prepared;
+with nothing left to offer the stage closes at its gate, and with only waits left it refuses with exit 1 — nothing to
+prepare YET, nothing written. `--prepare --review` refuses over a hold and records nothing (the bare verb is what
+records). `--commit` on a story whose dependency is no longer `done` refuses with exit 1 in both cases and writes
+nothing — the bundle, the branch and the worktree stay, the story stays `in_progress`, and the sentence names what
+releases it — because the story on that door has a developer's attempt on its branch and the loop's `blocked` row
+would say `attempts: 0`. Measured before this rule (the mixed shape #280 opened): a headless pass left S2 waiting
+`todo` behind S1 at `review`, the host's verdict blocked S1, and the next `--prepare` handed S2 out over an epic
+branch S1 never landed on; `--commit` then merged it.
 The sentence and its reader are one derivation, `build/dependencyHold.ts`.
 
 **The budget does not change.** `worstCaseShares` is already `stories × MAX_ATTEMPTS × (1 + REVIEWER_SHARE)` across

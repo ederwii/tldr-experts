@@ -41,6 +41,36 @@
   and `ver_gt` orders `1.0.0 > 0.99.0` and `0.10.0 > 0.9.0` numerically — the function is
   lifted from the script's own text for the test, so the pin is on the real implementation.
 
+- **`tldrx next --prepare` and `--commit` ask the same dependency frontier the headless loop asks (#300).**
+  MEASURED at `31ed3d7` on the mixed shape #280 opened: a headless pass met S2 behind S1 at `review` and
+  — correctly — left S2 `todo`; the host's `--commit --review` blocked S1; the next `--prepare` said
+  `prepared S2 · … ($3.20 ceiling, attempt 1 of 1)` and `--commit` then merged S2 into an epic branch
+  S1 had put nothing on. `runAll` has asked `blockingDependency` per story since #260/#263, but the
+  three in-session doors took `nextPending()` / `inProgress()` as offered, and `pendingStories` skips
+  only `done` and a terminal `blocked` — so the `blocked` row #280 stopped writing was, incidentally,
+  the only thing keeping `--prepare` off that dependent. A pure in-session run had the hole all along
+  (S1 blocked by a verdict, S2 `todo`); the mixed run is what made it fire without a person's hand.
+  Now `--prepare` walks the pending stories through the ONE frontier and does per story what the loop
+  does — a terminal hold records the dependent `blocked` with the recorded sentence, so the reason
+  reaches the gate and `staleDependencyHold` releases it when the dependency lands; a pending hold
+  leaves the row `todo` (never `blocked`, which would re-create #280 on the other door) and, with
+  nothing else to offer, refuses with exit 1 saying there is nothing to prepare YET and what releases
+  it. `--prepare --review` refuses over a hold and records nothing. `--commit` on a story whose
+  dependency is no longer `done` refuses with exit 1 in both cases and writes nothing — the bundle,
+  the branch and the worktree stay, the story stays `in_progress`, and the sentence names all three
+  — because that story has a developer's attempt on its branch and the loop's row would say it had
+  none. Exit 1 is the sequencing family (`refusedOnSequence`): the cycle is fine and the fix is the
+  other command; a `2` would send the stage back to `ready` and throw away the bundle a held
+  `--commit` is sitting on. And the closing hint of a `--commit` with more to do asks the same frontier,
+  recording nothing: it used to read raw `nextPending()` and say `S2 is next — run tldrx next --prepare`
+  the instant S1 was blocked, naming the one bundle the next `--prepare` refuses to write; it now names
+  what `--prepare` would actually offer, or says nothing is next and why. One correction to the issue's
+  proposed sequence, measured: S1 at `review`
+  followed by `--prepare` does NOT hand S2 out — S1 is pending too and earlier in wave order, so that
+  `--prepare` offers S1's review; the dependent is offered the moment S1 leaves `review` for a status
+  `pendingStories` skips. Minor by behaviour: a `--prepare` and a `--commit` that used to hand out and
+  settle now record `blocked` or refuse.
+
 ## 0.24.0 — 2026-09-14
 
 ### Added

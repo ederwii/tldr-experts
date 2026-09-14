@@ -140,8 +140,8 @@ import {
 } from "../../build/reviewRound.ts";
 import { readReviewLedger } from "../../build/reviewLedger.ts";
 import {
-  decidingHold, dependencyHoldOfLog, dependencyHoldReason, dependencyIsPending, dependencyWaitLine,
-  dependencyWaitReason, type DependencyHold,
+  decidingHold, dependencyCommitRefusal, dependencyHoldOfLog, dependencyHoldReason, dependencyIsPending,
+  dependencyNextLine, dependencyPrepareRefusal, dependencyWaitLine, dependencyWaitReason, type DependencyHold,
 } from "../../build/dependencyHold.ts";
 import { classifyRefusal, MAX_SEPARATOR_RETRIES, separatorCurePrefix, withCure } from "../../build/refusalKind.ts";
 import { developerGitGrants } from "../../build/developerGrants.ts";
@@ -765,7 +765,7 @@ class BuildSession {
    * `--commit` picks the pipeline up at the DoD step.
    */
   async prepare(): Promise<ExecutorOutcome> {
-    const planned = this.nextPending();
+    let planned = this.nextPending();
     if (planned === null) return await this.finish();
     // ORDER IS LOAD-BEARING (#164, review round 1). Every refusal that can be
     // decided WITHOUT moving the operator's files is decided first; the stash is
@@ -778,6 +778,18 @@ class BuildSession {
       ?? await this.refuseOnRedBase()
       ?? await this.refuseOnUnrunnableWorktree();
     if (refusal !== null) return refusal;
+
+    // THE SAME FRONTIER THE HEADLESS LOOP ASKS (#300). Until this line the door
+    // took `nextPending()` as offered, and `pendingStories` skips only `done`
+    // and a terminal `blocked` — so a `todo` dependent of a story that had NOT
+    // landed was handed out, and `--commit` merged it over an epic branch its
+    // dependency put nothing on. Measured on the mixed shape #280 opened: a
+    // headless pass leaves S2 waiting `todo` behind S1 at `review` (right), the
+    // host's verdict blocks S1, and the next `--prepare` said `prepared S2`.
+    const offered = this.offerAtFrontier();
+    if (offered.kind === "wait") return refusedOnSequence(this.ctx, dependencyPrepareRefusal(offered.story, offered.held));
+    if (offered.kind === "none") return await this.finish();
+    planned = offered.planned;
 
     // A story waiting on nothing but a REVIEW gets its reviewer bundle written
     // here, and nothing is spawned — exactly like every other `--prepare`.
@@ -940,6 +952,14 @@ class BuildSession {
       ?? await this.refuseOnForeignEpic()
       ?? await this.setAsideForeign();
     if (refusal !== null) return refusal;
+
+    // The frontier, read and not recorded (#300): this spelling writes a review
+    // bundle or nothing, and the cure below — "run `--prepare` for the developer
+    // half" — would be false about a story the bare `--prepare` is going to
+    // record `blocked`. The bare verb is the one that records; this one says why
+    // there is nothing to review.
+    const held = this.blockingDependency(planned);
+    if (held !== null) return refusedOnSequence(this.ctx, dependencyPrepareRefusal(planned.story.id, held));
 
     const work = this.reviewWorkFor(planned) ?? this.reviewWorkFromLedger(planned);
     if (work === null) {
@@ -1106,7 +1126,7 @@ class BuildSession {
       lines: [
         ...this.lines,
         `${planned.story.id} → \`${outcome?.status ?? "?"}\` (host review, unmetered)`,
-        `${this.nextPending()?.story.id ?? "?"} is next — run \`tldrx next --prepare\``,
+        this.nextAtFrontier(),
       ],
       stderr: [...this.advisories],
       error: null,
@@ -1120,6 +1140,21 @@ class BuildSession {
     if (planned === null) {
       // The developer's half of the same mistake (gh #82).
       return refusedOnSequence(this.ctx, "no story is `in_progress` — run `tldrx next --prepare` first");
+    }
+    // The frontier on the settling door (#300). Asked BEFORE the envelope is
+    // read, because the hold has nothing to do with what the host wrote: a
+    // dependency that was `done` at `--prepare` and is not now — reopened,
+    // blocked by a later verdict — is a story this one must not land over,
+    // whatever `result.json` says. Refused, never `blocked`: there is a
+    // developer's attempt on this branch, and the loop's row would say there
+    // was none. The sentence names where the bundle and the work stay.
+    const held = this.blockingDependency(planned);
+    if (held !== null) {
+      return refusedOnSequence(this.ctx, dependencyCommitRefusal(planned.story.id, held, {
+        bundleDir: relative(this.ctx.root, agentDir(this.ctx.runDir, this.bundleKey(planned.story.id))),
+        branch: storyBranchOf(this.ctx.runId, planned.story.id),
+        worktree: relative(this.ctx.root, this.storyWorktree(planned)),
+      }));
     }
     const key = this.bundleKey(planned.story.id);
     let result;
@@ -1182,7 +1217,7 @@ class BuildSession {
       lines: [
         ...this.lines,
         `${planned.story.id} → \`${outcome?.status ?? "?"}\``,
-        `${this.nextPending()?.story.id ?? "?"} is next — run \`tldrx next --prepare\``,
+        this.nextAtFrontier(),
       ],
       error: null,
     };
@@ -2297,6 +2332,80 @@ class BuildSession {
       if (status !== "done") holds.push({ id, status });
     }
     return decidingHold(holds);
+  }
+
+  /**
+   * The story `--prepare` may hand out, decided by the SAME frontier `runAll`
+   * asks at every wave boundary (#300) — one derivation, two doors.
+   *
+   * Walks `pendingStories` in wave order and does per story exactly what the
+   * loop does: a terminal hold records the dependent `blocked` with the reason
+   * (`blockOnDependency`) and moves on; a pending hold is a wait — row untouched,
+   * remembered for the report — and moves on; the first story with no hold is
+   * the offer. `none` when the walk recorded something or nothing was pending:
+   * the caller finishes, and the rows just written reach the gate. `wait` only
+   * when NOTHING was recorded and at least one story waits — a refusal that
+   * changes no state, which is the only kind a sequencing refusal may be.
+   *
+   * The `wait` branch is unreachable at `--prepare` for ANY valid plan, not
+   * just at the head of the queue: `validateWaveOrder` (`schemas/waves.ts`, run
+   * by `plan/validatePlan.ts`)
+   * puts every dependency in an EARLIER wave, `pendingStories` walks waves in
+   * order and skips only `done` and a terminal `blocked`, so a dependency at
+   * `review`/`in_progress` is itself pending and is reached — and offered —
+   * before anything that waits on it. The branch exists because the walk is the
+   * loop's rule and not a guess about reachability, and the same hold IS
+   * reachable on the settling door, where `commit()` refuses over it.
+   */
+  private offerAtFrontier():
+    | { kind: "offer"; planned: PlannedStory }
+    | { kind: "wait"; story: string; held: DependencyHold }
+    | { kind: "none" } {
+    const walked = this.walkFrontier(true);
+    if (walked.kind === "held" && !walked.recorded) return { kind: "wait", story: walked.story, held: walked.held };
+    if (walked.kind === "held") return { kind: "none" };
+    return walked;
+  }
+
+  /**
+   * What the next `--prepare` would offer, asked of the same frontier and
+   * RECORDING NOTHING — the closing hint of a `--commit` that has more to do
+   * (#300). Reading raw `nextPending()` there named the held dependent the
+   * instant its dependency was blocked, which is the one bundle `--prepare`
+   * then refuses to write.
+   */
+  private nextAtFrontier(): string {
+    const walked = this.walkFrontier(false);
+    if (walked.kind === "offer") return `${walked.planned.story.id} is next — run \`tldrx next --prepare\``;
+    if (walked.kind === "held") return dependencyNextLine(walked.story, walked.held);
+    return "nothing is next — run `tldrx next --prepare` to close the stage at its gate";
+  }
+
+  /**
+   * The one walk both readers share: `pendingStories` in wave order, the
+   * frontier asked per story. `record` is the whole difference between the
+   * door that hands out (`blocked` rows and waits are written) and the hint
+   * that only says what it would do. `held` names the FIRST hold met, with
+   * whether anything was recorded on the way.
+   */
+  private walkFrontier(record: boolean):
+    | { kind: "offer"; planned: PlannedStory }
+    | { kind: "held"; story: string; held: DependencyHold; recorded: boolean }
+    | { kind: "none" } {
+    let recorded = false;
+    let first: { story: string; held: DependencyHold } | null = null;
+    for (const planned of this.pendingStories()) {
+      const held = this.blockingDependency(planned);
+      if (held === null) return { kind: "offer", planned };
+      first ??= { story: planned.story.id, held };
+      if (dependencyIsPending(held.status)) {
+        if (record) this.waitOnDependency(planned, held);
+        continue;
+      }
+      if (record) this.blockOnDependency(planned, held);
+      recorded = true;
+    }
+    return first === null ? { kind: "none" } : { kind: "held", ...first, recorded };
   }
 
   /**
