@@ -26,6 +26,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { listCount, measuredWidening } from "../src/core/build/measuredTouches.ts";
 import { spendBasisOf } from "../src/core/budget/spendBasis.ts";
+import { buildStoryCost, renderStoryCost } from "../src/core/budget/costView.ts";
 import { capPayload, MAX_PAYLOAD_BYTES, validateEvent } from "../src/core/events/Event.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { buildExecutor } from "../src/core/facilitator/executors/build.ts";
@@ -1030,5 +1031,68 @@ describe("#249 double fault — the rows and their money survive an event append
     expect(text).not.toContain("no message recorded");
     expect(text).toContain("EISDIR");
     expect(text).toContain("2 of 2 task rows recorded");
+  }, 90_000);
+});
+
+// ---------------------------------------------------------------------------
+// #249, review round 2: the SECOND money surface. `budget.spent_usd` reads
+// run.yml rows and shows $0.50 after the double fault; `tldrx cost --stories`
+// (`storyLedger`) reads ONLY `agent.result` events, which the fault never wrote
+// — so S1 came back measuredUsd null, unmeteredTurns 0: a confident "nothing",
+// indistinguishable from a story no turn ran for, and silently at odds with the
+// $0.50 the budget records. The lost turns must enter the EXISTING lower-bound
+// door: a story `agent.spawned` named but no `agent.result` accounts for is a
+// turn this figure does not see — counted as unmetered, so the row SAYS lower
+// bound rather than null. No new vocabulary, no second parser (§7).
+// ---------------------------------------------------------------------------
+
+describe("#249 round 2 — the story ledger names the lost turns instead of a silent null", () => {
+  test("after the double fault, buildStoryCost labels S1 a LOWER BOUND, not measuredUsd null / 0 unmetered", async () => {
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_COST = "0.25";
+    process.env.FAKE_BUILD_SESSION_PAD = HUGE_SESSION;
+    mkdirSync(join(ws.runDir, "04-build", "log", "S1.md"), { recursive: true });
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(5);
+    // The two money surfaces, side by side: run.yml recorded the spend…
+    expect(RunStore.open(ws.runDir).run.budget.spent_usd).toBe(0.5);
+    // …and no agent.result reached the log, which is the fault this exercises.
+    expect(events(ws).filter((e) => e.type === "agent.result")).toHaveLength(0);
+
+    const cost = buildStoryCost(ws.runDir);
+    expect(cost).not.toBeNull();
+    const s1 = cost!.rows.find((r) => r.story === "S1");
+    expect(s1).toBeDefined();
+    // The two turns S1 was spawned for produced no agent.result — so the figure
+    // is a LOWER BOUND and the ledger says so, rather than a confident null with
+    // zero unmetered turns.
+    expect(cost!.unmeteredStories).toContain("S1");
+    expect(cost!.unmeteredTurns).toBe(2);
+    // Measured is still null — the dollars are in run.yml, not recoverable per
+    // story from the events, so it is NAMED absent, never invented as $0.00.
+    expect(s1!.measuredUsd).toBeNull();
+
+    const rendered = renderStoryCost(cost!);
+    expect(rendered).toContain("LOWER BOUND");
+    expect(rendered).toContain("S1");
+    expect(rendered).not.toContain("every story measured inside the spawn ceilings");
+  }, 90_000);
+
+  test("a healthy run is unchanged: spawns and results balance, so nothing is flagged", async () => {
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_COST = "0.25";
+
+    const outcome = await next(ws);
+    // A headless build stops at the human gate — exit 4, not 0 — with both turns
+    // evented; the control is that nothing is flagged, not the exit code.
+    expect(outcome.code).toBe(4);
+
+    const cost = buildStoryCost(ws.runDir);
+    expect(cost).not.toBeNull();
+    expect(cost!.unmeteredTurns).toBe(0);
+    expect(cost!.unmeteredStories).toEqual([]);
+    const s1 = cost!.rows.find((r) => r.story === "S1");
+    expect(s1?.measuredUsd).toBe(0.5);
   }, 90_000);
 });

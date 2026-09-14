@@ -319,6 +319,17 @@ export function storyLedger(
   const ceilings = new Map<string, number>();
   const measured = new Map<string, number>();
   const unmetered = new Map<string, number>();
+  // Per story, how many turns were SPAWNED against how many produced a result
+  // this ledger could read — an `agent.result` event, or a turn passed in
+  // through `extraTurns`. A story spawned for more turns than are accounted for
+  // lost the difference to a throw between the turn and its `agent.result`
+  // (#249, review round 2): the double fault where run.yml has the rows and the
+  // events log has none. Those lost turns are UNMETERED here — their cost is in
+  // run.yml, not derivable per story from the events (a task row carries no
+  // story key), so the figure is a LOWER BOUND and enters the SAME door as any
+  // other unmetered turn rather than reading as a confident null.
+  const spawned = new Map<string, number>();
+  const accounted = new Map<string, number>();
   const storyKeys = new Set<string>();
   const storyPhases = new Set<string>();
   let excluded = 0;
@@ -331,6 +342,7 @@ export function storyLedger(
     const phase = str(event.payload.phase);
     if (phase !== null) storyPhases.add(phase);
     first(story);
+    spawned.set(story, (spawned.get(story) ?? 0) + 1);
     const cap = event.payload.max_budget_usd;
     if (typeof cap !== "number" || !Number.isFinite(cap)) continue;
     ceilings.set(story, round((ceilings.get(story) ?? 0) + cap));
@@ -349,6 +361,7 @@ export function storyLedger(
     if (key === null) continue;
     if (!isStory(key, str(event.payload.phase))) { excluded += 1; continue; }
     first(key);
+    accounted.set(key, (accounted.get(key) ?? 0) + 1);
     if (attempt.usd === null) unmetered.set(key, (unmetered.get(key) ?? 0) + 1);
     else measured.set(key, round((measured.get(key) ?? 0) + attempt.usd));
   }
@@ -357,8 +370,20 @@ export function storyLedger(
   for (const turn of extraTurns) {
     if (!isStory(turn.key, scope === null ? null : scope.phaseId)) { excluded += 1; continue; }
     first(turn.key);
+    accounted.set(turn.key, (accounted.get(turn.key) ?? 0) + 1);
     if (turn.metered === false) unmetered.set(turn.key, (unmetered.get(turn.key) ?? 0) + 1);
     else measured.set(turn.key, round((measured.get(turn.key) ?? 0) + turn.costUsd));
+  }
+
+  // The lost turns (#249, review round 2): a story spawned for more turns than
+  // any result or `extraTurn` accounts for lost the difference to a throw before
+  // its `agent.result` landed — run.yml has the rows, the events log does not.
+  // Counted as unmetered, so the row reads as a LOWER BOUND through the door
+  // above rather than a silent null. Zero on every healthy story, where the
+  // spawn count and the accounted count agree, so the ledger is byte-identical.
+  for (const story of order) {
+    const gap = (spawned.get(story) ?? 0) - (accounted.get(story) ?? 0);
+    if (gap > 0) unmetered.set(story, (unmetered.get(story) ?? 0) + gap);
   }
 
   return {

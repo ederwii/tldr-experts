@@ -58,8 +58,15 @@
   trace. Now every row goes into the store before any event is appended (the in-memory row write cannot
   throw; the append is the only line that can), the store is saved before the `error` event is emitted and
   that emit is wrapped, `recording_error` sits in the cap's prose table beside `detail`, and no new
-  vocabulary reaches `budget show`, the dashboard or status: `run.yml` is whole, and the events side is
-  already labelled a LOWER BOUND by `tldrx cost` when a story has no metered `agent.result`. `tldrx replay`
+  vocabulary reaches `budget show`, the dashboard or status: `run.yml` is whole, so they read a
+  measurement. Pre-merge review round 2 found the events side was NOT labelled — `tldrx cost --stories`
+  reads only `agent.result` events, so a story the fault left un-evented came back with no measured cost
+  and zero unmetered turns, a silent null at odds with the `budget.spent_usd` run.yml records. Now the
+  story ledger counts, per story, the turns `agent.spawned` named against the ones a result or this
+  invocation accounts for, and enters the difference through the SAME unmetered/lower-bound door: a story
+  whose turns were spawned but never evented reads as a LOWER BOUND with the turn count, not a confident
+  zero (the dollars are in run.yml; a task row carries no story key, so they are named absent per story,
+  never invented). `tldrx replay`
   renders the error line from `detail` (it read `message`, a field the event never carried) and reports
   `rows_written` of `rows_expected` — reports, never sums.
 
