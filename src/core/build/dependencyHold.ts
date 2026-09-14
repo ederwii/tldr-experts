@@ -188,3 +188,90 @@ export function dependencyNextLine(storyId: string, held: DependencyHold): strin
   return `nothing is next — ${dependencyHoldReason(held)}, so \`tldrx next --prepare\` records ${storyId} ` +
     `\`blocked\` with that reason and closes the stage at its gate; ${dependencyHoldCure(held)}`;
 }
+
+
+/** One planned story, as `releasedByReopen` reads it: data only, no files. */
+export interface ReleaseCandidate {
+  readonly id: string;
+  /** The status on disk BEFORE the reopen — the reopened story itself included. */
+  readonly status: string;
+  readonly dependsOn: readonly string[];
+  /** `dependencyHoldOfLog` of the story's review log: the dependency its block names, or null. */
+  readonly hold: string | null;
+}
+
+/** A dependent `story reopen` released, and the dependency whose release lifted its hold. */
+export interface Released {
+  readonly id: string;
+  readonly dependency: string;
+}
+
+/** A blocked dependent it did NOT release, and the sentence saying why. */
+export interface StayedBlocked {
+  readonly id: string;
+  readonly reason: string;
+}
+
+/** The reason a dependent whose own block is a verdict, not a hold, stays where it is. */
+export const NOT_A_HOLD_REASON = "its block is not a dependency hold — a reviewer, a DoD or a developer recorded it, "
+  + "and reopening a dependency does not answer that; `tldrx story reopen <id>` does";
+
+/**
+ * Which `blocked` stories a `story reopen <reopened>` releases (#312).
+ *
+ * A story is released when the hold its log records names a story that is
+ * itself reopened or released here, and every OTHER dependency that is not
+ * `done` is a wait rather than a block — asked through `decidingHold`, the
+ * same derivation the Build loop's frontier uses, so "blocked only by X" has
+ * one meaning. Released stories count as released for the stories behind
+ * them, to a fixed point, so a chain S1 ← S2 ← S3 goes back to `todo` in one
+ * command and the order the rows arrive in cannot change the answer.
+ *
+ * What stays: a blocked story that depends directly on a released one and was
+ * not released — held by another dependency that will not land (the reason is
+ * `dependencyHoldReason` of that hold), or blocked by a verdict rather than a
+ * hold. A blocked story further down, whose hold names one of THOSE, is not
+ * listed: it is still held by exactly what it recorded.
+ */
+export function releasedByReopen(
+  reopened: string,
+  rows: readonly ReleaseCandidate[],
+): { readonly released: readonly Released[]; readonly stayed: readonly StayedBlocked[] } {
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const free = new Set([reopened]);
+  const released: Released[] = [];
+  const terminalHold = (row: ReleaseCandidate): DependencyHold | null => {
+    const holds: DependencyHold[] = [];
+    for (const id of row.dependsOn) {
+      const dependency = byId.get(id);
+      if (dependency === undefined || free.has(id) || dependency.status === "done") continue;
+      holds.push({ id, status: dependency.status as PlanStatus });
+    }
+    const deciding = decidingHold(holds);
+    return deciding !== null && !dependencyIsPending(deciding.status) ? deciding : null;
+  };
+  for (let moved = true; moved;) {
+    moved = false;
+    for (const row of rows) {
+      if (row.status !== "blocked" || free.has(row.id) || row.hold === null || !free.has(row.hold)) continue;
+      if (terminalHold(row) !== null) continue;
+      free.add(row.id);
+      released.push({ id: row.id, dependency: row.hold });
+      moved = true;
+    }
+  }
+  const stayed: StayedBlocked[] = [];
+  for (const row of rows) {
+    if (row.status !== "blocked" || free.has(row.id) || !row.dependsOn.some((id) => free.has(id))) continue;
+    const held = terminalHold(row);
+    stayed.push({
+      id: row.id,
+      reason: row.hold === null
+        ? NOT_A_HOLD_REASON
+        : held !== null
+        ? dependencyHoldReason(held)
+        : `its recorded hold is dependency ${row.hold}, which this reopen did not release`,
+    });
+  }
+  return { released, stayed };
+}

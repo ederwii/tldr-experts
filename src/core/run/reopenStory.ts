@@ -55,6 +55,9 @@ import { readReviewLedger } from "../facilitator/executors/build.ts";
 import { buildStageDefaults } from "./workflowPreset.ts";
 import type { RunStage } from "./RunFile.ts";
 import { validateEvent, type TldrxEvent } from "../events/Event.ts";
+import { parseFrontMatter } from "../schemas/frontMatter.ts";
+import { dependencyHoldOfLog, releasedByReopen, type ReleaseCandidate } from "../build/dependencyHold.ts";
+import { LOG_DIR } from "../build/plan.ts";
 
 export interface ReopenOptions {
   readonly root: string;
@@ -280,8 +283,21 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
     ]);
   }
 
+  // #312: a BLOCKED dependency going back to `todo` makes every hold that named
+  // it stale in the same instant. Prepared — files patched in memory, events
+  // built and validated — before anything is written, so a cascade that cannot
+  // be recorded leaves nothing half-moved.
+  const cascade = !forFix && row.status === "blocked" && !progress.implicit
+    ? prepareCascade(options, store, id, rows)
+    : { writes: [], lines: [] };
+  if ("refusal" in cascade) return refuse(cascade.refusal);
+
   writeFileSync(path, patched, "utf8");
   store.append(event);
+  for (const write of cascade.writes) {
+    writeFileSync(write.path, write.text, "utf8");
+    store.append(write.event);
+  }
 
   const kept = [
     "  its branch is kept, so the next developer starts from the commits the last one made "
@@ -326,6 +342,7 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
           + "settled review-only — nothing merged, the dod on the epic head, the reviewer over the recorded range",
         "  the record will say the branch was taken as it stands and name you, so nothing reads as "
           + "though a developer delivered it",
+        ...cascade.lines,
         ...kept,
       ],
     };
@@ -340,9 +357,106 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
         ? "  no reviewer had judged it, so no attempt was consumed; it runs as attempt 1"
         : `  ${String(ledger.verdicts)} verdict(s) were consumed before this and stay on the record — `
           + "they no longer count against it, and the next developer runs as attempt 1",
+      ...cascade.lines,
       ...kept,
     ],
   };
+}
+
+interface CascadeWrite {
+  readonly path: string;
+  readonly text: string;
+  readonly event: TldrxEvent;
+}
+
+/**
+ * The dependents a reopen of `reopened` releases, prepared and not yet written
+ * (#312). The rule is `releasedByReopen`'s — this reads the files it needs and
+ * turns its answer into story files, events and the lines that say so.
+ *
+ * Each release is a plain `story.reopened` (`reason: attempts`), signed by the
+ * same actor, with two additive keys: `released_by` (the story whose reopen
+ * caused it) and `dependency` (the hold its log named). Its note is the cause,
+ * spelled out; the operator's own note is on the reopen that caused it.
+ */
+function prepareCascade(
+  options: ReopenOptions,
+  store: RunStore,
+  reopened: string,
+  rows: readonly { readonly id: string; readonly status: string; readonly wave: string }[],
+): { readonly writes: readonly CascadeWrite[]; readonly lines: readonly string[] } | { readonly refusal: readonly string[] } {
+  const candidates: ReleaseCandidate[] = rows.map((planned) => ({
+    id: planned.id,
+    status: planned.status,
+    dependsOn: dependsOnOf(store.runDir, planned.id),
+    hold: planned.status === "blocked" ? holdOf(store.runDir, planned.id) : null,
+  }));
+  const { released, stayed } = releasedByReopen(reopened, candidates);
+  const writes: CascadeWrite[] = [];
+  const lines: string[] = [];
+  for (const release of released) {
+    const planned = rows.find((r) => r.id === release.id);
+    if (planned === undefined) continue;
+    const path = join(store.runDir, PLAN_DIR, "stories", `${release.id}.md`);
+    let text: string;
+    try {
+      text = updateStoryFront(readFileSync(path, "utf8"), { status: REOPENED_TO });
+    } catch (error) {
+      return {
+        refusal: [
+          `${reopened} was not reopened: its dependent ${release.id} would be released, and its file cannot be updated: `
+            + (error instanceof Error ? error.message : String(error)),
+          `  ${path}`,
+          "  nothing was written",
+        ],
+      };
+    }
+    const cause = release.dependency === reopened
+      ? `its only hold was dependency ${reopened}, which ${options.actor} reopened`
+      : `its only hold was dependency ${release.dependency}, which this reopen of ${reopened} released`;
+    const base = reopenEvent(
+      { ...options, note: `released by the reopen of ${reopened}: ${cause}` },
+      store.runId, release.id, planned.wave, planned.status, readReviewLedger(store.runDir, release.id).verdicts, false, false,
+    );
+    const event: TldrxEvent = {
+      ...base,
+      payload: { ...base.payload, released_by: reopened, dependency: release.dependency },
+    };
+    const validation = validateEvent(event);
+    if (!validation.ok) {
+      const first = validation.issues[0];
+      return {
+        refusal: [
+          `the story.reopened event releasing ${release.id} is not valid: ${first?.path ?? ""} ${first?.message ?? "schema error"}`,
+          "  nothing was written",
+        ],
+      };
+    }
+    writes.push({ path, text, event });
+    lines.push(`  released ${release.id} — \`blocked\` → \`${REOPENED_TO}\`: ${cause}; no attempt was consumed`);
+  }
+  for (const held of stayed) lines.push(`  ${held.id} stays \`blocked\`: ${held.reason}`);
+  return { writes, lines };
+}
+
+/** A story file's `depends_on`, read tolerantly: an unreadable file depends on nothing it can prove. */
+function dependsOnOf(runDir: string, id: string): readonly string[] {
+  try {
+    const doc = parseFrontMatter(readFileSync(join(runDir, PLAN_DIR, "stories", `${id}.md`), "utf8")).doc;
+    const list = (doc as { depends_on?: unknown } | null)?.depends_on;
+    return Array.isArray(list) ? list.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The dependency a story's review log says blocked it, or null — `dependencyHoldOfLog`, off the file. */
+function holdOf(runDir: string, id: string): string | null {
+  try {
+    return dependencyHoldOfLog(readFileSync(join(runDir, BUILD_PHASE, LOG_DIR, `${id}.md`), "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 /**

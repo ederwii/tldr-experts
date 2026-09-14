@@ -704,6 +704,18 @@ that true: the reopen event is a boundary the review ledger reads, so the old ve
 counting while staying in `events.jsonl` for `replay`, `cost` and `retro`. When the story
 runs again the Build stage says so in one line, with your note.
 
+Reopening a `blocked` story also releases the stories it alone was holding. A dependent the
+Build recorded `blocked` with `dependency S3 blocked` goes back to `todo` in the same command —
+and so does one blocked behind *that* dependent — as long as no other dependency still holds
+it. Each release is its own `story.reopened`, signed by you, naming the dependency that caused
+it, and costs no attempt. A dependent also held by another blocked story, or blocked by a
+reviewer rather than by its dependency, stays `blocked`, and the output says which and why:
+
+```
+  released S4 — `blocked` → `todo`: its only hold was dependency S3, which alan reopened; no attempt was consumed
+  S6 stays `blocked`: dependency S5 blocked
+```
+
 It runs no agent, spends nothing, deletes nothing and refunds nothing. The story's *branch*
 carries the last developer's commits forward and is untouched, so the next turn starts on
 top of them.
