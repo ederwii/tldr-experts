@@ -29,7 +29,8 @@ import { cancelRun } from "../src/core/run/rescue.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { EVENT_TYPES, validateEvent } from "../src/core/events/Event.ts";
 import { asideBranchOf, describeRelease, releaseEpicBranch, releaseRunEpics, uncountedReason } from "../src/core/build/epicRelease.ts";
-import { LINE_BREAK_MARK } from "../src/core/build/handoff.ts";
+import { LINE_BREAK_MARK, LINE_BREAK_NOTE, renderBuildHandoff } from "../src/core/build/handoff.ts";
+import { emptySrcContext, validateHandoff } from "../src/core/text/handoff.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
 import {
@@ -161,25 +162,45 @@ describe("run cancel releases the epic it claimed (#272, half 1)", () => {
     expect(outcome.lines).toEqual([describeRelease(outcome.released[0]!, git(ws.repoDir, ["rev-parse", "--short", "main"]))]);
   });
 
-  test("the section appended to the owner's handoff is one physical line per record, whatever the note held (#283)", async () => {
+  test("the section appended to the owner's handoff is one physical line per record, and the file then says what the mark is (#283)", async () => {
+    // The reviewer's scenario: a handoff with ZERO marks in it, then a `run cancel
+    // --note` carrying a newline. The note explaining the mark is a guarantee of
+    // the FILE, not of the render pass that happened to draw the first mark.
     const ws = workspace();
     claim(ws.runDir, "epic/e1");
     cutEpic(ws.repoDir, 0);
     cancel(ws, ws.runId);
-    mkdirSync(join(ws.runDir, "04-build"), { recursive: true });
-    writeFileSync(join(ws.runDir, "04-build", "handoff.md"), "# Handoff\n\n## Findings\n\n- x [src: absent:04-build/log]\n", "utf8");
+    mkdirSync(join(ws.runDir, "04-build", "log"), { recursive: true });
+    writeFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "# review\n", "utf8");
+    const before = renderBuildHandoff({
+      runId: ws.runId, stageId: "build", model: null, costUsd: 1, budgetUsd: 8, at: AT, epics: [],
+      outcomes: [{
+        id: "S1", title: "First", status: "done", wave: "W1", repo: "app", epic: "E1", epicBranch: "epic/e1",
+        branch: "story/S1", attempts: 1, dod: [{ command: "npm run test", exitCode: 0, timedOut: false, tail: "ok" }],
+        commit: "abc1234", merged: true, carried: 1, conflicts: [], verdict: "approve", developerError: null,
+        reviewSummary: "", reviewFindings: [], reviewRel: "04-build/log/S1.md", reason: null, rescued: null, cost_usd: 0.2,
+      }],
+    });
+    expect(before).not.toContain(LINE_BREAK_MARK);
+    expect(before).not.toContain(LINE_BREAK_NOTE);
+    writeFileSync(join(ws.runDir, "04-build", "handoff.md"), before, "utf8");
 
     await releaseRunEpics({
       root: ws.root, owner: RunStore.open(ws.runDir), actor: "alan", at: AT,
-      via: "run cancel", reason: "cancelled: abandoned\nafter the incident",
+      via: "run cancel", reason: "line one\nline two",
     });
     const text = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
     const after = text.slice(text.indexOf("## Epic branch released")).split("\n").slice(1).filter((l) => l !== "");
     // One record, one line — the raw note's newline is drawn as the mark, and the
     // citation is still the last thing on that line.
     expect(after).toHaveLength(1);
-    expect(after[0]).toContain(`abandoned ${LINE_BREAK_MARK} after the incident`);
+    expect(after[0]).toContain(`line one ${LINE_BREAK_MARK} line two`);
     expect(after[0]?.endsWith("[src: absent:04-build/log]")).toBe(true);
+    // The note: exactly once, outside every section (before the first H2), and the
+    // document is still the one the gate accepts.
+    expect(text.split(LINE_BREAK_NOTE).length - 1).toBe(1);
+    expect(text.indexOf(LINE_BREAK_NOTE)).toBeLessThan(text.indexOf("\n## "));
+    expect(validateHandoff(text, emptySrcContext(ws.root, ws.runDir)).ok).toBe(true);
   });
 
   test("an epic git could NOT count against its base is KEPT — an uncounted branch is never deleted", async () => {

@@ -283,6 +283,27 @@ export const LINE_BREAK_NOTE =
   + "keeps the command verbatim.";
 
 /**
+ * The document with its note, when it needs one — the ONE derivation of "a file
+ * that draws the mark says what the mark is" (gh #283).
+ *
+ * A guarantee of the FILE, not of a render pass: `renderBuildHandoff` writes the
+ * document and `epicRelease.ts` appends a section to it later, and a mark drawn
+ * by the second writer into a file the first left mark-free had no note anywhere
+ * (measured by review). So both writers hand their WHOLE document here. The note
+ * goes before the first H2 — outside every section `validateHandoff` reads, so it
+ * can never be a bullet or a continuation — exactly once, and never into a
+ * document without the mark, which keeps every such document byte-identical.
+ */
+export function ensureLineBreakNote(document: string): string {
+  if (!document.includes(LINE_BREAK_MARK) || document.includes(LINE_BREAK_NOTE)) return document;
+  const lines = document.split("\n");
+  const at = lines.findIndex((line) => line.startsWith("## "));
+  if (at === -1) return `${document.trimEnd()}\n\n${LINE_BREAK_NOTE}\n`;
+  lines.splice(at, 0, LINE_BREAK_NOTE, "");
+  return lines.join("\n");
+}
+
+/**
  * One physical line, with each newline shown as `LINE_BREAK_MARK`.
  *
  * Exported for the OTHER writer of this file: `epicRelease.ts` appends a
@@ -405,9 +426,7 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
   // Every element above is one line of the file, whatever text it quotes — and
   // a document that had to draw the mark says what the mark is, once, under the
   // header: outside every checked section, before the first bullet a reader acts on.
-  const flat = lines.map(asOneLine);
-  if (flat.some((line) => line.includes(LINE_BREAK_MARK))) flat.splice(2, 0, "", LINE_BREAK_NOTE);
-  return flat.join("\n");
+  return ensureLineBreakNote(lines.map(asOneLine).join("\n"));
 }
 
 /**
