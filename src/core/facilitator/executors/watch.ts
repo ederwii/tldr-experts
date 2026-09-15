@@ -152,11 +152,36 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
     tasks.push(...collected.tasks);
   } else {
     for (const [i, feature] of features.entries()) {
+      const cap = agentShare(ctx, features.length);
+      // The ceiling ON THE LOG, before the turn rather than after it (gh #190).
+      //
+      // This number already existed — `agentShare` computes it and `spawnAgent`
+      // is handed it — and it was the one executor's spawn that never wrote it
+      // down, so a watcher feature's measured cost had nothing to be read
+      // against while every Build story's did. `key`, the field `agent.result`
+      // carries for these same rows (`runNext.recordExecutorTasks`), is what
+      // joins the two ends of one turn. Deliberately NOT `story:`: that field is
+      // what `costView.storyLedger` counts a row as a BUILD STORY by, and a
+      // Watch feature id is not a story (spec §`tldrx cost --stories`) — the
+      // ceiling is recorded here, and whether `--stories` grows a Watch axis is
+      // a separate decision with its own docs.
+      //
+      // Emitted BEFORE the spawn, like Build's: a sub-agent that dies is still a
+      // turn this ceiling was committed to, and a ceiling written on the way out
+      // would be missing from exactly the runs that need explaining.
+      ctx.emit("agent.spawned", {
+        phase: ctx.phaseId,
+        key: feature.id,
+        role: "developer",
+        model: ctx.model ?? ctx.spec.planned.model,
+        effort: ctx.effort,
+        max_budget_usd: cap,
+      }, 0, "developer");
       const outcome = await spawnAgent({
         prompt: prompts[i] ?? "",
         model: ctx.model ?? ctx.spec.planned.model,
         effort: ctx.effort,
-        maxBudgetUsd: agentShare(ctx, features.length),
+        maxBudgetUsd: cap,
         workspaceCommands: [...loadWorkspace(ctx.root).commands],
         yolo: ctx.yolo,
         cwd: ctx.root,
@@ -283,13 +308,30 @@ function collectResults(
   for (const feature of features) {
     try {
       const result = readResult(ctx.runDir, taskKey(ctx, feature));
+      // The cost of an in-session watcher is DECLARED, never measured: the
+      // sub-agent ran inside the host's session and was billed to it. Same
+      // precedence and the same three-value contract Build's `commit()` and
+      // `commitStage` use — `--cost-usd` first, then the envelope's own
+      // `cost_usd`, and with NEITHER `null` + `metered: false` rather than a `0`
+      // that reads as a measurement and is a false one.
+      //
+      // gh #224: this read `result.cost_usd ?? 0` alone, which a host session has
+      // no reason to fill, and `ctx.costUsd` was never read in this file at all —
+      // so 56 rows across two live workspaces said `cost_usd: 0.0, model: haiku`
+      // with no `metered` key, `budget.spent_usd` counted those zeros as
+      // measurements, and the lower-bound labelling that keys off `metered: false`
+      // could not fire for the whole of 05-watch.
+      const declared = ctx.costUsd ?? result.cost_usd;
+      const cost = declared === null ? null : round2(declared);
       tasks.push({
         key: feature.id,
         model: ctx.model ?? ctx.spec.planned.model,
-        costUsd: round2(result.cost_usd ?? 0),
+        costUsd: cost ?? 0,
         sessionId: result.session_id,
         error: null,
         outputs: result.outputs,
+        ...(cost === null ? { metered: false } : {}),
+        ...(ctx.tokens === null ? {} : { tokens: ctx.tokens }),
       });
     } catch (error) {
       if (error instanceof PendingError) return { tasks, error: `\`${feature.id}\`: ${error.message}` };
