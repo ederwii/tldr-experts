@@ -24,7 +24,7 @@
  * and "the third waited" are read off what the processes themselves saw, not off
  * elapsed milliseconds, which is the one thing a Linux CI box will not reproduce.
  */
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { claudeOutput } from "../fakeStream.ts";
@@ -171,6 +171,14 @@ if (failWork === "committed" || failWork === "uncommitted") {
   // developer runs `git add -A` and `git commit` ITSELF, the two granted verbs
   // that close a merge the facilitator left in progress. Reported as the Bash
   // calls it made, through the one shared emitter below.
+  // gh #286 — `FAKE_BUILD_MOVE` = `{"S2#2": "shared.txt>moved.txt"}`: the developer
+  // RENAMES a file as it stands (markers and all) before any commit below.
+  const move = perStory("FAKE_BUILD_MOVE", devAttempt);
+  if (move !== null) {
+    const [from = "", to = ""] = move.split(">");
+    renameSync(join(process.cwd(), from), join(process.cwd(), to));
+    extraTools.push({ name: "Bash", input: { command: `mv ${from} ${to}` }, result: "" });
+  }
   if (perStory("FAKE_BUILD_COMMIT", devAttempt) === "commit") {
     execFileSync("git", ["add", "-A"], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
     execFileSync("git", ["commit", "-m", `fix(${storyId}): resolve the merge`],

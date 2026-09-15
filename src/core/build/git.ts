@@ -842,7 +842,7 @@ export async function abortOpenMerge(cwd: string): Promise<boolean> {
 
 /** What a conflict turn left behind that must never reach a DoD or a commit (gh #286). */
 export interface LeftoverMerge {
-  /** Handed conflicted files still holding a `<<<<<<<`…`>>>>>>>` conflict, in the order handed, each once. */
+  /** Handed conflicted files (or their rename destinations) still holding a git conflict marker line, each once. */
   readonly markers: readonly string[];
   /** `MERGE_HEAD` is still set: the developer never closed the merge. */
   readonly inProgress: boolean;
@@ -850,27 +850,40 @@ export interface LeftoverMerge {
 
 /**
  * The ONE marker guard (gh #286): which of the files the conflict turn was
- * handed still hold a conflict git left there, and whether the merge is open.
+ * handed — or the paths the developer renamed them to — still hold a line git
+ * writes only as a conflict, and whether the merge is open.
  *
- * Scoped to `files` — the paths the merge stopped on — because those are the
- * only files the facilitator put markers in; a developer's own change anywhere
- * else is the DoD's business, not this guard's. And a conflict is a PAIR — a
- * `<<<<<<<` line with a `>>>>>>>` line after it — never a lone `=======`: the
- * first cut read `git diff --check`, which calls every added `=======` a
- * "leftover conflict marker", and a correct resolution that underlined a
- * Markdown heading was blocked for good (review of 5dd14e7, reproduced:
- * `f.md:4: leftover conflict marker`, exit 2).
+ * Scoped to `files` plus their rename destinations since `since` (`git diff
+ * --name-status -M <since>`, R rows whose source is a handed file), because
+ * those are the only files the facilitator put markers in; a developer's change
+ * elsewhere is the DoD's business. A rename is followed because reading only the
+ * original path found nothing (ENOENT) while the markers sat in the new one —
+ * review of 18e4df5, probed.
+ *
+ * A leftover is ANY line starting git's own start (`<<<<<<<`), base
+ * (`|||||||`) or end (`>>>>>>>`) marker, each alone on the line or followed by
+ * a space. Any one, not a pair: a file with only its `<<<<<<<` line deleted
+ * still carries both sides and the `>>>>>>> <ref>` line, and the pair rule
+ * passed it (same review, probed). Never `=======` alone — it is a Markdown/RST
+ * heading underline as often as a marker, and `git diff --check` blocked a
+ * correct resolution on exactly that (review of 5dd14e7).
  *
  * The WORKING TREE is read, not a commit: it is what the DoD runs on and what
  * any commit after it carries, and a marker the developer committed is still in
- * it. A file the resolution deleted holds nothing.
+ * it. A path that no longer exists holds nothing.
  */
-export async function leftoverMerge(cwd: string, files: readonly string[]): Promise<LeftoverMerge> {
-  const markers = files.filter((file, i) => files.indexOf(file) === i && holdsConflict(join(cwd, file)));
+export async function leftoverMerge(cwd: string, files: readonly string[], since: string): Promise<LeftoverMerge> {
+  const scope = [...files];
+  const renamed = await git(["diff", "--name-status", "-M", since], cwd);
+  for (const row of renamed.stdout.split("\n")) {
+    const [kind = "", from = "", to = ""] = row.split("\t");
+    if (kind.startsWith("R") && files.includes(from) && to !== "") scope.push(to);
+  }
+  const markers = scope.filter((file, i) => scope.indexOf(file) === i && holdsConflict(join(cwd, file)));
   return { markers, inProgress: await mergeInProgress(cwd) };
 }
 
-/** A `<<<<<<<` marker line followed, later, by a `>>>>>>>` one — git's conflict shape. */
+/** Does any line start with a marker git writes only into a conflict? */
 function holdsConflict(path: string): boolean {
   let text: string;
   try {
@@ -878,12 +891,7 @@ function holdsConflict(path: string): boolean {
   } catch {
     return false;
   }
-  let opened = false;
-  for (const line of text.split("\n")) {
-    if (/^<{7}(?: |\r?$)/.test(line)) opened = true;
-    else if (opened && /^>{7}(?: |\r?$)/.test(line)) return true;
-  }
-  return false;
+  return text.split("\n").some((line) => /^(?:<{7}|\|{7}|>{7})(?: |\r?$)/.test(line));
 }
 
 /**

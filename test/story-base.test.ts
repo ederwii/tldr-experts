@@ -46,7 +46,7 @@ const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
   "FAKE_BUILD_WRITE", "FAKE_BUILD_VERDICTS", "FAKE_BUILD_COST", "FAKE_BUILD_STATE",
   "FAKE_BUILD_PROMPT_DIR", "FAKE_BUILD_IS_ERROR", "FAKE_BUILD_FAIL", "FAKE_BUILD_FAIL_REASON",
-  "FAKE_BUILD_COMMIT",
+  "FAKE_BUILD_COMMIT", "FAKE_BUILD_MOVE",
 ] as const;
 
 let open: BuildWorkspace[] = [];
@@ -908,6 +908,45 @@ describe("(f) a conflict inside the story's touches gets ONE conflict turn (#286
     expect(readFileSync(join(ws.planDir, "stories", "S2.md"), "utf8")).toContain("status: blocked");
     expect(storyLog(ws, "S2")).toContain(leftoverMergeReason(["shared.txt"], false));
     expect(git(ws, "show", "epic/e1:shared.txt")).toBe("S1's line");
+  });
+
+  test("a HALF-resolved file — only the `<<<<<<<` line deleted — still BLOCKS", async () => {
+    const ws = sharedWave();
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "shared.txt": "S1's line\n" },
+      S2: { "shared.txt": "S2's line\n" },
+      "S2#2": { "shared.txt": "S2's line\n=======\nS1's line\n>>>>>>> epic/e1\n" },
+    });
+    process.env.FAKE_BUILD_COMMIT = JSON.stringify({ "S2#2": "commit" });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"] });
+
+    await next(ws, { parallel: 2 });
+
+    expect(conflictTurns(ws)).toHaveLength(1);
+    expect(readFileSync(join(ws.planDir, "stories", "S2.md"), "utf8")).toContain("status: blocked");
+    expect(storyLog(ws, "S2")).toContain(leftoverMergeReason(["shared.txt"], false));
+    expect(git(ws, "show", "epic/e1:shared.txt")).toBe("S1's line");
+  });
+
+  test("a conflicted file RENAMED with its markers still BLOCKS, naming the new path", async () => {
+    // Twenty shared lines, so git's rename detection can see the move.
+    const body = Array.from({ length: 20 }, (_, i) => `line ${String(i + 1)}`).join("\n");
+    const ws = sharedWave({ repoFiles: { "shared.txt": `base\n${body}\n` } }, ["shared.txt", "moved.txt"]);
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "shared.txt": `S1's line\n${body}\n` },
+      S2: { "shared.txt": `S2's line\n${body}\n` },
+      "S2#2": { "notes.txt": "moved it\n" },
+    });
+    process.env.FAKE_BUILD_MOVE = JSON.stringify({ "S2#2": "shared.txt>moved.txt" });
+    process.env.FAKE_BUILD_COMMIT = JSON.stringify({ "S2#2": "commit" });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"] });
+
+    await next(ws, { parallel: 2 });
+
+    expect(conflictTurns(ws)).toHaveLength(1);
+    expect(readFileSync(join(ws.planDir, "stories", "S2.md"), "utf8")).toContain("status: blocked");
+    expect(storyLog(ws, "S2")).toContain(leftoverMergeReason(["moved.txt"], false));
+    expect(git(ws, "ls-tree", "--name-only", "-r", "epic/e1")).not.toContain("moved.txt");
   });
 
   test("a merge the developer never CLOSED blocks, and says the merge is still in progress", async () => {

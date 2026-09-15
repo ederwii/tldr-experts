@@ -1793,7 +1793,7 @@ class BuildSession {
     // or not — or never closed the merge BLOCKS: a requeue would hand the same
     // tree to the same bound, and a DoD over markers proves nothing.
     if (story.conflictTurn !== undefined) {
-      const left = await leftoverMerge(story.worktree, story.conflictTurn.files);
+      const left = await leftoverMerge(story.worktree, story.conflictTurn.files, handed);
       if (left.markers.length > 0 || left.inProgress) {
         return {
           story, cost: spent, dod: [], commit: null,
