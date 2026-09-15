@@ -30,6 +30,9 @@ import { summarize } from "../src/core/ui/summary.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
+/** The dod command that cancels the run it is running inside (gh #305's fixture). */
+const CANCEL_FROM_DOD = join(FRAMEWORK_ROOT, "test", "fixtures", "build", "cancelFromDod.ts");
+
 setDefaultTimeout(spawnTestTimeout());
 
 const ORIGINAL_PATH = process.env.PATH ?? "";
@@ -139,10 +142,10 @@ function workspace(options: BuildWorkspaceOptions): BuildWorkspace {
   return made;
 }
 
-async function next(ws: BuildWorkspace, parallel?: number): Promise<readonly string[]> {
+async function next(ws: BuildWorkspace, parallel?: number, at = "2026-09-15T09:00:00Z"): Promise<readonly string[]> {
   const outcome = await runNext({
     root: ws.root, dryRun: false, mode: "headless", yolo: false,
-    actor: "alan", at: "2026-09-15T09:00:00Z",
+    actor: "alan", at,
     ...(parallel === undefined ? {} : { parallel }),
   });
   return outcome.lines;
@@ -272,6 +275,34 @@ describe("a warning on one story's stream parks the NEXT story (gh #298)", () =>
 
   test("the event type is in the closed enum, so the log accepts the line", () => {
     expect(EVENT_TYPES).toContain("agent.rate_limited");
+  });
+});
+
+describe("a cancel that lands after the warning is the cause the record names", () => {
+  test("the handoff says the run was cancelled, not that the quota parked it", async () => {
+    // Both facts are true at once: S1's turn warned, and then a forced
+    // `tldrx run cancel` landed in S1's own Definition of Done. The live report
+    // already names the cancel — it is the door the loop actually took — so the
+    // audit record naming the quota would be the two halves of one run
+    // disagreeing about why a story was withheld.
+    const ws = workspace({
+      ...twoStories(),
+      testScript: `${JSON.stringify(process.execPath)} ${JSON.stringify(CANCEL_FROM_DOD)}`,
+    });
+    process.env.FAKE_BUILD_RATE_LIMIT = JSON.stringify({ S1: "allowed_warning@0.94" });
+
+    // The invocation stamp must PRECEDE the cancel's own (`cancelFromDod` writes
+    // `2026-09-14T06:35:00Z`): measured on the first cut of this test, a later
+    // `at` made `cancelRun` write a run.yml the schema refuses, the dod command
+    // exited 1, and the cancel never landed at all — the test was green about a
+    // scenario it had not produced. The instrument was the bug.
+    const lines = await next(ws, undefined, "2026-09-14T06:00:00Z");
+
+    expect(lines.join("\n")).toContain("S2: not started — the run was cancelled");
+    const handoff = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    expect(handoff).toContain("S2");
+    expect(handoff).toContain("the run was cancelled (tldrx run cancel) while this stage held it");
+    expect(handoff).not.toContain("the provider warned its rate limit was close");
   });
 });
 

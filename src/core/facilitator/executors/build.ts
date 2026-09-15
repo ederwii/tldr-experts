@@ -119,6 +119,15 @@ const EVENTS_FILE = "events.jsonl";
 /** gh #286: the operator line for a story requeued with a merge to resolve — one spelling, two drivers. */
 const CONFLICT_REQUEUED_LINE = "bringing it up to its epic conflicted — requeued once with the merge to resolve";
 /**
+ * gh #305: why a story was not started when a `run cancel` landed under this
+ * stage — ONE spelling, now three readers (the serial loop, a wave's lanes, and
+ * the handoff row that says why a scheduled story has no outcome). It was
+ * written out twice and the handoff knew nothing about it, which is how the
+ * live report and the audit record came to name different causes for the same
+ * withheld story (gh #298's review).
+ */
+const CANCELLED_UNDER_STAGE = "the run was cancelled (tldrx run cancel) while this stage held it";
+/**
  * gh #298: the operator line for a story the provider's quota warning parked —
  * one spelling, two doors (the serial loop and a wave's lanes).
  */
@@ -1377,8 +1386,7 @@ class BuildSession {
       // cancel that landed during the first attempt's review must stop it too.
       if (this.cancelledUnder()) {
         this.lines.push(
-          `  · ${planned.story.id}: ${i === 0 ? "not started" : "not requeued"} — the run was cancelled `
-            + "(tldrx run cancel) while this stage held it",
+          `  · ${planned.story.id}: ${i === 0 ? "not started" : "not requeued"} — ${CANCELLED_UNDER_STAGE}`,
         );
         return;
       }
@@ -1548,9 +1556,7 @@ class BuildSession {
           // gh #305: the same pre-spawn question `driveStory` asks, per lane —
           // asked again after a wait, which can be minutes of a sibling's turn.
           if (this.cancelledUnder()) {
-            this.lines.push(
-              `  · ${id}: not started — the run was cancelled (tldrx run cancel) while this stage held it`,
-            );
+            this.lines.push(`  · ${id}: not started — ${CANCELLED_UNDER_STAGE}`);
             return;
           }
           // gh #298, the same park per lane: a sibling lane's turn saw the
@@ -4408,6 +4414,10 @@ class BuildSession {
    */
   private scheduledWithoutOutcome(outcomes: readonly StoryOutcome[]): readonly NotStartedStory[] {
     const named = new Set(outcomes.map((o) => o.id));
+    // Read ONCE, not per story: it is one fact about the run, and it is a file
+    // parse. Read here rather than remembered from the loop, because the cancel
+    // can land after the last story was decided.
+    const cancelled = this.cancelledUnder();
     const rows: NotStartedStory[] = [];
     for (const wave of this.plan.waves) {
       for (const planned of wave.stories) {
@@ -4425,12 +4435,22 @@ class BuildSession {
           // lying in the dangerous direction (AGENTS.md §7). The dependency wait
           // wins where there is one — it is the more specific fact about THAT
           // story. The residue below is the one there really is no reason for.
+          // The order is the order the loop itself takes its doors, so the
+          // audit record and the live report can never name different causes
+          // for the same withheld story (gh #298's review): a dependency wait is
+          // the most specific fact about THIS story; a cancel stops everything
+          // and is checked before the park at both spawn doors, so it wins over
+          // the park here too — a quota warning that was true is not why the run
+          // stopped once a person cancelled it. The residue is the one there
+          // really is no reason for.
           reason: wait !== undefined
             ? dependencyWaitReason(wait)
-            : this.rateLimitPark !== null
-              ? this.rateLimitReason(this.rateLimitPark)
-              : "this stage recorded no attempt and no reason for it — "
-                + "nothing here says the work was done, and nothing says why it was not",
+            : cancelled
+              ? CANCELLED_UNDER_STAGE
+              : this.rateLimitPark !== null
+                ? this.rateLimitReason(this.rateLimitPark)
+                : "this stage recorded no attempt and no reason for it — "
+                  + "nothing here says the work was done, and nothing says why it was not",
         });
       }
     }
