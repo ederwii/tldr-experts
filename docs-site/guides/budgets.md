@@ -150,11 +150,31 @@ money family): phase 01-what has $2.58 left and the retry is priced at $3.00, $0
 Run `tldrx budget raise 01-what 0.42 --run <id>` first, or `tldrx reject --note "…"`.
 ```
 
-That prediction is made with the gate's own two figures — what the phase has left, and the same
-remaining-work estimate the brake compares it against — so the advice and the refusal you would
-have hit cannot disagree. Where this gate does not decide the retry at all (`on_exceed: warn`, a
-`host-tokens` phase, an `attended_by: host` run) the plain line is printed unchanged: those are
-"not this gate's call", which is not the same as "affordable".
+That prediction is made with the gate's own inputs — what the phase has left, the same
+remaining-work estimate the brake compares it against, and the same look at finished phases — so
+the advice and the refusal you would have hit cannot disagree about the arithmetic.
+
+**Which door you come back through decides the sentence.** `run auto` rebalances by default, so a
+shortfall a finished phase can cover is moved before anything is refused; `tldrx next` on its own
+never rebalances. The advice says which one it is standing in:
+
+```
+cost is recorded, not refunded — phase 02-how has $1.58 left and the retry is priced at $2.00,
+$0.42 short, but this launch has `--rebalance-finished` on (the `run auto` default), so the retry
+funds itself before anything is refused — unless a recorded grant declines the move, which the
+refusal would then say.
+budget: finished phase(s) hold $5.58 unspent (01-what $5.58), which covers the $0.42 shortfall:
+`tldrx budget raise 02-how 0.42 --run <id> --take-from 01-what`.
+`tldrx next` alone never rebalances: through that door the retry is exit 2, and
+`tldrx budget raise 02-how 0.42 --run <id>` is the fix.
+```
+
+It stops short of promising, because the grant check on each move happens after the line is
+written. When no finished phase can cover the shortfall, the refusal prediction stands through
+either door and says how short it still is with all of their money. Where this gate does not
+decide the retry at all (`on_exceed: warn`, a `host-tokens` phase, an `attended_by: host` run) the
+plain line is printed unchanged: those are "not this gate's call", which is not the same as
+"affordable".
 
 ## The three knobs, and which one caps a sub-agent
 

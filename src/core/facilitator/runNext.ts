@@ -2537,31 +2537,45 @@ function failStage(
   return out(EXIT_AGENT_FAILED, [
     ...notes,
     `${phaseId}/${stageId} failed: ${oneLine(reason)}`,
-    failureAdvice(store, options, phaseId, stageId, spec),
+    ...failureAdvice(store, options, phaseId, stageId, spec),
   ], [], `${phaseId}/${stageId} failed: ${oneLine(reason)}`);
 }
 
-/** What a stage death says when the retry it recommends is one the budget allows. */
+/** What a stage death says when the retry it recommends is one this gate will let through. */
 const PLAIN_RETRY_ADVICE = `cost is recorded, not refunded — retry with \`tldrx next\`, or \`tldrx reject --note "…"\``;
 
 /**
- * The last line of a stage death — and the half of gh #232 that `efb4eee` did not ship.
+ * The last lines of a stage death — and the half of gh #232 that `efb4eee` did not ship.
  *
  * `budget show` now says NO-RETRY for a phase sized to hold one attempt of its stage
  * (`budget/wouldExceed.ts`), which answers "is this phase big enough" BEFORE a cent is
  * spent. This answers the operator's other question, at the moment they are actually
  * asking it: the stage just died, and the line under it said `retry with tldrx next` —
- * a command that on such a phase is refused on arrival with exit 2, costing a round trip
- * to learn. Measured twice in one evening on the run #232 was filed from, and once more
- * on a second workspace where the starved phase was the LAST one.
+ * a command that on such a phase comes back as exit 2, costing a round trip to learn.
+ * Measured twice in one evening on the run #232 was filed from, and once more on a second
+ * workspace where the starved phase was the LAST one.
  *
- * It predicts the GATE, not the budget's health, and it does so with the gate's OWN two
- * figures — `remaining` and `stageRemainingWork`, exactly what `budgetRefusal` compares
- * a few hundred lines up. That is deliberate and it is what keeps the two honest: #232's
- * own comments measured how badly a derived estimate reads on a partly-unmetered run
- * (unpriced developer turns make it too small, so headroom looks generous), and a second
- * opinion computed here would disagree with the refusal the operator then hits. Whatever
- * those figures are, the retry is refused on this comparison or it is not.
+ * It predicts the GATE, not the budget's health, and it does so with the gate's OWN
+ * inputs — `remaining`, `stageRemainingWork`, `planRebalance` and this invocation's
+ * `rebalanceFinished`, which is every term `budgetRefusal` decides on a few hundred lines
+ * up. Nothing here is a second opinion: #232's own comments measured how badly a derived
+ * estimate reads on a partly-unmetered run (unpriced developer turns make it too small, so
+ * headroom looks generous), and an estimate computed here would disagree with the refusal
+ * the operator then hits.
+ *
+ * **`rebalanceFinished` is the term a first version of this got wrong** (caught in review,
+ * 2026-09-15): it read the remainder raw and called the retry refused, but `run auto`
+ * passes `--rebalance-finished` by DEFAULT (#330) and `budgetRefusal` moves exactly the
+ * shortfall out of finished phases before refusing anything. So the advice told an operator
+ * to raise a ceiling on a run whose very next relaunch would have funded the retry by
+ * itself. `tldrx next` alone never rebalances (`cli/helpText.ts`), so the same starved
+ * phase is refused through one door and funded through the other, and the only honest
+ * answer names which door this is. `planRebalance`/`rebalanceLines` are the refusal's own
+ * — one implementation, never a second copy (§7).
+ *
+ * The one thing it cannot see is the grant check `rebalanceFinished` applies to each move
+ * it actually makes, so the funded case says "unless a recorded grant declines it" rather
+ * than promising. Absent-with-reason beats a confident yes in the dangerous direction (§7).
  *
  * Silent — the plain advice, unchanged — wherever this gate does not decide the retry:
  * `on_exceed: warn` refuses nothing, a `host-tokens` phase is a category error the dollar
@@ -2575,26 +2589,44 @@ function failureAdvice(
   phaseId: string,
   stageId: string,
   spec: StageSpec,
-): string {
+): readonly string[] {
   // A throw on the advice line must not turn a stage failure into a crash: the money is
   // spent and the ledger is already saved, and the worst this may cost is the sentence.
   let left: number;
   let estimate: number;
   try {
-    if (store.budget.on_exceed !== "block") return PLAIN_RETRY_ADVICE;
-    if (isHostTokens(store.budget, phaseId)) return PLAIN_RETRY_ADVICE;
-    if (isAttendedByHost(store.run)) return PLAIN_RETRY_ADVICE;
+    if (store.budget.on_exceed !== "block") return [PLAIN_RETRY_ADVICE];
+    if (isHostTokens(store.budget, phaseId)) return [PLAIN_RETRY_ADVICE];
+    if (isAttendedByHost(store.run)) return [PLAIN_RETRY_ADVICE];
     left = remaining(store.budget, phaseId);
     estimate = stageRemainingWork(store, options, phaseId, requireStage(store, phaseId, stageId), spec).usd;
   } catch {
-    return PLAIN_RETRY_ADVICE;
+    return [PLAIN_RETRY_ADVICE];
   }
-  if (left >= estimate) return PLAIN_RETRY_ADVICE;
+  if (left >= estimate) return [PLAIN_RETRY_ADVICE];
   const short = shortBy(estimate, left);
-  return `cost is recorded, not refunded — and \`tldrx next\` would be refused on arrival (exit 2, the `
-    + `money family): phase ${phaseId} has $${left.toFixed(2)} left and the retry is priced at `
-    + `$${estimate.toFixed(2)}, $${short.toFixed(2)} short. Run \`${raiseCommand(store.runId, phaseId, short)}\` `
-    + `first, or \`tldrx reject --note "…"\`.`;
+  const figures = `phase ${phaseId} has $${left.toFixed(2)} left and the retry is priced at `
+    + `$${estimate.toFixed(2)}, $${short.toFixed(2)} short`;
+  const plan = planRebalance(store.budget, store.run, phaseId, short);
+  const fix = raiseCommand(store.runId, phaseId, short);
+  // Exactly `budgetRefusal`'s own condition for trying the move at all.
+  if (options.rebalanceFinished === true && plan.moves.length > 0) {
+    return [
+      `cost is recorded, not refunded — ${figures}, but this launch has \`--rebalance-finished\` on `
+        + "(the `run auto` default), so the retry funds itself before anything is refused — unless a "
+        + "recorded grant declines the move, which the refusal would then say.",
+      ...rebalanceLines(store.runId, plan, true, null),
+      "`tldrx next` alone never rebalances: through that door the retry is exit 2, and "
+        + `\`${fix}\` is the fix.`,
+    ];
+  }
+  return [
+    `cost is recorded, not refunded — and \`tldrx next\` would be refused on arrival (exit 2, the `
+      + `money family): ${figures}. Run \`${fix}\` first, or \`tldrx reject --note "…"\`.`,
+    // `enabled: false` deliberately: nothing has been moved, so this is what a move WOULD
+    // do — and when a move would cover it, the cheaper route is named beside the raise.
+    ...rebalanceLines(store.runId, plan, false, null),
+  ];
 }
 
 // --- prompt ----------------------------------------------------------------
