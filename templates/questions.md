@@ -55,6 +55,8 @@ Recommended: <letter> — <one line of why> [src: <a real citation>]
                   proves the gap is real rather than assumed
   Options         2–5 bullets, `- A)` `- B)` … lettered in order; the last may be free text
   Recommended     OPTIONAL, one line, after the options: `Recommended: <letter> — <why> [src: …]`.
+                  The letter comes first; its `)`, the `— <why>` and the `[src: …]` are each
+                  optional (`Recommended: B [src: …]` reads as B).
                   The asker's own call, and the only recommendation an `auto` gate can
                   ever carry — an evidence note's `recommend:` exists solely for the
                   `agent` policy, and wins when both are present. Write one on every

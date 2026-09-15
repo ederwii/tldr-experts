@@ -46,7 +46,10 @@ claim it cannot trace, so the rules are mechanical:
   Unknown it has to ask you about.
 - **Give every open question a `Recommended:` line.** Under `--questions none` the loop
   answers a question only when its block names one of its own options on a
-  `Recommended: <letter> — <why>` line; a question without one parks the run for a person.
+  `Recommended: <letter> — <why>` line (the `— <why>` and a trailing `[src: …]` are each
+  optional; the letter comes first); a question without one parks the run for a person.
+  `tldrx seed check` reads the line the way the loop does and refuses one it cannot read, or a
+  letter naming none of the question's options.
   The What agent writes the question blocks — a recommendation in the seed is what it
   reads to write that line. (Inferred from the mechanism; the measured run raised no
   question at all.)
@@ -286,8 +289,10 @@ Recommended: B — matches how players talk about it [src: 01-what/handoff.md:22
 
 That line exists because only an `agent` gate ever writes a note, so questions parked at an
 `auto` gate used to arrive with no guidance at all — while the stage that raised them was the
-one thing in the run that knew the trade-off. A `Recommended:` line the parser cannot read is
-ignored, never refused: it is guidance, so a typo costs the guidance and not the gate.
+one thing in the run that knew the trade-off. The letter comes first; its `)`, the `— <why>`
+reason and a trailing `[src: …]` are each optional, so `Recommended: B [src: …]` reads as B. A
+`Recommended:` line the parser cannot read is ignored, never refused: it is guidance, so a typo
+costs the guidance and not the gate.
 
 ### What you will see when an `auto` gate is waiting
 

@@ -13,6 +13,18 @@
   `story.reopened` naming the dependency that caused it (additive `released_by` and `dependency`),
   consuming no attempt. A dependent still held by another dependency, or blocked by a verdict
   rather than a hold, stays `blocked`, and the output says which and why.
+- **`Recommended: A [src: …]` is a recommendation, and `seed check` reads the line the way the
+  loop does (#323).** On a live run the loop answered Q8's `Recommended: A — <why> [src: …]`
+  and left Q7's `Recommended: A [src: …]` for a person, parking an unattended run: the question
+  parser demanded a dash reason before any citation, while `seed check` tested only the
+  substring `Recommended:` and had passed the same shape clean — two derivations of "has a
+  recommendation" that disagreed. There is now one grammar and one reader
+  (`parseRecommendedLine`): the letter first, then any of its `)`, a `— <why>` and trailing
+  `[src: …]` tokens. `seed check` calls it and names, as exit-1 findings, a `Recommended:` line
+  it cannot read (`question-recommended-unreadable`, with the line and the shape expected) and
+  a letter naming none of the options the question lists (`question-recommended-option`). A
+  seed question that lists no options is not judged on its letter — the options are the What
+  stage's to write. A §2.7 block's unreadable line is still ignored rather than refused.
 
 ## 0.27.0 — 2026-09-14
 

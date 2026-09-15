@@ -213,6 +213,43 @@ describe("one fixture per rule, each breaking only that rule", () => {
     expect(report.findings[0]?.line).toBe(11);
   });
 
+  // #323: seed check tested the SUBSTRING `Recommended:` while the loop read the line
+  // with its own grammar, so a seed could pass clean and park every unattended run.
+  // The check now reads the line with the loop's own reader — one derivation.
+  test("a letter and a citation with no reason is a readable recommendation — clean (#323)", () => {
+    const ws = workspace();
+    const rel = writeSeed(ws, "08b.md", variant(
+      "Recommended: A — matches the existing sort [src: lab/src/rank.ts:2]",
+      "Recommended: A [src: lab/src/rank.ts:2]",
+    ));
+    const report = checkSeed(ws.root, rel);
+    expect(rulesOf(report)).toEqual([]);
+  });
+
+  test("a Recommended: line the loop cannot read — question-recommended-unreadable, with the shape it expects (#323)", () => {
+    const ws = workspace();
+    const rel = writeSeed(ws, "08c.md", variant(
+      "Recommended: A — matches the existing sort [src: lab/src/rank.ts:2]",
+      "Recommended: A because it matches the existing sort [src: lab/src/rank.ts:2]",
+    ));
+    const report = checkSeed(ws.root, rel);
+    expect(rulesOf(report)).toEqual(["question-recommended-unreadable"]);
+    expect(report.findings[0]?.line).toBe(11);
+    expect(report.findings[0]?.text).toContain("Recommended: A because it matches the existing sort");
+    expect(report.findings[0]?.text).toContain("Recommended: <letter>");
+  });
+
+  test("a Recommended: letter that names none of the question's options — question-recommended-option (#323)", () => {
+    const ws = workspace();
+    const rel = writeSeed(ws, "08d.md", variant(
+      "Recommended: A — matches the existing sort",
+      "Recommended: C — matches the existing sort",
+    ));
+    const report = checkSeed(ws.root, rel);
+    expect(rulesOf(report)).toEqual(["question-recommended-option"]);
+    expect(report.findings[0]?.text).toContain("A, B");
+  });
+
   test("a story with no touches: line — story-touches, on the story heading", () => {
     const ws = workspace();
     const rel = writeSeed(ws, "09.md", variant("- touches: api/src/Hunt.cs\n", ""));
@@ -384,6 +421,17 @@ describe("tldrx seed check, through the binary", () => {
     expect(run.stdout).toMatch(/^\.tldrx\/seeds\/22\.md:\d+ dod-command — /m);
     expect(existsSync(join(ws.root, PROJECT_WORK_DIR))).toBe(true);
     expect(readdirSync(join(ws.root, PROJECT_WORK_DIR)).filter((d) => !d.startsWith("260828"))).toEqual([]);
+  });
+
+  test("an unreadable Recommended: line exits 1 through the binary, naming the rule (#323)", async () => {
+    const ws = workspace();
+    const rel = writeSeed(ws, "22b.md", variant(
+      "Recommended: A — matches the existing sort",
+      "Recommended: A because it matches the existing sort",
+    ));
+    const run = await tldrx(ws.root, ["seed", "check", rel]);
+    expect(run.code).toBe(EXIT_USAGE);
+    expect(run.stdout).toMatch(/^\.tldrx\/seeds\/22b\.md:11 question-recommended-unreadable — /m);
   });
 
   test("a path that does not exist exits 3", async () => {

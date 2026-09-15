@@ -50,8 +50,10 @@ mecánicas:
   como una incógnita sobre la que tenga que preguntarte.
 - **Dale a cada pregunta abierta una línea `Recommended:`.** Bajo `--questions none` el
   bucle responde una pregunta solo cuando su bloque nombra una de sus propias opciones en
-  una línea `Recommended: <letra> — <por qué>`; una pregunta sin ella detiene el run a la
-  espera de una persona. Los bloques de preguntas los escribe el agente del What — una
+  una línea `Recommended: <letra> — <por qué>` (el `— <por qué>` y un `[src: …]` final son
+  opcionales cada uno; la letra va primero); una pregunta sin ella detiene el run a la
+  espera de una persona. `tldrx seed check` lee la línea como la lee el bucle y rechaza una
+  que no puede leer, o una letra que no nombra ninguna opción de la pregunta. Los bloques de preguntas los escribe el agente del What — una
   recomendación en la semilla es lo que lee para escribir esa línea. (Inferido del
   mecanismo; el run medido no levantó ninguna pregunta.)
 
@@ -295,7 +297,9 @@ Recommended: B — matches how players talk about it [src: 01-what/handoff.md:22
 
 Esa línea existe porque solo una compuerta `agent` escribe una nota, así que las preguntas
 detenidas en una compuerta `auto` llegaban sin ninguna guía — mientras que la etapa que las
-levantó era lo único en el run que conocía el compromiso. Una línea `Recommended:` que el
+levantó era lo único en el run que conocía el compromiso. La letra va primero; su `)`, el
+motivo `— <por qué>` y un `[src: …]` final son opcionales cada uno, así que
+`Recommended: B [src: …]` se lee como B. Una línea `Recommended:` que el
 parser no puede leer se ignora, nunca se rechaza: es una guía, así que un error de tipeo
 cuesta la guía y no la compuerta.
 

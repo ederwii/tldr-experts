@@ -46,7 +46,8 @@ import { NOTIFY_KINDS } from "../src/core/notify/payload.ts";
 import { EVENT_TYPES, type TldrxEvent } from "../src/core/events/Event.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import {
-  IRREVERSIBLE_KEY, MONEY_KEY, parseQuestions, pinnedToPerson, recommendedPick,
+  describeRecommendation, IRREVERSIBLE_KEY, MONEY_KEY, parseQuestions, pinnedToPerson, readRecommendation,
+  recommendedPick,
 } from "../src/core/text/questions.ts";
 import {
   QUESTION_POLICIES, QuestionsPolicyError, parseQuestionsFlag, questionsPolicyFor,
@@ -275,6 +276,42 @@ describe("recommendedPick", () => {
 
   test("a block with no `Recommended:` line yields nothing to take", () => {
     expect(recommendedPick(block(questionsFile({ recommended: false })))).toBeNull();
+  });
+
+  // #323, measured on a live run: Q7 carried `Recommended: A [src: …]` — a letter and a
+  // citation, no dash reason — and the loop left it for a person while Q8, the same line
+  // with `— <why>` in the middle, was answered. The reason is optional; so is the `)`.
+  test.each([
+    ["a letter and a citation, no reason (#323)", "Recommended: B [src: absent:.tldrx/memory/facts.yml]", ""],
+    ["a bare letter", "Recommended: B", ""],
+    ["a letter with its `)`", "Recommended: B)", ""],
+    ["a letter with its `)` and a citation", "Recommended: B) [src: absent:.tldrx/memory/facts.yml]", ""],
+    ["a letter, its `)`, a reason and a citation", `Recommended: B) — ${WHY} [src: absent:.tldrx/memory/facts.yml]`, WHY],
+    ["a reason and two citations", `Recommended: B — ${WHY} [src: absent:.tldrx/memory/facts.yml] [src: absent:.tldrx/memory/decisions.yml]`, WHY],
+  ])("%s picks the option", (_name, line, why) => {
+    const text = questionsFile().replace(`Recommended: B — ${WHY} [src: absent:.tldrx/memory/facts.yml]`, line);
+    expect(text).toContain(line);
+    const pick = recommendedPick(block(text));
+    expect(pick?.letter).toBe("B");
+    expect(pick?.text).toBe(OPTION_B);
+    expect(pick?.why).toBe(why);
+  });
+
+  test("each way to have no pick says WHY, in one sentence a log line can carry (#323)", () => {
+    const LINE = `Recommended: B — ${WHY} [src: absent:.tldrx/memory/facts.yml]`;
+    expect(describeRecommendation(readRecommendation(block(questionsFile())))).toBeNull();
+    expect(describeRecommendation(readRecommendation(block(questionsFile({ recommended: false })))))
+      .toBe("no Recommended line");
+    const unreadable = "Recommended: B because it matches how players talk";
+    const reason = describeRecommendation(readRecommendation(block(questionsFile().replace(LINE, unreadable))));
+    expect(reason).toStartWith(`Recommended line unreadable: ${unreadable} — expected `);
+    expect(recommendedPick(block(questionsFile().replace(LINE, unreadable)))).toBeNull();
+    expect(describeRecommendation(readRecommendation(block(questionsFile().replace(LINE, "Recommended: E")))))
+      .toBe("Recommended line names no option: E is not one of A, B, C");
+    // The first `Recommended:` line is THE line: a readable second one never stands in for it.
+    const twice = questionsFile().replace(LINE, `${unreadable}\n${LINE}`);
+    expect(readRecommendation(block(twice)).kind).toBe("unreadable");
+    expect(block(twice).recommended).toBeNull();
   });
 
   test("a letter that names no option is not a pick — nothing is invented", () => {
