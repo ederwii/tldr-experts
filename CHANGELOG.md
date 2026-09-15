@@ -53,6 +53,22 @@
 
 ### Fixed
 
+- **A Build gate now names the story a dependent WAITS on, not only the stories that are
+  `blocked` (closes #303).** #280 correctly left a dependent of a `review`/`in_progress` story at
+  `todo` instead of recording a terminal `blocked` — but the gate only ever named literal
+  `blocked` stories (`storiesView`'s `firstBlocked`), so the sentence saying what S2 waits on
+  reached `04-build/handoff.md`'s `## Unknowns` and nowhere an operator watches: `gate.requested`,
+  its notification and the terminal `stories:` line said `S2 not started` and named no
+  dependency. That is the one thing to act on — `story reopen` refuses a story already `todo`,
+  and `run auto --until-done` does not relaunch an awaiting-human exit. MEASURED on the #280
+  fixture (S1 parked at `review` by a dying reviewer): the payload carried no key for S2 at all.
+  Now `gate.requested` and its notification carry three ADDITIVE keys, `waiting_story`,
+  `waiting_on` and `waiting_reason` — absent, never null, when nothing waits — and the summary
+  and terminal line say S2 waits on S1 (`review`). The wait is derived with the Build loop's own
+  `decidingHold`/`dependencyIsPending`, so a story that will BLOCK on a terminal dependency is
+  never reported as merely waiting, and `waiting_reason` is `dependencyWaitReason` — the
+  `## Unknowns` sentence, byte for byte. `story reopen`'s `depends_on` reader moved to
+  `buildProgress.ts` so both ask one reader. No event version or dashboard model bump.
 - **The `budget-gate` hook no longer refuses the `run auto` launch that would fix the shortfall
   (closes #321).** It priced a `tldrx run auto` spawn against the cursor phase's own ceiling
   alone. On a phase already short, it denied the launch and wrote `budget.blocked` before the

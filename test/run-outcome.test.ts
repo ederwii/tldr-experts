@@ -40,9 +40,10 @@ import { gateNotification, runEndNotification } from "../src/core/notify/notific
 import { EXIT_OK, EXIT_USAGE } from "../src/cli/exitCodes.ts";
 import { OUTCOME_NOT_RECORDED, type RunFile } from "../src/core/run/RunFile.ts";
 import {
-  deliveredPhrase, deriveRunOutcome, describeRunOutcome, gateStories, outcomeLine, storiesView,
+  deliveredPhrase, deriveRunOutcome, describeRunOutcome, gateStories, gateStoriesPayload, outcomeLine, storiesView,
   withRunOutcome,
 } from "../src/core/run/runOutcome.ts";
+import { dependencyWaitReason } from "../src/core/build/dependencyHold.ts";
 import { makeBuildWorkspace, type BuildWorkspace } from "./fixtures/build/workspace.ts";
 import { GOLDEN_REFUSED, GOLDEN_STORY } from "./fixtures/build/golden.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
@@ -51,7 +52,9 @@ import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 setDefaultTimeout(spawnTestTimeout());
 
 const ORIGINAL_PATH = process.env.PATH ?? "";
-const FAKE_KEYS = ["FAKE_BUILD_COST", "FAKE_BUILD_STATE", "FAKE_BUILD_PROMPT_DIR"] as const;
+const FAKE_KEYS = [
+  "FAKE_BUILD_COST", "FAKE_BUILD_STATE", "FAKE_BUILD_PROMPT_DIR", "FAKE_BUILD_FAIL", "FAKE_BUILD_FAIL_REASON",
+] as const;
 
 let open: BuildWorkspace[] = [];
 
@@ -344,5 +347,93 @@ describe("an outcome nobody can derive is named, never invented (#210)", () => {
 
     expect(outcome.kind).toBe("n/a");
     expect(outcome.why).toContain("no plan on disk");
+  });
+});
+
+// --- (e) a dependent WAITING on a dependency is named at the gate (#303) ------
+
+/**
+ * #280 left a dependent of a `review`/`in_progress` story at `todo` — correctly, it
+ * is "not yet", not "never" — and the sentence naming what it waits on went to the
+ * handoff's `## Unknowns` and nowhere else. `firstBlocked` matches literal `blocked`
+ * only, so the gate payload, its notification and the terminal `stories:` line said
+ * `S2 not started` and named no dependency: the one thing the operator can act on.
+ */
+describe("a Build gate names the story a dependent waits on (#303)", () => {
+  /** W1 = [S1], W2 = [S2 depends_on S1] — the #280 shape. */
+  function twoWaves(): BuildWorkspace {
+    return workspace({
+      stories: [
+        { id: "S1", epic: "E1", title: "First" },
+        { id: "S2", epic: "E1", title: "Second, in the next wave", dependsOn: ["S1"] },
+      ],
+      epics: [{ id: "E1", stories: ["S1", "S2"], branch: "epic/e1" }],
+      waves: [["S1"], ["S2"]],
+    });
+  }
+
+  function storyPath(ws: BuildWorkspace, id: string): string {
+    return join(ws.runDir, "03-plan", "stories", `${id}.md`);
+  }
+
+  test("gate.requested, its notification and the terminal line carry the waiting story and its dependency", async () => {
+    const ws = twoWaves();
+    // S1's first reviewer dies, so S1 parks at `review` and S2 waits on it (#280).
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_FAIL_REASON = "Reached maximum budget ($0.26)";
+    process.env.FAKE_BUILD_FAIL = "reviewer:S1#1";
+
+    const ran = await build(ws);
+
+    // The premise, or everything below asserts about nothing.
+    expect(readFileSync(storyPath(ws, "S1"), "utf8")).toContain("status: review");
+    expect(readFileSync(storyPath(ws, "S2"), "utf8")).toContain("status: todo");
+    const requested = eventsOf(ws, "gate.requested");
+    expect(requested.length, `one gate.requested; the build exited ${String(ran.code)}`).toBe(1);
+
+    const payload = payloadOf(requested[0]!);
+    const sentence = dependencyWaitReason({ id: "S1", status: "review" });
+    expect(payload.blocked_story).toBeUndefined();
+    expect(payload.waiting_story).toBe("S2");
+    expect(payload.waiting_on).toBe("S1");
+    // The SAME sentence `## Unknowns` records — one derivation, two readers.
+    expect(payload.waiting_reason).toBe(sentence);
+    const handoff = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    expect(handoff).toContain(sentence);
+
+    const view = storiesView(ws.runDir)!;
+    expect(view.firstWaiting?.id).toBe("S2");
+    expect(deliveredPhrase(view)).toContain("S2 waits on S1 (`review`)");
+    expect(ran.lines.join("\n")).toContain(`stories: ${deliveredPhrase(view)}`);
+
+    const notification = gateNotification(
+      { runId: ws.runId, stage: "04-build/build", root: ws.root, at: "2026-09-14T10:00:00Z" }, 0, "human", [], view,
+    );
+    expect(notification.detail.waiting_story).toBe("S2");
+    expect(notification.detail.waiting_on).toBe("S1");
+    expect(notification.detail.waiting_reason).toBe(sentence);
+    expect(notification.summary).toContain("S2 waits on S1 (`review`)");
+  }, 180_000);
+
+  test("a dependent held by a TERMINAL dependency is not waiting, and a plain `todo` names nothing", () => {
+    const ws = twoWaves();
+    // No build: S1 `blocked` on disk. `decidingHold` says that is a block, not a wait.
+    const s1 = storyPath(ws, "S1");
+    writeFileSync(s1, readFileSync(s1, "utf8").replace(/^status: \w+$/m, "status: blocked"), "utf8");
+
+    const blockedView = storiesView(ws.runDir)!;
+    expect(blockedView.firstWaiting).toBeNull();
+    expect(gateStoriesPayload(blockedView)).not.toHaveProperty("waiting_story");
+
+    // Both `todo`: S1 has no dependency, and S2's dependency is not mid-pipeline.
+    writeFileSync(s1, readFileSync(s1, "utf8").replace(/^status: \w+$/m, "status: todo"), "utf8");
+    const todoView = storiesView(ws.runDir)!;
+    expect(todoView.firstWaiting).toBeNull();
+    const payload = gateStoriesPayload(todoView);
+    // Absent, never null (§7): `waiting_story: null` would say we looked at one.
+    expect(payload).not.toHaveProperty("waiting_story");
+    expect(payload).not.toHaveProperty("waiting_on");
+    expect(payload).not.toHaveProperty("waiting_reason");
+    expect(deliveredPhrase(todoView)).toContain("S2 not started");
   });
 });

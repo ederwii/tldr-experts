@@ -41,8 +41,12 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildProgress, BUILD_PHASE } from "./buildProgress.ts";
+import { buildProgress, BUILD_PHASE, storyDependsOn } from "./buildProgress.ts";
 import { findingId, findingReason, findingStatus } from "../build/handoff.ts";
+import {
+  decidingHold, dependencyIsPending, dependencyWaitReason, type DependencyHold,
+} from "../build/dependencyHold.ts";
+import type { PlanStatus } from "../schemas/planCommon.ts";
 import { parseHandoff } from "../text/handoff.ts";
 import {
   OUTCOME_NOT_RECORDED, type RunFile, type RunOutcome,
@@ -80,6 +84,20 @@ export interface UnfinishedStory {
   readonly status: string;
   /** The handoff's own words, or `REASON_NOT_RECORDED`. Never empty, never invented. */
   readonly reason: string;
+  /**
+   * The dependency a `todo` story WAITS on (#280, #303): the deciding hold is at
+   * `review`/`in_progress`, so the Build loop left the row `todo` rather than
+   * `blocked`. Absent for every other story — never a null that says "looked, none".
+   */
+  readonly waitingOn?: DependencyHold;
+}
+
+/** The first waiting story, with the one sentence `## Unknowns` records for it. */
+export interface WaitingStory {
+  readonly id: string;
+  readonly waitingOn: DependencyHold;
+  /** `dependencyWaitReason` of the hold — the handoff's `## Unknowns` sentence, byte for byte. */
+  readonly reason: string;
 }
 
 /** The whole view: what the counts are, and what stopped the first story that stopped. */
@@ -89,6 +107,12 @@ export interface StoriesView {
   readonly unfinished: readonly UnfinishedStory[];
   /** The first `blocked` story, or null when none is blocked (they may all be `todo`). */
   readonly firstBlocked: UnfinishedStory | null;
+  /**
+   * The first `todo` story waiting on a dependency mid-pipeline, or null (#303).
+   * `firstBlocked` matches literal `blocked` only, and #280 correctly left such a
+   * dependent `todo` — so without this the gate named no story to act on.
+   */
+  readonly firstWaiting: WaitingStory | null;
 }
 
 /**
@@ -108,18 +132,53 @@ export function storiesView(runDir: string): StoriesView | null {
     todo: stories.filter((s) => s.status === "todo").length,
   };
   const reasons = blockedReasons(runDir);
-  const unfinished = stories
+  const statusById = new Map(stories.map((story) => [story.id, story.status]));
+  const unfinished: UnfinishedStory[] = stories
     .filter((story) => story.status !== "done")
-    .map((story) => ({
-      id: story.id,
-      status: story.status,
-      reason: reasons.get(story.id) ?? REASON_NOT_RECORDED,
-    }));
+    .map((story) => {
+      const waitingOn = story.status === "todo" && !progress.implicit
+        ? pendingHold(storyDependsOn(runDir, story.id), statusById)
+        : null;
+      return {
+        id: story.id,
+        status: story.status,
+        reason: reasons.get(story.id) ?? REASON_NOT_RECORDED,
+        ...(waitingOn === null ? {} : { waitingOn }),
+      };
+    });
+  const waiting = unfinished.find((story) => story.waitingOn !== undefined);
   return {
     counts,
     unfinished,
     firstBlocked: unfinished.find((story) => story.status === "blocked") ?? null,
+    firstWaiting: waiting?.waitingOn === undefined
+      ? null
+      : { id: waiting.id, waitingOn: waiting.waitingOn, reason: dependencyWaitReason(waiting.waitingOn) },
   };
+}
+
+/**
+ * The hold a story WAITS on, or null when it waits on nothing (#303).
+ *
+ * The same question the Build loop asks when it leaves a dependent `todo` (#280):
+ * every `depends_on` that is not `done`, in order, with an id no story answers to
+ * skipped — then `decidingHold`, and a wait only when THAT hold is pending. A
+ * terminal hold anywhere wins, so a story that is going to block is never
+ * reported as merely waiting. The rule lives in `build/dependencyHold.ts`; this
+ * only feeds it the statuses the story files carry.
+ */
+function pendingHold(
+  dependsOn: readonly string[],
+  statusById: ReadonlyMap<string, string>,
+): DependencyHold | null {
+  const holds: DependencyHold[] = [];
+  for (const id of dependsOn) {
+    const status = statusById.get(id);
+    if (status === undefined || status === "done") continue;
+    holds.push({ id, status: status as PlanStatus });
+  }
+  const deciding = decidingHold(holds);
+  return deciding !== null && dependencyIsPending(deciding.status) ? deciding : null;
 }
 
 /**
@@ -179,18 +238,27 @@ export function gateStories(runDir: string, phaseId: string): StoriesView | null
 
 /**
  * `stories: {…}` on a Build `gate.requested`, plus the first blocked story's id
- * and reason as two flat keys.
+ * and reason as two flat keys, and the first WAITING story as three (#303).
  *
  * Flat rather than nested so the payload stays greppable and a consumer reading
  * `blocked_story` never has to know whether `stories` was there. Both blocked
  * keys are ABSENT when nothing is blocked — `blocked_story: null` would read as
- * "we looked at a blocked story and it had no id" (§7).
+ * "we looked at a blocked story and it had no id" (§7). The same for
+ * `waiting_story` / `waiting_on` / `waiting_reason`: absent when no `todo` story
+ * waits on a dependency at `review`/`in_progress`, and when one does,
+ * `waiting_reason` is the sentence `04-build/handoff.md`'s `## Unknowns` records
+ * for it — the dependency is what the operator acts on, since `story reopen`
+ * refuses a story that is already `todo`.
  */
 export function gateStoriesPayload(view: StoriesView): Record<string, unknown> {
   const blocked = view.firstBlocked;
+  const waiting = view.firstWaiting;
   return {
     stories: view.counts,
     ...(blocked === null ? {} : { blocked_story: blocked.id, blocked_reason: blocked.reason }),
+    ...(waiting === null
+      ? {}
+      : { waiting_story: waiting.id, waiting_on: waiting.waitingOn.id, waiting_reason: waiting.reason }),
   };
 }
 
@@ -251,8 +319,14 @@ export function deliveredPhrase(view: StoriesView): string {
   return `${head}, ${named.join(", ")}${rest > 0 ? `, +${String(rest)} more` : ""}`;
 }
 
-/** `S2 blocked (npm run test exited 127…)`, or `S3 not started` for a `todo`. */
+/**
+ * `S2 blocked (npm run test exited 127…)`, "S3 waits on S2 (`review`)" for a `todo`
+ * held by a dependency mid-pipeline (#303), or `S3 not started` for any other `todo`.
+ */
 function describeUnfinished(story: UnfinishedStory): string {
+  if (story.waitingOn !== undefined) {
+    return `${story.id} waits on ${story.waitingOn.id} (\`${story.waitingOn.status}\`)`;
+  }
   if (story.status === "todo") return `${story.id} not started`;
   if (story.status !== "blocked") return `${story.id} ${story.status}`;
   return `${story.id} blocked (${clip(story.reason)})`;

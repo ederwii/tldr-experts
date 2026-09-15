@@ -334,7 +334,11 @@ Build gate's notification says what the stage actually delivered before it says 
 > Nothing runs after it until the gate is approved or rejected."*
 
 The counts and the first blocked story's own reason ride on the `gate.requested` payload as
-`stories`, `blocked_story` and `blocked_reason`, so a script can route on them. **What is
+`stories`, `blocked_story` and `blocked_reason`, so a script can route on them. A story left `todo`
+because it waits on a dependency still at `review` or `in_progress` is not `blocked`, so it rides
+separately as `waiting_story`, `waiting_on` and `waiting_reason`, and the summary says
+*"S2 waits on S1 (`review`)"*: the dependency is what you act on, because `tldrx story reopen`
+refuses a story that is already `todo`. **What is
 HOLDING the gate rides there too, as a field**: `holding` is `questions`, `stories` or `none` —
 the same branch the `command` above was chosen by, said once as data so an adapter never has to
 sniff it off the prefix of a CLI string. And where the gate can name what has to change in its
