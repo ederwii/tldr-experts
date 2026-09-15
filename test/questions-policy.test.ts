@@ -472,6 +472,25 @@ describe("run auto under questions_policy: recommended", () => {
     expect(events(ws, "question.answered").length).toBe(0);
   });
 
+  test("a question left for a person says WHY — an unreadable line is named, not reported as absent (#323)", async () => {
+    const unreadable = "Recommended: B because it matches how players talk";
+    const ws = workspace({ questionsFlag: "none" });
+    parkOnQuestions(ws, questionsFile().replace(`Recommended: B — ${WHY} [src: absent:.tldrx/memory/facts.yml]`, unreadable));
+
+    const outcome = await auto(ws);
+    expect(outcome.code).toBe(4);
+    const left = outcome.lines.filter((line) => line.includes("left Q1 for a person"));
+    expect(left.length).toBe(1);
+    expect(left[0]).toContain(`left Q1 for a person — Recommended line unreadable: ${unreadable} — expected `);
+  });
+
+  test("a question with no line at all is left with `no Recommended line` (#323)", async () => {
+    const ws = workspace({ questionsFlag: "none" });
+    parkOnQuestions(ws, questionsFile({ recommended: false }));
+    const outcome = await auto(ws);
+    expect(outcome.lines.filter((line) => line.includes("left Q1 for a person — no Recommended line")).length).toBe(1);
+  });
+
   test("a question tagged `money: true` is a person's whatever the policy says", async () => {
     const ws = workspace({ questionsFlag: "none" });
     parkOnQuestions(ws, questionsFile({ extra: "money: true" }));
