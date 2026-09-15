@@ -3795,7 +3795,8 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    PROGRESS (markers and `MERGE_HEAD` in place); the developer prompt names the conflicted files, the story's own
    intent and the stories that landed on the epic since the branch was cut (read off the epic's `merge(<id>): …`
    subjects, or the epic sha when there are none), and says that `git add` + `git commit` close the merge. Before the
-   DoD, a **marker guard** (`leftoverMerge`: each conflicted file handed, and any path it was renamed to, read for
+   DoD, a **marker guard** (`leftoverMerge`: each conflicted file handed, any path it was renamed to, every path added
+   since the handed sha and every untracked, non-ignored path — everything a commit could sweep in — read for
    ANY line starting `<<<<<<<`, `|||||||` or `>>>>>>>` — never a lone `=======`, which is a heading underline as often
    as a marker — plus `MERGE_HEAD`) BLOCKS — not requeues — a turn that left a marker in one of those files,
    committed or not, or never closed the merge, naming the files. Refused otherwise, with the reason appended to the block above. Measured on the field run

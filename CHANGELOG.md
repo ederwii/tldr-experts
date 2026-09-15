@@ -17,7 +17,8 @@
   worktree and the merge left open (markers, `MERGE_HEAD`); the prompt names the files, the
   story's intent and the stories that landed on the epic, and `git add` + `git commit` — verbs the
   developer already holds — close it, with the DoD as judge. A marker guard in `git.ts`
-  (each conflicted file handed and any path it was renamed to, read for any `<<<<<<<`, `|||||||`
+  (each conflicted file handed, any path it was renamed to, and every added or untracked path a
+  commit could sweep in, read for any `<<<<<<<`, `|||||||`
   or `>>>>>>>` line — a lone `=======` heading underline is not a marker — plus `MERGE_HEAD`)
   blocks, never requeues, a turn that left a marker in one of those files or never closed the
   merge, naming the files — without it, measured

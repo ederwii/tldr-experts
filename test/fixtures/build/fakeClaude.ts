@@ -179,6 +179,13 @@ if (failWork === "committed" || failWork === "uncommitted") {
     renameSync(join(process.cwd(), from), join(process.cwd(), to));
     extraTools.push({ name: "Bash", input: { command: `mv ${from} ${to}` }, result: "" });
   }
+  // `"commit-am"`: `git commit -am` alone — tracked changes only, so a file the
+  // developer created (or `mv`ed into place) stays UNTRACKED.
+  if (perStory("FAKE_BUILD_COMMIT", devAttempt) === "commit-am") {
+    execFileSync("git", ["commit", "-am", `fix(${storyId}): resolve the merge`],
+      { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+    extraTools.push({ name: "Bash", input: { command: `git commit -am "fix(${storyId}): resolve the merge"` }, result: "" });
+  }
   if (perStory("FAKE_BUILD_COMMIT", devAttempt) === "commit") {
     execFileSync("git", ["add", "-A"], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
     execFileSync("git", ["commit", "-m", `fix(${storyId}): resolve the merge`],

@@ -853,12 +853,17 @@ export interface LeftoverMerge {
  * handed — or the paths the developer renamed them to — still hold a line git
  * writes only as a conflict, and whether the merge is open.
  *
- * Scoped to `files` plus their rename destinations since `since` (`git diff
- * --name-status -M <since>`, R rows whose source is a handed file), because
- * those are the only files the facilitator put markers in; a developer's change
- * elsewhere is the DoD's business. A rename is followed because reading only the
- * original path found nothing (ENOENT) while the markers sat in the new one —
- * review of 18e4df5, probed.
+ * Scoped to everything a marker could have travelled into and that `add -A`
+ * could sweep into a commit, and to no pre-existing unrelated content: the
+ * handed `files`, their rename destinations since `since` (R rows of `git diff
+ * --name-status -M <since>` whose source is a handed file), every path ADDED
+ * since `since` (A rows), and every UNTRACKED, non-ignored path (`git ls-files
+ * --others --exclude-standard`). The rename rows exist because reading only the
+ * original path found nothing while the markers sat in the new one (review of
+ * 18e4df5, probed). The untracked set exists because a plain `mv` never added,
+ * closed with `git commit -am`, shows only `D <file>` to every diff — the moved
+ * file is invisible until the framework's own `commitAll` sweeps it, markers and
+ * all (review of abe54d7, reproduced end to end).
  *
  * A leftover is ANY line starting git's own start (`<<<<<<<`), base
  * (`|||||||`) or end (`>>>>>>>`) marker, each alone on the line or followed by
@@ -874,11 +879,14 @@ export interface LeftoverMerge {
  */
 export async function leftoverMerge(cwd: string, files: readonly string[], since: string): Promise<LeftoverMerge> {
   const scope = [...files];
-  const renamed = await git(["diff", "--name-status", "-M", since], cwd);
-  for (const row of renamed.stdout.split("\n")) {
+  const changed = await git(["diff", "--name-status", "-M", since], cwd);
+  for (const row of changed.stdout.split("\n")) {
     const [kind = "", from = "", to = ""] = row.split("\t");
     if (kind.startsWith("R") && files.includes(from) && to !== "") scope.push(to);
+    if (kind === "A" && from !== "") scope.push(from);
   }
+  const untracked = await git(["ls-files", "--others", "--exclude-standard"], cwd);
+  for (const path of untracked.stdout.split("\n")) if (path.trim() !== "") scope.push(path.trim());
   const markers = scope.filter((file, i) => scope.indexOf(file) === i && holdsConflict(join(cwd, file)));
   return { markers, inProgress: await mergeInProgress(cwd) };
 }

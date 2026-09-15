@@ -949,6 +949,28 @@ describe("(f) a conflict inside the story's touches gets ONE conflict turn (#286
     expect(git(ws, "ls-tree", "--name-only", "-r", "epic/e1")).not.toContain("moved.txt");
   });
 
+  test("a conflicted file `mv`ed and never added, closed with `commit -am`, still BLOCKS naming the new path", async () => {
+    // `commit -am` stages the DELETION as the resolution and clears MERGE_HEAD;
+    // the moved file is untracked, so no diff sees a rename — and the
+    // framework's own `add -A` would sweep its markers into the story commit.
+    const ws = sharedWave({}, ["shared.txt", "moved.txt"]);
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "shared.txt": "S1's line\n" },
+      S2: { "shared.txt": "S2's line\n" },
+      "S2#2": { "notes.txt": "moved it\n" },
+    });
+    process.env.FAKE_BUILD_MOVE = JSON.stringify({ "S2#2": "shared.txt>moved.txt" });
+    process.env.FAKE_BUILD_COMMIT = JSON.stringify({ "S2#2": "commit-am" });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"], S2: ["approve"] });
+
+    await next(ws, { parallel: 2 });
+
+    expect(conflictTurns(ws)).toHaveLength(1);
+    expect(readFileSync(join(ws.planDir, "stories", "S2.md"), "utf8")).toContain("status: blocked");
+    expect(storyLog(ws, "S2")).toContain("`moved.txt`");
+    expect(git(ws, "ls-tree", "--name-only", "-r", "epic/e1")).not.toContain("moved.txt");
+  });
+
   test("a merge the developer never CLOSED blocks, and says the merge is still in progress", async () => {
     const ws = sharedWave();
     process.env.FAKE_BUILD_WRITE = JSON.stringify({
