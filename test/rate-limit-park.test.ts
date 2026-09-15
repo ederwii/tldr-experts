@@ -218,6 +218,58 @@ describe("a warning on one story's stream parks the NEXT story (gh #298)", () =>
     expect(Object.keys(payload)).not.toContain("resets_at");
   });
 
+  test("the warning is recorded even when there was nothing left to park", async () => {
+    // The one-story wave: the frame arrives on the LAST story, so no park line
+    // is ever printed. The FRAME is still the fact the operator acts on, and a
+    // stage that said it on stdout and wrote nothing to the ledger was the first
+    // review's Important finding, reproduced here.
+    const ws = workspace({
+      stories: [{ id: "S1", epic: "E1", title: "Only story" }],
+      epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+      waves: [["S1"]],
+    });
+    process.env.FAKE_BUILD_RATE_LIMIT = JSON.stringify({ S1: "allowed_warning@0.94" });
+
+    await next(ws);
+
+    const parked = events(ws).filter((e) => e.type === "agent.rate_limited");
+    expect(parked).toHaveLength(1);
+    expect(parked[0]?.payload).toMatchObject({
+      status: "allowed_warning",
+      window: "five_hour",
+      utilization: 0.94,
+      resets_at: 1789364400,
+      parked_absent: "nothing was left to park — the warning arrived on this stage's last story",
+    });
+    // Nothing was withheld, so nothing may claim to have been.
+    expect(Object.keys(parked[0]?.payload ?? {})).not.toContain("parked");
+  });
+
+  test("the handoff names the park as the reason, instead of `no reason for it`", async () => {
+    const ws = workspace(twoStories());
+    process.env.FAKE_BUILD_RATE_LIMIT = JSON.stringify({ S1: "allowed_warning@0.94" });
+
+    await next(ws);
+
+    const handoff = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    expect(handoff).toContain("S2");
+    expect(handoff).toContain("the provider warned its rate limit was close, so the run parked before it bit");
+    // The audit record must not say the run has no explanation for a story it
+    // withheld on purpose, and said so about, twice (AGENTS.md §7).
+    expect(handoff).not.toContain("this stage recorded no attempt and no reason for it");
+  });
+
+  test("a park with no reset instant says so, rather than leaving the question open", async () => {
+    const ws = workspace(twoStories());
+    process.env.FAKE_BUILD_RATE_LIMIT = JSON.stringify({ S1: "allowed_warning@0.94@none" });
+
+    const lines = await next(ws);
+
+    expect(lines.join("\n")).toContain("it stated no reset instant, so nothing here knows when it clears");
+    const handoff = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    expect(handoff).toContain("it stated no reset instant, so nothing here knows when it clears");
+  });
+
   test("the event type is in the closed enum, so the log accepts the line", () => {
     expect(EVENT_TYPES).toContain("agent.rate_limited");
   });

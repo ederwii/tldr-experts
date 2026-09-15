@@ -1302,9 +1302,14 @@ normally. Until this event the framework parsed that line as noise, so the only 
 dying mid-story carrying the provider's own `success`. Its payload carries `status` (the provider's word, never
 normalised — `allowed`, `allowed_warning`, and whatever it says when the wall is hit), `window`, `utilization`,
 `resets_at` (**epoch seconds, exactly as stated** — nothing derives a deadline the provider did not give) and `parked`
-(the story the run then did not start). Any of those three figures the frame did not state is ABSENT, with a
-`<field>_absent` sentence in its place rather than a zero that would read as "none of the window is used". Build writes
-it ONCE per stage, the first time a frame whose `status` is not `allowed` arrives, and it changes no outcome: stories
+(the story the run then did not start), which becomes `parked_absent` with its reason when the warning arrived with
+nothing left to withhold — a one-story wave, where the frame is still the fact the operator acts on. Any figure the
+frame did not state is ABSENT the same way, with a `<field>_absent` sentence in its place rather than a zero that would
+read as "none of the window is used". Build writes
+it ONCE per stage, the first time a frame whose `status` is not `allowed` arrives — whether or not anything was parked,
+because the record must not be silent about a warning just because the stage had no story left to withhold — and every
+story left unstarted after it carries the park as its REASON in `handoff.md`'s `## Unknowns`, never the residue
+sentence that says this stage had no reason at all. It changes no outcome: stories
 already running finish and are settled, and only the NEXT story (or the next attempt) is not started — the run parks at
 a story boundary instead of spending developers into the wall. It never waits, and never retries: waiting to a reset the
 provider stated is the other half of #298 and is not built.

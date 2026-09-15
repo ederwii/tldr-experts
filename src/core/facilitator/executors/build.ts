@@ -324,6 +324,10 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
    * file read.
    */
   const withRestore = async (outcome: ExecutorOutcome): Promise<ExecutorOutcome> => {
+    // gh #298: the provider's warning belongs on the ledger whether or not this
+    // stage had a story left to withhold. Here, because this is the one wrapper
+    // every exit — finished, refused, failed — returns through.
+    session.flushRateLimited();
     const lines = await session.restoreForeignWorkAside();
     return withClaims(lines.length === 0 ? outcome : { ...outcome, lines: [...outcome.lines, ...lines] });
   };
@@ -358,6 +362,7 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
     // earned (#249): the caller's catch records them, so a throw after a paid
     // turn no longer takes that turn's money out of the ledger.
     try {
+      session.flushRateLimited();
       await session.restoreForeignWorkAside();
     } catch {
       // Nothing to add: the original error is the one that matters.
@@ -1622,8 +1627,25 @@ class BuildSession {
   private parkForRateLimit(storyId: string, what: "not started" | "not requeued"): void {
     const frame = this.rateLimitPark;
     if (frame === null) return;
-    this.lines.push(`  · ${storyId}: ${what} — ${RATE_LIMIT_PARK_LINE}: ${rateLimitLine(frame)}`);
-    if (this.rateLimitParked) return;
+    this.lines.push(`  · ${storyId}: ${what} — ${this.rateLimitReason(frame)}`);
+    this.recordRateLimited(storyId);
+  }
+
+  /**
+   * The warning, on the ledger, ONCE per stage (gh #298).
+   *
+   * `parked` is the first story the warning cost, and it is ABSENT when the
+   * warning arrived with nothing left to park — the stage's last story, which is
+   * the shape a one-story wave has. That absence is the whole reason this is not
+   * written from the park alone: the FRAME is the fact worth recording, and it is
+   * a fact whether or not this stage still had work to withhold. Measured on the
+   * review of the first cut: a one-story build warned, said so on stdout, and
+   * wrote zero rows — a record that is silent about the one thing the operator
+   * would act on.
+   */
+  private recordRateLimited(parked: string | null): void {
+    const frame = this.rateLimitPark;
+    if (frame === null || this.rateLimitParked) return;
     this.rateLimitParked = true;
     this.ctx.emit("agent.rate_limited", {
       phase: this.ctx.phaseId,
@@ -1637,8 +1659,32 @@ class BuildSession {
       ...(frame.resetsAt === null
         ? { resets_at_absent: "not recorded — the provider's frame stated no resetsAt" }
         : { resets_at: frame.resetsAt }),
-      parked: storyId,
+      ...(parked === null
+        ? { parked_absent: "nothing was left to park — the warning arrived on this stage's last story" }
+        : { parked }),
     }, 0, "build");
+  }
+
+  /**
+   * Every exit from this executor writes the warning if the park never did
+   * (gh #298). Called from the ONE wrapper `buildExecutor` returns through, so
+   * there is no path — refusal, throw, or a finished stage — that can drop it.
+   */
+  flushRateLimited(): void {
+    this.recordRateLimited(null);
+  }
+
+  /**
+   * The park, in one sentence, for the operator line AND for the handoff row —
+   * one derivation, so the two can never describe the same frame differently.
+   *
+   * A reset the provider did not state is NAMED as missing rather than left out:
+   * "when does this clear" is the question the sentence exists to answer, and
+   * silence there reads as "soon".
+   */
+  private rateLimitReason(frame: AgentRateLimit): string {
+    return `${RATE_LIMIT_PARK_LINE}: ${rateLimitLine(frame)}`
+      + (frame.resetsAt === null ? " — and it stated no reset instant, so nothing here knows when it clears" : "");
   }
 
   /**
@@ -4371,12 +4417,20 @@ class BuildSession {
           id: planned.story.id,
           rel: this.plan.implicit ? IMPLICIT_PLAN_REL : planned.rel,
           status: this.statusOf(planned),
-          // A wait IS a reason (#280); the residue below is the one there is no
-          // reason for.
+          // A wait IS a reason (#280); a quota park is one too (gh #298), and it
+          // covers EVERY story left unstarted after the warning — including the
+          // ones a wave's lanes never pulled, which get no operator line of their
+          // own. Without it the handoff said "no reason for it" over a reason
+          // this stage had printed, recorded and acted on: the audit record
+          // lying in the dangerous direction (AGENTS.md §7). The dependency wait
+          // wins where there is one — it is the more specific fact about THAT
+          // story. The residue below is the one there really is no reason for.
           reason: wait !== undefined
             ? dependencyWaitReason(wait)
-            : "this stage recorded no attempt and no reason for it — "
-              + "nothing here says the work was done, and nothing says why it was not",
+            : this.rateLimitPark !== null
+              ? this.rateLimitReason(this.rateLimitPark)
+              : "this stage recorded no attempt and no reason for it — "
+                + "nothing here says the work was done, and nothing says why it was not",
         });
       }
     }

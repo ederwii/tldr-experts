@@ -36,7 +36,10 @@
   a Build stage that sees a status the provider itself does not call `allowed` starts NO further
   story: the stories already running finish and settle, the next one is not started, and the run
   says so with the provider's own words on stdout and an `agent.rate_limited` event carrying the
-  status, the window, the utilization and the reset instant. The park test is the provider's WORD,
+  status, the window, the utilization and the reset instant — written once per stage whether or not
+  a story was left to withhold, because a one-story wave that warns is a warning the operator still
+  acts on, and carried as the REASON on every story the handoff lists as not started, where the
+  audit record would otherwise say this stage had no reason for it. The park test is the provider's WORD,
   never a utilization threshold this repo picked — the CLI already owns the judgement of when a
   window has surpassed its threshold, and a second opinion here would be a second implementation of
   it. Nothing waits and nothing retries: waiting to a reset the provider stated, and classifying the

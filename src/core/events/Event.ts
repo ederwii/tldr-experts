@@ -205,11 +205,14 @@ import {
  * Its payload carries `status` (the provider's own word, never normalised),
  * `window`, `utilization`, `resets_at` (EPOCH SECONDS, as stated — nothing here
  * converts a guess into a deadline) and `parked` (the story the run did not
- * start because of it). A figure the frame did not state is ABSENT, with a
- * `<field>_absent` sentence saying so rather than a zero that would read as
- * "none used". It is written ONCE per Build stage, the first time a non-`allowed`
- * frame arrives, and it changes no outcome: the stories already running finish,
- * and only the NEXT one is not started.
+ * start because of it), which is `parked_absent` with its reason when the
+ * warning arrived with nothing left to withhold. A figure the frame did not
+ * state is ABSENT the same way, with a `<field>_absent` sentence rather than a
+ * zero that would read as "none used". It is written ONCE per Build stage, the
+ * first time a non-`allowed` frame arrives, WHETHER OR NOT anything was parked —
+ * the frame is the fact, and a one-story wave that warned and recorded nothing
+ * was the first review's finding. It changes no outcome: the stories already
+ * running finish, and only the NEXT one is not started.
  */
 export const EVENT_TYPES = [
   "run.created", "run.closed", "run.unlocked", "run.cancelled", "run.attended", "run.relaunched",
