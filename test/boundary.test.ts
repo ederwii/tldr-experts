@@ -14,12 +14,14 @@
  * because nothing in the framework asked.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { approve } from "../src/core/run/gates.ts";
-import { evaluateBoundary, deriveSurface, epicTargets, inSurface, normalisePath, unqualifiedCitedPaths, OUTSIDE_SURFACE } from "../src/core/run/boundary.ts";
+import { evaluateBoundary, deriveSurface, epicTargets, inSurface, normalisePath, unqualifiedCitedPaths, OUTSIDE_SURFACE, OUTSIDE_SURFACE_WARNING } from "../src/core/run/boundary.ts";
+import { warnedByNote } from "../src/core/run/autoGate.ts";
+import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
 import { loadWorkspace } from "../src/hooks/lib/workspace.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
@@ -263,7 +265,14 @@ describe("the boundary condition against a real epic branch", () => {
     expect(RunStore.open(ws.runDir).run.phases.flatMap((p) => p.stages)[0]?.gate.by).toBe("auto");
   }, 60_000);
 
-  test("a path nobody scoped refuses the gate and is NAMED", async () => {
+  /**
+   * gh #331 — on an `auto` gate a path nobody scoped is a WARNING, not a hold.
+   *
+   * Measured in the hold-surface audit: 7 intervention episodes on this condition, every
+   * one approved or widened. The auto gate now signs, and the path is NAMED on the note
+   * it signs with — so the fact is carried, never dropped.
+   */
+  test("a path nobody scoped does not hold an auto gate — it is NAMED on the note as a warning", async () => {
     const ws = workspace(DECLARED);
     process.env.FAKE_BUILD_WRITE = JSON.stringify({
       S1: { "src/in.ts": "export const after = 2;\n", "platform/Auth.cs": "// nobody scoped this\n" },
@@ -271,22 +280,42 @@ describe("the boundary condition against a real epic branch", () => {
 
     const outcome = await next(ws);
 
-    expect(outcome.code).toBe(4);
     const said = outcome.lines.join("\n");
-    expect(said).toContain("auto gate not taken");
+    expect(outcome.code).toBe(0);
+    expect(said).toContain("auto-approved");
     // the paths, not a count — "1 path outside the surface" is not actionable
     expect(said).toContain("1 outside the surface: app:platform/Auth.cs");
-    expect(said).toContain(OUTSIDE_SURFACE);
-    // and the gate is still open for the person the decision belongs to
-    expect(RunStore.open(ws.runDir).run.phases.flatMap((p) => p.stages)[0]?.gate.status).toBe("pending");
+    // the auto note must not claim a human decides: nobody is asked
+    expect(said).not.toContain(OUTSIDE_SURFACE);
+    expect(said).toContain(OUTSIDE_SURFACE_WARNING);
+    const gate = RunStore.open(ws.runDir).run.phases.flatMap((p) => p.stages)[0]?.gate;
+    expect(gate?.status).toBe("approved");
+    expect(gate?.by).toBe("auto");
+    expect(warnedByNote(gate?.note ?? "")).toEqual(["boundary"]);
+    // said on its own line, not only inside the one-line note
+    expect(outcome.lines).toContain(`  warning: boundary \u2014 ${gate?.note.split("boundary=")[1]?.split(" \u00b7 warned by: ")[0] ?? ""}`);
+    // `gate.requested` names it, additively, beside `held_by`
+    const requested = readFileSync(join(ws.runDir, "events.jsonl"), "utf8").split("\n")
+      .filter((line) => line.includes("\"gate.requested\"")).map((line) => JSON.parse(line) as { payload: Record<string, unknown> });
+    expect(requested.at(-1)?.payload.held_by).toEqual([]);
+    expect(requested.at(-1)?.payload.warned_by).toEqual(["boundary"]);
+    // and `run status` names it on the row the gate signed
+    const store = RunStore.open(ws.runDir);
+    expect(renderStatus(buildStatus(store.run, store.budget, ws.runDir)))
+      .toMatch(/04-build\/build  auto   approved by auto[^\n]* \u2014 warning: boundary/);
   }, 60_000);
 
-  test("a human may still approve over a boundary refusal — it is their call", async () => {
-    const ws = workspace(DECLARED);
+  test("a HUMAN gate still stops over a boundary change, and a person may approve over it", async () => {
+    // gh #331 changed the AUTO gate only: a `human` Build gate is not signed by anybody
+    // but a person, whatever the boundary measured.
+    const ws = workspace({ ...DECLARED, gates: "build" });
     process.env.FAKE_BUILD_WRITE = JSON.stringify({
       S1: { "src/in.ts": "export const after = 2;\n", "platform/Auth.cs": "// nobody scoped this\n" },
     });
-    expect((await next(ws)).code).toBe(4);
+    const first = await next(ws);
+    expect(first.code).toBe(4);
+    expect(first.lines.join("\n")).not.toContain("auto-approved");
+    expect(RunStore.open(ws.runDir).run.phases.flatMap((p) => p.stages)[0]?.gate.status).toBe("pending");
 
     const signed = await approve(RunStore.open(ws.runDir), {
       root: ws.root,

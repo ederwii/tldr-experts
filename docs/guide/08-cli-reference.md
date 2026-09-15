@@ -1498,6 +1498,13 @@ entirely when there is nothing to say, because an empty section under that headi
 calls the same derivation the Build handoff's `## Unknowns` calls, so the PR and the handoff
 cannot hold two opinions about what "carried" or "unowned" means.
 
+**And what left the declared surface (gh #331).** An `auto` Build gate no longer stops on paths
+outside the surface the run declared, so the body carries `## Outside declared scope — review these`
+when there are any: every such path, from the same boundary measurement the gate takes, grouped
+under the story whose own measured diff named it (`- S2: \`app:src/app/validator/checks.py\``),
+and the rest under `no story's measured diff names these`. Left out when nothing is outside, or
+when the boundary could not be measured.
+
 When the branch exists in SEVERAL repos — the normal shape of a chained multi-repo run, whose
 epics share one integration branch — it opens one PR per repo: the same body,
 the repo name in the title, and every URL listed at the end. `--repo` narrows that to one, and

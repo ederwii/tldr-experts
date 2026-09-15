@@ -121,14 +121,15 @@ function storyFront(ws: BuildWorkspace, id: string): Record<string, unknown> {
 
 describe("(a) work outside the declared surface is measured, once, and never refused", () => {
   test("one story.touches_widened, basis measured, actor framework, naming the outside path", async () => {
-    const ws = workspace(UNDER_DECLARED);
+    // A `human` Build gate, so the run stays OPEN at it. Until gh #331 the auto gate's
+    // boundary condition parked this plan at exit 4 by itself; an auto gate now signs
+    // over a boundary (it only warns), and this test is not about gates at all.
+    const ws = workspace({ ...UNDER_DECLARED, gates: "build" });
     const outcome = await next(ws);
 
-    // 4 = awaiting a human, and it is the BOUNDARY gate's doing (condition 7, which
-    // has refused work outside the declared surface since long before this
-    // measurement) — not this event's. Measured: with the comparison removed, the
-    // same plan still exits 4. What is pinned here is that the story SETTLES: an
-    // advisory measurement must not be able to stop one from reaching `done`.
+    // 4 = awaiting a human: the human gate's doing, not this event's. What is pinned
+    // here is that the story SETTLES: an advisory measurement must not be able to
+    // stop one from reaching `done`.
     expect(outcome.code).toBe(4);
     expect(storyFront(ws, "S1").status).toBe("done");
 
@@ -165,7 +166,9 @@ describe("(b) a story that declared what it changed produces no measured event",
 
 describe("(c) both bases render, labelled", () => {
   test("replay names the operator row and the measured row differently", async () => {
-    const ws = workspace(UNDER_DECLARED);
+    // Human-gated so the run is still open to reopen (gh #331: an auto gate would sign
+    // over the boundary and finish the run).
+    const ws = workspace({ ...UNDER_DECLARED, gates: "build" });
     await next(ws);
     // The measured story settled `done`, and `widen` refuses a done story on
     // purpose (#171) — its evidence was written against the surface it declared.

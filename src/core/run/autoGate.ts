@@ -16,7 +16,8 @@
  *                        declared it as a check
  *   6. `stories`       — for a Build stage: every story in the plan reached `done`
  *   7. `boundary`      — for a Build stage: the epic branch changed nothing the
- *                        run did not declare it would touch
+ *                        run did not declare it would touch. Since gh #331 a
+ *                        WARNING on an auto gate, never a hold: see `warns`
  *
  * (5) overlaps (1) deliberately. `claim-sources` is the one validator that decides
  * whether the artefact a human would have READ is sourced at all, and a stage file
@@ -51,6 +52,14 @@ export interface AutoGateCondition {
   readonly ok: boolean;
   /** The measured value, always — a passing condition names its number too. */
   readonly detail: string;
+  /**
+   * Present only on a condition that did NOT hold but does not HOLD an auto gate
+   * either (gh #331) — today only `boundary` with paths outside the surface. It is the
+   * same measurement worded for a gate nobody is asked about, and it is what the auto
+   * note renders. `ok` stays false on purpose: an `agent` gate reads `ok` and still
+   * falls through to a person on a boundary, and `human` gates are not measured here.
+   */
+  readonly warning?: string;
 }
 
 export interface AutoGateVerdict {
@@ -58,8 +67,14 @@ export interface AutoGateVerdict {
   readonly conditions: readonly AutoGateCondition[];
   /** The note recorded on the gate: all seven conditions and their values. */
   readonly note: string;
-  /** Only the conditions that failed, for the "why not" line. Empty when `ok`. */
+  /** Only the conditions that HELD it, for the "why not" line. Empty when `ok`. */
   readonly why: string;
+  /**
+   * The ids of the conditions that did not hold but only WARN on an auto gate (gh
+   * #331), in evaluation order — `["boundary"]` or `[]`. Carried on the note by
+   * `warnedTail`, read back by `warnedByNote`.
+   */
+  readonly warnedBy: readonly string[];
   /**
    * The declared checks that FAILED, with their own findings (gh #231).
    *
@@ -91,14 +106,51 @@ export async function evaluateAutoGate(input: AutoGateInput): Promise<AutoGateVe
     storiesCondition(input),
     await boundaryCondition(input),
   ];
-  const failed = conditions.filter((condition) => !condition.ok);
+  const failed = conditions.filter(holds);
+  const warnedBy = conditions.filter(warns).map((condition) => condition.id);
   return {
     ok: failed.length === 0,
     conditions,
-    note: `auto-gate: ${conditions.map(render).join("; ")}`,
+    note: `auto-gate: ${conditions.map(render).join("; ")}${warnedTail(warnedBy)}`,
     why: failed.map(render).join("; "),
+    warnedBy,
     failedChecks: input.checks.filter((check) => check.status === "failed"),
   };
+}
+
+/** A condition that did not hold AND holds an auto gate — every failure but a warning. */
+export function holds(condition: AutoGateCondition): boolean {
+  return !condition.ok && condition.warning === undefined;
+}
+
+/** A condition that did not hold, but on an auto gate only warns (gh #331). */
+export function warns(condition: AutoGateCondition): boolean {
+  return !condition.ok && condition.warning !== undefined;
+}
+
+/**
+ * The marker a note carries its warnings under, at its END (gh #331).
+ *
+ * At the end and not the head: the approving `auto-gate: ` prefix is asserted
+ * byte-for-byte, and `heldByNote` parses a refusal's head up to its first separator —
+ * a tail touches neither. Absent entirely when nothing warned, so every note a gate
+ * without a warning signs is byte-identical to what it was.
+ */
+export const AUTO_GATE_WARNED_MARKER = " \u00b7 warned by: ";
+
+/**
+ * One `  warning: <id> — <wording>` line per condition that warned (gh #331), for the
+ * terminal. Its own line because the note is one long line, and a warning buried in
+ * it is exactly the silence carrying it was meant to break.
+ */
+export function warningLinesOf(verdict: AutoGateVerdict): readonly string[] {
+  return verdict.conditions
+    .filter(warns)
+    .map((condition) => `  warning: ${condition.id} \u2014 ${condition.warning ?? condition.detail}`);
+}
+
+function warnedTail(ids: readonly string[]): string {
+  return ids.length === 0 ? "" : `${AUTO_GATE_WARNED_MARKER}${ids.join(", ")}`;
 }
 
 /**
@@ -158,7 +210,7 @@ export function checkRetryVerdict(
     /** True when a failed check is PART of the refusal — the case whose "why not" is worth printing. */
     readonly checksHeld: boolean;
   } {
-  const held = verdict.conditions.filter((condition) => !condition.ok);
+  const held = verdict.conditions.filter(holds);
   if (verdict.ok || held.length === 0) return { retry: false, reason: "the auto gate is not refused", checksHeld: false };
   const checksHeld = held.some((condition) => RETRYABLE_CONDITIONS.has(condition.id));
   const other = held.filter((condition) => !RETRYABLE_CONDITIONS.has(condition.id)).map((condition) => condition.id);
@@ -200,7 +252,7 @@ export function checkRetryVerdict(
  * they cannot disagree.
  */
 export function heldBy(verdict: AutoGateVerdict): readonly string[] {
-  return verdict.conditions.filter((condition) => !condition.ok).map((condition) => condition.id);
+  return verdict.conditions.filter(holds).map((condition) => condition.id);
 }
 
 /**
@@ -233,7 +285,8 @@ export function refusalNote(verdict: AutoGateVerdict): string {
   const held = heldBy(verdict);
   if (held.length === 0) return "";
   return `${AUTO_GATE_REFUSED_PREFIX}${held.join(", ")}${HELD_SEPARATOR}`
-    + verdict.conditions.map(render).join("; ");
+    + verdict.conditions.map(render).join("; ")
+    + warnedTail(verdict.warnedBy);
 }
 
 /**
@@ -376,8 +429,27 @@ function recordRefusal(runDir: string, stageId: string, verdict: AutoGateVerdict
   }
 }
 
+/**
+ * The ids an auto note says WARNED (gh #331) — the reading half of `warnedTail`, and
+ * the one place a note is turned back into warning ids.
+ *
+ * Only an auto note is read (`auto-gate: ` or a refusal): a person's words that
+ * happen to contain the marker are not a machine record. The tail must be a plain id
+ * list, so a path in a condition's detail that contained the marker cannot pass for
+ * one. Empty means "this note names no warning", never "boundary was measured clean".
+ */
+export function warnedByNote(note: string): readonly string[] {
+  if (!note.startsWith("auto-gate: ") && !note.startsWith(AUTO_GATE_REFUSED_PREFIX)) return [];
+  const at = note.lastIndexOf(AUTO_GATE_WARNED_MARKER);
+  if (at === -1) return [];
+  const tail = note.slice(at + AUTO_GATE_WARNED_MARKER.length);
+  if (!/^[a-z][a-z-]*(, [a-z][a-z-]*)*$/.test(tail)) return [];
+  return tail.split(", ");
+}
+
+/** A warning renders its own wording: the auto note must not say a human decides. */
 function render(condition: AutoGateCondition): string {
-  return `${condition.id}=${condition.detail}`;
+  return `${condition.id}=${condition.warning ?? condition.detail}`;
 }
 
 function checksCondition(checks: readonly CheckOutcome[]): AutoGateCondition {
@@ -648,7 +720,16 @@ async function boundaryCondition(input: AutoGateInput): Promise<AutoGateConditio
     runDir: input.runDir,
     phaseId: input.phaseId,
   });
-  return { id: "boundary", ...verdict };
+  // gh #331: paths outside the surface WARN an auto gate rather than hold it. `ok`
+  // and `detail` are the measurement as a person or an agent gate reads it; `warning`
+  // is the same measurement worded for the auto note. The uncapped path list is not
+  // carried: the PR body asks `evaluateBoundary` itself, in its own process.
+  return {
+    id: "boundary",
+    ok: verdict.ok,
+    detail: verdict.detail,
+    ...(verdict.warning === undefined ? {} : { warning: verdict.warning }),
+  };
 }
 
 /**

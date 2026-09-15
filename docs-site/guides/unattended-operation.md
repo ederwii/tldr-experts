@@ -167,8 +167,8 @@ and the epic branch it cut is released for the next run of the same feature.
 
 What this recipe proves is that the *engine* can carry one small, well-seeded change to a
 PR with nobody watching. It does not make the four things that stay a person's — a new
-product decision, a ceiling going up, work outside the What's boundary, the final merge —
-go away: `--gates none` and `--questions none` are your recorded decision that this run
+product decision, a ceiling going up, work outside the What's boundary (on an `auto` gate it
+reaches you in the PR body rather than at the gate), the final merge — go away: `--gates none` and `--questions none` are your recorded decision that this run
 has none of them. A run with a `human` gate or a question the seed did not pre-answer needs
 the rest of this page.
 

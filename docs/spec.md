@@ -3084,6 +3084,21 @@ inside the product repo. It never refuses on an absence — outside Build, with 
 disk, with no plan, or on a run that declared no surface at all, it is measured as `n/a` **with the reason in the
 note**, because a condition that could not measure must not report that it measured zero.
 
+**Since gh #331, (7) WARNS an `auto` gate and never holds it.** Measured in a hold-surface audit of two client
+workspaces: `boundary` was in 48 of 78 Build `held_by` values and the only reason on 6, and each of the 7
+intervention episodes it caused ended in an approval or a `story widen` (the "no real catch" reading is inferred from
+their notes). So on an `auto` policy a boundary with paths outside the surface no longer refuses: the gate signs when
+the other six hold, and the fact is CARRIED, never dropped — the note renders the condition with
+`work outside the declared surface does not hold an auto gate — it is carried into the PR body for review` in place
+of the sentence above and ends in ` · warned by: boundary` (also on a refusal note, after the seven values);
+`gate.requested` carries `warned_by: ["boundary"]` beside `held_by` (additive, present only when non-empty);
+`tldrx next` prints `  warning: boundary — …` on its own line; `tldrx run status` appends `— warning: boundary` to the
+gate's row; and `tldrx ship` renders `## Outside declared scope — review these` in the PR body. That section lists
+every outside path (uncapped, from the same `evaluateBoundary` call — no second comparison), grouped under the story
+whose own measured `story.touches_widened` row names it, with the rest under
+`no story's measured diff names these`. An `agent` gate still falls through on `boundary` exactly as before (it reads
+the condition's `ok`, which stays false), and a `human` gate is never signed by the machine at all.
+
 Two of the others were tightened on 2026-08-29, both because an auto gate could be closed by SILENCE:
 
 - **(2) "zero open" is only an answer when the file was readable — but silence with a readable file IS an answer.**
@@ -3125,7 +3140,8 @@ were approved from a phone.
 
 **An auto gate says WHY it did not close.** The verdict is measured one statement before
 `gate.requested` is appended, and the event carries `why` (the failing conditions in the same
-words `tldrx next` prints) and `held_by` (their ids). Both keys are **additive and present only
+words `tldrx next` prints) and `held_by` (their ids) — plus, only when non-empty, `warned_by`:
+the conditions that did not hold but only warn an auto gate, today `boundary` (gh #331). Both keys are **additive and present only
 for an `auto` policy** — a `human` or `agent` gate has no auto verdict behind it, and
 `held_by: []` there would read as "the seven were checked and none held it", which is the
 opposite of "nothing looked". `run auto`'s notification renders `why` in its summary; the

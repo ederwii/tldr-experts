@@ -33,6 +33,10 @@ Everything here follows from a single division:
 | question grammar | the final merge to `main` |
 | the diff against the stories it claims to implement | |
 
+One row moved in gh #331: on an **`auto`** gate a boundary change no longer stops the run — it
+is carried into the PR body as `## Outside declared scope — review these`, so the person meets
+it in review instead of at a gate. On an `agent` gate it still falls to a person, as below.
+
 The framework has always encoded that split *implicitly*: conditions get checked, questions
 get asked. Unattended mode makes it **explicit** — a gate policy that names who may sign what,
 and a run mode that stops the framework spending money behind a session that is already doing

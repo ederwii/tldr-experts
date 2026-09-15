@@ -49,7 +49,8 @@ claim-sources=passed; stories=n/a (not a build stage); boundary=n/a (not a build
 5. la etapa no falló;
 6. cada afirmación que escribió resolvió contra una fuente real ([evidencia](/es/concepts/evidence));
 7. solo en una etapa Build — cada story llegó a `done`, **y** la rama de la épica no cambió
-   nada que el run nunca declaró que iba a tocar.
+   nada que el run nunca declaró que iba a tocar. Esa segunda mitad **advierte** a una
+   compuerta `auto` en lugar de detenerla: mira abajo.
 
 Que falle cualquiera de ellas la regresa a la compuerta humana, diciendo cuál falló y qué
 midió. Una cita que nadie pudo comprobar no reprueba la etapa, pero sí detiene una
@@ -69,9 +70,27 @@ waiting gate on 01-what/what — held by claim-sources — `tldrx approve` or `t
 `tldrx run status --verbose` cita la nota completa, con los valores de las condiciones que sí
 pasaron: "¿fue el dinero?" es una pregunta que una lista de fallas por sí sola no contesta.
 
+### En una compuerta `auto` el límite es una advertencia
+
+Una ruta fuera de la superficie declarada no detiene una compuerta `auto`. Cada intervención que
+una auditoría de retenciones atribuyó a esta condición terminó en una aprobación o en un widen,
+así que la compuerta firma cuando todo lo demás se cumple, y las rutas viajan con el run: la nota
+termina en `· warned by: boundary`, `tldrx run status` marca la fila, y `tldrx ship` las lista en
+el cuerpo del PR, por story:
+
+```
+## Outside declared scope — review these
+
+- S2: `app:src/app/validator/checks.py`, `app:tests/test_extract.py`
+- no story's measured diff names these: `app:docs/inventory.md`
+```
+
+Una compuerta `agent` sigue cayéndole a una persona por esto, y una compuerta `human` la firmas
+tú de todos modos.
+
 ### Pasar el límite declarado: `tldrx story widen`
 
-La séptima condición es la que más vas a encontrarte. Una story terminó tocando una ruta que el
+En una compuerta `human` o `agent`, la séptima condición es la que más vas a encontrarte. Una story terminó tocando una ruta que el
 plan nunca declaró, así que la compuerta se niega y nombra las rutas. Trabajo que nadie declaró
 suele ser el trabajo correcto — y decirlo es una decisión, con su verbo:
 

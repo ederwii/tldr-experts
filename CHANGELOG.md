@@ -50,6 +50,23 @@
   test that pinned the park ("a headless run … parks the story") is inverted, citing the decision.
   A host review is shown the same findings and closes nothing. No new event, `run.yml` field or
   CLI verb.
+- **An `auto` Build gate no longer stops on paths outside the declared surface — it signs, and
+  carries them into the PR (closes #331).** A hold-surface audit of two client workspaces measured
+  `boundary` in 48 of 78 Build `held_by` values, the only reason on 6, and 7 intervention episodes
+  on it; every one ended in an approval or a `story widen` (the "no real catch" reading is inferred
+  from their notes). A condition that stops an unattended run and is always waved through is a
+  cost, not a check — but dropping it would lose the one question a reviewer asks first. So the
+  fact moves from the gate to the review: the auto note renders the boundary with "does not hold an
+  auto gate — it is carried into the PR body for review" and ends in `· warned by: boundary`;
+  `gate.requested` gains an additive `warned_by` beside `held_by` (present only when non-empty);
+  `tldrx next` prints a `warning: boundary — …` line; `tldrx run status` marks the gate row
+  `— warning: boundary`; and `tldrx ship` renders `## Outside declared scope — review these`,
+  every outside path, grouped under the story whose own measured `story.touches_widened` row names
+  it, the rest under `no story's measured diff names these`. One derivation: the gate and the PR
+  body both call `evaluateBoundary`, which now returns the uncapped list beside its detail. An
+  `agent` gate still falls to a person on a boundary, and a `human` gate is unchanged. No exit
+  code changed; a check-only refusal with a boundary warning beside it is now eligible for
+  `run auto`'s bounded re-run, since the boundary no longer holds it.
 
 ### Fixed
 

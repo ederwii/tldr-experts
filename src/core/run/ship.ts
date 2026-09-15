@@ -110,7 +110,10 @@ import { loadWorkspace, FALLBACK_DEFAULT_BRANCH } from "../../hooks/lib/workspac
 // One name for one binary. `adapters/github.ts` already had to decide what the
 // GitHub CLI is called; a second spelling here would be a second thing to keep true.
 import { GH_BIN } from "../adapters/github.ts";
-import { renderShipBody, type OpenFindingRow } from "./shipBody.ts";
+import { renderShipBody, type OpenFindingRow, type OutsideScopeRow } from "./shipBody.ts";
+import { evaluateBoundary } from "./boundary.ts";
+import { BUILD_PHASE } from "./buildProgress.ts";
+import { wideningRows } from "../build/measuredTouches.ts";
 import { latestFixlist, openFindings } from "../build/fixlist.ts";
 import { carriedReportFor, phaseDirsOf, scanStories } from "../build/carriedRows.ts";
 import { readReviewLedger } from "../build/reviewLedger.ts";
@@ -338,6 +341,7 @@ export async function shipRun(options: ShipOptions): Promise<ShipOutcome> {
 
   const body = writeShipBody(
     store, branch, handoff, stories, new Set(loadWorkspace(options.root).repos.keys()),
+    await outsideScopeRows(options.root, store, stories),
   );
   try {
     return await shipTo(options, store, branch, body, stories);
@@ -1739,6 +1743,7 @@ function writeShipBody(
   handoff: Handoff,
   stories: readonly ShipStory[],
   repoNames: ReadonlySet<string>,
+  outsideScope: readonly OutsideScopeRow[],
 ): ShipBody {
   const rows = openFixFindings(store, stories);
   const carried = carriedReportFor(store.runDir, repoNames);
@@ -1761,10 +1766,69 @@ function writeShipBody(
     // second count in this file. Null when there is no plan on disk: a header
     // asserting `0 of 0` would be a claim about a plan that never existed (§7).
     outcome: describeShipOutcome(store),
+    outsideScope,
   });
   const path = join(mkdtempSync(join(tmpdir(), "tldrx-ship-")), "pr-body.md");
   writeFileSync(path, text, "utf8");
   return { path, bytes: Buffer.byteLength(text, "utf8"), handoffRel: handoff.rel, open: rows.length };
+}
+
+/**
+ * What left the declared surface, grouped per story, for the PR body (gh #331).
+ *
+ * An `auto` Build gate no longer HOLDS on the boundary condition, so the PR is where
+ * a person meets those paths. Two rules keep this from becoming a second opinion:
+ *
+ *  - **The list is `evaluateBoundary`'s**, called here because `ship` runs in its own
+ *    process — the one comparison of a diff against `deriveSurface`. An `ok` verdict
+ *    (nothing outside, or `n/a`: nothing could be measured) contributes no rows.
+ *  - **The attribution is the ledger's**: a path is put under a story when that
+ *    story's own `story.touches_widened` row names it (the executor measures each
+ *    story's diff against its `touches:` as the story settles). A story's `repo:`
+ *    scopes its rows, since those paths are repo-relative. A path no row names is
+ *    listed under a null story — carried, never dropped.
+ */
+async function outsideScopeRows(
+  root: string,
+  store: RunStore,
+  stories: readonly ShipStory[],
+): Promise<readonly OutsideScopeRow[]> {
+  let outside: readonly string[];
+  try {
+    const verdict = await evaluateBoundary({ root, runDir: store.runDir, phaseId: BUILD_PHASE });
+    outside = verdict.outside ?? [];
+  } catch {
+    // A measurement that threw is not a PR refusal: the section is advisory, and
+    // the boundary's own n/a rule says an absence never refuses anything.
+    return [];
+  }
+  if (outside.length === 0) return [];
+  let widenings: ReturnType<typeof wideningRows> = [];
+  try {
+    widenings = wideningRows(readFileSync(join(store.runDir, "events.jsonl"), "utf8"));
+  } catch {
+    widenings = [];
+  }
+  const repoOf = new Map(stories.map((story) => [story.id, story.repo]));
+  const byStory = new Map<string, string[]>();
+  const unattributed: string[] = [];
+  for (const qualified of outside) {
+    const colon = qualified.indexOf(":");
+    const repo = qualified.slice(0, colon);
+    const path = qualified.slice(colon + 1);
+    const owners = [...new Set(widenings
+      .filter((row) => repoOf.get(row.story) === repo && row.paths.includes(path))
+      .map((row) => row.story))];
+    if (owners.length === 0) unattributed.push(qualified);
+    for (const owner of owners) {
+      const list = byStory.get(owner) ?? [];
+      if (!list.includes(qualified)) list.push(qualified);
+      byStory.set(owner, list);
+    }
+  }
+  const rows: OutsideScopeRow[] = [...byStory.keys()].sort().map((story) => ({ story, paths: byStory.get(story) ?? [] }));
+  if (unattributed.length > 0) rows.push({ story: null, paths: unattributed });
+  return rows;
 }
 
 /**

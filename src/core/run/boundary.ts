@@ -82,6 +82,16 @@ import { BUILD_PHASE, PLAN_DIR } from "./buildProgress.ts";
 export const OUTSIDE_SURFACE =
   "work outside the declared surface is a boundary change — a human decides whether to widen the scope";
 
+/**
+ * The same fact, worded for an `auto` gate (gh #331). An auto gate no longer HOLDS on
+ * this condition: the hold-surface audit measured 7 intervention episodes on it, every
+ * one approved or widened. So the sentence an auto gate signs with must not say a human
+ * decides — nobody is asked — and says instead where a human WILL see it: the PR body
+ * `tldrx ship` renders. `human` and `agent` gates keep `OUTSIDE_SURFACE`, unchanged.
+ */
+export const OUTSIDE_SURFACE_WARNING =
+  "work outside the declared surface does not hold an auto gate — it is carried into the PR body for review";
+
 /** At most this many offending paths are named before the detail says "+N more". */
 export const NAMED_PATHS = 8;
 
@@ -130,6 +140,19 @@ export interface EpicTarget {
 export interface BoundaryVerdict {
   readonly ok: boolean;
   readonly detail: string;
+  /**
+   * Present only when paths landed outside the surface (gh #331): the same measured
+   * detail, closed with `OUTSIDE_SURFACE_WARNING` instead of `OUTSIDE_SURFACE`. Built
+   * HERE, beside `detail`, so the two wordings cannot measure different things.
+   */
+  readonly warning?: string;
+  /**
+   * Every changed path outside the surface, `repo:path`, UNCAPPED (gh #331) — the list
+   * the PR body lists. Present only when `ok` is false; `detail` still names at most
+   * `NAMED_PATHS`. This is the one derivation of "outside the surface": nothing else
+   * compares a diff against `deriveSurface`.
+   */
+  readonly outside?: readonly string[];
 }
 
 /**
@@ -500,12 +523,15 @@ export async function evaluateBoundary(input: BoundaryInput): Promise<BoundaryVe
   }
   const named = outside.slice(0, NAMED_PATHS);
   const rest = outside.length - named.length;
+  const measuredPart =
+    `${String(audited)} changed path(s), ${String(outside.length)} outside the surface: `
+    + `${named.join(", ")}${rest > 0 ? `, +${String(rest)} more` : ""}`
+    + `${unreadPart}${excludedPart}`;
   return {
     ok: false,
-    detail:
-      `${String(audited)} changed path(s), ${String(outside.length)} outside the surface: `
-      + `${named.join(", ")}${rest > 0 ? `, +${String(rest)} more` : ""}`
-      + `${unreadPart}${excludedPart}; ${OUTSIDE_SURFACE}`,
+    detail: `${measuredPart}; ${OUTSIDE_SURFACE}`,
+    warning: `${measuredPart}; ${OUTSIDE_SURFACE_WARNING}`,
+    outside,
   };
 }
 

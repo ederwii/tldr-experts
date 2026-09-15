@@ -31,6 +31,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileS
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { runStories, shipRun, type ShipTransport } from "../src/core/run/ship.ts";
+import { OUTSIDE_SCOPE_HEADING } from "../src/core/run/shipBody.ts";
 import { declaredSurfaces } from "../src/core/build/carriedRows.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { renderBuildHandoff } from "../src/core/build/handoff.ts";
@@ -964,5 +965,63 @@ describe("tldrx ship — carried findings nobody's story owns (#171)", () => {
       expect(body).toContain("## Carried findings");
       expect(body).toContain("the token is logged");
     });
+  });
+});
+
+/**
+ * gh #331 — an `auto` Build gate no longer stops on paths outside the declared surface,
+ * so the PR body is where a person meets them.
+ *
+ * The epic branch is REAL (committed in the fixture repo), because the list is
+ * `evaluateBoundary`'s own `git diff` — a scripted transport answer would test a list
+ * `ship` never reads. The per-story attribution is the ledger's `story.touches_widened`
+ * row, so the event is written in the shape the executor writes it.
+ */
+describe("tldrx ship — paths outside the declared scope (#331)", () => {
+  function commitOnEpic(ws: BuildWorkspace, files: Readonly<Record<string, string>>): void {
+    git(ws.repoDir, ["checkout", "-q", "epic/e1"]);
+    for (const [rel, text] of Object.entries(files)) {
+      mkdirSync(join(ws.repoDir, rel, ".."), { recursive: true });
+      writeFileSync(join(ws.repoDir, rel), text, "utf8");
+    }
+    git(ws.repoDir, ["add", "-A"]);
+    git(ws.repoDir, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "epic work"]);
+    git(ws.repoDir, ["checkout", "-q", "main"]);
+  }
+
+  function measuredWideningEvent(ws: BuildWorkspace, story: string, paths: readonly string[]): void {
+    const line = JSON.stringify({
+      v: 1, ts: "2026-08-31T09:00:00Z", run: ws.runId, stage: "build", type: "story.touches_widened",
+      actor: "framework", payload: { story, paths, note: "measured", before: [], after: paths, basis: "measured" },
+    });
+    writeFileSync(join(ws.runDir, "events.jsonl"), `${readFileSync(join(ws.runDir, "events.jsonl"), "utf8")}${line}\n`, "utf8");
+  }
+
+  test("each out-of-surface path is listed under the story whose measured diff names it", async () => {
+    const ws = workspace();
+    readyToShip(ws);                                     // S1 · repo app · touches ["s1.txt"]
+    commitOnEpic(ws, { "s1.txt": "declared\n", "platform/Auth.cs": "// S1's\n", "docs/stray.md": "nobody's\n" });
+    measuredWideningEvent(ws, "S1", ["platform/Auth.cs"]);
+
+    const transport = healthy();
+    expect((await ship(ws, transport)).code).toBe(EXIT_OK);
+    const body = bodyOf(transport);
+
+    const outside = section(body, OUTSIDE_SCOPE_HEADING);
+    expect(outside).toContain("- S1: `app:platform/Auth.cs`");
+    expect(outside).toContain("- no story's measured diff names these: `app:docs/stray.md`");
+    // the declared path is not a review item
+    expect(outside).not.toContain("s1.txt");
+  });
+
+  test("a branch that stayed inside the surface leaves the section out", async () => {
+    const ws = workspace();
+    readyToShip(ws);
+    commitOnEpic(ws, { "s1.txt": "declared\n" });
+
+    const transport = healthy();
+    await ship(ws, transport);
+
+    expect(bodyOf(transport)).not.toContain(OUTSIDE_SCOPE_HEADING);
   });
 });
