@@ -19,8 +19,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   agentProvider, claudeBin, CLAUDE_BIN, codexBin, CODEX_BIN, describeSpawn, spawnAgent,
-  providerBudgetAdvisory,
+  providerBudgetAdvisory, buildClaudeArgs, interpret,
 } from "../src/core/facilitator/spawnAgent.ts";
+import { REVIEW_SCHEMA } from "../src/core/build/prompts.ts";
+import { parseReview } from "../src/core/build/review.ts";
 import { codexPromptMarker } from "../src/core/facilitator/fakeTranscript.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
@@ -35,6 +37,83 @@ afterEach(() => {
 });
 
 describe("the provider selection keeps Claude as the byte-identical default", () => {
+  /**
+   * #148, measured against published 0.7.0 + codex-cli 0.153.0: a Build review died
+   * before the reviewer ran, with `invalid_json_schema: fixlist.items.required must
+   * include every property (missing n)`. Codex's structured-output API requires every
+   * declared property to be listed in `required`; `REVIEW_SCHEMA` declares `fixlist`,
+   * `n`, `severity`, `where`, `detail` and `do_not` as OPTIONAL, at two levels, and the
+   * spawn wrote it to `--output-schema` verbatim.
+   *
+   * What is asserted is the file the CHILD actually read, not the object the framework
+   * held: the fake logs the `--output-schema` path's bytes back. The Claude half is the
+   * other direction of the same fix — the shared contract may not move, so `REVIEW_SCHEMA`
+   * is compared before and after, and `--json-schema` must still carry it unchanged.
+   */
+  test("Codex receives a strict reviewer schema and Claude's stays byte-identical", async () => {
+    const dir = tmp();
+    const schemaLog = join(dir, "schema.json");
+    process.env.TLDRX_AGENT_PROVIDER = "codex";
+    process.env.TLDRX_CODEX_BIN = join(import.meta.dir, "fixtures", "agent", "fakeCodex.ts");
+    const before = JSON.stringify(REVIEW_SCHEMA);
+    await spawnAgent({ ...request(dir), role: "reviewer", schema: REVIEW_SCHEMA,
+      env: { ...process.env, FAKE_CODEX_SCHEMA_LOG: schemaLog } });
+    const schema = JSON.parse(readFileSync(schemaLog, "utf8"));
+    expect(schema.required).toEqual(["verdict", "summary", "findings", "fixlist"]);
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.properties.fixlist.anyOf[1]).toEqual({ type: "null" });
+    const item = schema.properties.fixlist.anyOf[0].items;
+    // Spelled out rather than derived from `REVIEW_SCHEMA.properties`: this is the WIRE
+    // shape a live Codex refused once, so a property added to the review contract should
+    // redden here and be looked at, not be swept into the list that produced it.
+    expect(item.required).toEqual(["n", "severity", "finding", "where", "kind", "disposition", "detail", "do_not"]);
+    expect(item.properties.n).toEqual({ anyOf: [{ type: "integer" }, { type: "null" }] });
+    expect(item.properties.kind).toEqual(REVIEW_SCHEMA.properties.fixlist.items.properties.kind);
+    expect(item.properties.disposition).toEqual(REVIEW_SCHEMA.properties.fixlist.items.properties.disposition);
+    expect(item.additionalProperties).toBe(false);
+    expect(JSON.stringify(REVIEW_SCHEMA)).toBe(before);
+    const claude = buildClaudeArgs({ ...request(dir), schema: REVIEW_SCHEMA });
+    expect(claude[claude.indexOf("--json-schema") + 1]).toBe(before);
+  });
+
+  /**
+   * The second half of #148: Codex names its refusal in a pretty-printed block, and that
+   * sentence is quoted into a handoff, where every line must carry its own `[src: …]`.
+   * A multi-line reason became uncited continuation lines. Collapsing beats taking the
+   * first line — the first line of that block is `{` and the WHY is two lines down.
+   */
+  test("a multiline Codex failure reason is flattened onto one handoff line, whole", () => {
+    const raw = JSON.stringify({
+      type: "turn.failed",
+      error: { message: "{\n  code: invalid_json_schema,\n  message: Missing n\n}" },
+    });
+    const outcome = interpret(1, raw, "", false, "codex");
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("invalid_json_schema");
+    expect(outcome.error).toContain("Missing n");
+    expect(outcome.error).not.toContain("\n");
+  });
+
+  /**
+   * A GUARD, not a red-first proof: this passes on the code before the fix too. It is
+   * here because the translation above changes what a Codex reviewer may legally SEND —
+   * `null` where a field used to be absent — and the parser that reads it back is shared
+   * with Claude. It pins that a null reads as absent and that the fail-closed rule
+   * (`verdict: "fixlist"` with no readable list is `changes`) is untouched by it.
+   */
+  test("a nullable optional field reads back as absent, and fail-closed stays fail-closed", () => {
+    expect(parseReview({ verdict: "approve", summary: "checked", findings: [], fixlist: null }, "").verdict)
+      .toBe("approve");
+    const review = parseReview({ verdict: "fixlist", summary: "one defect", findings: [], fixlist: [{
+      n: null, severity: null, finding: "Missing test", where: null,
+      kind: "correctness", disposition: "fix-now", detail: null, do_not: null,
+    }] }, "");
+    expect(review.verdict).toBe("fixlist");
+    expect(review.fixlist[0]).toMatchObject({ n: 1, severity: "unrated", where: "", detail: "", doNot: [] });
+    expect(parseReview({ verdict: "fixlist", summary: "empty", findings: [], fixlist: null }, "").verdict)
+      .toBe("changes");
+  });
+
   test("unset selects Claude; codex is an explicit opt-in", () => {
     expect(agentProvider()).toBe("claude");
     process.env.TLDRX_AGENT_PROVIDER = "codex";

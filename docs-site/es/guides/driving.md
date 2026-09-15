@@ -21,6 +21,11 @@ se combinan.
 - **`run auto` es un motor.** Llama a `next` una y otra vez, sin interfaz, lanzando un
   subagente etapa tras etapa. Claude reporta USD medidos; Codex reporta tokens y queda
   explícitamente sin medición en dólares.
+  Los dos leen el mismo contrato de revisión. La API de salida estructurada de Codex exige
+  que toda propiedad declarada figure como requerida, así que el esquema se traduce solo en
+  la frontera de lanzamiento de Codex — un campo opcional pasa a ser nullable — y un `null`
+  se vuelve a leer igual que el campo ausente. Los desarrolladores corren en
+  `workspace-write`; los revisores, en `read-only`.
 - **`run attend host` es un candado.** Pone un campo, no gasta nada, no corre ninguna
   etapa. De ahí en adelante el framework nunca lanza nada en ese run: cada turno es un
   apretón de manos `tldrx next --prepare` / `tldrx next --commit` con una sesión que
