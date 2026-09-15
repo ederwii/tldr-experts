@@ -322,7 +322,11 @@ describe("N = 2 over three stories in one wave", () => {
   }, 90_000);
 
   test("merges land in the wave's listed order, whatever order the fan-out finished in", async () => {
-    const ws = workspace(THREE_IN_ONE_WAVE);
+    // $20, not the fixture's $8: this test is about ORDER, and gh #325 made money able to
+    // serialise a wave. On $8 three unpriced lanes hold $2.14 of developer caps plus three
+    // $2.00 review floors, so S3 waits for a lane to meter (measured: "leaves -$0.14 where
+    // S3's developer may not be spawned under $1.07") and ends last instead of S1.
+    const ws = workspace({ ...THREE_IN_ONE_WAVE, budgetUsd: 20 });
     const dir = liveDirOn(ws);
     // S1 is the slowest, so it finishes LAST — and must still merge FIRST.
     process.env.FAKE_BUILD_SLEEP_MS = JSON.stringify({ S1: 400, S2: 30, S3: 10 });

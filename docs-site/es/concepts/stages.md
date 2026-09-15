@@ -46,7 +46,10 @@ las mergea a la épica en el orden en que el plan las lista, terminen como termi
 next --parallel N` (y `tldrx run auto --parallel N`) lo cambia para un run; `parallel: N` en
 tu propio `.tldrx/stages/build/stage.yml`, o `build: {parallel: N}` en un workflow, lo
 cambia de forma permanente. Dos y no más porque un abanico más ancho es lo primero que
-sufre una laptop.
+sufre una laptop. Dos stories a la vez nunca reclaman el mismo dinero dos veces: el
+developer de cada carril recibe como techo lo que le queda a la etapa después de los carriles
+que ya corren y de una revisión para cada uno, y un carril que la etapa todavía no puede
+financiar espera a que otro termine — el run imprime las cifras.
 
 Mergearlas en orden implica que, cuando le toca a la segunda, su rama ya quedó atrás de la
 épica: su DoD probó un árbol que no incluía el trabajo de la primera. Por eso, justo antes de

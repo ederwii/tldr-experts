@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.29.0 — unreleased
+
+### Fixed
+
+- **A parallel Build wave no longer hands two developers the same unspent money (closes #325).**
+  Every per-story cap reads the stage's METERED remainder, which is only right when stories run
+  one at a time. Measured live: a $21.60 stage spawned S1 under $21.00 and S2 under $16.50 in one
+  wave before either had metered a cent, spend landed at $33.07, and S2's reviewer was refused on
+  "$0.00 left" — the build ended 0 of 4. Reproduced on the fake agent before the fix: two lanes on
+  a $20 stage were spawned at $9.00 each, $22 claimed with their review floors. Now each lane is
+  capped at the stage's remainder less the caps of the lanes still running and a $2.00 reviewer
+  floor for every story whose review is still ahead, its own included. A lane that bound would
+  put under the least its developer is already allowed (`story_cap_floor_usd` for a priced story,
+  its uniform share otherwise) waits for a lane to finish, and the run prints `S2: not dispatched
+  beside S1 yet —` with the remainder, the reservation, the floors and the bound; with nothing in
+  flight nothing can be freed by waiting, so it runs at that floor instead of stalling. The
+  consequence to know: a small stage can now serialise a wide wave — measured, the third of three
+  unpriced stories on an $8 stage waits for the other two to meter. `--parallel 1` is
+  byte-identical (golden unchanged). No new config key, event or field. Not in this
+  change: sizing the stage from the plan once it exists, and `budget show`
+  naming what its estimate excludes — both named on #325.
+
 ## 0.28.1 — 2026-09-15
 
 ### Fixed

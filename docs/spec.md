@@ -4232,6 +4232,19 @@ unqualified raise moves caps no spawn at all (gh #244). The review is still owed
 review-only path picks it up rather than re-running the developer; under the same remainder it refuses again, for
 free. A HOST review (`attended_by: host`) is never refused this way: it costs the stage nothing.
 
+**A parallel wave reserves what it has dispatched** (gh #325). Every cap above reads the stage's METERED remainder,
+which assumes serial dispatch: measured live, a $21.60 stage spawned S1 under $21.00 and S2 under $16.50 in the same
+wave before either metered, spend landed at $33.07 and S2's review was refused. Under `--parallel N > 1` each lane's
+developer cap is `min(developerCap, remainder − Σ caps of lanes still in half A − REVIEWER_FLOOR_USD × stories whose
+review is still ahead in this fan-out, its own included)` (`build/caps.ts` `waveLaneFunding`). Below the least that
+developer is already allowed — `story_cap_floor_usd` ÷ the attempt divisor for a priced story, the uniform share for
+an unpriced one (`developerFloorUsd`) — the lane is NOT dispatched while another lane is in flight: it waits for one
+to finish, whose reservation is then replaced by its metered spend, and the stage's lines carry `<S>: not dispatched
+beside <ids> yet —` with the remainder, the reservation, the floors and the bound. With nothing in flight the lane is
+dispatched at that floor, because nothing waiting could free. `max_budget_usd` on `agent.spawned`, the developer
+prompt's ceiling and a cap death's `blocked_reason` all carry the lane's cap. `--parallel 1` is unchanged. No event,
+field or key was added.
+
 **One activity line per lane.** Every event a Build sub-agent publishes carries its story id as a `lane`, so the
 scene, the compact one-liner and `--ui plain` show `S1 reading … · S2 $ dotnet test …` rather than interleaving two
 streams into one. A lane disappears from the line when its agent finishes. With one lane — every run that did not ask

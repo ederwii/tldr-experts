@@ -157,7 +157,7 @@ import {
 import { phaseCostToDate, storySpendToDate } from "../../build/phaseCost.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
 import {
-  capDeathReason, clampParallel, developerAttemptDivisor, developerCap, planOverStageAdvisory,
+  capDeathReason, clampParallel, developerAttemptDivisor, developerCap, planOverStageAdvisory, waveLaneFunding,
   reviewerCap, reviewerUnderfunded, round2, stageRemainderUsd, storyCeilingUsd,
   DEFAULT_PARALLEL, MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
   STORY_CAP_MULTIPLIER, STORY_CAP_FLOOR_USD,
@@ -663,6 +663,13 @@ class BuildSession {
    * `## Unknowns` name the wait instead of "no attempt and no reason for it".
    */
   private readonly waits = new Map<string, DependencyHold>();
+  /**
+   * The developer cap a parallel wave's lane was FUNDED at (gh #325), keyed by
+   * story, for exactly as long as that lane is in half A. Empty on the serial
+   * path, which is what keeps `--parallel 1` byte-identical: every read below
+   * falls through to `developerCap`.
+   */
+  private readonly laneCaps = new Map<string, number>();
 
   constructor(
     private readonly ctx: ExecutorContext,
@@ -1392,18 +1399,61 @@ class BuildSession {
   private async fanOut(queue: readonly PlannedStory[]): Promise<Map<string, StoryHalf>> {
     const halves = new Map<string, StoryHalf>();
     let cursor = 0;
+    // gh #325: what the lanes already dispatched may still spend. A lane's
+    // reservation is its developer cap until its half A returns; from then on
+    // `spent()` carries what it metered instead, and — when a review is ahead of
+    // it — `awaitingReview` keeps that review's floor held, because half B runs
+    // only after this whole fan-out does.
+    const inFlight = new Map<string, number>();
+    let awaitingReview = 0;
+    let wake: () => void = () => {};
+    let freed = new Promise<void>((resolve) => { wake = resolve; });
+    const release = (): void => {
+      const woken = wake;
+      freed = new Promise<void>((resolve) => { wake = resolve; });
+      woken();
+    };
     const lane = async (): Promise<void> => {
       for (;;) {
         const planned = queue[cursor++];
         if (planned === undefined) return;
-        // gh #305: the same pre-spawn question `driveStory` asks, per lane.
-        if (this.cancelledUnder()) {
-          this.lines.push(
-            `  · ${planned.story.id}: not started — the run was cancelled (tldrx run cancel) while this stage held it`,
-          );
-          return;
+        const id = planned.story.id;
+        for (;;) {
+          // gh #305: the same pre-spawn question `driveStory` asks, per lane —
+          // asked again after a wait, which can be minutes of a sibling's turn.
+          if (this.cancelledUnder()) {
+            this.lines.push(
+              `  · ${id}: not started — the run was cancelled (tldrx run cancel) while this stage held it`,
+            );
+            return;
+          }
+          // A story a PERSON finished spawns no developer (#279): nothing to fund.
+          if (this.asIsFor(planned) !== null) break;
+          // Decided and reserved with no `await` between them, so two lanes can
+          // never both be funded off the same unreserved dollar.
+          const funding = waveLaneFunding(this.capParts, this.spent(), {
+            storyId: id,
+            attempt: this.attemptFor(planned),
+            inFlight: [...inFlight].map(([storyId, capUsd]) => ({ storyId, capUsd })),
+            awaitingReview,
+          });
+          if (funding.kind === "dispatch") {
+            inFlight.set(id, funding.capUsd);
+            this.laneCaps.set(id, funding.capUsd);
+            break;
+          }
+          this.lines.push(`  · ${funding.reason}`);
+          await freed;
         }
-        halves.set(planned.story.id, await this.buildHalf(planned));
+        try {
+          const half = await this.buildHalf(planned);
+          halves.set(id, half);
+          if (half.failure === null && half.developerError === null && half.commit !== null) awaitingReview += 1;
+        } finally {
+          inFlight.delete(id);
+          this.laneCaps.delete(id);
+          release();
+        }
       }
     };
     // `allSettled`, then rethrow: a lane that throws (a `GitError`, or the
@@ -1859,7 +1909,8 @@ class BuildSession {
           : [permissionBlockReason(developer.refused, { declared: this.repoCommands(story.planned.story.repo) })]),
           ...(budgetDeath === null
             ? []
-            : [capDeathReason(budgetDeath, this.capParts, story.planned.story.id, story.attempt, this.capLever)]),
+            : [capDeathReason(budgetDeath, this.capParts, story.planned.story.id, story.attempt, this.capLever)
+              + this.laneCapNote(story)]),
         ].join("; and "),
         developerError: null,
         before,
@@ -2928,14 +2979,7 @@ class BuildSession {
       worktree,
       branch,
       epicBranch,
-      // Verdicts that cost an attempt, plus attempts this process requeued on a red
-      // DoD (gh #313) — both spend one, and only the first is a review.
-      attempt: Math.min(
-        this.reviewAttempts(planned.story.id) + this.counters.dodRequeuesSpent(this.ctx.runDir, planned.story.id)
-          // gh #286: and a conflict turn spends one too.
-          + this.counters.conflictTurnsSpent(this.ctx.runDir, planned.story.id) + 1,
-        this.attempts,
-      ),
+      attempt: this.attemptFor(planned),
       ...(() => {
         const previous = this.previousAttemptFor(planned.story.id);
         return { previousAttempt: previous.text, previousAttemptKind: previous.kind };
@@ -2943,6 +2987,21 @@ class BuildSession {
       notInWorktree: await this.unreadableTouches(planned, repoDir, branch),
       freshWorktree,
     };
+  }
+
+  /**
+   * The attempt a story opened now would be on — `openStory`'s, and the one a
+   * wave lane is funded for before it opens (gh #325).
+   */
+  private attemptFor(planned: PlannedStory): number {
+    return Math.min(
+      // Verdicts that cost an attempt, plus attempts this process requeued on a red
+      // DoD (gh #313) — both spend one, and only the first is a review.
+      this.reviewAttempts(planned.story.id) + this.counters.dodRequeuesSpent(this.ctx.runDir, planned.story.id)
+        // gh #286: and a conflict turn spends one too.
+        + this.counters.conflictTurnsSpent(this.ctx.runDir, planned.story.id) + 1,
+      this.attempts,
+    );
   }
 
   /**
@@ -3023,6 +3082,26 @@ class BuildSession {
    * The two are separate on purpose: an errored spawn still costs money, and the
    * money is the operator's clue about why it errored.
    */
+  /**
+   * `capDeathReason` derives the cap from the plan; a wave lane funded BELOW that
+   * was spawned under less, and the sentence must not name a cap the turn never
+   * had (gh #325). Empty on the serial path and whenever the lane got its own cap.
+   */
+  private laneCapNote(story: StoryContext): string {
+    const lane = this.laneCaps.get(story.planned.story.id);
+    const own = developerCap(this.capParts, story.planned.story.id, story.attempt);
+    return lane === undefined || lane === own
+      ? ""
+      : `; this parallel lane was dispatched under $${lane.toFixed(2)}, not $${own.toFixed(2)} — the rest was `
+        + "held for the wave's other lanes and their reviews (gh #325)";
+  }
+
+  /** The cap this story's developer is spawned under: its lane's, in a wave (gh #325). */
+  private developerCapFor(story: StoryContext): number {
+    return this.laneCaps.get(story.planned.story.id)
+      ?? developerCap(this.capParts, story.planned.story.id, story.attempt);
+  }
+
   private async spawnDeveloper(
     story: StoryContext,
     // gh #278: the one re-spawn after a CHAINED refusal with no work — the cure
@@ -3030,7 +3109,7 @@ class BuildSession {
     // line it is the retry for. Additive on `agent.spawned`; absent otherwise.
     retry: { readonly after: string } | null = null,
   ): Promise<{ cost: number; error: string | null; refused: string | null }> {
-    const cap = developerCap(this.capParts, story.planned.story.id, story.attempt);
+    const cap = this.developerCapFor(story);
     const commands = this.repoCommands(story.planned.story.repo);
     this.ctx.emit("agent.spawned", {
       phase: this.ctx.phaseId,
@@ -4545,7 +4624,7 @@ class BuildSession {
       conventions: renderConventions(this.ctx.root, [repo]),
       facts: renderFacts(facts.facts, [repo]),
       experts: bundles.experts,
-      budgetUsd: developerCap(this.capParts, story.planned.story.id, story.attempt),
+      budgetUsd: this.developerCapFor(story),
       // The implicit plan writes its own note, naming the facts this story is
       // for; the constant is the fallback for a plan built before it did.
       planNote: this.plan.implicit ? (story.planned.note ?? IMPLICIT_STORY_NOTE) : undefined,
