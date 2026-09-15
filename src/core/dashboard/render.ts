@@ -290,6 +290,12 @@ export function dashPending(run: RunModel): DashPending | null {
   }
   if (kind === "failed") return { kind: "failed", text: run.waiting.message };
   if (kind === "prepared") return { kind: "prepared", text: run.waiting.message };
+  // #246, and the same reasoning as `prepared` above: a headless turn whose
+  // process died is in `MOVABLE_KINDS`, so the row can already wear `← next`, and
+  // an unattended run that stopped because its parent was killed is the single
+  // most urgent thing this page can say. Nothing else will notice — the loop is
+  // not running any more.
+  if (kind === "interrupted") return { kind: "interrupted", text: run.waiting.message };
   return null;
 }
 

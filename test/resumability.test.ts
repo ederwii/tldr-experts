@@ -571,6 +571,81 @@ describe("waitingFor: running and prepared", () => {
   });
 });
 
+// --- #246: a killed HEADLESS spawn is not a `--prepare` bundle --------------
+//
+// Measured on a real 0.16.1 run: the parent `tldrx` died (SIGKILL-class, no
+// signal hook ran), the stage stayed `running`, the `.lock` held a dead pid, and
+// `.agent/<stage>/pending.json` was on disk — because `runNext` writes the bundle
+// BEFORE the mode branch, so every headless spawn leaves one too. `run status`
+// read that as `prepared` and prescribed `tldrx next --commit`, which the very
+// next line of code refuses ("what is `ready`, not `running`"). The bundle cannot
+// tell the two apart; the LAST `stage.started` on the ledger can, and it is the
+// only thing that records which mode this turn was.
+
+/** Append the `stage.started` a real turn writes, so the ledger says which mode it was. */
+function recordStageStart(runDir: string, runId: string, stageId: string, mode: string, ts: string): void {
+  EventLog.forRun(runDir).append({
+    ts, run: runId, stage: stageId, type: "stage.started", actor: "alan", cost_usd: 0,
+    payload: { phase: "01-what", mode },
+  });
+}
+
+describe("waitingFor: an interrupted headless turn (#246)", () => {
+  /** stage `running`, dead lock, bundle on disk — the shape both modes leave behind. */
+  function orphaned(mode: string | null): { ws: FacilitatorWorkspace } {
+    const ws = oneStage();
+    const store = RunStore.open(ws.runDir);
+    store.mutate((run) => withStageStatus(run, "alpha", "running"));
+    store.save();
+    mkdirSync(join(ws.runDir, ".agent", "alpha"), { recursive: true });
+    writeFileSync(join(ws.runDir, ".agent", "alpha", "pending.json"), "{}", "utf8");
+    writeFileSync(join(ws.runDir, ".lock"), JSON.stringify({ pid: DEAD_PID, at: "2026-09-12T13:32:01Z" }), "utf8");
+    if (mode !== null) recordStageStart(ws.runDir, ws.runId, "alpha", mode, "2026-09-12T13:32:01Z");
+    return { ws };
+  }
+
+  test("a dead headless spawn reads as `interrupted` and prescribes a command that is accepted", () => {
+    const { ws } = orphaned("headless");
+    const waiting = waitingFor(RunStore.open(ws.runDir).run, ws.runDir);
+    expect(waiting.kind).toBe("interrupted");
+    expect(waiting.message).toBe(
+      `01-what/alpha was interrupted — its headless turn's process is gone — \`tldrx run auto ${ws.runId}\``,
+    );
+    // The two dead ends the audit hit: a bundle nobody prepared, and a `--commit`
+    // the next line of code refuses.
+    expect(waiting.message).not.toContain("--prepare");
+    expect(waiting.message).not.toContain("--commit");
+    // Somebody can act on it, so `tldrx status` may still hand it over.
+    expect(isMovable(waiting.kind)).toBe(true);
+  });
+
+  test("a real `--prepare` bundle is still `prepared` — the ledger says which one it was", () => {
+    const { ws } = orphaned("prepare");
+    expect(waitingFor(RunStore.open(ws.runDir).run, ws.runDir).kind).toBe("prepared");
+  });
+
+  test("the LAST start wins: prepared, committed, then re-spawned headless and killed", () => {
+    const { ws } = orphaned("prepare");
+    recordStageStart(ws.runDir, ws.runId, "alpha", "headless", "2026-09-12T13:40:00Z");
+    expect(waitingFor(RunStore.open(ws.runDir).run, ws.runDir).kind).toBe("interrupted");
+  });
+
+  test("another stage's headless start does not speak for this one", () => {
+    const { ws } = orphaned("prepare");
+    recordStageStart(ws.runDir, ws.runId, "beta", "headless", "2026-09-12T13:40:00Z");
+    expect(waitingFor(RunStore.open(ws.runDir).run, ws.runDir).kind).toBe("prepared");
+  });
+
+  test("`run status` and the dashboard read the new kind off the same derivation", () => {
+    const { ws } = orphaned("headless");
+    const reopened = RunStore.open(ws.runDir);
+    const view = buildStatus(reopened.run, reopened.budget, ws.runDir);
+    expect(view.waiting.kind).toBe("interrupted");
+    expect(renderStatus(view)).toContain("was interrupted");
+    expect(openRunRows(RunStore.findOpen(ws.root)).map((row) => row.waiting)).toContain("interrupted");
+  });
+});
+
 describe("next refuses to re-spawn over a --prepare bundle", () => {
   test("exit 2, and the message names all three ways out", async () => {
     const ws = oneStage();

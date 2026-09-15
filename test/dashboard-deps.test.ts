@@ -56,14 +56,15 @@ describe("the dashboard never disagrees with `tldrx run status`", () => {
     expect([...covered].sort()).toEqual(["answer", "done", "failed", "gate", "ready"]);
     expect(model.runs).toHaveLength(7);
 
-    // The four this fixture cannot hold: `blocked` needs a broken cursor,
-    // `running` needs a live pid, `prepared` needs a bundle on disk, `cancelled`
-    // needs a run somebody closed. They are covered in
+    // The five this fixture cannot hold: `blocked` needs a broken cursor,
+    // `running` needs a live pid, `prepared` needs a bundle on disk, `interrupted`
+    // needs a dead headless turn on the ledger (#246), `cancelled` needs a run
+    // somebody closed. They are covered in
     // `test/dashboard-vocabulary.test.ts` against fixtures built for them.
-    // Asserted against WAITING_KINDS so a TENTH kind fails here — which is
+    // Asserted against WAITING_KINDS so an ELEVENTH kind fails here — which is
     // the only thing that would have caught `prepared` going unrendered.
     const missing = WAITING_KINDS.filter((kind) => !covered.has(kind));
-    expect([...missing].sort()).toEqual(["blocked", "cancelled", "prepared", "running"]);
+    expect([...missing].sort()).toEqual(["blocked", "cancelled", "interrupted", "prepared", "running"]);
   });
 
   test("`waiting.kind` matches the CLI for every run, including a fresh one", () => {

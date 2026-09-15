@@ -18,14 +18,16 @@
  * model calls `waitingFor` on the document it already loaded. There is now one
  * function, and the two screens cannot disagree.
  *
- * Reads exactly one file beyond the run document it is handed: the cursor
- * phase's `questions.md`, for the BLOCKING open block ids. No model, no network,
- * no write.
+ * Reads two files beyond the run document it is handed: the cursor phase's
+ * `questions.md`, for the BLOCKING open block ids, and — only when the cursor
+ * stage is `running` with a dead lock — `events.jsonl`, for the mode of that
+ * stage's last `stage.started` (#246). No model, no network, no write.
  */
 import { basename, join } from "node:path";
 import { blockingQuestionIds } from "../facilitator/skipIf.ts";
 import { isAlive, readLock } from "../facilitator/Lock.ts";
 import { hasPreparedBundle } from "./prepared.ts";
+import { startedHeadless } from "./lastStart.ts";
 import { heldByNote } from "./autoGate.ts";
 
 /**
@@ -40,10 +42,16 @@ import { heldByNote } from "./autoGate.ts";
  *
  * `running` — a live `next` holds the run's `.lock`; nobody else may touch it.
  * `prepared` — a `--prepare` bundle is on disk and no process is holding the run.
+ * `interrupted` — a HEADLESS turn's process is gone and the stage is still
+ *   `running` (gh #246). It used to be reported as `prepared`, because a headless
+ *   spawn leaves the same bundle behind and nothing here read the mode; the
+ *   `tldrx next --commit` that answer prescribed is refused by the very next line
+ *   of code, so the status screen's only advice was a dead end.
  * `cancelled` — a human closed the run with `tldrx run cancel` (gh #86).
  */
 export const WAITING_KINDS = [
-  "gate", "answer", "ready", "done", "blocked", "failed", "running", "prepared", "cancelled",
+  "gate", "answer", "ready", "done", "blocked", "failed", "running", "prepared", "interrupted",
+  "cancelled",
 ] as const;
 export type WaitingKind = (typeof WAITING_KINDS)[number];
 
@@ -64,10 +72,13 @@ export interface Waiting {
  * something else to move first, and `running` is already in someone's hands, so
  * none of the four is a run you can
  * be handed. `prepared` IS one: the bundle is written and it is waiting on a
- * human to run the prompt and come back through `--commit`. `tldrx status` uses this to pick which run
+ * human to run the prompt and come back through `--commit`. So is `interrupted`:
+ * the turn's process is gone and somebody has to relaunch the loop. `tldrx status` uses this to pick which run
  * wears `← next`, and the dashboard uses it for the same decision.
  */
-export const MOVABLE_KINDS: readonly WaitingKind[] = ["gate", "answer", "ready", "failed", "prepared"];
+export const MOVABLE_KINDS: readonly WaitingKind[] = [
+  "gate", "answer", "ready", "failed", "prepared", "interrupted",
+];
 
 export function isMovable(kind: WaitingKind): boolean {
   return MOVABLE_KINDS.includes(kind);
@@ -258,6 +269,26 @@ export function waitingFor(run: WaitingRun, runDir: string): Waiting {
           kind: "running",
           message: `stage is running (pid ${String(holder.pid)}) — wait, or ` +
             `\`tldrx run unlock ${basename(runDir)}\` if it died`,
+          questions: open,
+        };
+      }
+      // A HEADLESS turn whose process is gone (#246). Checked BEFORE the bundle,
+      // because a headless spawn leaves the same `pending.json` a `--prepare`
+      // does — `runNext` writes the bundle before it branches on the mode — so
+      // the bundle cannot tell them apart and the ledger's last `stage.started`
+      // can. Measured on the 0.16.1 run that filed this: `prepared` here sent the
+      // operator to `tldrx next --commit`, which `commitStage` refuses because
+      // `next` has already demoted the stage to `ready`. What actually moves the
+      // run is relaunching the loop, so that is what this says — one command, and
+      // the next line of code accepts it.
+      //
+      // `startedHeadless` is false whenever the ledger does not say, so a run
+      // whose log is missing or torn keeps the pre-#246 reading below.
+      if (startedHeadless(runDir, entry.stage.id)) {
+        return {
+          kind: "interrupted",
+          message: `${entry.phase.id}/${entry.stage.id} was interrupted — its headless turn's process is gone — `
+            + `\`tldrx run auto ${basename(runDir)}\``,
           questions: open,
         };
       }

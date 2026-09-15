@@ -99,6 +99,12 @@ lock and exits `130`. Run `tldrx next` again and it retries that stage.
 
 If a command died badly and left a lock behind: `tldrx run unlock`.
 
+A `SIGKILL`-class death runs no handler at all, so the stage stays `running` with a dead pid
+in the lock. `tldrx run status` names that for what it is — `was interrupted — its headless
+turn's process is gone` — and prescribes `tldrx run auto <id>`, which is the command that
+actually resumes it. It is not a `--prepare` bundle waiting on you, even though a headless
+turn leaves the same files behind.
+
 ## It said "3 runs are open — pass one" and refused
 
 That is working. With several runs open and no id, a run-targeting command lists them and

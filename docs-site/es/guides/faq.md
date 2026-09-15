@@ -101,6 +101,12 @@ con `130`. Corre `tldrx next` otra vez y reintenta esa etapa.
 
 Si un comando se murió feo y dejó un lock tirado: `tldrx run unlock`.
 
+Una muerte tipo `SIGKILL` no corre ningún handler, así que la etapa se queda en `running` con
+un pid muerto en el lock. `tldrx run status` lo llama por su nombre — `was interrupted — its
+headless turn's process is gone` — y receta `tldrx run auto <id>`, que es el comando que de
+verdad lo retoma. No es un bundle de `--prepare` esperándote, aunque un turno headless deje
+los mismos archivos detrás.
+
 ## Me dijo "3 runs are open — pass one" y se negó
 
 Eso es que está funcionando. Con varios runs abiertos y sin id, un comando que apunta a un
