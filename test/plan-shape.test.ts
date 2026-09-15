@@ -28,6 +28,7 @@ import { runCheck } from "../src/core/run/checks.ts";
 import { loadWorkflowPreset } from "../src/core/run/workflowPreset.ts";
 import { FRAMEWORK_ROOT, PLUGIN_DIR } from "../src/core/paths.ts";
 import { PLAN_SKILL_RELATIVE } from "../src/core/install/skillFile.ts";
+import { MAX_ITEM_CHARS } from "../src/core/schemas/planCommon.ts";
 import { makeRunWorkspace, type TempRunWorkspace } from "./fixtures/tempRunWorkspace.ts";
 
 interface StorySpec {
@@ -155,6 +156,16 @@ describe(`the wave cap (#316): more than ${String(MAX_WAVES_PER_RUN)} waves is r
       expect(found.length, `reason ${bad}`).toBe(1);
       expect(found[0]).toContain(WAVE_CAP_REASON_KEY);
     }
+  });
+
+  test(`an over-cap reason is told its length, the cap, and to write one sentence (#328)`, () => {
+    const long = `"${"x".repeat(MAX_ITEM_CHARS + 88)}"`;
+    const dir = writePlan(planFiles(CHAIN_3, [["S1"], ["S2"], ["S3"]], [`${WAVE_CAP_REASON_KEY}: ${long}`]));
+    const found = messagesOf(dir);
+    expect(found.length).toBe(1);
+    expect(found[0]).toContain(WAVE_CAP_REASON_KEY);
+    expect(found[0]).toContain(`${String(MAX_ITEM_CHARS + 88)} characters (cap ${String(MAX_ITEM_CHARS)})`);
+    expect(found[0]).toContain("one sentence");
   });
 
   test(`${String(MAX_WAVES_PER_RUN)} waves need no reason`, () => {

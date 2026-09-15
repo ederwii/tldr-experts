@@ -16,13 +16,14 @@
  * reaches the agent through the real `tldrx next --prepare` bundle.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { STAGES_DIR } from "../src/core/paths.ts";
 import { MAX_ITEM_CHARS, MAX_LIST_ITEMS, PLAN_STATUSES } from "../src/core/schemas/planCommon.ts";
 import { STORY_KEYS, validateStory } from "../src/core/schemas/story.ts";
 import { EPIC_KEYS } from "../src/core/schemas/epic.ts";
 import { runNext } from "../src/core/facilitator/runNext.ts";
+import { planContractExamples } from "../src/core/plan/schemaContract.ts";
 import {
   makeFacilitatorWorkspace, type FacilitatorWorkspace, type StageOptions,
 } from "./fixtures/facilitator/workspace.ts";
@@ -139,8 +140,8 @@ describe("the violation message names the cap it broke (#38)", () => {
       test_plan: ["unit"], evidence: [],
     }).issues;
     const message = issues.find((i) => i.path === "acceptance[0]")?.message ?? "";
-    expect(message).toContain(`${String(MAX_ITEM_CHARS)}-character cap`);
-    expect(message).toContain(String(MAX_ITEM_CHARS + 1));
+    expect(message).toContain(`${String(MAX_ITEM_CHARS + 1)} characters (cap ${String(MAX_ITEM_CHARS)})`);
+    expect(message).toContain("split it into several items");
   });
 
   test("an over-long LIST is told the item-count cap", () => {
@@ -177,5 +178,52 @@ describe("the plan bundle tells the agent how to COMPLETE `touches` (#132)", () 
     expect(section).toContain("a criterion whose file is not in the surface passes vacuously");
     // Why any of it matters, in the prompt rather than in an issue.
     expect(section).toContain("the story comes back for another paid round");
+  });
+});
+
+/**
+ * The over-cap finding reaches the RETRY, not only the gate's output (#328).
+ *
+ * Measured on this fixture before the fix: a plan whose one defect is a
+ * 683-character `test_plan` item fails the `plan` check, and the next prompt's
+ * `## Previous attempt` read `…683 characters exceeds the 512-character cap on
+ * one list item…es/S1.md failed validation — …` — the instruction to split was
+ * the part cut out. The failure reason is squeezed to one line of a fixed width
+ * on its way into the next prompt (the facilitator's, not this check's), with the
+ * middle elided, so the finding has to put what to DO where it survives.
+ */
+describe("a plan-stage retry carries the over-cap finding (#328)", () => {
+  test("the next prompt names the field, the length, the cap and the split", async () => {
+    const ws = makeFacilitatorWorkspace({ scope: "demo", stages: PLAN_STAGE, budgetUsd: 10 });
+    workspaces.push(ws);
+    const base = { root: ws.root, dryRun: false, yolo: false, actor: "alan", at: "2026-08-31T09:00:00Z" } as const;
+    expect((await runNext({ ...base, mode: "prepare" })).code).toBe(0);
+
+    const examples = planContractExamples();
+    const long = `Unit: ${"x".repeat(MAX_ITEM_CHARS + 171 - "Unit: ".length)}`;
+    const plan = join(ws.runDir, "03-plan");
+    mkdirSync(join(plan, "stories"), { recursive: true });
+    mkdirSync(join(plan, "epics"), { recursive: true });
+    writeFileSync(join(plan, "stories", "S1.md"), examples.story
+      .replace("repo: example", "repo: lab")
+      .replace(examples.dodCommands[0] ?? "", "true")
+      .replace(/^test_plan: .*$/m, `test_plan: ["${long}"]`), "utf8");
+    writeFileSync(join(plan, "epics", "E1.md"), examples.epic.replace("[example]", "[lab]"), "utf8");
+    writeFileSync(join(plan, "waves.yml"), examples.waves, "utf8");
+    writeFileSync(join(ws.runDir, "waves.yml"), examples.waves, "utf8");
+    writeFileSync(join(ws.runDir, ".agent", "plan", "result.json"), JSON.stringify({
+      outputs: ["waves.yml"], questions_asked: [], notes: "plan written", cost_usd: 0.1,
+      session_id: "c9f1a2b0-1f2e-4c3d-9a10-6b7c8d9e0f11",
+    }), "utf8");
+    const committed = await runNext({ ...base, mode: "commit" });
+    expect(committed.lines.join("\n")).toContain("check `plan` failed");
+
+    expect((await runNext({ ...base, mode: "prepare" })).code).toBe(0);
+    const prompt = readFileSync(join(ws.runDir, ".agent", "plan", "prompt.md"), "utf8");
+    const at = prompt.indexOf("## Previous attempt");
+    const failed = prompt.slice(at).split("\n").find((line) => line.startsWith("The previous attempt at this stage FAILED")) ?? "(no failure line)";
+    expect(failed).toContain("stories/S1.md test_plan[0]");
+    expect(failed).toContain(`${String(MAX_ITEM_CHARS + 171)} characters (cap ${String(MAX_ITEM_CHARS)})`);
+    expect(failed).toContain("split it into several items");
   });
 });

@@ -126,7 +126,7 @@ describe("an invalid story is not reported as a missing one (#37)", () => {
     expect(report.ok).toBe(false);
     const root = report.issues.find((i) => i.file === "stories/S8.md");
     expect(root?.path).toBe("acceptance[1]");
-    expect(root?.message).toContain(`${String(MAX_ITEM_CHARS)}-character cap`);
+    expect(root?.message).toContain(`(cap ${String(MAX_ITEM_CHARS)})`);
   });
 
   test("nothing claims S8 has no file, because S8.md exists", () => {

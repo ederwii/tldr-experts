@@ -70,6 +70,20 @@
   byte-identical (golden unchanged). No new config key, event or field. Not in this
   change: sizing the stage from the plan once it exists, and `budget show`
   naming what its estimate excludes — both named on #325.
+- **The Plan prompt states the per-item character cap where each capped field is described, and
+  an over-cap finding now survives into the retry (closes #328).** Two plan stages failed on the
+  same cap in one day: a 683-character `test_plan` item, and a `wave_cap_reason` — held to the
+  same cap at the gate, and stated nowhere the Plan agent reads before writing it. The
+  `acceptance` and `test_plan` rows now say "one sentence each; split a long … into several
+  items", and the Plan-shape wave-cap rule and the Caps list name `wave_cap_reason`'s cap — all
+  rendered from `MAX_ITEM_CHARS`, never a typed number. The retry half was measured, not assumed:
+  a failed check's reason reaches the next `## Previous attempt` squeezed to one line with its
+  middle elided, and on a one-defect plan the old message lost "split it into several items" to
+  that ellipsis. The finding is now `<n> characters (cap <cap>) — split it into several items`,
+  short enough that the field, the length, the cap and the instruction reach the retry; an
+  over-cap `wave_cap_reason` is told its length and the cap too. A prompt byte change by
+  design; no Build golden moves. Not in this change: the facilitator's one-line squeeze itself,
+  which still elides whatever a longer multi-finding reason puts in the middle.
 
 ## 0.28.1 — 2026-09-15
 

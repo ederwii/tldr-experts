@@ -80,7 +80,8 @@ export const PLAN_SHAPE_RULES: readonly PlanShapeRule[] = [
     text: `**At most ${String(MAX_WAVES_PER_RUN)} waves** (patch for ${RUN_SIZE_ISSUES} — the framework's measured `
       + "carry today, not a design preference). A later wave waits on every earlier merge, so each extra wave is "
       + "a stall: a 4-wave plan left 2 stories never attempted. The `plan` check refuses more unless the root of "
-      + `\`${WAVES_FILE}\` records \`${WAVE_CAP_REASON_KEY}: "<why these stories cannot share a wave>"\`.`,
+      + `\`${WAVES_FILE}\` records \`${WAVE_CAP_REASON_KEY}: "<why these stories cannot share a wave>"\` — one sentence `
+      + `on one line, at most ${String(MAX_ITEM_CHARS)} characters (#328).`,
   },
   {
     issue: "#316",
@@ -111,12 +112,25 @@ export const PLAN_SHAPE_RULES: readonly PlanShapeRule[] = [
   },
 ];
 
-/** The gate's refusal for a plan over the wave cap. `invalid`: a reason was written and is not one. */
-export function waveCapMessage(waves: number, invalid = false): string {
+/**
+ * The gate's refusal for a plan over the wave cap. `written`: the root key's value
+ * as parsed, `undefined` when the plan wrote none. A string over the cap is told
+ * its length and the cap (#328), the way an over-cap list item is.
+ */
+export function waveCapMessage(waves: number, written?: unknown): string {
   return `${String(waves)} waves — the framework carries ${String(MAX_WAVES_PER_RUN)} per run today `
     + `(patch for ${RUN_SIZE_ISSUES}; a later wave waits on every earlier merge, #316): run independent stories `
     + `in parallel, split the run, or record why at the root of ${WAVES_FILE} as \`${WAVE_CAP_REASON_KEY}: "<why>"\``
-    + (invalid ? ` — the \`${WAVE_CAP_REASON_KEY}\` written is not a non-empty line of at most ${String(MAX_ITEM_CHARS)} characters` : "");
+    + invalidReason(written);
+}
+
+function invalidReason(written: unknown): string {
+  if (written === undefined) return "";
+  const key = `\`${WAVE_CAP_REASON_KEY}\``;
+  if (typeof written === "string" && written.length > MAX_ITEM_CHARS) {
+    return ` — the ${key} written is ${String(written.length)} characters (cap ${String(MAX_ITEM_CHARS)}): one sentence, on one line`;
+  }
+  return ` — the ${key} written is not a non-empty line of at most ${String(MAX_ITEM_CHARS)} characters`;
 }
 
 /** The gate's refusal for a story scheduled later than its dependencies need. */
@@ -186,7 +200,7 @@ export function validatePlanShape(planDir: string): PlanShapeReport {
     if (count > MAX_WAVES_PER_RUN) {
       const reason = isRecord(doc) ? doc[WAVE_CAP_REASON_KEY] : undefined;
       const valid = typeof reason === "string" && reason.trim() !== "" && reason.length <= MAX_ITEM_CHARS && !reason.includes("\n");
-      if (!valid) issues.push({ file: WAVES_FILE, path: WAVE_CAP_REASON_KEY, message: waveCapMessage(count, reason !== undefined) });
+      if (!valid) issues.push({ file: WAVES_FILE, path: WAVE_CAP_REASON_KEY, message: waveCapMessage(count, reason) });
     }
 
     const at = scheduleOf(waves);

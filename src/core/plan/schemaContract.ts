@@ -35,7 +35,7 @@ import { EPIC_KEYS } from "../schemas/epic.ts";
 import { BUDGET_REQUIRED_KEYS } from "../schemas/budget.ts";
 import { FENCE } from "../schemas/frontMatter.ts";
 import { EPICS_DIR, PLAN_BUDGET_FILE, STORIES_DIR, WAVES_FILE } from "./validatePlan.ts";
-import { PLAN_SHAPE_HEADING, PLAN_SHAPE_RULES } from "./planShape.ts";
+import { PLAN_SHAPE_HEADING, PLAN_SHAPE_RULES, WAVE_CAP_REASON_KEY } from "./planShape.ts";
 
 /** The H2 the facilitator splices this under, in `stage.md`. */
 export const PLAN_CONTRACT_HEADING = "Output schemas";
@@ -67,7 +67,14 @@ const STAKES_ENUM = STORY_STAKES.map((value) => `\`${value}\``).join(", ");
 const STATUS_ENUM = PLAN_STATUSES.join(" | ");
 /** The same list for a table cell, where a `|` would open a new column. */
 const STATUS_CELL = PLAN_STATUSES.map((status) => `\`${status}\``).join(", ");
-const ITEM_RULE = `non-empty · at most ${String(MAX_LIST_ITEMS)} items · at most ${String(MAX_ITEM_CHARS)} characters per item`;
+/**
+ * A prose list's rule: the caps, and what to do instead of lengthening an item (#328).
+ * A field run still wrote a 683-character `test_plan` item under the bare numbers.
+ */
+function itemRule(what: string): string {
+  return `non-empty · at most ${String(MAX_LIST_ITEMS)} items · at most ${String(MAX_ITEM_CHARS)} characters per item — `
+    + `one sentence each; split a long ${what} into several items`;
+}
 
 /** The H3 the `touches` rule points at, and the checklist writes. */
 const TOUCHES_CHECKLIST_HEADING = "Completing `touches`";
@@ -128,8 +135,8 @@ const STORY_FIELDS: Readonly<Record<StoryKey, Field>> = {
     rule: `non-empty · at most ${String(MAX_TOUCHES)} paths · no \`..\` — and COMPLETE: `
       + `see **${TOUCHES_CHECKLIST_HEADING}** below, the one rule here no validator can catch`,
   },
-  acceptance: { value: '["Top-50 ranks render from the materialised view, newest hunt first"]', rule: ITEM_RULE },
-  test_plan: { value: '["Unit: rank ordering with ties, empty table, single player"]', rule: ITEM_RULE },
+  acceptance: { value: '["Top-50 ranks render from the materialised view, newest hunt first"]', rule: itemRule("criterion") },
+  test_plan: { value: '["Unit: rank ordering with ties, empty table, single player"]', rule: itemRule("test plan") },
   evidence: { value: "[]", rule: "Build fills it; leave it empty here" },
   stakes: {
     value: "correctness",
@@ -274,7 +281,7 @@ export function planContractExamples(): PlanContractExamples {
 
 /** Every cap the Plan schemas enforce, with the constant that sets it. */
 const CAPS: readonly { readonly value: number; readonly what: string }[] = [
-  { value: MAX_ITEM_CHARS, what: "characters in ONE list item, and in a `title`" },
+  { value: MAX_ITEM_CHARS, what: `characters in ONE list item, in a \`title\`, and in \`${WAVES_FILE}\`'s \`${WAVE_CAP_REASON_KEY}\`` },
   { value: MAX_LIST_ITEMS, what: "items in ONE list (`acceptance`, `test_plan`, `depends_on`, `evidence`, `repos`, `stories`)" },
   { value: MAX_TOUCHES, what: "paths in a story's `touches`" },
   { value: MAX_WAVES, what: `waves in \`${WAVES_FILE}\`` },
@@ -403,8 +410,8 @@ export function renderPlanSchemaContract(): string {
     "",
     ...CAPS.map((cap) => `- **${String(cap.value)}** — ${cap.what}`),
     "",
-    `An over-cap value is refused, never trimmed. Split a long acceptance criterion into several`,
-    `items rather than writing one over ${String(MAX_ITEM_CHARS)} characters.`,
+    `An over-cap value is refused, never trimmed. Split a long acceptance criterion or test plan into`,
+    `several items rather than writing one over ${String(MAX_ITEM_CHARS)} characters.`,
   ].join("\n");
 }
 
