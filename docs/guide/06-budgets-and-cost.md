@@ -449,14 +449,32 @@ refuses the review before spawning it rather than buying one that cannot finish.
 
 ## Running stories in parallel does not change the bill
 
-`--parallel N` (guide 3) changes when the money is spent, not how much. A Build
-stage divides its ceiling by `stories x 2 attempts x (developer + a quarter for the
-reviewer)` up front, so the sum of every sub-agent ceiling it can hand out is inside
-the stage ceiling however the attempts fall — and however many are in flight at once.
-Three developers running together each get the same share they would have got one at
-a time. (The reviewer floor above is the one deliberate exception to that sum: it can
-lift a small stage's worst case past its ceiling, and the budget gate is what stops a
-stage that actually runs out.)
+`--parallel N` (guide 3) changes when the money is spent, not how much. An unpriced
+plan's stories share the stage's ceiling divided by `stories x 2 attempts x (developer +
+a quarter for the reviewer)` up front. A priced story's developer may be handed up to
+three times its price, which is deliberately allowed to over-run a single estimate —
+and every one of those caps is derived from what the stage has METERED, which is stale
+the moment two developers start at once.
+
+Measured live (gh #325): a $21.60 stage spawned two developers in one wave under $21.00
+and $16.50 before either had spent a cent; spend landed at $33.07 and the second story's
+review was refused on "$0.00 left". So a wave now **reserves** as it dispatches. Each lane's
+developer cap is bounded by the stage's remainder, less the caps of the lanes already in
+flight, less a $2.00 reviewer floor for every story of the fan-out whose review is still
+ahead — its own included. A lane that bound would put under the least its developer may
+be given (`story_cap_floor_usd` for a priced story; an unpriced story's own share) waits
+for a lane to finish, and the run says so with the figures:
+
+```
+  · S2: not dispatched beside S1 yet — the stage has $8.00 left, $6.00 is reserved for the
+    developer(s) already in flight (S1) and $4.00 holds a reviewer floor for 2 story(ies),
+    which leaves -$2.00 where S2's developer may not be spawned under $4.00; it waits for a
+    lane to meter
+```
+
+When nothing else is in flight nothing is freed by waiting, so the lane runs at that floor
+rather than stalling. `--parallel 1` reserves nothing: one story at a time already sees
+every cent the one before it metered.
 
 ## What "the estimate" means, once a stage has started
 

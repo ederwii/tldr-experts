@@ -306,10 +306,105 @@ export function developerCap(parts: CapParts, storyId?: string, attempt = 1): nu
  * has.
  */
 export function storyCeilingUsd(parts: CapParts, price: number): number {
-  const floor = parts.budgetUsd > 0
+  return Math.max(price * storyCapMultiplierOf(parts), clampedStoryFloorUsd(parts));
+}
+
+/** `story_cap_floor_usd`, clamped to the stage's own ceiling — `storyCeilingUsd`'s floor. */
+export function clampedStoryFloorUsd(parts: CapParts): number {
+  return parts.budgetUsd > 0
     ? Math.min(storyCapFloorOf(parts), parts.budgetUsd)
     : storyCapFloorOf(parts);
-  return Math.max(price * storyCapMultiplierOf(parts), floor);
+}
+
+/**
+ * The least a developer is ALREADY allowed to be spawned with on this attempt —
+ * never a new number (gh #325).
+ *
+ * A priced story's cap is `storyCeilingUsd / divisor`, and that ceiling never
+ * drops below `clampedStoryFloorUsd`, so the floor ÷ the same divisor is the
+ * smallest priced cap `developerCap` can hand out. An unpriced story has no
+ * floor at all: its uniform share IS the only cap it is ever spawned with. Either
+ * way it is clamped by `developerCap` itself, so `per_agent_max_usd` / `--max-usd`
+ * still win.
+ */
+export function developerFloorUsd(parts: CapParts, storyId: string, attempt = 1): number {
+  const cap = developerCap(parts, storyId, attempt);
+  if (priceOf(parts, storyId) === null) return cap;
+  return Math.min(cap, round2(clampedStoryFloorUsd(parts) / developerAttemptDivisor(attempt, attemptsOf(parts))));
+}
+
+// --- a parallel wave's lanes (gh #325) ------------------------------------------
+
+/** A lane of the same wave whose developer is dispatched and not yet finished. */
+export interface WaveLaneReservation {
+  readonly storyId: string;
+  /** What that developer was spawned under — unmetered money it may still spend. */
+  readonly capUsd: number;
+}
+
+/** What the wave knows at the instant lane k is about to be dispatched. DATA only. */
+export interface WaveLaneState {
+  readonly storyId: string;
+  readonly attempt: number;
+  /** Lanes of this fan-out still in half A. */
+  readonly inFlight: readonly WaveLaneReservation[];
+  /**
+   * Stories of this fan-out whose half A finished heading for a review. Half B
+   * — every reviewer — runs only after the WHOLE fan-out returns, so their review
+   * money is still owed while later lanes are dispatched.
+   */
+  readonly awaitingReview: number;
+}
+
+export type WaveLaneFunding =
+  | { readonly kind: "dispatch"; readonly capUsd: number }
+  | { readonly kind: "defer"; readonly reason: string };
+
+/**
+ * The developer cap one lane of a parallel wave may be dispatched under (gh #325).
+ *
+ * Every other cap in this file reads the stage's METERED remainder, and every one
+ * of them assumed serial dispatch: a second story was only supposed to see the
+ * stage once the first had metered. Two lanes spawned in the same instant both
+ * see the whole stage. Measured live: a $21.60 stage handed S1 $21.00 and S2
+ * $16.50 in one wave, spend landed at $33.07, and S2's reviewer was refused on
+ * "$0.00 left".
+ *
+ * So lane k is bounded by the metered remainder, LESS what the lanes already in
+ * flight were handed (money they may still spend and nothing has counted yet),
+ * LESS one `REVIEWER_FLOOR_USD` for every story of the fan-out whose review is
+ * still ahead of it, lane k's own included — so every dispatched story's review
+ * stays fundable. A lane never gets MORE than `developerCap`.
+ *
+ * Below `developerFloorUsd` — the least a developer is already allowed — the lane
+ * is DEFERRED when another lane is in flight: that lane's finish replaces its
+ * reservation with its metered spend, which is the only thing that can change the
+ * answer. With nothing in flight nothing will be freed by waiting (`spentUsd` is
+ * this invocation's), so the lane is dispatched exactly as the floor allows —
+ * never deferred into a stall and never spawned under a turn's floor.
+ *
+ * `null` from `stageRemainderUsd` — a stage with no budget figure — bounds
+ * nothing: a remainder invented for it would be the confident zero §7 forbids.
+ */
+export function waveLaneFunding(parts: CapParts, spentUsd: number, lane: WaveLaneState): WaveLaneFunding {
+  const own = developerCap(parts, lane.storyId, lane.attempt);
+  const remainder = stageRemainderUsd(parts, spentUsd);
+  if (remainder === null) return { kind: "dispatch", capUsd: own };
+  const reservedUsd = round2(lane.inFlight.reduce((sum, r) => sum + r.capUsd, 0));
+  const stories = lane.inFlight.length + lane.awaitingReview + 1;
+  const floorsUsd = round2(stories * REVIEWER_FLOOR_USD);
+  const bound = round2(remainder - reservedUsd - floorsUsd);
+  const floor = developerFloorUsd(parts, lane.storyId, lane.attempt);
+  if (bound >= floor) return { kind: "dispatch", capUsd: Math.min(own, bound) };
+  if (lane.inFlight.length === 0) return { kind: "dispatch", capUsd: floor };
+  const ids = lane.inFlight.map((r) => r.storyId).join(", ");
+  return {
+    kind: "defer",
+    reason: `${lane.storyId}: not dispatched beside ${ids} yet — the stage has ${usd(remainder)} left, `
+      + `${usd(reservedUsd)} is reserved for the developer(s) already in flight (${ids}) and ${usd(floorsUsd)} `
+      + `holds a reviewer floor for ${String(stories)} story(ies), which leaves ${bound < 0 ? `-${usd(-bound)}` : usd(bound)} where `
+      + `${lane.storyId}'s developer may not be spawned under ${usd(floor)}; it waits for a lane to meter`,
+  };
 }
 
 /**
@@ -476,9 +571,7 @@ export function storyCapDerivation(
   const scaled = priceOf(parts, storyId);
   if (scaled === null) return null;
   const planPriceUsd = parts.prices.get(storyId) as number;
-  const floorUsd = parts.budgetUsd > 0
-    ? Math.min(storyCapFloorOf(parts), parts.budgetUsd)
-    : storyCapFloorOf(parts);
+  const floorUsd = clampedStoryFloorUsd(parts);
   return {
     storyId,
     attempt,

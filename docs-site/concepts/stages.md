@@ -44,7 +44,10 @@ in an **earlier** wave — so Build runs **two at a time by default**, and merge
 the epic in the wave's listed order however the two finish. `tldrx next --parallel N` (and
 `tldrx run auto --parallel N`) changes it per run; `parallel: N` in your own
 `.tldrx/stages/build/stage.yml`, or `build: {parallel: N}` in a workflow, changes it for
-good. Two rather than more because a wider fan-out is what a laptop notices first.
+good. Two rather than more because a wider fan-out is what a laptop notices first. Two
+stories at once never claim the same money twice: each lane's developer is capped at what
+the stage has left after the lanes already running and a review for each, and a lane the
+stage cannot fund yet waits for one to finish — the run prints the figures.
 
 Merging them in order means the second one's branch is behind the epic by the time its turn
 comes — its definition of done proved a tree without the first story's work in it. So just
