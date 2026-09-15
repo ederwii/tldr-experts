@@ -76,6 +76,7 @@ function finding(overrides: Partial<FixFinding>): FixFinding {
     doNot: [],
     resolved: false,
     resolvedSha: null,
+    resolvedShaRefusal: null,
     ...overrides,
   };
 }

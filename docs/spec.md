@@ -4468,6 +4468,17 @@ them does not parse, and the finding it belongs to is dropped rather than half-r
   verification already downgraded, and every other finding in the file stay byte-identical. Each rewrite is named on
   stdout. A sha git cannot resolve is never rewritten: that is the failure path above, which WITHDRAWS the claim
   rather than tidying it.
+- **A token of 41+ hex characters is REFUSED by name — it is never read as "no sha" (#163).** The shape rule is one
+  grammar with three answers: **7 to 39** is an abbreviation (accepted, then canonicalised by the rule above), **40**
+  is the object id, and **41 or more** is neither, so there is no reading of it that is not a guess. The old regex
+  made that guess in the dangerous direction twice over: no position inside an over-long hex run is a word boundary,
+  so the token produced no match and the line read as a bare `Resolved: yes` with the shape fault never stated — and
+  the scan then carried on to the next hex word, so `Resolved: yes <41 hex> (see 9f2c1ab)` closed the finding over a
+  DIFFERENT commit from the one the line claims. An over-long token now withdraws the claim the way every
+  unverifiable one is withdrawn — `Resolved: claimed-unverified — named \`<token>\` — <n> hex characters, …` — so the
+  finding keeps holding the story and the file says why. A refusal anywhere on the line refuses the whole read: the
+  answer may not depend on which side of the bad token a good one sits. A `Resolved: no` carrying a hex word is prose,
+  claims nothing, and is refused nothing.
 - **One round per story** (`MAX_FIXLIST_ROUNDS`, reset by `story reopen` like every other count in the review ledger).
   A free round that could be taken twice is a story that never has to settle, so a second `fixlist` is refused out
   loud and read as `changes` — which costs the attempt the first one did not — and the SECOND reviewer's prompt

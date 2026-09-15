@@ -3535,6 +3535,7 @@ describe("a carried finding nobody's story owns reaches `## Unknowns` (#171)", (
       n: 1, severity: "high", finding: "a finding", where: "[src: app:platform/Auth.cs:3]",
       kind: "correctness", normalisedFrom: null,
       disposition: "defer-with-log", detail: "", doNot: [], resolved: false, resolvedSha: null,
+      resolvedShaRefusal: null,
       ...overrides,
     };
   }
@@ -3682,6 +3683,7 @@ describe("the carried-findings leaf, and what every surface gets from it (#171, 
       n: 1, severity: "high", finding: "the token is logged", where: "[src: app:platform/Auth.cs:3]",
       kind: "correctness", normalisedFrom: null,
       disposition: "defer-with-log", detail: "", doNot: [], resolved: false, resolvedSha: null,
+      resolvedShaRefusal: null,
       ...overrides,
     };
   }
