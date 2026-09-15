@@ -907,3 +907,91 @@ describe("a retry after a refused card repairs it rather than restarting (#301)"
     expect(token?.refs.map((ref) => ref.kind)).toEqual(["file"]);
   });
 });
+
+/**
+ * #306. The stage fails on the FIRST card that does not validate, and `tldrx next`
+ * / `run auto --retry-failed` re-enters the executor from the top — so every
+ * feature's writer was spawned again, including the ones whose card had already
+ * validated and been stamped. Each of those re-spawns pays at least `MIN_AGENT_USD`
+ * for a card nothing refused.
+ */
+describe("a retry keeps a card that already validated instead of paying for it again (#306)", () => {
+  const SOURCED_WHERE = "- Application Insights `traces` [src: api:src/Leaderboard.cs:3]";
+  const UNSOURCED_WHERE = "- PostgreSQL `leaderboard_refreshes` table, read over a database connection";
+
+  /** Two features: `leaderboard` (E1, 2 done stories) and `other` (E2, 1 done story). */
+  function twoFeaturePlan(): Record<string, string> {
+    const plan = defaultPlan();
+    plan["03-plan/stories/S3.md"] = story("S3", "E2", "done", "lab");
+    return plan;
+  }
+
+  function refusedCard(id: string, stories: readonly string[]): string {
+    const text = card(id, stories, LIVE_SIGNAL);
+    expect(text).toContain(SOURCED_WHERE);
+    return text.replace(SOURCED_WHERE, UNSOURCED_WHERE);
+  }
+
+  test("attempt 2 spawns only for the refused feature, and the kept card is a $0.00 row", async () => {
+    const { ws, ctx } = fixture(twoFeaturePlan());
+    // Attempt 1: `leaderboard` validates and is stamped; `other` is refused, so
+    // the stage fails with both cards on disk.
+    fakeClaude(ws, {
+      [watcherRelPath("leaderboard")]: card("leaderboard", ["S1", "S2"], LIVE_SIGNAL),
+      [watcherRelPath("other")]: refusedCard("other", ["S3"]),
+    });
+    const first = await watchExecutor(ctx);
+    expect(first.ok).toBe(false);
+    const kept = read(ws, watcherRelPath("leaderboard"));
+    expect(kept).toContain("status: verified");
+
+    // Attempt 2, headless — the same call `run auto --retry-failed` makes. The
+    // fake writes ONLY the refused feature's card now, so a spawn for
+    // `leaderboard` would be visible as a rewrite that never happened.
+    const spawned: string[] = [];
+    fakeClaude(ws, { [watcherRelPath("other")]: card("other", ["S3"], LIVE_SIGNAL) });
+    const outcome = await watchExecutor({
+      ...ctx,
+      emit: (type, payload) => {
+        if (type === "agent.spawned") spawned.push(String((payload as { key?: unknown }).key ?? ""));
+      },
+    });
+
+    expect(outcome.ok).toBe(true);
+    // The whole feature: one spawn, not two.
+    expect(spawned).toEqual(["other"]);
+    // The kept card is still a row — the run records what happened to every
+    // feature — and it says no turn was bought for it.
+    const leaderboardRow = outcome.tasks.find((task) => task.key === "leaderboard");
+    expect(leaderboardRow).toBeDefined();
+    expect(leaderboardRow?.costUsd).toBe(0);
+    expect(leaderboardRow?.sessionId).toBeNull();
+    expect(leaderboardRow?.model).toBeNull();
+    expect(outcome.costUsd).toBeCloseTo(0.11, 5);
+    // Byte-identical: nothing rewrote it.
+    expect(read(ws, watcherRelPath("leaderboard"))).toBe(kept);
+    // And the stage SAYS so, rather than leaving a $0.00 row to be read as a bug.
+    expect(outcome.lines.join("\n")).toContain("already validated");
+  });
+
+  test("a first attempt with no cards on disk still spawns for every feature", async () => {
+    const { ws, ctx } = fixture(twoFeaturePlan());
+    const spawned: string[] = [];
+    fakeClaude(ws, {
+      [watcherRelPath("leaderboard")]: card("leaderboard", ["S1", "S2"], LIVE_SIGNAL),
+      [watcherRelPath("other")]: card("other", ["S3"], LIVE_SIGNAL),
+    });
+
+    const outcome = await watchExecutor({
+      ...ctx,
+      emit: (type, payload) => {
+        if (type === "agent.spawned") spawned.push(String((payload as { key?: unknown }).key ?? ""));
+      },
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(spawned).toEqual(["leaderboard", "other"]);
+    expect(outcome.costUsd).toBeCloseTo(0.22, 5);
+    expect(outcome.lines.join("\n")).not.toContain("already validated");
+  });
+});

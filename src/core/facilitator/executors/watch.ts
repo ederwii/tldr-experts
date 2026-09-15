@@ -146,12 +146,62 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
   if (ctx.mode === "prepare") return prepare(ctx, features, prompts);
 
   const tasks: ExecutorTask[] = [];
+  /** Features whose card was already on disk and already valid (#306), in order. */
+  const keptIds: string[] = [];
   if (ctx.mode === "commit") {
     const collected = collectResults(ctx, features);
     if (collected.error !== null) return failed(ctx, collected.error, collected.tasks);
     tasks.push(...collected.tasks);
   } else {
+    // The decision is a SNAPSHOT of disk as the stage was entered, taken before
+    // anything spawns — not a per-feature read inside the loop. A writer is told
+    // to write one card and one card only, but it runs with the run directory in
+    // front of it, and a loop that re-read disk each time would let feature 1's
+    // sub-agent decide whether feature 2 gets written at all. What this skip is
+    // allowed to mean is "the PREVIOUS attempt already produced this", nothing
+    // else.
+    const kept = new Set(
+      features.filter((feature) => keptCard(ctx, feature, srcCtx)).map((feature) => feature.id),
+    );
     for (const [i, feature] of features.entries()) {
+      // A card already on disk that validates under THIS stage's `srcCtx` is
+      // finished work, and a retry must not buy it again (#306).
+      //
+      // The stage fails on the FIRST card that does not validate, and
+      // `tldrx next` / `run auto --retry-failed` re-enters the executor from the
+      // top — so a run with N features where feature k was refused used to spawn
+      // N writers on every attempt, including the k-1 cards that had already
+      // validated and been STAMPED. Each of those paid at least `MIN_AGENT_USD`
+      // (a cold spawn's floor, `:53`) for a card nothing had refused. #301 made
+      // that second spend an edit rather than a rewrite; this makes it zero.
+      //
+      // The predicate is the same one the validation loop below judges with —
+      // `parseWatcherCard` against the same single `srcCtx` — so a card is kept
+      // iff it would pass, and never because it merely exists. A card whose
+      // citations have since gone stale re-validates as refused here and is
+      // rewritten like any other.
+      //
+      // The row it records is a REAL measured zero, not an unmetered one: no
+      // turn was bought, so `metered: false` (which means "billed to the host,
+      // figure unknown") would be the wrong claim. `model` and `sessionId` are
+      // null because no model ran — absent is "not recorded", and the stage's
+      // report names every kept card so a $0.00 row is never read as a lost one.
+      if (kept.has(feature.id)) {
+        keptIds.push(feature.id);
+        tasks.push({
+          key: feature.id,
+          model: null,
+          costUsd: 0,
+          sessionId: null,
+          error: null,
+          outputs: [watcherRelPath(feature.id)],
+        });
+        continue;
+      }
+      // The share stays over EVERY feature, not just the ones still to be
+      // written: the ceiling a retry hands a writer is then the same number the
+      // first attempt handed it, and `floorOverrun` above — which is checked
+      // over `features.length` — keeps meaning what it says.
       const cap = agentShare(ctx, features.length);
       // The ceiling ON THE LOG, before the turn rather than after it (gh #190).
       //
@@ -249,6 +299,15 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
         return `  ${w.card.decidedStatus === "verified" ? "✓" : "·"} ${w.feature.id} (${w.feature.epicId}) — `
           + `${w.card.decidedStatus}${unmerged === null ? "" : `, ${unmerged}`}`;
       }),
+      // Why some rows cost $0.00, said where the rows are read (#306). Without
+      // it a kept card is indistinguishable from a writer that silently did
+      // nothing — the same shape, in `run.yml`, that gh #224 was about.
+      ...(keptIds.length === 0
+        ? []
+        : [
+          `  ${String(keptIds.length)} card(s) already validated on disk and were kept — no writer was `
+            + `spawned for them: ${keptIds.join(", ")}`,
+        ]),
       `wrote ${HANDOFF_REL}`,
     ],
     error: null,
@@ -584,6 +643,28 @@ function writeHandoff(ctx: ExecutorContext, cards: readonly WrittenCard[], costU
     }),
     "utf8",
   );
+}
+
+/**
+ * Is this feature's card already written AND already valid (#306)?
+ *
+ * One derivation with the validation loop: the SAME `parseWatcherCard` against
+ * the SAME `srcCtx` the stage judges the finished cards with. A card that would
+ * be refused below is not kept here, so the skip can never hide a bad card — the
+ * worst it can do is decline to save money.
+ *
+ * A read that throws (a card deleted between `existsSync` and here, a permission
+ * fault) returns false: the writer is spawned, which is what would have happened
+ * before any of this existed.
+ */
+function keptCard(ctx: ExecutorContext, feature: Feature, srcCtx: SrcContext): boolean {
+  const abs = join(ctx.runDir, watcherRelPath(feature.id));
+  if (!existsSync(abs)) return false;
+  try {
+    return parseWatcherCard(readFileSync(abs, "utf8"), srcCtx, feature.id).ok;
+  } catch {
+    return false;
+  }
 }
 
 function failed(ctx: ExecutorContext, error: string, tasks: readonly ExecutorTask[]): ExecutorOutcome {

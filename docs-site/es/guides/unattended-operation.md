@@ -648,6 +648,11 @@ Tres cosas lo acotan, y las tres importan:
   misma, y la última línea dice la cuenta — `3 consecutive stage failures at 03-plan/plan …` —
   para que la carga `run.failed` en tu teléfono diga que el bucle lo intentó, en vez de un `5`
   pelado.
+  Watch es la única etapa que gasta MENOS en un reintento que en el primer intento: escribe una
+  ficha por feature entregada y falla en la primera ficha que no valida, así que el intento
+  siguiente conserva cada ficha que ya validaba — no se lanza ningún escritor para ésas, y sólo
+  se vuelven a comprar los features rechazados. Sus filas en `run.yml` son un `cost_usd: 0.0`
+  real y sin `session_id`, y el reporte de la etapa las nombra.
 
 El máximo es `3`; cualquier valor mayor se rechaza por nombre con salida `1`.
 
