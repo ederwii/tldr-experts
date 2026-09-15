@@ -288,6 +288,67 @@ describe("a fix list closed by hand settles its blocked story with no spawn (gh 
   }, 120_000);
 });
 
+// GUARDS, not proofs: both passed the moment the code they cover was written.
+describe("what the auto-close must NOT close (gh #327, guards)", () => {
+  test("GUARD: a HOST review's approve closes nothing — the host closes lines by hand", async () => {
+    const ws = workspace();
+    process.env.FAKE_BUILD_FAIL_REASON = "Reached maximum budget ($1)";
+    process.env.FAKE_BUILD_FAIL = "reviewer:S1#1";
+    await next(ws, { mode: "prepare" });
+    writeFileSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`, "s1.txt"), "S1\n", "utf8");
+    writeFileSync(join(ws.runDir, ".agent", "build", "S1", "result.json"), JSON.stringify({
+      outputs: ["s1.txt"], questions_asked: [], notes: "", cost_usd: 0, session_id: "sess-author-1",
+    }), "utf8");
+    await next(ws, { mode: "commit", at: "2026-08-29T09:30:00Z" });
+    await next(ws, { mode: "prepare", at: "2026-08-29T09:40:00Z" });
+    const reviewResult = join(ws.runDir, ".agent", "build", "S1", "review", "result.json");
+    writeFileSync(reviewResult, JSON.stringify({
+      verdict: "fixlist", summary: "signed, with one defect", findings: [], fixlist: [FINDINGS[0]],
+    }), "utf8");
+    await next(ws, { mode: "commit", review: true, at: "2026-08-29T09:50:00Z" });
+    await next(ws, { mode: "prepare", review: true, at: "2026-08-29T09:55:00Z" });
+    // The host's reviewer WAS shown the finding — one renderer for both doors.
+    expect(readFileSync(join(ws.runDir, ".agent", "build", "S1", "review", "prompt.md"), "utf8"))
+      .toContain(FIX_ROUND_REVIEW_HEADING);
+    writeFileSync(reviewResult, JSON.stringify({ verdict: "approve", summary: "re-read", findings: [] }), "utf8");
+    const settled = await next(ws, { mode: "commit", review: true, at: "2026-08-29T09:58:00Z" });
+
+    const text = readFileSync(fixlistPath(ws), "utf8");
+    expect(text).not.toContain(AUTO_CLOSED_MARK);
+    expect(parseFixlistFile(text).find((f) => f.n === 1)?.resolved).toBe(false);
+    expect(settled.lines.join("\n")).not.toContain(AUTO_CLOSED_MARK);
+    expect(story(ws, "S1")).toContain("status: blocked");
+  }, 120_000);
+
+  test("GUARD: a NEWER fix-list round written between the spawn and the settle closes nothing", async () => {
+    const ws = workspace();
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["fixlist", "approve"] });
+    process.env.FAKE_BUILD_FIXLIST = JSON.stringify({ S1: [FINDINGS[0]] });
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({ "S1#2": { "s1.txt": "S1 fixed\n" } });
+    // Round 2 lands while the fix-round reviewer runs, carrying the SAME number and
+    // heading it was shown in round 1 — so only the path check tells them apart.
+    const round2 = join(ws.runDir, "04-build", "fixlist", "S1-2.md");
+    process.env.FAKE_BUILD_REVIEWER_APPEND = JSON.stringify({
+      "S1#2": {
+        path: round2,
+        text: "# Fix list — S1 · First story, round 2\n\n"
+          + "## 1 · Concurrent double-confirm mints two sessions  [high]\n\n"
+          + "Where: (not stated)\nKind: correctness\nDisposition: **fix-now**\nResolved: no\n",
+      },
+    });
+
+    await next(ws);
+
+    expect(existsSync(round2)).toBe(true);
+    for (const path of [fixlistPath(ws), round2]) {
+      const text = readFileSync(path, "utf8");
+      expect(text).not.toContain(AUTO_CLOSED_MARK);
+      expect(parseFixlistFile(text).find((f) => f.n === 1)?.resolved).toBe(false);
+    }
+    expect(story(ws, "S1")).toContain("status: blocked");
+  }, 120_000);
+});
+
 describe("an auto-closed line is the existing grammar, and stays reopenable (gh #327, §7)", () => {
   const SHA = "0123456789abcdef0123456789abcdef01234567";
   const text = renderFixlist({
