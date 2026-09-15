@@ -38,7 +38,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
-import { runAuto, LAST_LINE_CHARS, MAX_UNTIL_DONE, type AutoOptions } from "../src/core/facilitator/runAuto.ts";
+import {
+  runAuto, budgetBlockedReason, LAST_LINE_CHARS, MAX_UNTIL_DONE, type AutoOptions,
+} from "../src/core/facilitator/runAuto.ts";
 import { runCommand } from "../src/cli/commands/run.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
@@ -164,6 +166,21 @@ function starve(ws: Made, phaseId: string, ceiling: number): void {
   const pattern = new RegExp(`(\\{id: "?${phaseId}"?, ceiling_usd: )[0-9.]+`);
   const next = text.replace(pattern, `$1${ceiling.toFixed(2)}`);
   if (next === text) throw new Error(`starve() did not match a phase row for ${phaseId} in budget.yml`);
+  writeFileSync(path, next, "utf8");
+}
+
+/**
+ * Label one phase `host-tokens` in the file on disk, exactly as `test/economy.test.ts` does —
+ * the one way to a real host-tokens `budget.blocked`, since `run new` prices in dollars.
+ */
+function priceInHostTokens(ws: Made, phaseId: string): void {
+  const path = join(ws.runDir, "budget.yml");
+  const marker = new RegExp(`id: "?${phaseId}"?,`);
+  const text = readFileSync(path, "utf8");
+  const next = text.split("\n").map((line) =>
+    marker.test(line) ? line.replace(/}\s*$/, ", economy: host-tokens}") : line,
+  ).join("\n");
+  if (next === text) throw new Error(`priceInHostTokens() did not match a phase row for ${phaseId}`);
   writeFileSync(path, next, "utf8");
 }
 
@@ -319,6 +336,70 @@ describe("never over money", () => {
     expect(estimate).toBeGreaterThan(remaining);
     expect(last).toContain(`remaining_usd $${remaining.toFixed(2)}`);
     expect(last).toContain(`estimate_usd $${estimate.toFixed(2)}`);
+  });
+
+  /**
+   * gh #270. The dollar case above is only HALF the refusals `budgetBlockedReason` sees: a
+   * phase priced in `host-tokens` is blocked by a row that carries no `remaining_usd` and no
+   * `estimate_usd` at all, and the reason rendered `$0.00 < $0.00` off `number()`'s default —
+   * a confident figure nothing measured, plus `tldrx budget raise`, a dollar command for a
+   * ceiling that is a token allowance. The row's OWN words are the ones a person can act on.
+   */
+  test("a host-tokens budget.blocked names tokens and the row's reason — no invented dollars", async () => {
+    const ws = workspace();
+    priceInHostTokens(ws, "01-what");
+    const outcome = await auto(ws, { untilDone: 5 });
+    expect(outcome.code).toBe(2);
+    expect(attempts(ws)).toBe(0);
+    expect(relaunched(ws)).toEqual([]);
+    const blocked = events(ws).filter((event) => event.type === "budget.blocked");
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0]?.payload).toMatchObject({ phase: "01-what", economy: "host-tokens" });
+    expect(blocked[0]?.payload.remaining_usd).toBeUndefined();
+    expect(blocked[0]?.payload.estimate_usd).toBeUndefined();
+    const last = outcome.lines[outcome.lines.length - 1] ?? "";
+    expect(last).toContain("budget.blocked on 01-what (host-tokens)");
+    expect(last).toContain(`ceiling_tokens ${String(blocked[0]?.payload.ceiling_tokens)}`);
+    expect(last).toContain(String(blocked[0]?.payload.reason));
+    // The two wrongs the issue names, both absent: no dollar figure, no dollar command.
+    expect(last).not.toContain("$");
+    expect(last).not.toContain("tldrx budget raise");
+  });
+
+  /**
+   * The other `host-tokens` writer (`hostTokensNote`) carries the pair, and the reason must
+   * name BOTH sides — the comparison whose two numbers share a unit. Read straight off the
+   * function, because reaching this row through the loop needs a declared-token run.
+   */
+  test("a host-tokens row carrying the pair names host_tokens of ceiling_tokens", () => {
+    const reason = budgetBlockedReason([{
+      version: 1, ts: "2026-09-14T09:00:00Z", run: "260914-x", actor: "alan", stage: "build",
+      type: "budget.blocked",
+      payload: {
+        phase: "04-build", economy: "host-tokens", host_tokens: 210000, ceiling_tokens: 150000,
+        reason: "declared host tokens are over the phase ceiling",
+      },
+    } as unknown as TldrxEvent]);
+    expect(reason).toContain("budget.blocked on 04-build (host-tokens)");
+    expect(reason).toContain("host_tokens 210000 of ceiling_tokens 150000");
+    expect(reason).toContain("declared host tokens are over the phase ceiling");
+    expect(reason).not.toContain("$");
+  });
+
+  /**
+   * gh #270's other half: the DOLLAR reason must not invent its figures either. A row with no
+   * `remaining_usd`/`estimate_usd` is absent-with-reason, never a confident `$0.00`.
+   */
+  test("a dollar row missing its figures says so, and never prints $0.00", () => {
+    const reason = budgetBlockedReason([{
+      version: 1, ts: "2026-09-14T09:00:00Z", run: "260914-x", actor: "alan", stage: "build",
+      type: "budget.blocked",
+      payload: { phase: "04-build", reason: "the ceiling refused" },
+    } as unknown as TldrxEvent]);
+    expect(reason).toContain("budget.blocked on 04-build");
+    expect(reason).not.toContain("$0.00");
+    expect(reason).toContain("not recorded");
+    expect(reason).toContain("the ceiling refused");
   });
 
   /**

@@ -657,6 +657,9 @@ over:
   `--wait-gates` are the flags that wait for you.
 - **Money.** A `budget.blocked` names `remaining_usd < estimate_usd`, and nothing in-process
   moves that ceiling — the stop line says the two figures, and `tldrx budget raise` is yours.
+  A phase priced in `economy: host-tokens` is stopped by the same event but not by dollars, so
+  the stop line names `host_tokens` / `ceiling_tokens` and quotes that row's own reason — the
+  ceiling it refused against is a token allowance in `budget.yml`, not money.
   A phase that finished phases' unspent ceiling can cover never gets there: `run auto` moves
   exactly the shortfall first, by default (gh #330; `--no-rebalance-finished` turns it off).
   The loop's own `--max-usd` spans every relaunch rather than resetting with each one.

@@ -3436,7 +3436,9 @@ decides both the relaunch and whether the run-end notification (§2.18) is held:
 no `run.failed`, and `run.finished` / `run.failed` go out once, from the last attempt. What it never relaunches over,
 in the order it checks: exit `0` (done), `3` (no run), `4` (a person's — the `--wait-*` flags own it); a stop the
 loop itself named as immovable — a `budget.blocked` (the refusal names `remaining_usd < estimate_usd`, and nothing
-in-process moves that ceiling, gh #232/#244), its own `--max-usd`, its iteration cap, a run whose files disagree with
+in-process moves that ceiling, gh #232/#244; under `economy: host-tokens` the same stop names `host_tokens` /
+`ceiling_tokens` and quotes the row's own `reason` instead — that ceiling is a token allowance, not dollars, and a
+figure the event does not carry is said to be not recorded rather than printed as `$0.00`, gh #270), its own `--max-usd`, its iteration cap, a run whose files disagree with
 themselves, a usage refusal such as an attended run; the bound; and an attempt REFUSED BY THE SAME WORDS as the
 one before it — a refusal repeating, which one relaunch has already proved and a second would only hammer. What
 those words are is the producer's to say, not a line position's (gh #297): a report names its own refusal
