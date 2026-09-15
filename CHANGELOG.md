@@ -59,6 +59,38 @@
   now asks the developer to run each new database test alone and with its neighbours and record the
   result beside the test, and the Check asks the reviewer only whether that record is there.
 
+- **A stage death no longer recommends the retry the budget is about to refuse (#232, remaining
+  half).** Every failed stage ended with the same literal — *"cost is recorded, not refunded —
+  retry with `tldrx next`"* — printed whether or not the phase could fund that retry. On a phase
+  sized to hold exactly one attempt of its stage (what `run new` wrote before #170, and what every
+  run created before 2026-09-09 keeps for life) `tldrx next` comes straight back as exit 2, so the
+  advice sent the operator to buy the refusal themselves: measured twice in one evening on the run
+  #232 was filed from, and once more on a second workspace where the starved phase was the last
+  one. The other half of #232 shipped in `efb4eee` — `budget show`'s `next` column says `NO-RETRY`
+  before a cent is spent — and this is the same fact said where the operator actually is when it
+  bites: the line now names the refusal, both figures, the shortfall and the `budget raise` that
+  clears it. It predicts the GATE and not the budget's health, using the gate's OWN inputs — what
+  the phase has left, the same remaining-work estimate the brake compares it against, the same
+  `planRebalance`, and this invocation's own `--rebalance-finished` state — deliberately: #232's
+  own comments measured how badly a derived estimate reads on a partly unmetered run, and a second
+  opinion computed here would disagree with the refusal the operator then hits. **That last term is
+  the one a first version of this fix got wrong, and a reviewer caught it before it merged**: the
+  rebalance is ON by default under `run auto` (#330), so a shortfall that finished phases can cover
+  is moved out of them before anything is refused, and the advice was telling the operator to raise
+  a ceiling on a run whose very next relaunch would have funded the retry by itself. `tldrx next`
+  alone never rebalances, so the same starved phase is refused through one door and funded through
+  the other; the advice now names which door it is standing in. Under a rebalancing launch whose
+  donors cover the shortfall it says the retry funds itself, names the donor phase and the move,
+  and says that a bare `tldrx next` is not that door — it stops short of a promise, because the
+  grant check on each move happens after this line is written. When no finished phase can cover it,
+  the refusal prediction stands through either door, with how short it still is *with all of it*.
+  Where this gate does not decide the retry at all — `on_exceed: warn` refuses nothing,
+  a `host-tokens` phase is a category error the dollar brake must never judge, an `attended_by:
+  host` run is allowed past it by policy — the plain line is printed unchanged: those are "not this
+  gate's call", which is not the same as "affordable", and claiming a refusal there would be the
+  invented value the house rules forbid. The failure's `signature` (#297) is untouched and is still
+  the failure's own sentence, never this line.
+
 - **A red Definition-of-Done command is measured TWICE before it pins a story `blocked`, and the
   record carries both exit codes (#163, sub-fix 1).** MEASURED on a .NET workspace, 2026-09-05: a
   story's DoD gate returned `dotnet test` → exit 2, so the story blocked; the operator then ran the

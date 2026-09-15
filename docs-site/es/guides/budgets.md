@@ -146,6 +146,45 @@ bien.
 Es una advertencia, nunca un rechazo: `tldrx next` sigue corriendo, y la línea de "todo en
 orden" dice cuántas fases la arrastran.
 
+Y si no estabas leyendo `budget show` en el momento que importaba, la muerte de la etapa
+también lo dice. La última línea de una etapa fallida era siempre el mismo literal —*"cost is
+recorded, not refunded — retry with `tldrx next`"*— que en una fase sin margen nombra justo el
+comando que vuelve de inmediato como exit 2. Ahora nombra el rechazo:
+
+```
+01-what/what failed: the sub-agent failed
+cost is recorded, not refunded — and `tldrx next` would be refused on arrival (exit 2, the
+money family): phase 01-what has $2.58 left and the retry is priced at $3.00, $0.42 short.
+Run `tldrx budget raise 01-what 0.42 --run <id>` first, or `tldrx reject --note "…"`.
+```
+
+Esa predicción se hace con las entradas propias del gate —lo que le queda a la fase, la misma
+estimación de trabajo restante contra la que el freno la compara, y la misma mirada a las fases
+terminadas—, así que el consejo y el rechazo que habrías encontrado no pueden contradecirse en la
+aritmética.
+
+**Por qué puerta vuelves decide la frase.** `run auto` rebalancea por defecto, así que un faltante
+que una fase terminada pueda cubrir se mueve antes de rechazar nada; `tldrx next` por sí solo nunca
+rebalancea. El consejo dice en cuál de las dos está parado:
+
+```
+cost is recorded, not refunded — phase 02-how has $1.58 left and the retry is priced at $2.00,
+$0.42 short, but this launch has `--rebalance-finished` on (the `run auto` default), so the retry
+funds itself before anything is refused — unless a recorded grant declines the move, which the
+refusal would then say.
+budget: finished phase(s) hold $5.58 unspent (01-what $5.58), which covers the $0.42 shortfall:
+`tldrx budget raise 02-how 0.42 --run <id> --take-from 01-what`.
+`tldrx next` alone never rebalances: through that door the retry is exit 2, and
+`tldrx budget raise 02-how 0.42 --run <id>` is the fix.
+```
+
+No llega a prometerlo, porque la verificación de autorización de cada movimiento ocurre después de
+escribir esa línea. Cuando ninguna fase terminada puede cubrir el faltante, la predicción del
+rechazo vale por las dos puertas y dice cuánto falta todavía incluso con todo su dinero. Donde este
+gate no decide el reintento (`on_exceed: warn`, una fase en `host-tokens`, un run
+`attended_by: host`) se imprime la línea de siempre sin cambios: eso es "no le toca a este gate",
+que no es lo mismo que "alcanza".
+
 ## Las tres perillas, y cuál limita a un sub-agente
 
 Un `raise` como el de arriba mueve el **techo de la fase**, y un techo de fase decide una sola

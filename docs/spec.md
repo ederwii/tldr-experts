@@ -2766,6 +2766,29 @@ metered, the safer that ratio claims it is. `attempts: 1` declares no retry, so 
 reads `ok`; a phase with no stage left to run, or one whose stage declares no budget, reads **`n/e`** — absent-with-reason
 (§7), never a pass.
 
+**And the same fact at the other end: the stage-failure advice (gh #232).** Every `EXIT_AGENT_FAILED` report ends with a
+line about the money, and that line used to be a literal — *"cost is recorded, not refunded — retry with `tldrx next`"* —
+printed whether or not the phase could fund the retry. On a starved phase it named the exact command that comes straight
+back as exit 2, so the operator paid a round trip to learn what the run already knew. It now predicts that refusal and
+says it instead, with both figures, the shortfall and the `budget raise` that clears it. The prediction is made with the
+**gate's own inputs** — `remaining`, the same `remainingWork` the brake compares, the same `planRebalance`, and this
+invocation's own `rebalanceFinished` — never with a second estimate, so the two cannot disagree about the arithmetic.
+
+**Which door the retry comes back through decides the sentence.** `--rebalance-finished` is ON by default under
+`run auto` (gh #330) and `budgetRefusal` moves exactly the shortfall out of finished phases before refusing anything,
+while `tldrx next` alone never rebalances — so the same starved phase is refused through one door and funded through the
+other. Under a rebalancing launch whose donors cover the shortfall the advice says the retry funds itself, names the
+donor and the move (`rebalanceLines`, the refusal's own), and says a bare `tldrx next` is not that door; it says
+"unless a recorded grant declines the move" rather than promising, because that check happens after this line is
+written. Through a bare `tldrx next`, or when no finished phase can cover it, the refusal prediction stands — with the
+cheaper route named beside the raise when one exists, and with how short it still is *with all of it* when none does.
+
+It is silent — the plain line, unchanged — wherever this gate does not decide the retry: `on_exceed: warn` refuses
+nothing, a `host-tokens` phase is a category error the dollar brake must never judge (§E.2), and an `attended_by: host`
+run is allowed past it by policy. Those are "not this gate's call", not "affordable", and claiming a refusal there would
+be the invented value §7 forbids. The failure's `signature` (gh #297) is unchanged and is still the failure's own
+sentence, never these lines.
+
 **Both economies, and who is driving (issue #22).** The hook reads its run through the tolerant reader
 (`hooks/lib/runFile.ts`), and that reader skipped `tasks[]` and `attended_by:` entirely — so a run whose turns a host
 session paid for reported `$0.00` metered and nothing else, and neither the hook nor the status line could tell "nobody
