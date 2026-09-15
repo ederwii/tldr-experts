@@ -1382,7 +1382,9 @@ function toStaleness(loaded: LoadedRun, now: Date): Staleness {
  * `blocked` run is off it for the opposite reason — the cursor is usually the
  * thing that is broken.
  */
-const CURSOR_KINDS: readonly string[] = ["gate", "answer", "ready", "failed", "running", "prepared"];
+const CURSOR_KINDS: readonly string[] = [
+  "gate", "answer", "ready", "failed", "running", "prepared", "interrupted",
+];
 
 /** `waiting`, taken apart into the pieces a card renders. Never a second derivation. */
 function toNextAction(waits: Waiting, doc: RunDocument, depends: ResolvedRun): NextActionModel {

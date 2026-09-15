@@ -413,10 +413,11 @@ phases: []
   });
 
   test("every waiting kind maps to a `waitingOn` the renderer can enumerate", () => {
-    // The list is asserted against WAITING_KINDS so a TENTH kind fails here
+    // The list is asserted against WAITING_KINDS so an ELEVENTH kind fails here
     // rather than falling through to a blank hero card.
     expect([...WAITING_KINDS].sort()).toEqual([
-      "answer", "blocked", "cancelled", "done", "failed", "gate", "prepared", "ready", "running",
+      "answer", "blocked", "cancelled", "done", "failed", "gate", "interrupted", "prepared", "ready",
+      "running",
     ]);
   });
 });

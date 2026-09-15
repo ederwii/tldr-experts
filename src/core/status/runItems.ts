@@ -263,6 +263,10 @@ function summaryOf(run: RunFile, waiting: Waiting, blocked: readonly string[]): 
     // flight, not blockers.
     case "prepared":
       return `run ${what} has a --prepare bundle waiting for the host session to run it`;
+    // #246: a headless turn whose process died. Not `prepared` — nobody prepared
+    // anything and nobody is going to run a prompt by hand.
+    case "interrupted":
+      return `run ${what} was interrupted at ${run.cursor.phase}/${run.cursor.stage} and is waiting to be relaunched`;
     case "running":
       return `run ${what} is running ${run.cursor.phase}/${run.cursor.stage} right now`;
     default:
@@ -279,6 +283,11 @@ function commandFor(run: RunFile, waiting: Waiting): string {
     case "ready":
     case "failed":
       return `tldrx next ${run.run}`;
+    // The command `waitingFor` names, and the only one that moves it: `next
+    // --commit` is refused on this state and `next` alone re-spawns one stage
+    // rather than resuming the loop that was interrupted (#246).
+    case "interrupted":
+      return `tldrx run auto ${run.run}`;
     default:
       return "";
   }

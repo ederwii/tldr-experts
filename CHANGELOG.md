@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.30.0 — unreleased
+
+### Fixed
+
+- **A killed headless turn reads as `interrupted` and is handed a command the next line of code
+  accepts, instead of being called a `--prepare` bundle that never existed (closes #246, half
+  one).** MEASURED on a 0.16.1 field run: the `tldrx` process driving `run auto` died
+  SIGKILL-class (no handler ran), leaving the stage `running`, a dead pid in the `.lock`, and
+  `.agent/<stage>/pending.json` on disk. `run status` said "a `--prepare` bundle is waiting — run
+  the prompt and `tldrx next --commit <id>`"; that command was then REFUSED ("what is `ready`, not
+  `running`"), so the only advice the screen gave was a dead end, and nobody was going to run a
+  prompt by hand on an unattended run anyway. The mechanism is that the two states are
+  indistinguishable on disk: `runNext` writes the bundle BEFORE it branches on the mode, so every
+  headless spawn leaves exactly what a `--prepare` leaves, and `waiting.ts` derived `prepared`
+  from stage `running` + dead lock + a bundle without ever reading which mode opened the turn. The
+  ledger already knew — `stage.started` has carried `mode` since it was first written — so the
+  answer is now read off the newest `stage.started` for that stage
+  (`src/core/run/lastStart.ts`, one implementation, imported by both readers that had made this
+  identification independently). A tenth waiting kind, `interrupted`, says what happened and
+  prescribes `tldrx run auto <id>` — the command that actually resumes the run; `prepared` is
+  reserved for a bundle a `--prepare` really wrote. `Ctrl-C` shared the bug and is fixed with it:
+  `stopInFlightRun` preserved any `killed === 0` stage with a bundle as `running` forever, and now
+  preserves only one whose last start was a `prepare`. A ledger that does not say keeps the old
+  reading exactly — an absent record is not evidence of a spawn. The second half of #246, the
+  orphaned sub-agent's dollars being recorded nowhere while `spent_usd` reads a confident `0.00`,
+  is untouched and stays open.
 ## 0.29.0 — 2026-09-15
 
 ### Changed

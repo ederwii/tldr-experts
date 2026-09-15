@@ -32,6 +32,7 @@ import { EventLog } from "../events/EventLog.ts";
 import type { TldrxEvent } from "../events/Event.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { hasPreparedBundle } from "../run/prepared.ts";
+import { startedHeadless } from "../run/lastStart.ts";
 import { releaseLock } from "./Lock.ts";
 
 /** What the CLI knows at the moment the signal landed. */
@@ -101,8 +102,16 @@ export function stopInFlightRun(runDir: string, context: InterruptContext): read
   // work is on disk waiting for a human, and demoting it to `ready` would hand
   // the next `tldrx next` a licence to re-run the stage. Leave it exactly where
   // it is — `waitingFor` reports it as `prepared` and says what to do.
+  //
+  // `killed === 0` plus a bundle is NOT enough to identify one, though (#246): a
+  // headless spawn leaves the same `pending.json`, so a Ctrl-C that found no
+  // child to kill — the child already dead, or never started — preserved an
+  // interrupted headless stage as `running` forever. The ledger's last
+  // `stage.started` says which mode opened the turn, and a headless one is closed
+  // like any other. `startedHeadless` is false when the ledger does not say, so
+  // an unreadable log keeps the pre-#246 behaviour.
   const preserved = context.killed === 0
-    ? running.filter((entry) => hasPreparedBundle(runDir, entry.stage))
+    ? running.filter((entry) => hasPreparedBundle(runDir, entry.stage) && !startedHeadless(runDir, entry.stage))
     : [];
   const preservedIds = new Set(preserved.map((entry) => `${entry.phase}/${entry.stage}`));
   const toClose = running.filter((entry) => !preservedIds.has(`${entry.phase}/${entry.stage}`));

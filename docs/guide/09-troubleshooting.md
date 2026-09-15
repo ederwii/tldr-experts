@@ -60,6 +60,16 @@ prompt. Three ways out, and the message names all three: run the prompt and
 `tldrx next --discard-pending` to bin the bundle and run the stage again. Re-spawning without
 one of those would throw away a sub-agent turn the run has already paid for.
 
+**`<phase>/<stage> was interrupted — its headless turn's process is gone`.** The framework
+spawned that stage itself and the `tldrx` process driving it died without running a handler
+(a `SIGKILL`, a closed session, a reboot) — the stage is still `running`, the lock holds a
+dead pid, and the bundle on disk is the one every headless spawn writes, not one a person
+prepared. `tldrx run auto <id>` is the way out and the message says so. Before #246 this read
+as `a --prepare bundle is waiting` and sent you to `tldrx next --commit`, which is refused on
+exactly this state ("<stage> is `ready`, not `running`") — the screen's only advice was a dead
+end. The orphaned sub-agent may have run to completion and billed for it; its dollars are not
+on `run.yml` (that is #246's second half, still open).
+
 **`tldrx run unlock` says there is no lock.** Then the lock was not the problem. The message
 points at the real state — usually an uncommitted `--prepare` bundle, which is not a lock.
 
