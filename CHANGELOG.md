@@ -45,6 +45,33 @@
   session — and the stage's report names every kept card, so a `$0.00` row is never read as a
   writer that silently did nothing. `--prepare`/`--commit` is untouched.
 
+- **The epic branch Build cuts is claimed in `run.yml` at the cut, not when the stage returns
+  (closes #262).** Reported from a field workspace: a `run auto` loop was killed mid-Build,
+  relaunched, and was refused its OWN epic — "`epic/<slug>` already exists … refusing to stack
+  this run's commits onto someone else's epic" — with `tldrx next --reuse-epic` the only way back
+  in, a flag `run auto` cannot pass. Same sentence as #248, different mechanism, and #248's fix
+  cannot reach this one: #248 closed the THROW path, where a process is still alive to run its
+  catch. Here the process is GONE. `ExecutorOutcome.epicBranches` merges into `build.epic_branch`
+  only after the executor RETURNS, and a Build stage does not return for as long as a developer
+  turn takes — so a SIGKILL, an OOM kill or a cut session anywhere in that window left
+  `epic/<slug>` in the repo with nothing in the record claiming it. SIGINT and SIGTERM are hooked
+  (`src/cli/signals.ts`); SIGKILL cannot be hooked by any process, so no handler was ever going to
+  cover this. The cut now records the claim itself, through the `ctx.claimEpicBranch` seam, once
+  per branch rather than once per story. It does NOT ride the write serializer and is not claimed
+  to: of `openStory`'s eight call sites, four wrap it in `this.writes.run` and four
+  (`prepare`, `prepareReview`, `commitReview`, `commit`) call it bare. What makes it safe is that
+  there is no `await` between the branch being cut and the claim, and the claim is synchronous —
+  so on every one of those paths the cut and its record are one uninterrupted step. The guard is
+  NOT widened: a branch this run did not cut is refused exactly as
+  before — the claim stays a RECORD, and the fix is to write the record when it is earned rather
+  than to teach the guard to accept inferred evidence. A `run.yml` save that cannot take the
+  workspace lock is NOT swallowed: it fails the stage naming the branch, the repo, why the write
+  failed and both ways back in, because a claim that could not be written is this defect happening
+  again in silence. Honest about how far this goes: the save is atomic against a KILLED PROCESS
+  (temp file, then `rename`), and it is not `fsync`ed — a power cut can still lose a write the
+  kernel had not flushed. It is pinned by a real SIGKILL of a real `tldrx next`, never a simulated
+  throw, which would only have re-tested #248.
+
 ## 0.29.0 — 2026-09-15
 
 ### Changed

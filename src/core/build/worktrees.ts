@@ -46,6 +46,17 @@ export class EpicState {
   /** Epic branches this run cut or adopted; `runNext` writes them to run.yml. */
   readonly claimed = new Set<string>();
   /**
+   * Of those, the ones whose claim is already ON DISK — written while this
+   * invocation was still running, by `claimAtTheCut` (#262).
+   *
+   * Separate from `claimed` because the two answer different questions: `claimed`
+   * is what the outcome carries out at the end, and this is what a process
+   * starting after a SIGKILL would find. It exists to keep the write to ONE per
+   * branch: `openStory` runs on every story, every attempt, and the claim is a
+   * `run.yml` save.
+   */
+  private readonly recorded = new Set<string>();
+  /**
    * Stale epics this invocation moved aside before cutting its own (gh #272) —
    * the handoff's Decisions bullets. Empty on every ordinary Build.
    */
@@ -58,6 +69,25 @@ export class EpicState {
   private readonly scopedRuns = new Set<string>();
   /** Epic branches whose head this invocation has already run the full list on. */
   private readonly headChecked = new Set<string>();
+
+  /**
+   * Claim `branch` for this run — in memory AND, through `record`, in `run.yml`
+   * on disk before this returns (#262).
+   *
+   * `record` is `ctx.claimEpicBranch`, which saves; it is passed in rather than
+   * read off a session, so this class keeps knowing nothing about the executor.
+   * It fires ONCE per branch: the write is idempotent, but it is a file write,
+   * and `openStory` reaches here on every story of every attempt.
+   *
+   * `recorded` is marked only AFTER `record` returns, so a write that threw is
+   * retried by the next story rather than silently believed.
+   */
+  claimAtTheCut(branch: string, record: (branch: string) => void): void {
+    this.claimed.add(branch);
+    if (this.recorded.has(branch)) return;
+    record(branch);
+    this.recorded.add(branch);
+  }
 
   noteScopedRun(epicBranch: string): void {
     this.scopedRuns.add(epicBranch);
@@ -123,6 +153,41 @@ export class EpicState {
   rememberWorktree(key: string, path: string): void {
     this.epicWorktrees.set(key, path);
   }
+}
+
+/**
+ * The epic branch was cut and the claim could NOT be written (#262).
+ *
+ * Its own class so `buildExecutor` can fail the stage with the sentence below
+ * instead of re-raising a `WorkspaceLockError` whose message is about a lock
+ * file and says nothing about the branch now sitting in the repo unclaimed.
+ */
+export class EpicClaimError extends Error {}
+
+/**
+ * Why the claim could not be written, and what to do about it — never a bare
+ * throw, and never silence.
+ *
+ * Swallowing this would be #262 happening again with the evidence deleted: the
+ * branch is on disk, the record does not name it, and the operator finds out on
+ * the relaunch that refuses it. So it travels — with the cause named (the write
+ * that failed) and the cure named (both ways back in).
+ */
+export function epicClaimRefusal(
+  branch: string,
+  repo: string,
+  runId: string,
+  cause: unknown,
+): EpicClaimError {
+  const why = cause instanceof Error ? cause.message : String(cause);
+  return new EpicClaimError(
+    `cut \`${branch}\` in ${repo} but could not record the claim in run.yml: ${why}. ` +
+      "The branch is in the repo and this run's record does not name it, so a process killed now " +
+      `would be refused its own epic on the next \`tldrx run auto ${runId}\`. ` +
+      "Let the other tldrx process finish (or remove the lock file it names if that process is gone) " +
+      `and run \`tldrx run auto ${runId}\` again; \`tldrx next --reuse-epic ${runId}\` adopts the branch ` +
+      "deliberately if the record was already lost.",
+  );
 }
 
 /**

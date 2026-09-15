@@ -123,9 +123,9 @@ import {
 } from "../../build/dodRunner.ts";
 import { scopedPathsFor } from "../../build/scopedPaths.ts";
 import {
-  commitIfDirty, EpicState, mergeIntoEpic, openConflictTurnMerge, openEpicWorktree, refreshStoryBase, rescueUncommitted,
-  staleBaseConflict, storyWorktreePath, unreadableTouches, updateStoryBase, workSince,
-  type EpicWorktreeParts,
+  commitIfDirty, EpicClaimError, epicClaimRefusal, EpicState, mergeIntoEpic, openConflictTurnMerge, openEpicWorktree,
+  refreshStoryBase, rescueUncommitted, staleBaseConflict, storyWorktreePath, unreadableTouches, updateStoryBase,
+  workSince, type EpicWorktreeParts,
 } from "../../build/worktrees.ts";
 import {
   INSTALL_SLOT, installCommandFor, installFailed, installFailureReason, runWorktreeInstall, type InstallCheck,
@@ -337,7 +337,10 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
     // something no story caused. Whatever the developer already cost is still in
     // `session.tasks` and is still recorded.
     if (error instanceof BaseGateFailure) return await withRestore(refusedOnBase(session, error));
-    if (error instanceof GitError || error instanceof PlanLoadError) {
+    // #262: the branch was cut and the claim could not be written. A stage
+    // failure carrying that sentence, rather than a `WorkspaceLockError` stack
+    // that names a lock file and not the branch now sitting in the repo.
+    if (error instanceof GitError || error instanceof PlanLoadError || error instanceof EpicClaimError) {
       const outcome = failed(ctx, error.message, session.tasks);
       return await withRestore({ ...outcome, lines: [...session.reportLines, ...outcome.lines] });
     }
@@ -3152,7 +3155,31 @@ class BuildSession {
     // Whatever happened above, this run is now working on that branch: say so in
     // run.yml (`build.epic_branch`) so its NEXT invocation, and any other run,
     // can tell "I cut this" from "this was already here".
-    this.epics.claimed.add(epicBranch);
+    //
+    // ON DISK, here, before the developer turn that follows (#262) — not only in
+    // the outcome this executor carries out at the end. A Build stage takes
+    // minutes to return, and a SIGKILL in that window (a cancelled session, an
+    // OOM kill, a power cut; SIGINT and SIGTERM are hooked, SIGKILL cannot be)
+    // used to leave the branch in the repo with nothing claiming it, and the
+    // relaunch was then refused its OWN epic.
+    //
+    // It does NOT ride the write serializer, and must not be described as doing
+    // so: `openStory` has EIGHT call sites (measured) and only four wrap it in
+    // `this.writes.run` — `asIsHalf`, `buildHalf`, `settleClosedFixlists` and
+    // `rereview` do; `prepare`, `prepareReview`, `commitReview` and `commit`
+    // call it bare. What makes this safe is the statement below, not a queue:
+    // there is NO `await` between `ensureBranch` resolving above and the claim,
+    // and `ctx.claimEpicBranch` is synchronous, so the cut and its record are
+    // one uninterrupted step of this task — nothing else in the process can run
+    // between them, on any of the eight paths.
+    this.epics.claimAtTheCut(epicBranch, (branch) => {
+      try {
+        this.ctx.claimEpicBranch(branch, this.branchModel.kind);
+      } catch (error) {
+        // Named, never swallowed: see `epicClaimRefusal`.
+        throw epicClaimRefusal(branch, planned.story.repo, this.ctx.runId, error);
+      }
+    });
     // The run id is IN the branch name — see `storyBranchOf`, which is the ONE
     // place that name is derived. Without the run id, four runs of the same plan
     // all cut `story/S1`: the second found it already there, `addWorktree`

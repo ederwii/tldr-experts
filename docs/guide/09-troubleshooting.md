@@ -447,6 +447,11 @@ mean to ship (`tldrx approve --note "…"`), or fix the stories and run the stag
 **`refused: an epic/<slug> branch exists that this run did not cut`, exit 2.** The epic branch
 keeps its plain name on purpose — it is the unit a team merges — so instead of making collision
 impossible, adopting one is made deliberate: `tldrx next --reuse-epic`.
+A run that was KILLED mid-Build does not land here for its own epic any more (#262): the claim
+is written to `run.yml` at the cut, before the turn that can be killed, so the relaunch finds
+the branch recorded as its own. If you still see this for a run you know cut the branch, the
+write that records it did not survive — a power cut (the save is atomic, not `fsync`ed), or a
+`run.yml` restored from elsewhere — and `--reuse-epic` is the deliberate way back in.
 
 **``· app: 4 uncommitted change(s) nobody's story declares — set aside in stash a1b2c3d4e5f6 …
 and given back when this stage ends``.** Not an error. Since #164 a dirty tree does not
