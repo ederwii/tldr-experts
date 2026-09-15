@@ -160,6 +160,24 @@ export interface FixFinding {
    * really on the branch is a git question, answered by the executor.
    */
   readonly resolvedSha: string | null;
+  /**
+   * Why the `Resolved: yes …` line's sha token was REFUSED — or null when the
+   * line carried a readable one, or carried none at all (#163).
+   *
+   * The distinction this field exists for: "the claim named no commit" and "the
+   * claim named something that is not a sha" are different facts, and until this
+   * existed they were the same null. `\b([0-9a-f]{7,40})\b` cannot match inside a
+   * 41-character hex run — no interior position is a word boundary — so an
+   * over-long token read as a bare `Resolved: yes`, and worse, the scan carried
+   * on to whatever hex word came NEXT on the line: a `yes <41 hex> (see 9f2c1ab)`
+   * resolved to `9f2c1ab`, a different commit from the one the line claims.
+   *
+   * Non-null keeps the finding open exactly as an unevidenced claim does
+   * (`resolvedSha` stays null), and `canonicalizeResolutions` writes this sentence
+   * into the file as the `claimed-unverified` reason, so the refusal is NAMED
+   * rather than performed in silence.
+   */
+  readonly resolvedShaRefusal: string | null;
 }
 
 /**
@@ -394,6 +412,7 @@ export function parseFixFindings(value: unknown): ParsedFixlist {
         : [],
       resolved: false,
       resolvedSha: null,
+      resolvedShaRefusal: null,
     });
   }
   if (findings.length === 0 && problems.length === 0) {
@@ -567,15 +586,82 @@ const KIND_RE = /^Kind:\s*(.*)$/;
 const NORMALISED_RE = /^Normalised-from:\s*([a-z-]+)\s*(?:—.*)?$/;
 const DISPOSITION_RE = /^Disposition:\s*\*\*([a-z-]+)\*\*\s*(?:—\s*(.*))?$/;
 const RESOLVED_RE = /^Resolved:\s*(\S+)\s*(.*)$/;
+/** git's own abbreviation floor: fewer hex characters is not a sha to look up. */
+export const SHA_ABBREV_MIN = 7;
+/** A git object id. Anything longer is not one, however it was produced. */
+export const SHA_FULL_LEN = 40;
+
 /**
- * The sha inside the REST of a `Resolved: yes …` line.
+ * Every standalone hex run on a line — the candidates, before any rule is applied.
  *
- * Deliberately loose about what surrounds it — `yes 9f2c1ab`, `yes (9f2c1ab)`,
- * `yes — commit 9f2c1ab` all read the same — and strict about the token itself.
- * Seven hex characters is git's own abbreviation floor; anything shorter is not
- * a sha somebody could look up.
+ * `(?<!\w)…(?!\w)` is `\b` written so it cannot silently mean "somewhere in the
+ * middle": the old `\b([0-9a-f]{7,40})\b` had NO match inside a 41-character run,
+ * because no interior position of a word is a boundary, and that is exactly how an
+ * over-long token became invisible. Here an over-long run is still a run — it is
+ * seen, and then refused by name.
  */
-const RESOLVED_SHA_RE = /\b([0-9a-f]{7,40})\b/;
+const HEX_RUN_RE = /(?<!\w)[0-9a-fA-F]+(?!\w)/g;
+export interface ResolvedShaRead {
+  /** The accepted token, lowercased — 7 to 40 hex — or null. */
+  readonly sha: string | null;
+  /** Where it starts in the text this read, or -1 when nothing was accepted. */
+  readonly index: number;
+  /** Its length in that text, so a rewriter replaces the token and nothing else. */
+  readonly length: number;
+  /** Why a token was refused, or null. See `FixFinding.resolvedShaRefusal`. */
+  readonly refusal: string | null;
+}
+
+/**
+ * THE reading of a `Resolved: yes …` line's tail (#163) — one grammar, three
+ * answers, and every reader of a fix-list sha goes through it.
+ *
+ * Deliberately loose about what surrounds the token — `yes 9f2c1ab`,
+ * `yes (9f2c1ab)`, `yes — commit 9f2c1ab` all read the same — and strict about
+ * the token itself:
+ *
+ *   - **7 to 39** is an abbreviation, ACCEPTED. Demanding 40 at parse time would
+ *     refuse the `yes 9f2c1ab` a person legitimately types; the record is made
+ *     exact AFTER the verification instead (`canonicalizeResolutions`), which is
+ *     strictly stronger and refuses nobody.
+ *   - **40** is the object id itself.
+ *   - **41 or more** is REFUSED BY NAME. It cannot be an abbreviation of anything
+ *     and it is not an object id, so there is no reading of it that is not a
+ *     guess — and the guess this used to make was the dangerous one: the token
+ *     vanished from the match, the line read as a bare `Resolved: yes`, and the
+ *     scan carried on to the next hex word, closing the finding over a DIFFERENT
+ *     commit than the one the line claims.
+ *
+ * A refusal is a property of the LINE, not of the first token on it: any
+ * over-long run anywhere refuses the whole read, so the answer cannot depend on
+ * which side of the bad token a good one happens to sit.
+ *
+ * Runs SHORTER than the floor are skipped rather than refused — a `Resolved: yes,
+ * see the abc note` says nothing about a sha, and three hex-looking characters in
+ * prose are prose.
+ */
+export function readResolvedSha(rest: string): ResolvedShaRead {
+  const runs = [...rest.matchAll(HEX_RUN_RE)];
+  const overLong = runs.find((run) => run[0].length > SHA_FULL_LEN);
+  if (overLong !== undefined) {
+    return {
+      sha: null,
+      index: -1,
+      length: 0,
+      refusal:
+        `named \`${overLong[0]}\` — ${String(overLong[0].length)} hex characters, and a git object `
+        + `id is ${String(SHA_FULL_LEN)} (an abbreviation, ${String(SHA_ABBREV_MIN)} to `
+        + `${String(SHA_FULL_LEN - 1)}, is read as one). Nothing here guesses which of them you `
+        + "meant, and a token this long is not read as \"no sha\"",
+    };
+  }
+  const hit = runs.find((run) => run[0].length >= SHA_ABBREV_MIN);
+  if (hit === undefined || hit.index === undefined) {
+    return { sha: null, index: -1, length: 0, refusal: null };
+  }
+  return { sha: hit[0].toLowerCase(), index: hit.index, length: hit[0].length, refusal: null };
+}
+
 const DO_NOT_RE = /^Do NOT:\s*(.*)$/;
 const STORY_RE = /^#\s+Fix list\s+—\s+(\S+)\s+·/;
 
@@ -595,6 +681,7 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
     n: number; finding: string; severity: string; kind: FindingKind | null;
     normalisedFrom: Disposition | null;
     where: string; disposition: Disposition | null; resolved: boolean; resolvedSha: string | null;
+    resolvedShaRefusal: string | null;
     detail: string[]; doNot: string[];
   } | null = null;
   const flush = (): void => {
@@ -611,6 +698,7 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
       doNot: current.doNot,
       resolved: current.resolved,
       resolvedSha: current.resolvedSha,
+      resolvedShaRefusal: current.resolvedShaRefusal,
     });
   };
   for (const line of text.split("\n")) {
@@ -622,7 +710,8 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
         finding: (heading[2] ?? "").trim(),
         severity: (heading[3] ?? "unrated").trim(),
         kind: null, normalisedFrom: null,
-        where: "", disposition: null, resolved: false, resolvedSha: null, detail: [], doNot: [],
+        where: "", disposition: null, resolved: false, resolvedSha: null, resolvedShaRefusal: null,
+        detail: [], doNot: [],
       };
       continue;
     }
@@ -658,10 +747,11 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
     if (resolved !== null) {
       current.resolved = (resolved[1] ?? "").toLowerCase() === "yes";
       // Only a `yes` may carry a sha. A `no` line with a hex word in it is prose,
-      // and reading a sha out of it would invent evidence for a claim nobody made.
-      current.resolvedSha = current.resolved
-        ? RESOLVED_SHA_RE.exec((resolved[2] ?? "").toLowerCase())?.[1] ?? null
-        : null;
+      // and reading a sha out of it would invent evidence for a claim nobody made
+      // — which is also why a `no` can carry no refusal: nothing was claimed.
+      const read = current.resolved ? readResolvedSha(resolved[2] ?? "") : null;
+      current.resolvedSha = read?.sha ?? null;
+      current.resolvedShaRefusal = read?.refusal ?? null;
       continue;
     }
     const doNot = DO_NOT_RE.exec(line);
@@ -754,15 +844,6 @@ export function autoCloseShown(
 }
 
 /**
- * Locates the sha token inside a `Resolved: yes …` line — accepting `A-F` because
- * it runs against the line's ORIGINAL casing, which is the only text whose spans
- * line up with the line being rewritten. Not a difference in strictness from
- * `RESOLVED_SHA_RE`: the parser lowercases the tail before matching it, so both
- * are case-insensitive in effect.
- */
-const RESOLVED_SHA_TOKEN_RE = /\b[0-9a-fA-F]{7,40}\b/;
-
-/**
  * Rewrite finding `n`'s `Resolved: yes …` line so its sha names the FULL 40-hex
  * object id, touching nothing else the line says.
  *
@@ -796,12 +877,16 @@ export function canonicalizeResolvedSha(text: string, n: number, sha: string): s
     // with a hex word in it is prose.
     if (resolved === null || (resolved[1] ?? "").toLowerCase() !== "yes") return line;
     const rest = resolved[2] ?? "";
-    const token = RESOLVED_SHA_TOKEN_RE.exec(rest);
-    if (token === null) return line;
+    // The same grammar the parser read, so the token this replaces and the token
+    // that was verified can never be two different spans (§7: one implementation
+    // per derivation). It reports the span in `rest`'s ORIGINAL casing, which is
+    // the only text whose offsets line up with the line being rewritten.
+    const read = readResolvedSha(rest);
+    if (read.sha === null) return line;
     // `rest` is `(.*)$` in `RESOLVED_RE` — it is always the line's own tail, so
     // its start position in `line` is exact without a second search.
-    const start = line.length - rest.length + token.index;
-    return `${line.slice(0, start)}${sha}${line.slice(start + token[0].length)}`;
+    const start = line.length - rest.length + read.index;
+    return `${line.slice(0, start)}${sha}${line.slice(start + read.length)}`;
   }).join("\n");
 }
 
@@ -824,6 +909,13 @@ export function canonicalizeResolvedSha(text: string, n: number, sha: string): s
  * not at the call site: the caller (`verifyResolutions`) makes one call and
  * routes the three things back — the possibly-rewritten findings, the
  * possibly-rewritten text, and the report lines to say what happened.
+ *
+ * The OTHER edge of the same grammar — a token of 41+ hex characters, which
+ * `readResolvedSha` refuses by name (#163) — is deliberately NOT handled here.
+ * That is a DOWNGRADE, and `verifyResolutions` is the one place a claim is ever
+ * withdrawn (`markUnverified`, one direction only); a second site that could also
+ * withdraw one is the duplicate §7 refuses. A refused finding arrives here with
+ * `resolvedSha: null` already, so this walks past it like any other open finding.
  */
 export async function canonicalizeResolutions(
   repoDir: string,

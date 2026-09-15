@@ -28,7 +28,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalSha } from "../src/core/build/git.ts";
-import { canonicalizeResolutions, canonicalizeResolvedSha, parseFixlistFile } from "../src/core/build/fixlist.ts";
+import {
+  CLAIMED_UNVERIFIED, canonicalizeResolutions, canonicalizeResolvedSha, isOpen, parseFixlistFile,
+} from "../src/core/build/fixlist.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
 // This file spawns a REAL git process to build repositories `canonicalSha` resolves
@@ -257,5 +259,123 @@ describe("canonicalizeResolutions — the single leaf `verifyResolutions` calls"
     expect(result.text).toBe(text);
     expect(result.lines).toEqual([]);
     expect(result.findings[0]?.resolvedSha).toBe("deadbeefdeadbeef");
+  });
+});
+
+/**
+ * The OTHER edge of the same grammar, and the dangerous one (#163, sub-fix 3).
+ *
+ * `\b([0-9a-f]{7,40})\b` has no match at all inside a 41-character hex run — no
+ * position in the middle of one is a word boundary — so a `Resolved: yes <41 hex>`
+ * read as a claim that named NO sha. That is the direction §7 forbids: the
+ * abbreviation case keeps a record that is merely weaker than it could be, while
+ * an over-long token was read as something the line does not say, with the shape
+ * fault never named.
+ *
+ * The rule now: 7-39 is an abbreviation (accepted, and rewritten to the 40 git
+ * returned — the half above), 40 is an object id, and 41+ is REFUSED by name,
+ * with the count, through the `claimed-unverified` sentence #130 already writes.
+ * One grammar, `readResolvedSha`, read by the parser and by the rewriter.
+ */
+describe("the sha SHAPE is refused, never read as no sha (#163)", () => {
+  const OVER_LONG = `${"0123456789abcdef0123456789abcdef01234567"}0`;
+
+  test("a `Resolved: yes <41 hex>` is not read as a bare `yes` — the token is named as refused", () => {
+    const text = [
+      "## 1 · Finding  [major]", "", "Disposition: **fix-now**", `Resolved: yes ${OVER_LONG}`, "",
+    ].join("\n");
+
+    const finding = parseFixlistFile(text)[0];
+
+    expect(finding?.resolved).toBe(true);
+    expect(finding?.resolvedSha).toBeNull();
+    // The whole defect in one assertion: the line SAID something, and the record
+    // has to say what was wrong with it rather than behave as if it said nothing.
+    expect(finding?.resolvedShaRefusal).toContain(OVER_LONG);
+    expect(finding?.resolvedShaRefusal).toContain("41");
+    // It still holds the story, exactly as an unevidenced claim does.
+    expect(isOpen(finding!)).toBe(true);
+  });
+
+  test("canonicalizing walks PAST a refused finding — withdrawing a claim is not this leaf's job", async () => {
+    const { dir } = bareRepo();
+    const text = [
+      "## 1 · Finding  [major]", "", "Disposition: **fix-now**", `Resolved: yes ${OVER_LONG}`, "",
+    ].join("\n");
+
+    const result = await canonicalizeResolutions(dir, parseFixlistFile(text), text);
+
+    // The DOWNGRADE has exactly one site — `verifyResolutions`, which is also the
+    // only writer of `claimed-unverified` (§7). A second site that could withdraw
+    // a claim is the duplicate that rule exists to refuse. Asserted by what this
+    // leaf does NOT do; the refusal reaching the file and the report is asserted
+    // end-to-end in `fixlist.test.ts`.
+    expect(result.text).toBe(text);
+    expect(result.lines).toEqual([]);
+    expect(result.findings[0]?.resolvedSha).toBeNull();
+    expect(isOpen(result.findings[0]!)).toBe(true);
+  });
+
+  test("a line carrying an over-long token AND a short one is refused, not read past to the short one", () => {
+    const text = [
+      "## 1 · Finding  [major]", "", "Disposition: **fix-now**",
+      `Resolved: yes ${OVER_LONG} (see 9f2c1ab)`, "",
+    ].join("\n");
+
+    const finding = parseFixlistFile(text)[0];
+
+    // Reading past the bad token to a hex word in the prose would pick a
+    // DIFFERENT commit than the line's own claim — inventing evidence, which is
+    // the one thing this file may never do.
+    expect(finding?.resolvedSha).toBeNull();
+    expect(finding?.resolvedShaRefusal).toContain(OVER_LONG);
+  });
+
+  test("the written refusal reads back as a withdrawn claim, so a second round does not refuse it twice", () => {
+    // The sentence keeps the offending token in it, which is the point — and it
+    // must not read as a fresh claim carrying a bad sha on the next pass. The
+    // `Resolved:` value is the whole test: it is no longer `yes`.
+    const finding = parseFixlistFile([
+      "## 1 · Finding  [major]", "", "Disposition: **fix-now**",
+      `Resolved: ${CLAIMED_UNVERIFIED} — named \`${OVER_LONG}\` — 41 hex characters`, "",
+    ].join("\n"))[0];
+
+    expect(finding?.resolved).toBe(false);
+    expect(finding?.resolvedSha).toBeNull();
+    expect(finding?.resolvedShaRefusal).toBeNull();
+    expect(isOpen(finding!)).toBe(true);
+  });
+
+  test("GUARD (green before this change): 7, 39 and 40 hex are all still accepted, and none is refused", () => {
+    const full = "0123456789abcdef0123456789abcdef01234567";
+    for (const token of [full.slice(0, 7), full.slice(0, 39), full]) {
+      const finding = parseFixlistFile([
+        "## 1 · Finding  [minor]", "", "Disposition: **fix-now**", `Resolved: yes ${token}`, "",
+      ].join("\n"))[0];
+      expect(finding?.resolvedSha).toBe(token);
+      expect(finding?.resolvedShaRefusal).toBeNull();
+    }
+  });
+
+  test("GUARD (green before this change): a 39-hex abbreviation does not survive the round as written", async () => {
+    const { dir, sha } = bareRepo();
+    const text = [
+      "## 1 · Finding  [major]", "", "Disposition: **fix-now**", `Resolved: yes ${sha.slice(0, 39)}`, "",
+    ].join("\n");
+
+    const result = await canonicalizeResolutions(dir, parseFixlistFile(text), text);
+
+    expect(result.text).toContain(`Resolved: yes ${sha}`);
+    expect(result.findings[0]?.resolvedSha).toBe(sha);
+  });
+
+  test("a `Resolved: no` line with an over-long hex word in it is prose — nothing is claimed, nothing is refused", () => {
+    const finding = parseFixlistFile([
+      "## 1 · Finding  [minor]", "", "Disposition: **fix-now**", `Resolved: no ${OVER_LONG}`, "",
+    ].join("\n"))[0];
+
+    expect(finding?.resolved).toBe(false);
+    expect(finding?.resolvedSha).toBeNull();
+    expect(finding?.resolvedShaRefusal).toBeNull();
   });
 });

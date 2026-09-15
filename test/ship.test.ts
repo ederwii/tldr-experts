@@ -303,6 +303,7 @@ function writeFixlistFixture(
         doNot: [],
         resolved: false,
         resolvedSha: null,
+        resolvedShaRefusal: null,
         ...partial,
       })),
     }),

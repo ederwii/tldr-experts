@@ -4,6 +4,28 @@
 
 ### Fixed
 
+- **A fix-list sha that is too LONG is refused by name, instead of reading as no sha at all
+  (#163, sub-fix 3).** The abbreviation edge of `Resolved: yes <sha>` was closed in 0.10.0 — a
+  7-39 hex claim that verifies is rewritten to the 40 `rev-parse` returned — and the same
+  grammar, `\b([0-9a-f]{7,40})\b`, was failing silently at the other edge, which is the
+  dangerous direction §7 names. No position inside a 41-character hex run is a word boundary, so
+  an over-long token produced NO match: the line read as a bare `Resolved: yes` that named
+  nothing, and the shape fault was never stated. Measured while fixing it, and worse than the
+  issue reported: the scan did not stop there but carried on to the next hex word on the line, so
+  `Resolved: yes <41 hex> (see 9f2c1ab)` closed the finding over `9f2c1ab` — a DIFFERENT commit
+  from the one the line claims, which is an audit record inventing its own evidence. A token of
+  41+ hex characters is now refused by name and by count, through the `claimed-unverified`
+  sentence #130 already writes into the file, so the finding keeps holding the story and the
+  record says why; a refusal anywhere on the line refuses the whole read, so the answer cannot
+  depend on which side of the bad token a good one happens to sit. 7-39 is still accepted and
+  still canonicalised — nothing a person legitimately types is refused. The grammar now lives in
+  one leaf, `readResolvedSha`, read by both the parser and the rewriter, which is what makes the
+  token that gets verified and the token that gets replaced provably the same span. The refusal is
+  written once and read everywhere: `verifyResolutions` is the single site that withdraws a claim,
+  so the file, the story's blocked reason and the stdout report all carry the SAME sentence. They
+  did not before — the file would have named the 41-character token while the report a human reads
+  first said `named no commit to point at`, which is two records of one event disagreeing.
+
 - **A killed headless turn reads as `interrupted` and is handed a command the next line of code
   accepts, instead of being called a `--prepare` bundle that never existed (closes #246, half
   one).** MEASURED on a 0.16.1 field run: the `tldrx` process driving `run auto` died

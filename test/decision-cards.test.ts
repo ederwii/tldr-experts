@@ -346,7 +346,7 @@ describe("a card per fallthrough kind", () => {
       finding: {
         n: 1, severity: "high", finding: "the token is logged", kind: "correctness", normalisedFrom: null,
         where: "[src: api:platform/Auth.cs:3]", disposition: "defer-with-log",
-        detail: "", doNot: [], resolved: false, resolvedSha: null,
+        detail: "", doNot: [], resolved: false, resolvedSha: null, resolvedShaRefusal: null,
       },
       ownership: "unowned",
       reason: "no story declares this path in the repo it names",

@@ -2666,12 +2666,21 @@ class BuildSession {
       // EVERY claim, not only the ones that gate `done`. A `defer-with-log`
       // finding marked resolved over a fix that does not exist is a smaller
       // problem and the same lie, and the record is what is being fixed here.
-      const why = finding.resolved ? await this.unverifiedBecause(story, finding.resolvedSha) : null;
+      // A claim whose sha was refused on SHAPE (#163) is downgraded here like any
+      // other, and with the sentence `readResolvedSha` already wrote — not a
+      // second phrasing of it (§7). It is asked FIRST because `unverifiedBecause`
+      // cannot tell this case from a bare `Resolved: yes`: both arrive with
+      // `resolvedSha: null`, and answering "named no commit to point at" over a
+      // line that named 41 characters put the file and this report — the one a
+      // human reads first — at odds about the same event.
+      const why = finding.resolved
+        ? finding.resolvedShaRefusal ?? await this.unverifiedBecause(story, finding.resolvedSha)
+        : null;
       if (why === null) {
         findings.push(finding);
         continue;
       }
-      findings.push({ ...finding, resolved: false, resolvedSha: null });
+      findings.push({ ...finding, resolved: false, resolvedSha: null, resolvedShaRefusal: null });
       refused.push(`#${String(finding.n)} — ${why}`);
       text = markUnverified(text ?? readFileSync(fixlist.path, "utf8"), finding.n, why);
       this.lines.push(
