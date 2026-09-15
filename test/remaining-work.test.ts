@@ -37,6 +37,10 @@ import { asRunBudget, type RunBudget } from "../src/core/budget/RunBudget.ts";
 import { asRunFile, type RunFile } from "../src/core/run/RunFile.ts";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { parseYaml } from "../src/core/yaml.ts";
+import { spawnSync } from "node:child_process";
+import { RunStore } from "../src/core/run/RunStore.ts";
+import { estimateNextStage } from "../src/core/budget/estimateView.ts";
+import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
@@ -714,6 +718,79 @@ describe("the brake", () => {
 
     const outcome = await next(ws);
     expect(outcome.code).not.toBe(2);
+  });
+
+  /**
+   * gh #214. `attempts: 1` is a stage that gets ONE developer turn per story. The
+   * brake has always resolved it (`spec.tuning.attempts`); `budget show`, `run
+   * estimate` and the `budget-gate` hook asked with the shipped 2, so they priced a
+   * second developer turn and a second reviewer nobody was going to dispatch — and
+   * the hook DENIED a `tldrx next` the brake itself allows.
+   *
+   * S3 alone, unpriced, $9.00 stage: attempts 1 ⇒ dev $2.40 + reviewer floor $2.00
+   * = $4.40; asked with 2 ⇒ dev $1.20 ×2 + $2.00 ×2 = $6.40. $5.00 left sits
+   * between the two, so every reader that still asks with 2 refuses here.
+   */
+  describe("attempts: 1 (gh #214) — every reader prices the stage's own attempts", () => {
+    function oneAttempt(): BuildWorkspace {
+      const made = makeBuildWorkspace({ ...PLAN, attempts: 1 });
+      open.push(made);
+      process.env.PATH = made.binDir;
+      process.env.FAKE_BUILD_STATE = made.statePath;
+      settle(made, "S1", "done");
+      settle(made, "S2", "done");
+      starve(made, 5.0);
+      return made;
+    }
+
+    test("control: the brake itself does NOT refuse — $4.40 of work fits in $5.00", async () => {
+      const outcome = await next(oneAttempt());
+      expect(outcome.code).not.toBe(2);
+      expect(outcome.lines.join("\n")).not.toContain("refusing to start stage");
+    });
+
+    test("`budget show` quotes the same $4.40 and does not say BLOCKED", () => {
+      const ws = oneAttempt();
+      const store = RunStore.open(ws.runDir);
+      const view = buildBudgetView(store.run, store.budget, store.runDir, ws.root);
+      const phase = view.phases.find((p) => p.id === "04-build");
+      expect(phase?.next_estimate_detail).toBe("remaining work: S3 dev $2.40 + reviewer $2.00 = $4.40");
+      expect(phase?.next_estimate_usd).toBe(4.4);
+      expect(phase?.blocked).toBe(false);
+      expect(renderBudget(view)).not.toContain("is BLOCKED");
+    });
+
+    test("the `tldrx budget show --json` command hands the page its workspace, and says ok", () => {
+      const ws = oneAttempt();
+      const shown = spawnSync(process.execPath, [join(FRAMEWORK_ROOT, "bin", "tldrx.ts"), "budget", "show", "--json"], {
+        cwd: ws.root, encoding: "utf8", env: { ...process.env, TMPDIR: ws.root },
+      });
+      expect(shown.status).toBe(0);
+      const view = JSON.parse(shown.stdout) as { phases: { id: string; next_estimate_usd: number; blocked: boolean }[] };
+      const phase = view.phases.find((p) => p.id === "04-build");
+      expect(phase?.next_estimate_usd).toBe(4.4);
+      expect(phase?.blocked).toBe(false);
+    });
+
+    test("`run estimate` prices the same $4.40", () => {
+      const ws = oneAttempt();
+      expect(estimateNextStage(ws.root, ws.runId).remaining.usd).toBe(4.4);
+    });
+
+    test("the budget-gate hook allows the `tldrx next` the brake allows", () => {
+      const ws = oneAttempt();
+      const run = spawnSync(process.execPath, [join(FRAMEWORK_ROOT, "src", "hooks", "budget-gate.ts")], {
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse", tool_name: "Bash", cwd: ws.root,
+          tool_input: { command: "tldrx next" },
+        }),
+        encoding: "utf8",
+        env: { ...process.env, USER: "alan", TMPDIR: ws.root },
+      });
+      expect(run.status).toBe(0);
+      expect(run.stdout).not.toContain("permissionDecision");
+      expect(run.stdout).toBe("");
+    });
   });
 
   test("a stage whose phase cannot afford the FIRST attempt is refused exactly as before", async () => {

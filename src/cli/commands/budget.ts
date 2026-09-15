@@ -112,11 +112,12 @@ function budgetShow(argv: readonly string[]): number {
     const args = parseArgs(argv, VALUE_FLAGS);
     refuseGrantFlags(args, "show");
     refuseRaiseFlags(args, "show");
-    const resolved = openRun(args.positionals[0] ?? stringFlag(args, "run"), workspaceRootFrom(args));
+    const root = workspaceRootFrom(args);
+    const resolved = openRun(args.positionals[0] ?? stringFlag(args, "run"), root);
     if (!isResolved(resolved)) return resolved.exit;
     const store = resolved.store;
 
-    const view = buildBudgetView(store.run, store.budget, store.runDir);
+    const view = buildBudgetView(store.run, store.budget, store.runDir, root);
     process.stdout.write(
       boolFlag(args, "json") ? `${JSON.stringify(view, null, 2)}\n` : `${renderBudget(view)}\n`,
     );
@@ -139,7 +140,8 @@ function budgetRaise(argv: readonly string[]): number {
     if (!Number.isFinite(amountUsd)) {
       throw new UsageError(`the amount must be a number of dollars, got '${amountText}'`);
     }
-    const resolved = openRun(stringFlag(args, "run"), workspaceRootFrom(args));
+    const root = workspaceRootFrom(args);
+    const resolved = openRun(stringFlag(args, "run"), root);
     if (!isResolved(resolved)) return resolved.exit;
     const store = resolved.store;
 
@@ -218,7 +220,7 @@ function budgetRaise(argv: readonly string[]): number {
     });
     store.save();
 
-    const view = buildBudgetView(store.run, store.budget, store.runDir);
+    const view = buildBudgetView(store.run, store.budget, store.runDir, root);
     const lines = [describeRaise(outcome), ...stageRaiseLines(phaseId, stageId, stageBefore, amountUsd)];
     // The `warn` half of #170: the ceiling was written, and the sentence names
     // the grant, the fact behind it and the figure — so the operator reads what

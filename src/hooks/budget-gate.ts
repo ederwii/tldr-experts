@@ -36,6 +36,7 @@ import type { RunFile } from "../core/run/RunFile.ts";
 import { EventLog } from "../core/events/EventLog.ts";
 import { parseYaml } from "../core/yaml.ts";
 import { PROJECT_WORK_DIR } from "../core/paths.ts";
+import { buildStageDefaults } from "../core/run/workflowPreset.ts";
 
 /**
  * Every command that can spend money, not just the two the spec first listed.
@@ -127,6 +128,10 @@ await runHook("budget-gate", async () => {
   const attended = isAttendedByHostView(view);
   const stage = cursorStage(view);
   const declared = stage?.budget_usd ?? stageBudgetFromLibrary(root, view.cursor.stage);
+  // The cursor stage's own `attempts:` (gh #214), resolved the way `tldrx next`'s
+  // brake resolves it. TOLERANT — an unreadable preset gives the shipped default —
+  // and already on a PreToolUse path: `dod-gate` resolves the same function.
+  const attempts = buildStageDefaults(root, view.scope, view.cursor.stage).attempts;
   // Not the stage's price — what is LEFT to dispatch under it. On a Build stage
   // whose plan is on disk this shrinks as stories settle; everywhere else it IS
   // the declared price and this hook behaves exactly as it did (design §E.2).
@@ -141,6 +146,7 @@ await runHook("budget-gate", async () => {
     maxUsd: null,
     economy: economyFor(budget, view.cursor.phase),
     attended,
+    attempts,
   });
   const estimate = estimateFor(command, work === null ? null : work.usd);
   if (estimate <= 0) return; // nothing declared to spend; nothing to refuse
@@ -201,15 +207,10 @@ await runHook("budget-gate", async () => {
     return;
   }
 
-  // `remainingWork` and `wouldExceed` are asked with the SHIPPED `attempts`
-  // (2), not this stage's: neither of these is a place that may open a
-  // `stage.yml` — one is a page render, one is a PreToolUse hook on a 50 ms
-  // budget with no stage spec in hand. Two consequences, both stated rather than
-  // discovered: for `attempts: 3` the reserve quoted here is an UNDER-estimate,
-  // which only makes it refuse less often; for `attempts: 1` it is an
-  // OVER-estimate, and it can refuse a command the real arithmetic would allow.
-  // That is a known gap, filed as #214 (follow-up to #170), not an accepted design.
-  const decision = wouldExceed(budget, view.cursor.phase, estimate);
+  // Priced with the stage's own `attempts` (gh #214). Asked with the shipped 2,
+  // an `attempts: 1` stage was reserved a developer turn and a reviewer nobody
+  // dispatches, and this gate DENIED a `tldrx next` the brake itself allows.
+  const decision = wouldExceed(budget, view.cursor.phase, estimate, attempts);
   if (!decision.blocked) return;
 
   // `tldrx next` on an `attended_by: host` run exits 4 and spawns nothing, so the

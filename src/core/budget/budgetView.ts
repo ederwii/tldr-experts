@@ -17,6 +17,8 @@ import { spentFigure, tallyOf, type SpentTally } from "./spentFigure.ts";
 import { shortBy } from "../build/caps.ts";
 import { EventLog } from "../events/EventLog.ts";
 import { givenAwayLines } from "./rebalance.ts";
+import { buildStageDefaults } from "../run/workflowPreset.ts";
+import { STAGE_TUNING_DEFAULTS } from "../schemas/stageTuning.ts";
 
 export interface BudgetPhaseView {
   readonly id: string;
@@ -108,13 +110,21 @@ export interface BudgetView {
  * `runDir` is optional and its absence is not a degraded mode — it is the pre-4C
  * behaviour, exactly: with no run directory to read stories from, every estimate
  * is the stage's declared `budget_usd` and every field below is what it was.
+ *
+ * `root` (gh #214) is the workspace the run lives in, so the next stage's own
+ * `attempts:` can be resolved (`buildStageDefaults`, tolerant) — the same value
+ * `tldrx next`'s brake prices the remaining work with. Absent ⇒ the shipped
+ * default, which is what this page quoted before.
  */
-export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string): BudgetView {
+export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string, root?: string): BudgetView {
   const tally = runTally(run);
   const phases = budget.phases.map((phase) => {
     const runPhase = run.phases.find((p) => p.id === phase.id);
     const next = runPhase === undefined ? null : nextStageOf(runPhase.stages);
     const staticEstimate = next?.budget_usd ?? 0;
+    const attempts = root === undefined || next === null
+      ? STAGE_TUNING_DEFAULTS.attempts
+      : buildStageDefaults(root, run.scope, next.id).attempts;
     const work = runDir === undefined || next === null
       ? null
       : remainingWork({
@@ -126,17 +136,14 @@ export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string
         maxUsd: null,
         economy: economyFor(budget, phase.id),
         attended: isAttendedByHost(run),
+        // The stage's own `attempts:` (gh #214), resolved the way the brake
+        // resolves it. Asked with the shipped 2 this page quoted an `attempts: 1`
+        // stage a second developer turn and a second reviewer nobody dispatches,
+        // and said BLOCKED where `tldrx next` runs.
+        attempts,
       });
     const estimate = work === null ? staticEstimate : work.usd;
-  // `remainingWork` and `wouldExceed` are asked with the SHIPPED `attempts`
-  // (2), not this stage's: neither of these is a place that may open a
-  // `stage.yml` — one is a page render, one is a PreToolUse hook on a 50 ms
-  // budget with no stage spec in hand. Two consequences, both stated rather than
-  // discovered: for `attempts: 3` the reserve quoted here is an UNDER-estimate,
-  // which only makes it refuse less often; for `attempts: 1` it is an
-  // OVER-estimate, and it can refuse a command the real arithmetic would allow.
-  // That is a known gap, filed as #214 (follow-up to #170), not an accepted design.
-    const decision = wouldExceed(budget, phase.id, estimate);
+    const decision = wouldExceed(budget, phase.id, estimate, attempts);
     return {
       id: phase.id,
       ceiling_usd: phase.ceiling_usd,
