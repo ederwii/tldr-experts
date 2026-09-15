@@ -151,8 +151,15 @@ export interface WorkflowPreset {
  * final sentence. A workflow that cannot be read, a scope with no Build stage, a
  * `stage.yml` that is not there: each gives the SHIPPED defaults, which is what
  * every one of these readers hard-coded before this function existed.
+ *
+ * `stageId` (gh #214) narrows it to the stage a cursor NAMES, which is the stage
+ * `tldrx next`'s brake resolves (`loadStageSpec(root, scope, stageId)`): the
+ * `budget show` page and the `budget-gate` hook price the remaining work with
+ * that stage's `attempts:`, and asked with the shipped 2 they refused a `next`
+ * the brake allowed on an `attempts: 1` stage. Absent, or naming no stage in the
+ * preset ⇒ the BUILD phase's stage, as before.
  */
-export function buildStageDefaults(root: string, scope: string): {
+export function buildStageDefaults(root: string, scope: string, stageId?: string): {
   readonly attempts: number;
   readonly timeoutS: number;
 } {
@@ -161,7 +168,8 @@ export function buildStageDefaults(root: string, scope: string): {
     const preset = loadWorkflowPreset(root, scope);
     // The BUILD phase's stage, by phase rather than by the id `build`: a scope may
     // name its stage anything, and `phase:` is what spec §1 fixes.
-    const stage = preset.stages.find((s) => s.phase === PHASE_IDS[3]);
+    const stage = (stageId === undefined ? undefined : preset.stages.find((s) => s.id === stageId))
+      ?? preset.stages.find((s) => s.phase === PHASE_IDS[3]);
     if (stage === undefined) return fallback;
     return { attempts: stage.attempts, timeoutS: stage.timeout_s };
   } catch {

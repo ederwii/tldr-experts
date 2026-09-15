@@ -105,6 +105,21 @@
   the `host_tokens` / `ceiling_tokens` it carries and quotes its `reason`, and a dollar row
   missing its figures says they are not recorded rather than printing `$0.00`. The verdict is
   unchanged — a `budget.blocked` was never relaunched and still is not.
+- **`budget show`, `run estimate` and the `budget-gate` hook price the remaining work with the
+  stage's own `attempts:` (closes #214).** `tldrx next`'s brake has resolved the stage's
+  `attempts:` since the key existed; these three readers asked `remainingWork` with the shipped
+  2. On an `attempts: 1` stage that reserved a second developer turn and a second reviewer the
+  executor never dispatches, so the page said BLOCKED and the hook DENIED a `tldrx next` the
+  brake itself allowed. Reproduced before the fix on the Build fixture with `attempts: 1`, two
+  of three stories done and $5.00 left: the brake allowed ($4.40 of work), while `budget show`
+  and `run estimate` quoted $6.40 and the hook denied `tldrx next` on "the stage estimate is
+  $6.40". The hook and `budget show` now resolve the cursor stage through the same tolerant
+  `buildStageDefaults` the `dod-gate` hook already calls on its PreToolUse path (it now takes
+  the stage id; an unreadable preset still gives the shipped 2), and `run estimate` passes the
+  stage spec it already loads. `reviewer_share`, `story_cap_multiplier` and
+  `story_cap_floor_usd` are still asked with their defaults by these three readers; this change
+  moves `attempts` only.
+
 - **The `budget-gate` hook no longer refuses the `run auto` launch that would fix the shortfall
   (closes #321).** It priced a `tldrx run auto` spawn against the cursor phase's own ceiling
   alone. On a phase already short, it denied the launch and wrote `budget.blocked` before the
