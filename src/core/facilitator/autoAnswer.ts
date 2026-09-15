@@ -36,7 +36,8 @@ import { join } from "node:path";
 import { captureAnswers, writeAnswerSlot, type AnswerOverride } from "../answers/captureAnswers.ts";
 import { QUESTION_PHASES } from "../run/questionCards.ts";
 import {
-  isAdvisory, openBlocks, parseQuestions, pinnedToPerson, recommendedPick, type RecommendedPick,
+  describeRecommendation, isAdvisory, openBlocks, parseQuestions, pinnedToPerson, readRecommendation,
+  recommendedPick, type RecommendedPick,
 } from "../text/questions.ts";
 
 /** The decider every auto-answered fact carries (`Fact.ts`, `FACT_DECIDERS`). */
@@ -67,7 +68,12 @@ export interface AutoAnswered {
 /** A block the loop looked at and left for a person, with why — so the transcript says so. */
 export interface AutoEscalated {
   readonly q: string;
-  readonly reason: "no recommendation" | "recommendation names no option" | "pinned to a person";
+  /**
+   * `pinned to a person`, `recommendation names no option` (written but not captured), or
+   * `describeRecommendation`'s sentence (#323) — "no Recommended line" vs "Recommended line
+   * unreadable: <line> — expected …", so a person can tell a missing line from a mistyped one.
+   */
+  readonly reason: string;
 }
 
 export interface AutoAnswerOutcome {
@@ -103,7 +109,7 @@ export function answerRecommended(ctx: AutoAnswerContext): AutoAnswerOutcome {
       if (pick === null) {
         escalated.push({
           q: id,
-          reason: block.recommended === null ? "no recommendation" : "recommendation names no option",
+          reason: describeRecommendation(readRecommendation(block)) ?? "recommendation names no option",
         });
         continue;
       }

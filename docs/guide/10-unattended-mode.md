@@ -642,7 +642,12 @@ Recommended: B — one screen, correct for everyone [src: 01-what/handoff.md:22]
 **A question with no recommendation still gets no line**: the value of that line is that
 somebody stood behind it with a citation, and a manufactured one is worse than none. A
 `Recommended:` line that does not match the shape is ignored rather than refused — it is
-guidance, so a typo costs the guidance and never the gate.
+guidance, so a typo costs the guidance and never the gate. The shape is the letter first, then
+any of: its `)`, a `— <why>` reason, and a trailing `[src: …]` token or tokens — so
+`Recommended: B`, `Recommended: B [src: 01-what/handoff.md:22]` and the line above all read as
+B (#323: the reason used to be required before a citation, and `Recommended: A [src: …]`
+parked an unattended run). `tldrx seed check` reads a seed's question with the same reader and
+refuses a line it cannot read.
 
 `--gate-agent` never changes an exit code and never upgrades a stage's frozen gate policy.
 On an attended run it never spawns, because nothing on an attended run does. The full card

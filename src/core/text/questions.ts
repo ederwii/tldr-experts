@@ -72,6 +72,10 @@ export interface SupersessionFooter {
  * never refused. Ignoring is the right failure here and it is a decision, not laziness
  * — the line is GUIDANCE, and a stage that mistypes it must lose the guidance rather
  * than the gate. `validateQuestions` therefore says nothing about it either.
+ *
+ * A SEED is different (#323): `seed check` reads its question's line with the same
+ * reader (`readInlineRecommendation`) and makes an unreadable one a finding, because
+ * a seed is checked before anything runs, when fixing the line costs nothing.
  */
 export interface QuestionRecommendation {
   /** The option the asker would take: one letter, `A`–`E`. */
@@ -143,13 +147,34 @@ const OPTION_RE = /^-\s+([A-E])\)\s*(.*)$/;
 /**
  * `Recommended: B — one screen, correct for everyone [src: 01-what/handoff.md:22]`
  *
+ * THE grammar of a recommendation, and the only one (#323) — `parseRecommendedLine`
+ * below is its one reader, and the loop, the decision card and `seed check` all go
+ * through it. The letter comes first, then any combination of: its `)`, a dash
+ * reason, and a trailing `[src: …]` token or tokens. So all of these read as B:
+ *
+ *   Recommended: B
+ *   Recommended: B)
+ *   Recommended: B [src: 01-what/handoff.md:22]
+ *   Recommended: B) — one screen, correct for everyone [src: 01-what/handoff.md:22]
+ *
  * Strict about the two things that make it machine-readable — one letter A–E, and a
  * dash before any prose — precisely so it can be TOLERANT about everything else. A
  * line that does not match is not half-read: `Recommended: whichever you like` names
  * no option, and a reader that guessed one from the first letter of a sentence would
  * be inventing exactly the recommendation `decisionCard.ts` refuses to manufacture.
+ *
+ * Measured (#323): this regex used to demand the dash reason before a `[src:]`, so
+ * `Recommended: A [src: …]` — a line a person reads as complete — parsed as NO
+ * recommendation and parked an unattended run, while `seed check`'s substring test
+ * passed the same shape clean.
  */
-const RECOMMENDED_RE = /^Recommended:[ \t]+([A-E])\)?[ \t]*(?:[—–-][ \t]+(.*))?$/;
+const RECOMMENDED_PREFIX_RE = /^Recommended:/;
+const RECOMMENDED_RE = /^Recommended:[ \t]+([A-E])\)?(?![^ \t])[ \t]*(.*)$/;
+const RECOMMENDED_REASON_RE = /^[—–-](?:[ \t]+(.*))?$/;
+/** The shape a finding or a log line names when a `Recommended:` line cannot be read. */
+export const RECOMMENDED_SHAPE = "`Recommended: <letter>` — optionally `<letter>)`, then `— <why>`, then a trailing `[src: …]`";
+/** An inline option in a one-line question: `A) ascending B) descending`. */
+const INLINE_OPTION_RE = /(?:^|[\s(])([A-E])\)\s/g;
 const ANSWER_RE = /^\[Answer\]:[ \t]*(\S.*)$/;
 const ANSWER_SLOT_RE = /^\[Answer\]:/;
 const FOOTER_KEYS = ["answered_by", "answered_at", "fact"] as const;
@@ -195,6 +220,7 @@ function buildBlock(startLine: number, lines: readonly string[]): QuestionBlock 
   let whySrc: SrcToken | null = null;
   const options: QuestionOption[] = [];
   let recommended: QuestionRecommendation | null = null;
+  let sawRecommendedLine = false;
   let answer = "";
   let answerIndex = -1;
   let footer: AnswerFooter | null = null;
@@ -223,9 +249,12 @@ function buildBlock(startLine: number, lines: readonly string[]): QuestionBlock 
       options.push({ letter: option[1], text: option[2] });
       continue;
     }
-    const recommendation = RECOMMENDED_RE.exec(line);
-    if (recommendation !== null && recommendation[1] !== undefined && recommended === null) {
-      recommended = toRecommendation(recommendation[1], recommendation[2] ?? "");
+    if (RECOMMENDED_PREFIX_RE.test(line) && !sawRecommendedLine) {
+      // The FIRST `Recommended:` line is the block's line, readable or not — a later
+      // one never stands in for an unreadable first (`readRecommendation` agrees).
+      sawRecommendedLine = true;
+      const reading = parseRecommendedLine(line);
+      recommended = reading.kind === "ok" ? reading.recommendation : null;
       continue;
     }
     if (ANSWER_SLOT_RE.test(line) && answerIndex === -1) {
@@ -241,18 +270,97 @@ function buildBlock(startLine: number, lines: readonly string[]): QuestionBlock 
   };
 }
 
+/** What one `Recommended:` line says, read with THE grammar (#323). */
+export type RecommendationReading =
+  /** The text carries no `Recommended:` line at all. */
+  | { readonly kind: "absent" }
+  /** It carries one, and the grammar cannot read it. `line` is the line as written. */
+  | { readonly kind: "unreadable"; readonly line: string }
+  | { readonly kind: "ok"; readonly line: string; readonly recommendation: QuestionRecommendation };
+
 /**
- * The `[src: …]` grammar is `srcToken.ts`'s and stays there: this splits the line into
- * the sentence and the citation using that one parser, and joins the refs back with the
- * separator `srcToken()` itself writes — never a second reading of the same bytes.
+ * The ONE reader of a `Recommended:` line (#323). `line` must START with
+ * `Recommended:`; anything else is `absent`.
+ *
+ * The `[src: …]` grammar is `srcToken.ts`'s and stays there: this peels trailing tokens
+ * off with that one parser, and joins their refs back with the separator `srcToken()`
+ * itself writes — never a second reading of the same bytes. What is left between the
+ * letter and the citations must be nothing, or a dash and the reason.
  */
-function toRecommendation(option: string, rest: string): QuestionRecommendation {
-  const token = parseSrcToken(rest);
-  return {
-    option,
-    why: withoutSrcToken(rest).trim(),
-    src: token === null ? "" : token.refs.map((ref) => ref.raw).join(SRC_SEPARATOR),
-  };
+export function parseRecommendedLine(line: string): RecommendationReading {
+  if (!RECOMMENDED_PREFIX_RE.test(line)) return { kind: "absent" };
+  const match = RECOMMENDED_RE.exec(line.replace(/\s+$/, ""));
+  const option = match?.[1];
+  if (match === null || option === undefined) return { kind: "unreadable", line };
+  let rest = (match[2] ?? "").trim();
+  const tokens: string[][] = [];
+  for (let token = parseSrcToken(rest); token !== null; token = parseSrcToken(rest)) {
+    tokens.unshift(token.refs.map((ref) => ref.raw));
+    // `parseSrcToken` reads past closing punctuation after the `]`; so does this.
+    rest = withoutSrcToken(rest).replace(/[\s.,;:!?]+$/, "").trim();
+  }
+  let why = "";
+  if (rest !== "") {
+    const reason = RECOMMENDED_REASON_RE.exec(rest);
+    if (reason === null) return { kind: "unreadable", line };
+    why = (reason[1] ?? "").trim();
+  }
+  return { kind: "ok", line, recommendation: { option, why, src: tokens.flat().join(SRC_SEPARATOR) } };
+}
+
+/**
+ * A reading judged against the options the question offers. `letters` null means the
+ * text states no options to judge against (a one-line seed question may leave them to
+ * the What stage), so a readable letter is taken as it stands.
+ */
+export type RecommendationVerdict =
+  | RecommendationReading
+  | { readonly kind: "no-option"; readonly line: string; readonly option: string; readonly letters: readonly string[] };
+
+export function judgeRecommendation(
+  reading: RecommendationReading, letters: readonly string[] | null,
+): RecommendationVerdict {
+  if (reading.kind !== "ok" || letters === null) return reading;
+  const option = reading.recommendation.option;
+  return letters.includes(option) ? reading : { kind: "no-option", line: reading.line, option, letters };
+}
+
+/** A parsed §2.7 block's recommendation, judged against its own `- A)` options. */
+export function readRecommendation(block: Pick<QuestionBlock, "lines" | "options">): RecommendationVerdict {
+  const line = block.lines.slice(1).find((l) => RECOMMENDED_PREFIX_RE.test(l));
+  return judgeRecommendation(
+    line === undefined ? { kind: "absent" } : parseRecommendedLine(line),
+    block.options.map((option) => option.letter),
+  );
+}
+
+/**
+ * A ONE-LINE question — a seed's `# Open questions` bullet:
+ * `Tie order? A) ascending B) descending. Recommended: A — matches the sort [src: …]`.
+ * The recommendation is everything from `Recommended:` to the end, read by
+ * `parseRecommendedLine`; the options are the `X)` letters written before it, and a
+ * bullet that writes none is judged against nothing (`letters` null).
+ */
+export function readInlineRecommendation(text: string): RecommendationVerdict {
+  const at = /\bRecommended:/.exec(text);
+  if (at === null) return { kind: "absent" };
+  const letters = [...text.slice(0, at.index).matchAll(INLINE_OPTION_RE)].map((m) => m[1] ?? "");
+  return judgeRecommendation(parseRecommendedLine(text.slice(at.index)), letters.length === 0 ? null : letters);
+}
+
+/**
+ * Absent-with-reason, one sentence per verdict — for whatever has to say why a question
+ * carries no usable recommendation: a seed-check finding, or the line `run auto` logs
+ * when it leaves a question for a person. Null for a usable one.
+ */
+export function describeRecommendation(verdict: RecommendationVerdict): string | null {
+  switch (verdict.kind) {
+    case "ok": return null;
+    case "absent": return "no Recommended line";
+    case "unreadable": return `Recommended line unreadable: ${verdict.line.trim()} — expected ${RECOMMENDED_SHAPE}`;
+    case "no-option":
+      return `Recommended line names no option: ${verdict.option} is not one of ${verdict.letters.join(", ")}`;
+  }
 }
 
 function parsePipeComment(inner: string): (readonly [string, string])[] {
@@ -466,9 +574,9 @@ export interface RecommendedPick {
 /**
  * The option the block's own `Recommended:` line names, or null.
  *
- * Null in exactly two cases, both "nothing to take": no `Recommended:` line parsed
- * (`RECOMMENDED_RE` is tolerant, so a malformed line is already null here), or a
- * letter that names none of the block's options — `Recommended: E` over three
+ * Null whenever `readRecommendation` is not `ok` — all "nothing to take": no
+ * `Recommended:` line, a line the grammar cannot read (`describeRecommendation` says
+ * which, for a caller that must name why), or a letter that names none of the block's options — `Recommended: E` over three
  * options is a recommendation of nothing, and a reader that took the first option
  * instead would be inventing the pick `decisionCards.ts` refuses to manufacture.
  *
@@ -478,8 +586,9 @@ export interface RecommendedPick {
  * question, and nothing else.
  */
 export function recommendedPick(block: QuestionBlock): RecommendedPick | null {
-  if (block.recommended === null) return null;
-  const letter = block.recommended.option;
+  const verdict = readRecommendation(block);
+  if (verdict.kind !== "ok") return null;
+  const letter = verdict.recommendation.option;
   const taken = block.options.find((option) => option.letter === letter);
   if (taken === undefined) return null;
   return {
@@ -488,7 +597,7 @@ export function recommendedPick(block: QuestionBlock): RecommendedPick | null {
     alternatives: block.options
       .filter((option) => option.letter !== letter)
       .map((option) => `${option.letter}) ${option.text}`),
-    why: block.recommended.why,
+    why: verdict.recommendation.why,
   };
 }
 

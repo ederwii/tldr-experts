@@ -40,6 +40,9 @@ import { renderSeedHandoff, renderSeedIndex, SEED_INDEX } from "./renderSeed.ts"
 import { uncoveredSections } from "./seedCoverage.ts";
 import { validateHandoff } from "../text/handoff.ts";
 import {
+  describeRecommendation, readInlineRecommendation, RECOMMENDED_SHAPE, type RecommendationVerdict,
+} from "../text/questions.ts";
+import {
   describeSrcFailure, diagnoseSrcToken, parseSrcToken, resolveSrc, type SrcContext,
 } from "../text/srcToken.ts";
 import { loadWorkspace, toSrcContext, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
@@ -72,7 +75,8 @@ export type SeedCheckRule =
   | "bullet-length" | "src-grammar" | "src-resolve"
   | "dod-separator" | "dod-command"
   | "story-id" | "story-dod" | "story-touches" | "story-depends" | "depends-unknown"
-  | "wave-boundary" | "question-recommended" | "importer";
+  | "wave-boundary" | "question-recommended" | "question-recommended-unreadable"
+  | "question-recommended-option" | "importer";
 
 export type SeedCheckAdvisory = "size" | "waves" | "heading";
 
@@ -308,15 +312,32 @@ function checkBullets(document: SeedDocument, structure: Structure, ctx: SrcCont
       }
     }
   }
+  // The loop's own reader, not a second reading of the line (#323): a substring test
+  // here passed `Recommended: A [src: …]` clean while the loop's grammar read it as no
+  // recommendation and parked an unattended run. Every open question is held to it,
+  // because a seed has no questions policy of its own — `--questions` is a `run new`
+  // flag, so the check cannot know the seed will NOT run unattended, and a line fixed
+  // here costs nothing.
   for (const question of structure.questions) {
-    if (!/\bRecommended:/.test(question.text)) {
-      findings.push({
-        file: document.rel, line: question.line, rule: "question-recommended",
-        text: "an open question with no `Recommended: <letter> — <why>` line parks the run for a person under --questions none",
-      });
-    }
+    const verdict = readInlineRecommendation(question.text);
+    const rule = QUESTION_RULE[verdict.kind];
+    if (rule === null) continue;
+    const park = " — under --questions none the loop cannot take it and parks the run for a person";
+    findings.push({
+      file: document.rel, line: question.line, rule,
+      text: verdict.kind === "absent"
+        ? `an open question with no \`Recommended:\` line${park}; add ${RECOMMENDED_SHAPE}`
+        : `${describeRecommendation(verdict) ?? ""}${park}`,
+    });
   }
 }
+
+const QUESTION_RULE: Readonly<Record<RecommendationVerdict["kind"], SeedCheckRule | null>> = {
+  ok: null,
+  absent: "question-recommended",
+  unreadable: "question-recommended-unreadable",
+  "no-option": "question-recommended-option",
+};
 
 /** The last physical line of the bullet that starts at `line` (1-based), as written. */
 function lastLineOf(raw: readonly string[], line: number): string {

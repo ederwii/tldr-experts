@@ -52,8 +52,12 @@ measured in both:
   `# Open questions` — so every output is covered and none is reported as an Unknown.
 - **Give every open question a `Recommended:` line.** Under `run new --questions none` the
   loop answers a question only when its block names one of its own options on a
-  `Recommended: <letter> — <why>` line; one without a recommendation parks the run for a
-  person. The question blocks are the What agent's — the seed's recommendation is what it
+  `Recommended: <letter>` line — optionally `<letter>)`, then `— <why>`, then a trailing
+  `[src: …]`, in that order; one without a recommendation parks the run for a person.
+  `seed check` reads the line with the loop's own reader (#323): a `Recommended:` it cannot
+  read (`question-recommended-unreadable`) or a letter naming none of the options the bullet
+  lists (`question-recommended-option`) is a finding, exit `1`, like a missing one.
+  The question blocks are the What agent's — the seed's recommendation is what it
   reads to write that line (inferred from the mechanism, not measured on a run).
 
 The rules above are the grammar. The rules below are what four unattended runs in one week
