@@ -784,6 +784,11 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
     "- `approve` — every acceptance criterion is met by the diff and the conventions hold.",
     "- `changes` — something is missing, wrong or unconventional. It costs a whole second",
     "  attempt, so ask only for what the acceptance criteria or the conventions require.",
+    // #326: a `changes` with no evidence is refused as a malformed envelope.
+    "  It MUST carry evidence: your summary, or one line of a finding, ends with an `[src: …]`",
+    "  citation — the diff line that is wrong, the acceptance criterion that is unmet",
+    `  (\`[src: ${parts.story.rel}:<line>]\`), or where missing work should be (\`[src: absent:<path>]\`).`,
+    "  A `changes` that cites nothing is refused and you will be asked for the envelope again.",
     ...verdictLines(parts.fixlistAvailable !== false),
     "",
     "## Rules",
@@ -795,7 +800,7 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
     // came to be described twice in the first place.
     "- You have no write tool. Do not attempt to edit, commit or fix anything.",
     "",
-    ...grammarSection(parts.fixlistAvailable !== false),
+    ...grammarSection(),
     "## Stop",
     "",
     "Return the envelope and stop.",
@@ -805,7 +810,7 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
 }
 
 /**
- * The `[src: …]` grammar, for the one verdict that is held to it (gh #77).
+ * The `[src: …]` grammar, for the verdicts that are held to it (gh #77, gh #326).
  *
  * `refuted` is the disposition that contradicts its own finding, and
  * `parseFixFindings` refuses one whose citation does not parse — dropping the
@@ -813,12 +818,12 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
  * now the prompt asked for a citation and never said what one is; run
  * `260830-ordering-inventory` lost three attempts to exactly that gap.
  *
- * Emitted only when `fixlist` is on the table, for the reason `verdictLines`
- * above withdraws the verdict itself: a reviewer that cannot return `refuted`
- * pays nothing for the grammar of a citation it will never be asked for.
+ * Emitted on EVERY review since #326. It used to be withdrawn with `fixlist`, on
+ * the reasoning that a reviewer that cannot return `refuted` is never asked for a
+ * citation — but a `changes` verdict now must carry one, and `changes` is on the
+ * table on every review.
  */
-function grammarSection(fixlistAvailable: boolean): readonly string[] {
-  if (!fixlistAvailable) return [];
+function grammarSection(): readonly string[] {
   return [`## ${SRC_GRAMMAR_HEADING}`, "", renderSrcGrammarContract(), ""];
 }
 

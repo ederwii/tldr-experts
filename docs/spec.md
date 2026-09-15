@@ -1411,8 +1411,11 @@ grammar alone; #79 widened it to every envelope-FORMAT refusal, because they are
 economies for one kind of fault is a rule nobody can hold. Free and bounded: a `refuted` finding whose `[src: …]` does
 not parse, a `fixlist` that is missing, not an array or empty, a row that is not an object, a row with no `finding`
 text, a row with no valid `disposition`, a row with no valid `kind` or a `docs`/`style` row submitted `fix-now`
-without the citation that buys it (#255), and a verdict WORD outside the enum (#36 — its message is unchanged, only
-its price). Still costs the attempt, unchanged: a verdict's CONTENT, a red DoD, a second fix-list round refused by its own
+without the citation that buys it (#255), a verdict WORD outside the enum (#36 — its message is unchanged, only
+its price), and a declared `changes` that cites nothing (#326 — its `summary`, or one line of a finding, must end with
+an `[src: …]` token that parses; owner decision 2026-09-14, measured on `260914-tenant-credits`, where `changes` over
+summary "test" and findings `["a","b"]` was recorded as a real review and spent the attempt). Still costs the attempt,
+unchanged: a verdict's CONTENT — a `changes` that cites its evidence, a red DoD, a second fix-list round refused by its own
 bound, a reviewer that never answered — and **any refusal the format index does not claim.** That last one is the
 guard: the free round is granted only when every reason the envelope was refused is indexed as form
 (`isFormatRejection`), so a future refusal about the WORK costs the attempt until somebody deliberately says otherwise.
@@ -3888,7 +3891,10 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    `260830-ordering-inventory`: S2, S3 and S5 each lost an attempt to it, over summaries beginning "I would sign
    this"). Build instead asks the SAME reviewer for a corrected envelope, carrying every refusal verbatim — #77 made
    the citation ones name the rule broken, quote the line written and show a corrected one — under
-   `## Your previous envelope was REFUSED`, and records one `story.review_retried` (§2.9) per free round. Bounded at
+   `## Your previous envelope was REFUSED`, and records one `story.review_retried` (§2.9) per free round. A `changes`
+   verdict must carry its evidence (#326): at least one `[src: …]` that parses, ending its `summary` or a line of a
+   finding — the diff line that is wrong, the unmet criterion (`03-plan/stories/<id>.md:<line>`), or `absent:<path>` for
+   missing work — and the reviewer prompt carries that sentence and the §2.8 grammar on every review. Bounded at
    **two** per envelope round: the third refusal is the ordinary `changes` and costs the attempt, so a reviewer that
    cannot write a readable envelope still settles. Both doors go through it — a spawn re-prompts itself;
    `--commit --review` leaves the bundle out with the refusal spliced into its `prompt.md`, moves the refused

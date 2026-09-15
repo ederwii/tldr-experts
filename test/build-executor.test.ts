@@ -4772,7 +4772,7 @@ describe("the in-session doors ask the dependency frontier (gh #300)", () => {
     expect(existsSync(join(ws.runDir, "04-build", "log", "S2.md"))).toBe(false);
 
     // The host's verdict blocks S1 for good — one attempt, `changes`.
-    answerReview(ws, "S1", { verdict: "changes", summary: "not what the story asked for", findings: ["S1: wrong"] });
+    answerReview(ws, "S1", { verdict: "changes", summary: "not what the story asked for", findings: ["S1: wrong [src: 03-plan/stories/S1.md:1]"] });
     const blocked = await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
     expect(story(ws, "S1")).toContain("status: blocked");
     expect(blocked.lines.join("\n")).toContain("S1 → `blocked`");
@@ -4811,7 +4811,7 @@ describe("the in-session doors ask the dependency frontier (gh #300)", () => {
     const ws = twoWaves();
     await headlessPassLeavesS2Waiting(ws);
     await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
-    answerReview(ws, "S1", { verdict: "changes", summary: "not what the story asked for", findings: ["S1: wrong"] });
+    answerReview(ws, "S1", { verdict: "changes", summary: "not what the story asked for", findings: ["S1: wrong [src: 03-plan/stories/S1.md:1]"] });
     await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
     expect(story(ws, "S1")).toContain("status: blocked");
 

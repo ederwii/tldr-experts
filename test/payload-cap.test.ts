@@ -304,7 +304,7 @@ describe("the emit seam under a real build run — an oversized reviewer verdict
     await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
 
     const round1 = "a".repeat(MAX_PAYLOAD_BYTES * 2);
-    answerReview(ws, "S1", { verdict: "changes", summary: round1, findings: ["fix it"] });
+    answerReview(ws, "S1", { verdict: "changes", summary: round1, findings: ["fix it [src: 03-plan/stories/S1.md:1]"] });
     await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
 
     // The requeue is real: attempt 2 gets a fresh developer run (headless, same

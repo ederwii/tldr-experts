@@ -414,7 +414,25 @@ function isFindingKind(value: string): value is FindingKind {
  * wrote none.
  */
 function citationProblem(where: string, detail: string): string | null {
-  const candidates = [where, ...detail.split("\n")].map((line) => line.trim());
+  return firstCitationProblem(
+    [where, ...detail.split("\n")],
+    "a refutation is a claim, and it carries its evidence or it is not one: `where`, or one "
+    + "LINE of `detail`, must END with a `[src: …]` token that parses. "
+    + `Write e.g. \`${srcRule("file-shape").good}\` — the full grammar is under `
+    + `"${SRC_GRAMMAR_HEADING}" in your prompt.`,
+  );
+}
+
+/**
+ * Does any candidate LINE end with a `[src: …]` token that parses? Null when one
+ * does; otherwise #77's diagnosis of the first token that was attempted, or
+ * `missing` when none was.
+ *
+ * Exported for #326, which holds a `changes` verdict to the same evidence rule a
+ * refutation already paid: one reading of "carries a citation", not two (§7).
+ */
+export function firstCitationProblem(lines: readonly string[], missing: string): string | null {
+  const candidates = lines.map((line) => line.trim());
   for (const candidate of candidates) {
     const token = parseSrcToken(candidate);
     if (token !== null && token.errors.length === 0 && token.refs.length > 0) return null;
@@ -423,10 +441,7 @@ function citationProblem(where: string, detail: string): string | null {
     const failure = diagnoseSrcToken(candidate);
     if (failure !== null) return describeSrcFailure(failure);
   }
-  return "a refutation is a claim, and it carries its evidence or it is not one: `where`, or one "
-    + "LINE of `detail`, must END with a `[src: …]` token that parses. "
-    + `Write e.g. \`${srcRule("file-shape").good}\` — the full grammar is under `
-    + `"${SRC_GRAMMAR_HEADING}" in your prompt.`;
+  return missing;
 }
 
 function str(value: unknown): string {
