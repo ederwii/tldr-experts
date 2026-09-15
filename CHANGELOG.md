@@ -120,6 +120,29 @@
   `story_cap_floor_usd` are still asked with their defaults by these three readers — the same
   disagreement on three more knobs, measured and filed as #333; this change moves `attempts` only.
 
+- **An in-session Watch turn is recorded as UNMETERED, not as a measured `$0.00` (closes #224).**
+  The `--commit` path read the result envelope's own `cost_usd` and defaulted it to `0` — and a
+  host session has no reason to fill that field in — while `--cost-usd`, the flag the host
+  declares what its sub-agent cost with, was never read anywhere in the Watch executor. Measured
+  on disk across two live workspaces: 56 watch task rows at `cost_usd: 0.0` with no `metered` key,
+  one of them written by a current release, so every zero was counted by `budget.spent_usd` as a
+  real measurement and the lower-bound labelling that keys off `metered: false` could not fire for
+  the whole of 05-watch. Watch now uses the same three-value contract Build and the single-agent
+  stages already use: `--cost-usd` first, then the envelope's figure, and with NEITHER
+  `cost_usd: null` + `metered: false` — a named absence instead of a confident zero. A declared
+  `--tokens` rides along on the row the same way. A headless watch turn, which this process really
+  does meter, is untouched.
+- **A Watch spawn now records the ceiling it was given (closes #190).** The executor computed a
+  per-feature ceiling, handed it to the sub-agent and emitted no `agent.spawned` at all, so a
+  watcher feature was the one turn in the framework whose measured cost could not be read against
+  what it was allowed to cost — every other stage reconciles `agent.spawned.max_budget_usd`
+  against the `agent.result` it paired with. Watch now emits one `agent.spawned` per feature
+  before the spawn (a turn that dies is still a turn the ceiling was committed to), carrying
+  `phase`, `role: developer`, `model`, `effort`, `max_budget_usd` and `key` — the same `key` the
+  `agent.result` for that row already carries, which is what joins the two ends of one turn.
+  Deliberately not `story:`: that is the field `tldrx cost --stories` counts a row as a Build
+  story by, and a Watch feature id is not a story, so that report is unchanged and whether it
+  grows a Watch axis stays a separate decision.
 - **The `budget-gate` hook no longer refuses the `run auto` launch that would fix the shortfall
   (closes #321).** It priced a `tldrx run auto` spawn against the cursor phase's own ceiling
   alone. On a phase already short, it denied the launch and wrote `budget.blocked` before the

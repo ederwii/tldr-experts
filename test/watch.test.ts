@@ -425,6 +425,64 @@ describe("no done stories", () => {
   });
 });
 
+// --- the spawn ceiling on the log ------------------------------------------
+
+/**
+ * gh #190. Every other executor's spawn ceiling is reconcilable off
+ * `events.jsonl` — `agent.spawned.max_budget_usd` against the `agent.result` it
+ * paired with. Watch computed the same number (`agentShare`), handed it to
+ * `spawnAgent`, and never wrote it anywhere, so a watcher feature's measured cost
+ * had nothing to be read against.
+ */
+describe("a watch spawn records its ceiling (gh #190)", () => {
+  test("one `agent.spawned` per feature, carrying the ceiling that spawn was given", async () => {
+    const plan = defaultPlan();
+    plan["03-plan/stories/S3.md"] = story("S3", "E2", "done", "lab");
+    const { ws, ctx } = fixture(plan);
+    fakeClaude(ws, {
+      [watcherRelPath("leaderboard")]: card("leaderboard", ["S1", "S2"], LIVE_SIGNAL),
+      [watcherRelPath("other")]: card("other", ["S3"], LIVE_SIGNAL),
+    });
+    const emitted: { type: string; payload: Record<string, unknown> }[] = [];
+
+    const outcome = await watchExecutor({
+      ...ctx,
+      emit: (type, payload) => { emitted.push({ type, payload }); },
+    });
+
+    expect(outcome.ok).toBe(true);
+    const spawns = emitted.filter((e) => e.type === "agent.spawned");
+    expect(spawns.map((e) => e.payload.key)).toEqual(["leaderboard", "other"]);
+    // The ceiling the executor actually handed `spawnAgent`: the stage's
+    // $2.00 shared two ways, which is also what `--prepare` writes as the
+    // bundle's `max_budget_usd`.
+    expect(spawns.map((e) => e.payload.max_budget_usd)).toEqual([1, 1]);
+    expect(spawns.map((e) => e.payload.role)).toEqual(["developer", "developer"]);
+    expect(spawns.map((e) => e.payload.phase)).toEqual([WATCH_PHASE, WATCH_PHASE]);
+  });
+
+  /**
+   * The spawn is on the log BEFORE the turn, not after it: a sub-agent that dies
+   * is still a turn the ceiling was committed to, and a ceiling written only on
+   * the way out would be missing from exactly the runs that need explaining.
+   */
+  test("the ceiling is recorded even when the sub-agent fails", async () => {
+    const { ws, ctx } = fixture();
+    fakeClaude(ws, { [watcherRelPath("leaderboard")]: card("leaderboard", ["S1", "S2"], LIVE_SIGNAL) });
+    process.env.FAKE_CLAUDE_IS_ERROR = "1";
+    const emitted: { type: string; payload: Record<string, unknown> }[] = [];
+
+    const outcome = await watchExecutor({
+      ...ctx,
+      emit: (type, payload) => { emitted.push({ type, payload }); },
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(emitted.filter((e) => e.type === "agent.spawned")).toHaveLength(1);
+    expect(ws.runDir).toBeTruthy();
+  });
+});
+
 // --- in-session mode -------------------------------------------------------
 
 describe("--prepare / --commit, per feature", () => {
@@ -476,6 +534,57 @@ describe("--prepare / --commit, per feature", () => {
     expect(outcome.costUsd).toBeCloseTo(0.07, 5);
     expect(read(ws, watcherRelPath("leaderboard"))).toContain("status: verified");
     expect(existsSync(join(ws.runDir, WATCH_PHASE, "handoff.md"))).toBe(true);
+  });
+
+  /**
+   * gh #224. A host's in-session sub-agent is billed to the HOST session, so the
+   * row must read `cost_usd: null` + `metered: false` — the spelling Build's
+   * `commit()` and `commitStage` already use — and never a `$0.00` that reads as
+   * a measurement. Measured before the fix: 56 watch rows at `cost_usd: 0.0`
+   * with no `metered` key across two live workspaces.
+   */
+  test("commit with nothing declared records an UNMETERED row, not a measured $0.00", async () => {
+    const { ws, ctx } = fixture();
+    process.env.PATH = "";
+    await watchExecutor({ ...ctx, mode: "prepare" });
+
+    const path = join(ws.runDir, watcherRelPath("leaderboard"));
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, card("leaderboard", ["S1", "S2"], LIVE_SIGNAL), "utf8");
+    // No `cost_usd` at all: a host session has no reason to fill one in.
+    writeFileSync(
+      join(ws.runDir, ".agent", "watch", "leaderboard", "result.json"),
+      JSON.stringify({ outputs: [watcherRelPath("leaderboard")], questions_asked: [], notes: "" }),
+      "utf8",
+    );
+
+    const outcome = await watchExecutor({ ...ctx, mode: "commit", costUsd: null });
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.tasks[0]?.metered).toBe(false);
+  });
+
+  /** gh #224: `--cost-usd` is what the host DECLARED, and watch never read it. */
+  test("commit reads `--cost-usd` in preference to the envelope's own figure", async () => {
+    const { ws, ctx } = fixture();
+    process.env.PATH = "";
+    await watchExecutor({ ...ctx, mode: "prepare" });
+
+    const path = join(ws.runDir, watcherRelPath("leaderboard"));
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, card("leaderboard", ["S1", "S2"], LIVE_SIGNAL), "utf8");
+    writeFileSync(
+      join(ws.runDir, ".agent", "watch", "leaderboard", "result.json"),
+      JSON.stringify({ outputs: [watcherRelPath("leaderboard")], questions_asked: [], notes: "", cost_usd: 0 }),
+      "utf8",
+    );
+
+    const outcome = await watchExecutor({ ...ctx, mode: "commit", costUsd: 2.25, tokens: 41000 });
+
+    expect(outcome.tasks[0]?.costUsd).toBeCloseTo(2.25, 5);
+    expect(outcome.tasks[0]?.metered).toBeUndefined();
+    expect(outcome.tasks[0]?.tokens).toBe(41000);
+    expect(outcome.costUsd).toBeCloseTo(2.25, 5);
   });
 
   test("commit without a result.json says which feature is missing one", async () => {
