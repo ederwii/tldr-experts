@@ -2766,6 +2766,19 @@ metered, the safer that ratio claims it is. `attempts: 1` declares no retry, so 
 reads `ok`; a phase with no stage left to run, or one whose stage declares no budget, reads **`n/e`** — absent-with-reason
 (§7), never a pass.
 
+**And the same fact at the other end: the stage-failure advice (gh #232).** Every `EXIT_AGENT_FAILED` report ends with a
+line about the money, and that line used to be a literal — *"cost is recorded, not refunded — retry with `tldrx next`"* —
+printed whether or not the phase could fund the retry. On a starved phase it named the exact command that comes straight
+back as exit 2, so the operator paid a round trip to learn what the run already knew. It now predicts that refusal and
+says it instead, with both figures, the shortfall and the `budget raise` that clears it. The prediction is made with the
+**gate's own two figures** — `remaining` and the same `remainingWork` the brake compares — never with a second estimate:
+whatever bias those carry on a partly unmetered run, the retry is refused on exactly this comparison or it is not, so the
+advice and the refusal cannot disagree. It is silent — the plain line, unchanged — wherever this gate does not decide the
+retry: `on_exceed: warn` refuses nothing, a `host-tokens` phase is a category error the dollar brake must never judge
+(§E.2), and an `attended_by: host` run is allowed past it by policy. Those are "not this gate's call", not "affordable",
+and claiming a refusal there would be the invented value §7 forbids. The failure's `signature` (gh #297) is unchanged and
+is still the failure's own sentence, never this line.
+
 **Both economies, and who is driving (issue #22).** The hook reads its run through the tolerant reader
 (`hooks/lib/runFile.ts`), and that reader skipped `tasks[]` and `attended_by:` entirely — so a run whose turns a host
 session paid for reported `$0.00` metered and nothing else, and neither the hook nor the status line could tell "nobody

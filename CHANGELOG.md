@@ -59,6 +59,27 @@
   now asks the developer to run each new database test alone and with its neighbours and record the
   result beside the test, and the Check asks the reviewer only whether that record is there.
 
+- **A stage death no longer recommends the retry the budget is about to refuse (#232, remaining
+  half).** Every failed stage ended with the same literal — *"cost is recorded, not refunded —
+  retry with `tldrx next`"* — printed whether or not the phase could fund that retry. On a phase
+  sized to hold exactly one attempt of its stage (what `run new` wrote before #170, and what every
+  run created before 2026-09-09 keeps for life) `tldrx next` comes straight back as exit 2, so the
+  advice sent the operator to buy the refusal themselves: measured twice in one evening on the run
+  #232 was filed from, and once more on a second workspace where the starved phase was the last
+  one. The other half of #232 shipped in `efb4eee` — `budget show`'s `next` column says `NO-RETRY`
+  before a cent is spent — and this is the same fact said where the operator actually is when it
+  bites: the line now names the refusal, both figures, the shortfall and the `budget raise` that
+  clears it. It predicts the GATE and not the budget's health, using the gate's OWN two figures
+  (what the phase has left, and the same remaining-work estimate the brake compares it against),
+  deliberately: #232's own comments measured how badly a derived estimate reads on a partly
+  unmetered run, and a second opinion computed here would disagree with the refusal the operator
+  then hits. Where this gate does not decide the retry at all — `on_exceed: warn` refuses nothing,
+  a `host-tokens` phase is a category error the dollar brake must never judge, an `attended_by:
+  host` run is allowed past it by policy — the plain line is printed unchanged: those are "not this
+  gate's call", which is not the same as "affordable", and claiming a refusal there would be the
+  invented value the house rules forbid. The failure's `signature` (#297) is untouched and is still
+  the failure's own sentence, never this line.
+
 - **A red Definition-of-Done command is measured TWICE before it pins a story `blocked`, and the
   record carries both exit codes (#163, sub-fix 1).** MEASURED on a .NET workspace, 2026-09-05: a
   story's DoD gate returned `dotnet test` → exit 2, so the story blocked; the operator then ran the

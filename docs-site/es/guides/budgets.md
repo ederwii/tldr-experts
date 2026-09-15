@@ -146,6 +146,24 @@ bien.
 Es una advertencia, nunca un rechazo: `tldrx next` sigue corriendo, y la línea de "todo en
 orden" dice cuántas fases la arrastran.
 
+Y si no estabas leyendo `budget show` en el momento que importaba, la muerte de la etapa
+también lo dice. La última línea de una etapa fallida era siempre el mismo literal —*"cost is
+recorded, not refunded — retry with `tldrx next`"*— que en una fase sin margen nombra justo el
+comando que vuelve de inmediato como exit 2. Ahora nombra el rechazo:
+
+```
+01-what/what failed: the sub-agent failed
+cost is recorded, not refunded — and `tldrx next` would be refused on arrival (exit 2, the
+money family): phase 01-what has $2.58 left and the retry is priced at $3.00, $0.42 short.
+Run `tldrx budget raise 01-what 0.42 --run <id>` first, or `tldrx reject --note "…"`.
+```
+
+Esa predicción se hace con las dos cifras propias del gate —lo que le queda a la fase y la misma
+estimación de trabajo restante contra la que el freno la compara—, así que el consejo y el
+rechazo que habrías encontrado no pueden contradecirse. Donde este gate no decide el reintento
+(`on_exceed: warn`, una fase en `host-tokens`, un run `attended_by: host`) se imprime la línea
+de siempre sin cambios: eso es "no le toca a este gate", que no es lo mismo que "alcanza".
+
 ## Las tres perillas, y cuál limita a un sub-agente
 
 Un `raise` como el de arriba mueve el **techo de la fase**, y un techo de fase decide una sola

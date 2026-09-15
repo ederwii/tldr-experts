@@ -138,6 +138,24 @@ nothing to size, and saying nothing is not the same as saying it is fine.
 It is a warning, never a refusal — `tldrx next` still runs, and the all-clear line says how
 many phases are carrying it.
 
+And if you were not reading `budget show` when it mattered, the stage death says it too. The
+last line of a failed stage used to be the same literal every time — *"cost is recorded, not
+refunded — retry with `tldrx next`"* — which on a starved phase names the one command that
+comes straight back as exit 2. It now names the refusal instead:
+
+```
+01-what/what failed: the sub-agent failed
+cost is recorded, not refunded — and `tldrx next` would be refused on arrival (exit 2, the
+money family): phase 01-what has $2.58 left and the retry is priced at $3.00, $0.42 short.
+Run `tldrx budget raise 01-what 0.42 --run <id>` first, or `tldrx reject --note "…"`.
+```
+
+That prediction is made with the gate's own two figures — what the phase has left, and the same
+remaining-work estimate the brake compares it against — so the advice and the refusal you would
+have hit cannot disagree. Where this gate does not decide the retry at all (`on_exceed: warn`, a
+`host-tokens` phase, an `attended_by: host` run) the plain line is printed unchanged: those are
+"not this gate's call", which is not the same as "affordable".
+
 ## The three knobs, and which one caps a sub-agent
 
 A raise like the one above moves the **phase ceiling**, and a phase ceiling decides one thing:
