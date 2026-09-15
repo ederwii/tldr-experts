@@ -64,7 +64,7 @@ import {
   abortOpenMerge, addWorktree, commitsBetween, ensureBranch, firstLine, fullShaOf, git, GitError, headSha, leftoverMerge,
   markerGuardVerdict, removeWorktree, repoDirOf, reviewDiffCommand, reviewDiffRange, shaReachability, uncountedCount,
 } from "../../build/git.ts";
-import { BaseGateFailure, baseRefusalLines } from "../../build/preflight.ts";
+import { BaseGateFailure, baseRefusalLines, refusalFreshness } from "../../build/preflight.ts";
 import {
   loadBuildPlan, PlanLoadError, BUILD_PHASE, LOG_DIR, PLAN_PHASE,
   type BuildPlan, type BuildWave, type PlannedEpic, type PlannedStory,
@@ -121,7 +121,7 @@ const CONFLICT_REQUEUED_LINE = "bringing it up to its epic conflicted — requeu
 const FIX_ROUND_REQUEUED_LINE = "the reviewer signed with a fix list — requeued for its fix round, which spends no attempt";
 import { carriedReportFor, type CarriedReport } from "../../build/carriedRows.ts";
 import {
-  baseResultOf, PreflightCache, redBaseRefusal, runStoryDod, type BaseParts, type DodParts,
+  PreflightCache, redBaseRefusal, runStoryDod, serveBaseResult, type BaseParts, type DodParts,
 } from "../../build/dodRunner.ts";
 import { scopedPathsFor } from "../../build/scopedPaths.ts";
 import {
@@ -363,6 +363,7 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
 /** A story's DoD failure re-attributed to the base tree — see `BaseGateFailure`. */
 function refusedOnBase(session: BuildSession, error: BaseGateFailure): ExecutorOutcome {
   const who = error.storyId === null ? "a story" : `\`${error.storyId}\``;
+  const freshness = refusalFreshness([error.provenance]);
   return {
     ok: false,
     refused: true,
@@ -376,9 +377,22 @@ function refusedOnBase(session: BuildSession, error: BaseGateFailure): ExecutorO
       // moved somebody's files in silence.
       ...session.reportLines,
       `[tldrx] build: ${who} was not blocked — its Definition of Done failed for a reason the base tree shares.`,
-      ...baseRefusalLines([error.result]),
+      ...baseRefusalLines([{ result: error.result, provenance: error.provenance }]),
     ],
     error: error.message,
+    // #339: the same field `refuseOnRedBase` sets, from the same derivation. The two
+    // refusal builders are structurally parallel and a supervisor cannot tell them
+    // apart, so one of them being silent about freshness would be a hole that only
+    // shows up on the day this path DOES serve a cached row.
+    //
+    // Reachability, stated rather than assumed: today this throw's reading is almost
+    // always `measured`. The entry gate refuses over EVERY pending story's declared
+    // commands, so a command that reaches here had no red row when the stage started —
+    // it is a story that surfaced mid-attempt with a command the entry snapshot never
+    // probed, and that command is measured now. `cached` is therefore unreached in the
+    // shapes I could construct; it is set anyway because the derivation is shared and
+    // a builder that hard-codes "measured" would be a claim, not a reading.
+    ...(freshness === undefined ? {} : { signatureFreshness: freshness }),
   };
 }
 
@@ -3446,7 +3460,7 @@ class BuildSession {
       phaseId: this.ctx.phaseId,
       runDir: this.ctx.runDir,
       emit: (type, payload) => { this.ctx.emit(type, payload); },
-      baseResult: (repo, command) => baseResultOf(this.baseParts, repo, command),
+      baseResult: (repo, command) => serveBaseResult(this.baseParts, repo, command),
       ...(scoped === null ? {} : { scoped }),
     });
     // A story proven over its paths alone leaves the epic head owing a full run
@@ -4681,6 +4695,7 @@ class BuildSession {
       cache: this.preflight,
       at: this.ctx.at,
       preparing: this.ctx.mode === "prepare",
+      relaunching: this.ctx.relaunching,
       timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
       runDir: this.ctx.runDir,
       write: (work) => this.writes.run(work),
@@ -4698,6 +4713,9 @@ class BuildSession {
     return refusal === null ? null : {
       ok: false, refused: true, awaiting: false, tasks: [], costUsd: 0, outputs: [],
       lines: [...this.lines, ...refusal.lines], error: refusal.error,
+      // #339: the supervisor's repeat guard needs to know whether the sentence it is
+      // about to compare was MEASURED by this attempt. Passed through, never re-derived.
+      ...(refusal.freshness === undefined ? {} : { signatureFreshness: refusal.freshness }),
     };
   }
 

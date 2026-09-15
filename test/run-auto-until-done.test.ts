@@ -39,7 +39,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 import {
-  runAuto, budgetBlockedReason, LAST_LINE_CHARS, MAX_UNTIL_DONE, type AutoOptions,
+  runAuto, budgetBlockedReason, LAST_LINE_CHARS, MAX_UNTIL_DONE, relaunchVerdict, type AutoOptions,
 } from "../src/core/facilitator/runAuto.ts";
 import { runCommand } from "../src/cli/commands/run.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
@@ -695,6 +695,40 @@ describe("never twice over the same refusal", () => {
    * The other direction of the same guard, and the one it was built for: two stage deaths
    * with the SAME refusal are one relaunch — the proof that it repeats — and then a stop.
    */
+  /**
+   * gh #339 — the one case where a verbatim repeat proves nothing.
+   *
+   * A refusal served from a cache reproduces itself exactly; that is what a cache is
+   * for. Measured on a live run: a Build base pre-flight held its red for 30 minutes,
+   * the operator installed the two missing binaries, and the next attempt printed the
+   * same sentence over a base that was by then green. The guard read the identity of
+   * two strings, neither of which was a fresh measurement, and stopped the run with
+   * four relaunches unspent. So the guard reads the producer's FRESHNESS field, not the
+   * text: `cached` is relaunched, and everything else stops exactly as it did.
+   */
+  test("a repeat whose evidence was re-used is relaunched; a measured repeat still stops (gh #339)", () => {
+    const repeat = {
+      code: 2, comparand: "`npm run test` exits 127 on the base tree of app",
+      previousComparand: "`npm run test` exits 127 on the base tree of app",
+      held: null, attempt: 2, of: 5, runDir: "/tmp/run",
+    } as const;
+
+    // The producers that say nothing about freshness keep the behaviour they had.
+    expect(relaunchVerdict({ ...repeat }).relaunch).toBe(false);
+    expect(relaunchVerdict({ ...repeat, comparandFreshness: "measured" }).relaunch).toBe(false);
+
+    const cached = relaunchVerdict({ ...repeat, comparandFreshness: "cached" });
+    expect(cached.relaunch).toBe(true);
+    // And it says WHY it let a repeat through, rather than reading as an ordinary relaunch.
+    expect(cached.reason).toContain("re-used from the run's record rather than measured");
+
+    // A cached refusal that is NOT a repeat is relaunched on the ordinary rule, and says
+    // nothing about repeats — the clause is about the repeat, not about the cache.
+    const first = relaunchVerdict({ ...repeat, previousComparand: null, comparandFreshness: "cached" });
+    expect(first.relaunch).toBe(true);
+    expect(first.reason).not.toContain("re-used from the run's record");
+  });
+
   test("two stage deaths with the SAME reason is one relaunch, then the stop names the repeat", async () => {
     const ws = workspace();
     process.env.FAKE_CLAUDE_OUTPUTS = JSON.stringify({

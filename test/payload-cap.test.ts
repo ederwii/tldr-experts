@@ -829,7 +829,7 @@ describe("#249 — measureSurface never throws: the story's row and `done` land 
       spec: loadStageSpec(ws.root, store.run.scope, "build"), repos: store.run.repos,
       mode: "headless", model: null, effort: null, modelFlag: null, effortFlag: null,
       costUsd: null, tokens: null, budgetUsd: 8, maxBudgetUsd: 2, yolo: false,
-      at: "2026-08-29T09:00:00Z", keepWorktrees: false, reuseEpic: false, parallel: 1,
+      at: "2026-08-29T09:00:00Z", relaunching: false, keepWorktrees: false, reuseEpic: false, parallel: 1,
       discardPending: false, review: false, attendedByHost: false, agentCap: () => 2, emit,
       // #262: the real merge, not a no-op — a fake that swallowed the claim would
       // let a call site land green while `run.yml` said nothing.

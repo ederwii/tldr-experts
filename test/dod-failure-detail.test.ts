@@ -530,6 +530,7 @@ describe("#229 · a red base pre-flight keeps its output too", () => {
       cache: new PreflightCache(ws.runDir),
       at: "2026-09-11T09:00:00Z",
       preparing: false,
+      relaunching: false,
       timeoutMs: 60_000,
       runDir: ws.runDir,
       write: async <T,>(work: () => T | Promise<T>) => await work(),
@@ -557,7 +558,7 @@ describe("#229 · a red base pre-flight keeps its output too", () => {
         kept.split("\n").findIndex((l) => l.includes("FAIL test_x")) + 1,
       );
       // The stage-wide refusal the operator actually reads cites it by line.
-      const refusal = baseRefusalLines([result as BaseCommandResult]).join("\n");
+      const refusal = baseRefusalLines([{ result: result as BaseCommandResult, provenance: null }]).join("\n");
       expect(refusal).toContain("FAIL test_x");
       expect(refusal).toContain(`[src: ${rel}:${String(result?.outputLine ?? 0)}]`);
       // And it survives the round trip through `04-build/preflight.yml`.

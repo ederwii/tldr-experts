@@ -25,8 +25,8 @@ import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import {
   baseRefusalLines, baseResultFor, commandHash, emitPreflightYaml, failedOnBase, loadPreflight, parsePreflight,
-  preExistingFailureReason, PREFLIGHT_REL as SOURCE_PREFLIGHT_REL, PREFLIGHT_RED_TTL_MS, savePreflight, withResult,
-  type BaseCommandResult, type BasePreflight,
+  preExistingFailureReason, PREFLIGHT_REL as SOURCE_PREFLIGHT_REL, PREFLIGHT_RED_TTL_MS, refusalFreshness,
+  savePreflight, withResult, type BaseCommandResult, type BasePreflight, type BaseProvenance,
 } from "../src/core/build/preflight.ts";
 import { loadWorkspace, type WorkspaceContext } from "../src/hooks/lib/workspace.ts";
 import type { CommandProbeRecord } from "../src/core/schemas/workspace.ts";
@@ -77,6 +77,20 @@ const GREEN_ON_BASE =
   `node -e "require('fs').appendFileSync('${TICKS_MARK}', 'x'); process.exit(0)"`;
 
 /**
+ * Red while a marker file exists, green once it is gone — the operator's repair,
+ * as a file the test can delete (#339).
+ *
+ * It is the one shape the cached-red defect needs and `RED_ON_BASE` cannot express:
+ * a base tree that WAS red and has since been fixed by something the cache cannot
+ * see (a binary installed, a service started), with the sha, the command and the
+ * declared command list all unmoved. It counts its own runs through the same tick
+ * file, so "was this re-measured or served" is measured rather than argued.
+ */
+const RED_UNTIL_REPAIRED =
+  `node -e "require('fs').appendFileSync('${TICKS_MARK}', 'x'); `
+  + `process.exit(require('fs').existsSync('${TICKS_MARK}.broken') ? 1 : 0)"`;
+
+/**
  * Green on the untouched tree, red once a developer has written its story file.
  *
  * This is what the fixture's old `process.exit(1)` script MEANT — "the story
@@ -96,7 +110,11 @@ afterEach(() => {
   delete process.env.FAKE_BUILD_STATE;
   for (const ws of open) ws.dispose();
   open = [];
-  if (ticks !== null) rmSync(ticks, { force: true });
+  if (ticks !== null) {
+    rmSync(ticks, { force: true });
+    // `RED_UNTIL_REPAIRED`'s marker lives beside the tick file and is removed with it.
+    rmSync(`${ticks}.broken`, { force: true });
+  }
   ticks = null;
 });
 
@@ -189,6 +207,80 @@ describe("the base-tree pre-flight", () => {
     expect(again.code).toBe(2);
     expect(tickCount()).toBe(1);
   }, 90_000);
+
+  /**
+   * gh #339. The cache reproducing its red exactly is correct behaviour for a cache and
+   * a lie to the reader: measured on a live `run auto --until-done`, a base refusal at
+   * 18:48 was printed again at 21:45, byte for byte — same rows, same sha, same `[src:]`
+   * citations — over a base tree the operator had repaired in between, and the loop's
+   * verbatim-repeat guard stopped the run on the identity of the two texts.
+   *
+   * So a refusal that was not taken now has to SAY so, and name the three things that
+   * tell a stale reading from a fresh one: when the measurement was taken, which base it
+   * was taken against, and when it stops being trusted.
+   */
+  test("a refusal built from a re-used reading says so, names its expiry, and says what clears it", async () => {
+    const ws = workspace({ ...ONE, testScript: RED_ON_BASE });
+
+    const first = await next(ws);
+    expect(first.code).toBe(2);
+    expect(tickCount()).toBe(1);
+    // The FRESH refusal claims nothing about freshness — it measured, so there is
+    // nothing to disclose, and its bytes are what they always were.
+    expect(first.lines.join("\n")).not.toContain("re-used from");
+
+    // Five minutes later: inside the 30-minute red TTL, so the cache answers.
+    const again = await next(ws, { at: "2026-08-29T09:05:00Z" });
+    expect(again.code).toBe(2);
+    expect(tickCount()).toBe(1);
+    const text = again.lines.join("\n");
+    expect(text).toContain("re-used from 04-build/preflight.yml, not taken now");
+    expect(text).toContain("measured at 2026-08-29T09:00:00Z");
+    expect(text).toContain("against base `main`");
+    expect(text).toContain("stands until 2026-08-29T09:30:00Z");
+    expect(text).toContain("30-minute window");
+    // And the advice: the generic "fix it then run `tldrx next` again" is wrong here,
+    // because the command it names will be refused identically without looking.
+    expect(text).toContain("not every fix clears one");
+    expect(text).toContain("is not re-measured until the expiry named");
+  }, 90_000);
+
+  /**
+   * gh #339, the half that ends a run early. The operator repairs the base between two
+   * attempts of one `--until-done` loop; nothing the cache keys on moves (same sha, same
+   * command, same declared command list) and the loop hands every attempt the clock of
+   * the command a person typed, so the TTL cannot fire either. Before this, the second
+   * attempt was served the first one's red and the run stopped with the tree already green.
+   */
+  test("a relaunch re-measures a red base rather than re-serve it, and the repaired tree proceeds", async () => {
+    const ws = workspace({ ...ONE, testScript: RED_UNTIL_REPAIRED });
+    const broken = `${ticks ?? ""}.broken`;
+    writeFileSync(broken, "");
+
+    const first = await next(ws);
+    expect(first.code).toBe(2);
+    expect(tickCount()).toBe(1);
+
+    // The operator installs what was missing. Invisible to the cache by construction.
+    rmSync(broken, { force: true });
+
+    // A plain second invocation is still served the cached red — that is the cache
+    // doing its job, and it is why the refusal above has to disclose it.
+    const cached = await next(ws, { at: "2026-08-29T09:05:00Z" });
+    expect(cached.code).toBe(2);
+    expect(tickCount()).toBe(1);
+
+    // The relaunch is not a plain second invocation: the attempt before it refused and
+    // asked for exactly this repair. Same clock as the first attempt, deliberately —
+    // the TTL is not what saves this.
+    const relaunch = await next(ws, { relaunching: true });
+    // Greater than one, not exactly two: the base is re-probed (tick 2) and the run then
+    // proceeds, so the story's own DoD runs the same command in its worktree. A cache hit
+    // is what "still 1" would mean, and that is the state this test exists to refuse.
+    expect(tickCount()).toBeGreaterThan(1);
+    expect(relaunch.code).not.toBe(2);
+    expect(relaunch.lines.join("\n")).not.toContain("already fail on the untouched base tree");
+  }, 120_000);
 
   test("a red older than the TTL is measured again rather than trusted", async () => {
     // The whole point: a base tree moves, and a red is the answer that costs the
@@ -301,6 +393,7 @@ describe("the base refusal names every red command, not the first (gh #297)", ()
       cache: new PreflightCache(ws.runDir),
       at: "2026-08-29T09:00:00Z",
       preparing: false,
+      relaunching: false,
       timeoutMs: 60_000,
       runDir: ws.runDir,
       write: passThrough,
@@ -343,6 +436,72 @@ describe("the base refusal names every red command, not the first (gh #297)", ()
     const again = await redBaseRefusal(baseParts(ws), declaring(both));
     expect(again?.error).toBe(two?.error);
   }, 60_000);
+
+  /**
+   * gh #339. The comparand deliberately does NOT move when a refusal is served from
+   * cache — two texts that differ only in a timestamp would make the repeat guard fire
+   * never, which is the opposite failure. So the refusal carries the freshness as its
+   * own field, and the supervisor reads THAT rather than diffing text.
+   */
+  test("the refusal says whether this attempt measured its evidence or re-used it", async () => {
+    const ws = workspace(ONE);
+    const one = ["npm run test"];
+
+    // Seeded: `baseSha: ""` and no `command_hash` make the lookup unconditional, so
+    // nothing spawns and the answer is a cache hit by construction.
+    savePreflight(ws.runDir, { checkedAt: "", results: [seedRow(one[0] ?? "", 1)] });
+    const served = await redBaseRefusal(baseParts(ws), declaring(one));
+    expect(served?.freshness).toBe("cached");
+
+    // And the same question asked by a relaunch is MEASURED: the row is re-probed
+    // rather than re-served, and `npm run test` is green in this fixture.
+    const relaunch = await redBaseRefusal(
+      { ...baseParts(ws), relaunching: true }, declaring(one),
+    );
+    expect(relaunch).toBeNull();
+  }, 60_000);
+});
+
+/**
+ * gh #339, pre-merge review finding (Minor). Two builders make a base refusal — the
+ * Build-ENTRY gate (`redBaseRefusal`) and the mid-story re-attribution
+ * (`refusedOnBase`, over a `BaseGateFailure`) — and a supervisor cannot tell them
+ * apart: both leave through the same `refused: true` door and both are compared by the
+ * same repeat guard. So both read their freshness from THIS function, and these are
+ * GUARDS on it, not a red-first proof.
+ *
+ * Said plainly, because the difference matters: the `cached` branch of the mid-story
+ * builder is not reachable in any shape I could construct. The entry gate refuses over
+ * every PENDING story's declared commands, so a command that reaches the mid-story throw
+ * had no red row when the stage started — it belongs to a story that surfaced
+ * mid-attempt with a command the entry snapshot never probed, and it is measured now.
+ * The derivation is shared anyway: a second builder hard-coding "measured" would be a
+ * claim rather than a reading, and it would be wrong the first day that path caches.
+ */
+describe("what a base refusal may claim about its own freshness (gh #339)", () => {
+  const cached: BaseProvenance = {
+    source: "cached", measuredAt: "2026-09-15T13:12:51Z", trustedUntil: "2026-09-15T13:42:51Z",
+  };
+  const measured: BaseProvenance = { source: "measured", measuredAt: "2026-09-15T13:12:51Z", trustedUntil: "" };
+
+  test("a refusal is only as fresh as its least fresh reading", () => {
+    expect(refusalFreshness([measured])).toBe("measured");
+    expect(refusalFreshness([cached])).toBe("cached");
+    // The mixed case is the one a per-row reading would get wrong: one row measured
+    // does not make the refusal measured, because the other row is why it refused too.
+    expect(refusalFreshness([measured, cached])).toBe("cached");
+    expect(refusalFreshness([cached, measured])).toBe("cached");
+    expect(refusalFreshness([measured, measured])).toBe("measured");
+  });
+
+  test("a reading nobody can vouch for claims nothing — never `measured`", () => {
+    // `null` is a thrower that did not say. Claiming `measured` there would tell the
+    // supervisor a verbatim repeat was re-measured when nothing established it, which is
+    // the dangerous direction: the loop would stop on evidence nobody took.
+    expect(refusalFreshness([null])).toBeUndefined();
+    expect(refusalFreshness([measured, null])).toBeUndefined();
+    expect(refusalFreshness([])).toBeUndefined();
+  });
 });
 
 describe("the pre-flight cache file", () => {
@@ -720,7 +879,7 @@ describe("the base refusal cites init's probe when one exists", () => {
   }
 
   test("a probe that measured the same command red is quoted, once", () => {
-    const lines = baseRefusalLines([failure], context({
+    const lines = baseRefusalLines([{ result: failure, provenance: null }], context({
       test: {
         status: "failed", verified: false, exit_code: 1, at: "2026-09-06T09:00:00Z",
         reason: "not verified: `npm run test` exited 1",
@@ -759,31 +918,31 @@ describe("the base refusal cites init's probe when one exists", () => {
       }))]]),
     };
 
-    const cited = baseRefusalLines([failure], twoSlots)
+    const cited = baseRefusalLines([{ result: failure, provenance: null }], twoSlots)
       .filter((line) => line.includes("`tldrx init` measured this red too"));
     expect(cited).toHaveLength(1);
     expect(cited[0]).toContain("2026-09-06T09:30:00Z");
   });
 
   test("a green probe, an unrun one, and no workspace at all each say nothing", () => {
-    const green = baseRefusalLines([failure], context({
+    const green = baseRefusalLines([{ result: failure, provenance: null }], context({
       test: {
         status: "ok", verified: true, exit_code: 0, at: "2026-09-06T09:00:00Z", reason: "verified: exited 0",
       },
     }));
     // `exit_code: null` is "we did not look" — a timeout, a skip. Not corroboration.
-    const unrun = baseRefusalLines([failure], context({
+    const unrun = baseRefusalLines([{ result: failure, provenance: null }], context({
       test: {
         status: "skipped", verified: false, exit_code: null, at: "2026-09-06T09:00:00Z",
         reason: "skipped: --no-probe",
       },
     }));
-    const none = baseRefusalLines([failure]);
+    const none = baseRefusalLines([{ result: failure, provenance: null }]);
     for (const lines of [green, unrun, none]) {
       expect(lines.some((line) => line.includes("measured this red too"))).toBe(false);
     }
     // And the refusal itself is unchanged in every case — the citation is additive.
-    expect(none).toEqual(baseRefusalLines([failure], context({})));
+    expect(none).toEqual(baseRefusalLines([{ result: failure, provenance: null }], context({})));
   });
 });
 
@@ -832,7 +991,7 @@ describe("command_probes survives the round trip from workspace.yml", () => {
       repo: "app", command: "npm run test", status: "failed", exitCode: 1, timedOut: false,
       baseRef: "main", baseSha: "abc1234", tail: "1 failing",
     };
-    const cited = baseRefusalLines([failure], workspace)
+    const cited = baseRefusalLines([{ result: failure, provenance: null }], workspace)
       .filter((line) => line.includes("`tldrx init` measured this red too"));
     expect(cited).toHaveLength(1);
     expect(cited[0]).toContain(AT);

@@ -26,9 +26,10 @@ import { dodRefused } from "./outcome.ts";
 import type { BuildRefusal, DodRecheck, DodResult, SerialWrite } from "./outcome.ts";
 import type { PlannedStory } from "./plan.ts";
 import {
-  BaseGateFailure, baseRefusalLines, baseResultFor, commandHash, EMPTY_PREFLIGHT, loadPreflight, PREFLIGHT_REL,
-  savePreflight, withResult, withWorktreeRow, type BaseCommandResult, type BasePreflight,
-  type WorktreeProbeRow,
+  BaseGateFailure, baseRefusalLines, baseResultFor, cachedProvenance, commandHash, EMPTY_PREFLIGHT, loadPreflight,
+  measuredProvenance, PREFLIGHT_REL, refusalFreshness, savePreflight, withResult, withWorktreeRow,
+  type BaseCommandResult,
+  type BasePreflight, type BaseServed, type WorktreeProbeRow,
 } from "./preflight.ts";
 import { absentBinaryOf, WORKTREE_TREE } from "./worktreeDeps.ts";
 
@@ -176,6 +177,13 @@ export interface BaseParts {
   readonly cache: PreflightCache;
   readonly at: string;
   readonly preparing: boolean;
+  /**
+   * This invocation is a `run auto` RELAUNCH (#339). A cached RED is re-measured
+   * rather than re-served: the attempt before this one refused and asked somebody
+   * to repair the base tree, and a reading taken before that repair is evidence
+   * about a tree that may no longer exist. Greens are still re-used.
+   */
+  readonly relaunching: boolean;
   readonly timeoutMs: number;
   /**
    * The run directory — a RED base's kept output is written under it (#229),
@@ -200,6 +208,19 @@ export interface BaseParts {
 export async function baseResultOf(
   parts: BaseParts, repo: string, command: string,
 ): Promise<BaseCommandResult | null> {
+  return (await serveBaseResult(parts, repo, command))?.result ?? null;
+}
+
+/**
+ * `baseResultOf` and WHERE ITS ANSWER CAME FROM — the one derivation, so a reader
+ * that renders the freshness and the rule that decided it cannot drift (#339).
+ *
+ * `null` for the same reason `baseResultOf` returns `null`: the question could not
+ * be asked at all.
+ */
+export async function serveBaseResult(
+  parts: BaseParts, repo: string, command: string,
+): Promise<BaseServed | null> {
   let repoDir: string;
   try {
     repoDir = repoDirOf(parts.workspace, repo);
@@ -209,12 +230,14 @@ export async function baseResultOf(
   const baseRef = parts.workspace.defaultBranches.get(repo) ?? FALLBACK_DEFAULT_BRANCH;
   const baseSha = await shaOf(repoDir, baseRef);
   const hash = commandHash(command, [...parts.workspace.commands]);
-  const cached = baseResultFor(parts.cache.read(), repo, command, baseSha, {
+  const preflight = parts.cache.read();
+  const cached = baseResultFor(preflight, repo, command, baseSha, {
     commandHash: hash,
     at: parts.at,
     prepare: parts.preparing,
+    relaunch: parts.relaunching,
   });
-  if (cached !== null) return cached;
+  if (cached !== null) return { result: cached, provenance: cachedProvenance(cached, preflight.checkedAt) };
 
   const timeoutMs = parts.timeoutMs;
   let measured: BaseCommandResult;
@@ -262,7 +285,7 @@ export async function baseResultOf(
     const advisory = parts.cache.remember(measured, parts.at);
     if (advisory !== null) parts.advisories.push(advisory);
   });
-  return measured;
+  return { result: measured, provenance: measuredProvenance(parts.at) };
 }
 
 /**
@@ -298,20 +321,26 @@ export async function baseResultOf(
 export async function redBaseRefusal(
   parts: BaseParts, stories: readonly PlannedStory[],
 ): Promise<BuildRefusal | null> {
-  const failures: BaseCommandResult[] = [];
+  const failures: BaseServed[] = [];
   const seen = new Set<string>();
   for (const planned of stories) {
     for (const command of planned.dod.commands) {
       const key = `${planned.story.repo}\u0000${command}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const result = await baseResultOf(parts, planned.story.repo, command);
-      if (result !== null && result.status === "failed") failures.push(result);
+      const served = await serveBaseResult(parts, planned.story.repo, command);
+      if (served !== null && served.result.status === "failed") failures.push(served);
     }
   }
   if (failures.length === 0) return null;
   return {
     lines: [...baseRefusalLines(failures, parts.workspace)],
+    // #339: whether THIS attempt measured the evidence behind the refusal, or was
+    // handed a reading an earlier one took. The supervisor's repeat guard reads it —
+    // a refusal repeating verbatim proves nothing moved only when the second one was
+    // actually taken. Through `refusalFreshness`, the one derivation both refusal
+    // builders share, so the entry gate and the mid-story one cannot drift.
+    freshness: refusalFreshness(failures.map((served) => served.provenance)),
     // EVERY red command, not the first in iteration order (gh #297). This sentence is
     // what `--until-done` compares one attempt against the next, and a base tree with two
     // reds and one with only the first of them still red are different states that the
@@ -321,7 +350,8 @@ export async function redBaseRefusal(
     error: failures.length === 0
       ? "a workspace command fails on the base tree"
       : failures
-        .map((row) => `\`${row.command}\` exits ${String(row.exitCode ?? "?")} on the base tree of ${row.repo}`)
+        .map(({ result: row }) =>
+          `\`${row.command}\` exits ${String(row.exitCode ?? "?")} on the base tree of ${row.repo}`)
         .join("; "),
   };
 }
@@ -350,7 +380,11 @@ export interface DodParts {
    */
   readonly runDir: string;
   readonly emit: (type: EventType, payload: Record<string, unknown>) => void;
-  readonly baseResult: (repo: string, command: string) => Promise<BaseCommandResult | null>;
+  /**
+   * The base answer AND where it came from (#339) — so the refusal this raises
+   * says whether it read the tree or a record, exactly as the entry refusal does.
+   */
+  readonly baseResult: (repo: string, command: string) => Promise<BaseServed | null>;
   /**
    * The repo's `<slot>_scoped` templates and this story's paths (#257). PRESENT
    * means the repo declares at least one template, and every row then says
@@ -504,8 +538,8 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
     // under a reopened story) it is measured now rather than assumed. A base
     // that shares the failure halts the build instead of blocking the story.
     const base = await parts.baseResult(parts.repo, command);
-    if (base !== null && base.status === "failed") {
-      throw new BaseGateFailure(base, parts.storyId);
+    if (base !== null && base.result.status === "failed") {
+      throw new BaseGateFailure(base.result, parts.storyId, base.provenance);
     }
     break;
   }
