@@ -271,6 +271,14 @@ assertion, RED proofs verbatim, and the design paragraph when you made a judgeme
 with: the measurement, the mechanism (labelled if inferred), and file:line. The repo's own
 history is the style guide — read a few recent closes before writing yours.
 
+- **A merge message writes `closes #N` only when the change closes the issue ENTIRELY.**
+  GitHub parses the closing keyword and the number and ignores the rest of the sentence —
+  `closes #N in part`, `closes #N partially`, `closes #N (mostly)` all close #N outright; the
+  qualifier is never read, it is not an exception that failed. Measured 2026-09-15: merge
+  75fe88b closed #246 with half the issue unshipped, and the remaining half had to be re-filed
+  as #337. Write `#N`, `see #N`, or `part of #N` — any form without a closing keyword — and
+  open the remaining half as its own issue BEFORE the wave, not after.
+
 ## 12. Known live traps (all cost real time once)
 
 - Backticks inside a double-quoted shell string are command substitution — a message once went
