@@ -160,6 +160,20 @@
   (`UNCHECKED_PATH_POLICY` in `src/core/build/git.ts`): it refuses the attempt with the paths
   named, and a `warn` policy that lets the story walk on with them named on the Build lines is
   implemented beside it.
+- **A developer's `notes` written as an ARRAY of strings is now joined with newlines instead of
+  read as `""` by both readers (closes #217).** Measured on a 0.14.3 security-patch run: the
+  in-session developer wrote one note per array element, and the two readers' `typeof … ===
+  "string"` ternaries — `toEnvelope` on the spawned path, `readResult` on the `--commit` path —
+  each threw the whole field away. `notes` is the envelope's one free-text channel, so a turn's
+  stated caveats (on that run, what a security patch could NOT verify) vanished from `run.yml`,
+  the story log and the handoff with nothing on the `--commit` line saying so — a record wrong in
+  the dangerous direction. The elements ARE the notes, so they are joined rather than refused:
+  refusing would spend the turn again over a file whose content is not in doubt, on the reader
+  that is tolerant by design. Silence was the actual defect, so `tldrx next --commit --check` now
+  says which of the three readings a file gets — joined (with the count), dropped by index for a
+  non-string element the way `outputs[i]` already is, or still `""` for a `notes` that is neither
+  a string nor an array. All three paths, the check included, go through ONE function
+  (`readNotes`, `envelope.ts`), so the rehearsal cannot disagree with the commit.
 - **The `budget-gate` hook no longer refuses the `run auto` launch that would fix the shortfall
   (closes #321).** It priced a `tldrx run auto` spawn against the cursor phase's own ceiling
   alone. On a phase already short, it denied the launch and wrote `budget.blocked` before the

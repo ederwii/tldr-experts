@@ -4357,6 +4357,15 @@ It is a JSON schema object in both bundles, never a boolean and never a path. Wh
 strictly it is read: a reviewer envelope is refused on its form, and a developer envelope is COERCED (a missing
 `outputs` reads as `[]`), which is why `--check` below reports the two differently rather than pretending one rule.
 
+**`notes` written as an ARRAY of strings is JOINED with newlines, by one reader both halves call** (gh #217).
+Measured on a 0.14.3 security-patch run: an in-session developer wrote one note per array element, and both readers
+coerced the whole field to `""` — a turn's stated caveats gone from `run.yml`, the story log and the handoff with
+nothing said on the `--commit` line. The schema still asks for one string, and an array is not a licence to invent
+one: the elements ARE the notes, so they are joined rather than emptied, non-string elements are dropped by index the
+way `outputs[i]` already is, and a `notes` that is neither a string nor an array still reads as `""`. `--check` names
+which of the three happened (`readNotes`, `envelope.ts` — the same function `toEnvelope`, `readResult` and
+`checkDeveloper` all read through, so the rehearsal cannot disagree with the commit).
+
 **`tldrx next --commit --check` rehearses the commit and writes nothing.** The measurement it exists for: two reviews
 were refused at `--commit --review` because a `[src: …]` citation inside a `refuted` finding was not the last thing on
 its line, both refusals correct, both arriving after the turn had been paid for — and the host's answer was to stop

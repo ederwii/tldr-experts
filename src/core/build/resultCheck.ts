@@ -29,7 +29,8 @@
 import { relative } from "node:path";
 
 import { agentDir } from "../facilitator/paths.ts";
-import { isResultStringElement, PendingError, readResultObject } from "../facilitator/pending.ts";
+import { PendingError, readResultObject } from "../facilitator/pending.ts";
+import { isResultStringElement, readNotes } from "../facilitator/envelope.ts";
 import { preparedBundles, reviewBundles } from "../run/prepared.ts";
 import { parseReview } from "./review.ts";
 
@@ -124,7 +125,8 @@ function checkReviewer(envelope: Record<string, unknown>, where: string): Result
  * The honest answer here is narrower than the reviewer's, and saying so is the
  * point. `readResult` is TOLERANT: absent, unparseable or not-an-object is the
  * only refusal on this path (`readResultObject`, above), and everything after it
- * is coerced — a missing `outputs` reads as `[]`, a non-string `notes` as `""`.
+ * is coerced — a missing `outputs` reads as `[]`, a `notes` ARRAY is joined with
+ * newlines (gh #217), and a `notes` that is neither reads as `""`.
  * So this exits 0 for a coercible file and NAMES what is about to be coerced,
  * rather than inventing a refusal `--commit` would not make. The keys are the ones
  * `readResult` reads, in its own order.
@@ -159,7 +161,18 @@ function checkDeveloper(envelope: Record<string, unknown>, where: string): Resul
       coerced.push(`\`${field}[${index}]\` is not a string (\`${shown}\`) — dropped by the reader`);
     }
   }
-  if (typeof envelope.notes !== "string") coerced.push("`notes` is missing or not a string — read as `\"\"`");
+  // `notes` through the reader's OWN function (gh #217), never a typeof restated
+  // here: an array of notes is joined rather than emptied, and the check has to
+  // say which of the two happened to this file.
+  const notes = readNotes(envelope.notes);
+  if (notes.kind === "empty") coerced.push("`notes` is missing or not a string — read as `\"\"`");
+  if (notes.kind === "joined") {
+    coerced.push(`\`notes\` is an array of ${notes.kept} string${notes.kept === 1 ? "" : "s"} — joined with newlines`);
+    for (const index of notes.dropped) {
+      const shown = JSON.stringify((envelope.notes as unknown[])[index]) ?? "undefined";
+      coerced.push(`\`notes[${index}]\` is not a string (\`${shown}\`) — dropped by the reader`);
+    }
+  }
   if (envelope.cost_usd !== undefined && typeof envelope.cost_usd !== "number") {
     coerced.push("`cost_usd` is not a number — read as undeclared (`metered: false`), not as $0.00");
   }

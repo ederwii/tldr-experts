@@ -40,6 +40,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { readResult } from "../src/core/facilitator/pending.ts";
+import { toEnvelope } from "../src/core/facilitator/envelope.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
@@ -659,6 +660,73 @@ describe("`--commit --check` validates before the turn is spent", () => {
     const read = readResult(ws.runDir, "build/S1");
     expect(read.outputs).toEqual(["good", "also-good"]);
     expect(read.questions_asked).toEqual(["real question"]);
+  });
+
+  /**
+   * gh #217, measured on a 0.14.3 security-patch run: the developer's
+   * `result.json` carried `notes` as an ARRAY of strings, one per note, and both
+   * readers' ternaries read the whole field as `""` — a turn's stated caveats
+   * gone from `run.yml`, the story log and the handoff, with nothing on the
+   * `--commit` line saying so. `notes` is the envelope's one free-text channel,
+   * so that record is wrong in the dangerous direction (§7).
+   *
+   * An array of strings IS the notes, so the reader JOINS them with newlines
+   * rather than refusing: refusing would send a paid turn back to be retyped for
+   * a file whose content is not in doubt, and this reader is the tolerant one by
+   * design. `--check` still NAMES the join, because a host reading `--check` is
+   * asking what the reader is about to do to their file.
+   */
+  test("a `notes` array is JOINED by both readers, and `--check` names the join (#217)", async () => {
+    const ws = workspace();
+    expect((await next(ws, { mode: "prepare" })).code).toBe(0);
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "result.json"),
+      `${JSON.stringify({
+        outputs: ["s1.txt"],
+        questions_asked: [],
+        notes: ["pinned the transitive dep by hand", "the CVE's own PoC is not covered by a test"],
+      })}\n`,
+      "utf8",
+    );
+    const before = frozen(ws);
+
+    const checked = await next(ws, { mode: "commit", check: true, at: "2026-09-02T09:10:00Z" });
+
+    expect(checked.code).toBe(0);
+    const said = checked.lines.join("\n");
+    expect(said).toContain("`notes` is an array of 2 strings — joined with newlines");
+    expect(said).not.toContain("`notes` is missing or not a string");
+    expect(frozen(ws)).toBe(before);
+
+    // The reader the check speaks for, on the same bytes: nothing is lost.
+    const read = readResult(ws.runDir, "build/S1");
+    expect(read.notes).toBe("pinned the transitive dep by hand\nthe CVE's own PoC is not covered by a test");
+  });
+
+  /** The spawned half of the same derivation — one predicate, two callers. */
+  test("`toEnvelope` joins the same array the host reader joins (#217)", () => {
+    const envelope = toEnvelope({ outputs: [], questions_asked: [], notes: ["a", "b"] });
+    expect(envelope?.notes).toBe("a\nb");
+    // A `notes` that is neither a string nor an array of them still reads as
+    // empty — named by `--check`, never invented.
+    expect(toEnvelope({ outputs: [], questions_asked: [], notes: 42 })?.notes).toBe("");
+  });
+
+  /** A non-string element inside the array is dropped and NAMED, like `outputs[i]`. */
+  test("a non-string element of a `notes` array is dropped by index, named by `--check` (#217)", async () => {
+    const ws = workspace();
+    expect((await next(ws, { mode: "prepare" })).code).toBe(0);
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "result.json"),
+      `${JSON.stringify({ outputs: [], questions_asked: [], notes: ["kept", 42] })}\n`,
+      "utf8",
+    );
+
+    const checked = await next(ws, { mode: "commit", check: true, at: "2026-09-02T09:10:00Z" });
+
+    expect(checked.code).toBe(0);
+    expect(checked.lines.join("\n")).toContain("`notes[1]` is not a string (`42`) — dropped by the reader");
+    expect(readResult(ws.runDir, "build/S1").notes).toBe("kept");
   });
 
   test("with no bundle out it says so and still writes nothing", async () => {

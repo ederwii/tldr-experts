@@ -12,6 +12,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentDir } from "./paths.ts";
+import { isResultStringElement, readNotes } from "./envelope.ts";
 import type { DispatchNotes } from "./dispatchNotes.ts";
 import type { PlannedCheck } from "../run/workflowPreset.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
@@ -405,25 +406,13 @@ export function readResult(runDir: string, stageId: string): StageResult {
   return {
     outputs: strings(row.outputs),
     questions_asked: strings(row.questions_asked),
-    notes: typeof row.notes === "string" ? row.notes : "",
+    // One reader for `notes`, shared with the spawned path's `toEnvelope` and
+    // with `--check` (gh #217): a host that wrote an array of notes gets them
+    // joined, not silently emptied.
+    notes: readNotes(row.notes).notes,
     cost_usd: typeof row.cost_usd === "number" ? row.cost_usd : null,
     session_id: typeof row.session_id === "string" ? row.session_id : null,
   };
-}
-
-/**
- * The ONE test for "is this array element a string the reader will keep?".
- *
- * `strings()` below filters an array through it, silently — an element that
- * fails it is simply not in what `readResult` returns. `tldrx next --commit
- * --check` names those elements before the turn is spent, and it must name
- * exactly the ones this reader drops, so it calls this rather than restating
- * `typeof v === "string"` a second time (`checkDeveloper`, resultCheck.ts).
- * One implementation per derivation: a second predicate here is the only bug
- * either side can have.
- */
-export function isResultStringElement(value: unknown): value is string {
-  return typeof value === "string";
 }
 
 function strings(value: unknown): readonly string[] {
