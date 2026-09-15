@@ -628,6 +628,11 @@ Three things bound it, and all three matter:
   `--max-usd`. When the bound is spent the loop stops on the failure's own exit `5`, and the
   last line says the count — `3 consecutive stage failures at 03-plan/plan …` — so the
   `run.failed` payload on your phone says the loop tried, rather than a bare `5`.
+  Watch is the one stage that spends LESS on a retry than on the first attempt: it writes one
+  card per shipped feature and fails on the first card that does not validate, so the next
+  attempt keeps every card that already validated — no writer is spawned for those, and only
+  the refused features are bought again. Their rows in `run.yml` are a real `cost_usd: 0.0`
+  with no `session_id`, and the stage's report names them.
 
 The maximum is `3`; anything higher is refused by name with exit `1`.
 

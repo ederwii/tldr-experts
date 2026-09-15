@@ -4561,6 +4561,22 @@ Measured before this existed: the refusal reached the operator's terminal and ne
 field runs moved the refusal to a different line — what an independent re-generation does. A first attempt has no card
 on disk and gets no section, so its prompt is byte-identical to before.
 
+**A retry does not re-buy a card that already validated (#306).** The stage fails on the FIRST card that fails step 3,
+so a run with N features where feature k was refused used to re-spawn all N writers on the next attempt, including the
+k-1 cards that had already validated and been stamped — each paying at least the **$0.25** floor for a card nothing had
+refused. The headless path now takes ONE snapshot of disk as the stage is entered, before anything spawns: a feature
+whose card exists and passes the SAME `parseWatcherCard` against the SAME source context step 3 judges with is kept,
+and no writer is spawned for it. The predicate being identical to step 3's is what makes the skip safe — a card that
+would be refused below is never kept here, and a card whose citations have gone stale since re-validates as refused and
+is rewritten like any other. The snapshot is taken once rather than per feature inside the loop so that one sub-agent
+writing into the run directory can never decide whether the NEXT feature gets written at all. A kept feature still gets
+a `tasks[]` row — the run records what happened to every feature — with `cost_usd: 0.0`, `model: null` and
+`session_id: null`: a **measured** zero, not `metered: false`, because no turn was bought rather than one being billed
+elsewhere, and the stage's report names every kept card so the row is never read as a writer that silently did nothing.
+The per-feature ceiling is still the share over ALL features, so a retry hands a writer the same number the first
+attempt did, and the floor check that refuses the stage is still over all of them. `--prepare`/`--commit` is unchanged:
+it writes a bundle per feature and `--commit` expects a `result.json` for each.
+
 `--prepare`/`--commit` is **per feature**: each gets its own `.agent/<stage>/<feature>/{prompt.md,pending.json,result.json}`,
 so the host session dispatches N sub-agents with the same isolation the headless path gives them. `[assumption]` — the
 agent ceiling is the stage share divided N ways with a **$0.25 floor**, because §7 measured a cold `claude -p` paying

@@ -26,6 +26,25 @@
   reading exactly — an absent record is not evidence of a spawn. The second half of #246, the
   orphaned sub-agent's dollars being recorded nowhere while `spent_usd` reads a confident `0.00`,
   is untouched and stays open.
+
+- **A Watch retry no longer re-buys a watcher card that already validated (closes #306).** The
+  Watch stage fails on the FIRST card that does not validate, and `tldrx next` / `run auto
+  --retry-failed` re-enter the executor from the top — so a run with N features where feature k
+  was refused spawned all N writers again, including the k-1 cards that had already validated and
+  been stamped. Each of those paid at least the `$0.25` cold-spawn floor for a card nothing had
+  refused, and on a two-feature field run (#301, run B) with a different card refused in each
+  attempt, every writer was bought at least twice. #301 made the second spend an edit rather than
+  a rewrite; this makes it zero. The headless path now takes one snapshot of disk as the stage is
+  entered, before anything spawns, and keeps a feature whose card passes the SAME
+  `parseWatcherCard` against the SAME source context the stage validates with — so the skip can
+  never hide a bad card, only decline to save money, and a card whose citations went stale in the
+  meantime is rewritten like any other. It is a snapshot rather than a per-feature read so that
+  one writer loose in the run directory can never decide whether the next feature is written at
+  all. A kept feature still gets its `tasks[]` row, with `cost_usd: 0.0`, `model: null` and
+  `session_id: null` — a measured zero, not the `metered: false` of a turn billed to a host
+  session — and the stage's report names every kept card, so a `$0.00` row is never read as a
+  writer that silently did nothing. `--prepare`/`--commit` is untouched.
+
 ## 0.29.0 — 2026-09-15
 
 ### Changed
