@@ -24,7 +24,7 @@
  * and "the third waited" are read off what the processes themselves saw, not off
  * elapsed milliseconds, which is the one thing a Linux CI box will not reproduce.
  */
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { claudeOutput } from "../fakeStream.ts";
@@ -166,6 +166,34 @@ if (failWork === "committed" || failWork === "uncommitted") {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, content, "utf8");
     written.push(rel);
+  }
+  // gh #286 — `FAKE_BUILD_COMMIT` = `{"S2#2": "commit"}`: after writing, the
+  // developer runs `git add -A` and `git commit` ITSELF, the two granted verbs
+  // that close a merge the facilitator left in progress. Reported as the Bash
+  // calls it made, through the one shared emitter below.
+  // gh #286 — `FAKE_BUILD_MOVE` = `{"S2#2": "shared.txt>moved.txt"}`: the developer
+  // RENAMES a file as it stands (markers and all) before any commit below.
+  const move = perStory("FAKE_BUILD_MOVE", devAttempt);
+  if (move !== null) {
+    const [from = "", to = ""] = move.split(">");
+    renameSync(join(process.cwd(), from), join(process.cwd(), to));
+    extraTools.push({ name: "Bash", input: { command: `mv ${from} ${to}` }, result: "" });
+  }
+  // `"commit-am"`: `git commit -am` alone — tracked changes only, so a file the
+  // developer created (or `mv`ed into place) stays UNTRACKED.
+  if (perStory("FAKE_BUILD_COMMIT", devAttempt) === "commit-am") {
+    execFileSync("git", ["commit", "-am", `fix(${storyId}): resolve the merge`],
+      { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+    extraTools.push({ name: "Bash", input: { command: `git commit -am "fix(${storyId}): resolve the merge"` }, result: "" });
+  }
+  if (perStory("FAKE_BUILD_COMMIT", devAttempt) === "commit") {
+    execFileSync("git", ["add", "-A"], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("git", ["commit", "-m", `fix(${storyId}): resolve the merge`],
+      { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+    extraTools.push(
+      { name: "Bash", input: { command: "git add -A" }, result: "" },
+      { name: "Bash", input: { command: `git commit -m "fix(${storyId}): resolve the merge"` }, result: "" },
+    );
   }
 }
 
@@ -322,10 +350,38 @@ function nextVerdictPeek(id: string): string {
   return queue[Math.min(at, queue.length - 1)] ?? "approve";
 }
 
-/** 1-based call count for `key`, persisted so it survives across processes. */
+/**
+ * 1-based call count for `key`, persisted so it survives across processes.
+ *
+ * Read-modify-write under a `mkdir` lock (gh #286): parallel lanes run several
+ * of these processes at once against ONE state file, and without the lock a
+ * sibling's write could drop this one's increment — measured on the #286 tests
+ * as a lane's second developer reading attempt 1 and getting attempt 1's plan.
+ */
 function attemptCount(key: string, advance = true): number {
   const path = process.env.FAKE_BUILD_STATE;
   if (path === undefined || path === "") return 1;
+  if (!advance) return readCount(path, key, advance);
+  const lock = `${path}.lock`;
+  mkdirSync(dirname(path), { recursive: true });
+  const until = Date.now() + 10_000;
+  for (;;) {
+    try {
+      mkdirSync(lock);
+      break;
+    } catch {
+      if (Date.now() > until) break;   // a stale lock must not hang a test forever
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
+  try {
+    return readCount(path, key, advance);
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+}
+
+function readCount(path: string, key: string, advance: boolean): number {
   let state: Record<string, number> = {};
   if (existsSync(path)) {
     try {

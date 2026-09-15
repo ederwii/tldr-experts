@@ -22,8 +22,8 @@ import type { EventType } from "../events/Event.ts";
 import type { EpicReleaseNote } from "./handoff.ts";
 import type { PlanStatus } from "../schemas/planCommon.ts";
 import {
-  addWorktree, assertWorktreeOn, baseStateOf, commitAll, dirtyPaths, fastForward, firstLine, headSha,
-  isDirty, mergeNoFf, partitionDirty, pathAtRef, stateDirPrefixes,
+  abortOpenMerge, addWorktree, assertWorktreeOn, baseStateOf, commitAll, dirtyPaths, fastForward, firstLine, fullShaOf,
+  git, headSha, isDirty, mergeNoFf, partitionDirty, pathAtRef, stateDirPrefixes,
   treesDiffer,
 } from "./git.ts";
 import type { RescuedWork, SerialWrite, StoryOutcome } from "./outcome.ts";
@@ -432,8 +432,41 @@ export async function mergeIntoEpic(
   return await mergeNoFf(
     await openEpicWorktree(state, parts),
     parts.storyBranch,
-    `merge(${parts.storyId}): ${parts.storyTitle}`,
+    storyMergeSubject(parts.storyId, parts.storyTitle),
   );
+}
+
+/**
+ * `merge(<story>): <title>` — the subject of a story LANDING on its epic, and
+ * the one place it is spelled, because `storiesLandedSince` reads it back.
+ */
+export function storyMergeSubject(storyId: string, title: string): string {
+  return `merge(${storyId}): ${title}`;
+}
+
+/** One story that landed on the epic, as its merge subject names it. */
+export interface LandedStory {
+  readonly id: string;
+  readonly title: string;
+}
+
+/**
+ * The stories that landed on `epicBranch` since `since` — the EPIC side of a
+ * conflict (gh #286), read off the merge subjects `storyMergeSubject` wrote,
+ * newest first. Empty when git could not answer or nothing matched, which the
+ * caller renders as the epic sha instead: absent, with the reason, never guessed.
+ */
+export async function storiesLandedSince(
+  repoDir: string, since: string, epicBranch: string,
+): Promise<readonly LandedStory[]> {
+  const logged = await git(["log", "--first-parent", "--merges", "--format=%s", `${since}..${epicBranch}`], repoDir);
+  if (!logged.ok) return [];
+  const landed: LandedStory[] = [];
+  for (const line of logged.stdout.split("\n")) {
+    const hit = /^merge\(([^)]+)\): (.*)$/.exec(line.trim());
+    if (hit?.[1] !== undefined && !landed.some((s) => s.id === hit[1])) landed.push({ id: hit[1], title: hit[2] ?? "" });
+  }
+  return landed;
 }
 
 /** What `rescueUncommitted` needs, including the executor's ONE writer. */
@@ -518,6 +551,11 @@ export async function rescueUncommitted(parts: RescueParts): Promise<RescuedWork
   });
 }
 
+/** The subject of the epic merged INTO a story — `updateStoryBase` and a conflict turn both write it. */
+function storySyncSubject(storyId: string, epicBranch: string): string {
+  return `sync(${storyId}): \`${epicBranch}\` moved under this story before it merged back`;
+}
+
 /** What `updateStoryBase` needs to bring a story branch onto its epic's tip. */
 export interface UpdateParts {
   readonly storyId: string;
@@ -598,7 +636,7 @@ export async function updateStoryBase(parts: UpdateParts): Promise<StoryBaseUpda
     // subject of a STORY landing on the epic, and readers of `git log <epic>`
     // — a person, and `build-parallel.test.ts`'s merge-order assertion — take
     // that prefix to mean exactly that. This commit is the opposite direction.
-    `sync(${parts.storyId}): \`${parts.epicBranch}\` moved under this story before it merged back`,
+    storySyncSubject(parts.storyId, parts.epicBranch),
   );
   if (!merged.ok) return { kind: "blocked", conflicts: merged.conflicts, detail: merged.detail };
   const to = await headSha(parts.worktree);
@@ -608,6 +646,42 @@ export async function updateStoryBase(parts: UpdateParts): Promise<StoryBaseUpda
   // where it is the only measurement there is.
   if (to === from || to === "") return { kind: "current", why: base.uncounted };
   return { kind: "updated", from, to, behind: base.behind, uncounted: base.uncounted };
+}
+
+/** What a conflict turn's dispatch found when it merged the epic in again (gh #286). */
+export type ConflictTurnMerge =
+  /** The merge stopped on these files and was LEFT in progress for the developer. */
+  | { readonly kind: "conflicted"; readonly files: readonly string[]; readonly epicSha: string; readonly landed: readonly LandedStory[] }
+  /** The epic merged in cleanly this time — there is nothing left to resolve. */
+  | { readonly kind: "merged"; readonly epicSha: string; readonly landed: readonly LandedStory[] }
+  /** git refused the merge for a reason that is not a conflict. */
+  | { readonly kind: "failed"; readonly detail: string };
+
+/**
+ * gh #286: the merge a conflict turn is handed, redone at dispatch against the
+ * epic's CURRENT tip and left open.
+ *
+ * Redone rather than kept: the conflicting settle aborted its merge (the tree
+ * a person or a later run finds must never be half-applied, #268), and the epic
+ * may have moved again since — resolving against the tip it has NOW is what
+ * gives the resolution a chance to be the last one. A merge still open from a
+ * developer that FAILED mid-turn is aborted first, for the same reason.
+ */
+export async function openConflictTurnMerge(parts: UpdateParts): Promise<ConflictTurnMerge> {
+  await assertWorktreeOn(parts.worktree, parts.branch, "story worktree");
+  await abortOpenMerge(parts.worktree);
+  const since = await headSha(parts.worktree);
+  const epicSha = await fullShaOf(parts.repoDir, parts.epicBranch);
+  const landed = since === "" ? [] : await storiesLandedSince(parts.repoDir, since, parts.epicBranch);
+  const merged = await mergeNoFf(
+    parts.worktree,
+    parts.epicBranch,
+    storySyncSubject(parts.storyId, parts.epicBranch),
+    true,
+  );
+  if (merged.ok) return { kind: "merged", epicSha, landed };
+  if (merged.conflicts.length === 0) return { kind: "failed", detail: merged.detail };
+  return { kind: "conflicted", files: merged.conflicts, epicSha, landed };
 }
 
 /**

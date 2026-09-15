@@ -51,9 +51,18 @@ comes — its definition of done proved a tree without the first story's work in
 before a story merges, Build checks whether the epic moved since that story was cut, and if it
 did, it merges the epic **into** the story's own worktree and runs that story's definition of
 done again on the result. The cost is one extra run of the suite per story, and only when the
-epic actually moved; a story whose base is current pays nothing. A real conflict blocks that
-story with the conflicting files named, merges nothing, and leaves its worktree exactly as the
-sub-agent left it — never half-applied.
+epic actually moved; a story whose base is current pays nothing. A real conflict merges
+nothing and never leaves anything half-applied. When it is small — at most three files, every
+one of them in the story's own `touches` — the story gets **one conflict turn**: it goes back
+in the queue (spending an attempt), and its next developer is handed the merge already in
+progress, markers and all, with the conflicted files, the story's own intent and the stories
+that landed on the epic named in its prompt. It resolves them and closes the merge with
+`git add` and `git commit`; the definition of done judges the result like any other attempt,
+and a leftover conflict marker or a merge left open blocks the story, naming the files. The
+turn is recorded as `story.conflict_turn`, so `tldrx replay` says an agent resolved it. A
+bigger conflict, one outside the story's `touches`, a second conflict on the same story, or
+no attempts left blocks as before, with the conflicting files named and the worktree exactly
+as the sub-agent left it.
 
 When a story ends `blocked`, what happens next is decided **per story**, from `depends_on`.
 A later story whose dependencies all reached `done` runs — being in a wave behind a blocked

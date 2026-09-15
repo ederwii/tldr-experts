@@ -18,7 +18,7 @@
  * (gh #253). Publishing a branch stays a decision — one the run's `ship:` block
  * records, or a person makes at the keyboard — never a side effect of building.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { runtime } from "../runtime/index.ts";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
@@ -800,13 +800,21 @@ export interface MergeOutcome {
  * Concept §9: a story merges to its epic on green. On a conflict the merge is
  * aborted so the epic branch is left exactly as it was — the next story in the
  * wave still has somewhere to land.
+ *
+ * `leaveConflicts` is the ONE caller that wants the opposite (gh #286): a story
+ * owed a conflict turn has the epic merged into its OWN worktree and the merge
+ * left in progress — markers in the files, `MERGE_HEAD` set — for its developer
+ * to close with `git add` and `git commit`. Same command, same conflict list;
+ * only the abort is skipped.
  */
-export async function mergeNoFf(cwd: string, branch: string, message: string): Promise<MergeOutcome> {
+export async function mergeNoFf(
+  cwd: string, branch: string, message: string, leaveConflicts = false,
+): Promise<MergeOutcome> {
   const merged = await git(["merge", "--no-ff", "-m", message, branch], cwd);
   if (merged.ok) return { ok: true, conflicts: [], detail: firstLine(merged.stdout) };
   const conflicted = await git(["diff", "--name-only", "--diff-filter=U"], cwd);
   const conflicts = conflicted.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== "");
-  await git(["merge", "--abort"], cwd);
+  if (!leaveConflicts || conflicts.length === 0) await git(["merge", "--abort"], cwd);
   return {
     ok: false,
     conflicts,
@@ -814,6 +822,84 @@ export async function mergeNoFf(cwd: string, branch: string, message: string): P
       ? `conflict in ${conflicts.join(", ")}`
       : firstLine(merged.stderr) || firstLine(merged.stdout) || `git merge exited ${String(merged.exitCode)}`,
   };
+}
+
+/** Is a merge in progress in this worktree — `MERGE_HEAD` set, whichever worktree's git dir holds it? */
+export async function mergeInProgress(cwd: string): Promise<boolean> {
+  return (await git(["rev-parse", "-q", "--verify", "MERGE_HEAD"], cwd)).ok;
+}
+
+/**
+ * `git merge --abort` when, and only when, a merge is open — so a conflict turn
+ * that ends anywhere but a clean commit leaves its tree as a person would want
+ * to find it, and nothing downstream (a rescue's `add -A`, a DoD) meets markers
+ * git still owns (gh #286).
+ */
+export async function abortOpenMerge(cwd: string): Promise<boolean> {
+  if (!(await mergeInProgress(cwd))) return false;
+  return (await git(["merge", "--abort"], cwd)).ok;
+}
+
+/** What a conflict turn left behind that must never reach a DoD or a commit (gh #286). */
+export interface LeftoverMerge {
+  /** Handed conflicted files (or their rename destinations) still holding a git conflict marker line, each once. */
+  readonly markers: readonly string[];
+  /** `MERGE_HEAD` is still set: the developer never closed the merge. */
+  readonly inProgress: boolean;
+}
+
+/**
+ * The ONE marker guard (gh #286): which of the files the conflict turn was
+ * handed — or the paths the developer renamed them to — still hold a line git
+ * writes only as a conflict, and whether the merge is open.
+ *
+ * Scoped to everything a marker could have travelled into and that `add -A`
+ * could sweep into a commit, and to no pre-existing unrelated content: the
+ * handed `files`, their rename destinations since `since` (R rows of `git diff
+ * --name-status -M <since>` whose source is a handed file), every path ADDED
+ * since `since` (A rows), and every UNTRACKED, non-ignored path (`git ls-files
+ * --others --exclude-standard`). The rename rows exist because reading only the
+ * original path found nothing while the markers sat in the new one (review of
+ * 18e4df5, probed). The untracked set exists because a plain `mv` never added,
+ * closed with `git commit -am`, shows only `D <file>` to every diff — the moved
+ * file is invisible until the framework's own `commitAll` sweeps it, markers and
+ * all (review of abe54d7, reproduced end to end).
+ *
+ * A leftover is ANY line starting git's own start (`<<<<<<<`), base
+ * (`|||||||`) or end (`>>>>>>>`) marker, each alone on the line or followed by
+ * a space. Any one, not a pair: a file with only its `<<<<<<<` line deleted
+ * still carries both sides and the `>>>>>>> <ref>` line, and the pair rule
+ * passed it (same review, probed). Never `=======` alone — it is a Markdown/RST
+ * heading underline as often as a marker, and `git diff --check` blocked a
+ * correct resolution on exactly that (review of 5dd14e7).
+ *
+ * The WORKING TREE is read, not a commit: it is what the DoD runs on and what
+ * any commit after it carries, and a marker the developer committed is still in
+ * it. A path that no longer exists holds nothing.
+ */
+export async function leftoverMerge(cwd: string, files: readonly string[], since: string): Promise<LeftoverMerge> {
+  const scope = [...files];
+  const changed = await git(["diff", "--name-status", "-M", since], cwd);
+  for (const row of changed.stdout.split("\n")) {
+    const [kind = "", from = "", to = ""] = row.split("\t");
+    if (kind.startsWith("R") && files.includes(from) && to !== "") scope.push(to);
+    if (kind === "A" && from !== "") scope.push(from);
+  }
+  const untracked = await git(["ls-files", "--others", "--exclude-standard"], cwd);
+  for (const path of untracked.stdout.split("\n")) if (path.trim() !== "") scope.push(path.trim());
+  const markers = scope.filter((file, i) => scope.indexOf(file) === i && holdsConflict(join(cwd, file)));
+  return { markers, inProgress: await mergeInProgress(cwd) };
+}
+
+/** Does any line start with a marker git writes only into a conflict? */
+function holdsConflict(path: string): boolean {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return false;
+  }
+  return text.split("\n").some((line) => /^(?:<{7}|\|{7}|>{7})(?: |\r?$)/.test(line));
 }
 
 /**

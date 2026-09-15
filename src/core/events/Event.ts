@@ -159,6 +159,19 @@ import {
  * is `story.base_fastforwarded`'s — story, repo, branch, base, `from`, `to`,
  * `commits` — because it is the same measurement of the same move.
  *
+ * `story.conflict_turn` was added 2026-09-14 (issue #286). When bringing a story
+ * up to its epic CONFLICTS in at most three files, all inside the story's
+ * declared `touches`, and the story has had no conflict turn since its last
+ * `story.reopened` and has an attempt left, the story is requeued instead of
+ * blocked, and its next developer is handed the merge — left in progress in its
+ * own worktree, markers and `MERGE_HEAD` in place — to resolve and close with
+ * `git add` + `git commit`. The Definition of Done judges the result as for any
+ * other turn. This event is the record of that grant, so the cost is visible and
+ * a replay can say an AGENT resolved the merge, not a person. Its payload carries
+ * `story`, `repo`, `branch`, `base` (the epic branch), `attempt` (the attempt
+ * that hit the conflict), `files` (the conflicted paths), `epic_sha` and
+ * `story_sha` (both full, at the moment of the conflict).
+ *
  * `epic.released` was added 2026-09-13 (issue #272). It is the third event that
  * records tldrx touching a REF on the operator's behalf: an `epic/<slug>` branch
  * a FINISHED run claimed, released so the name is free for the next run of the
@@ -192,7 +205,8 @@ export const EVENT_TYPES = [
   "question.asked", "question.answered",
   "gate.requested", "gate.approved", "gate.rejected", "gate.revoked", "gate.policy_changed",
   "questions.policy_changed",
-  "story.reopened", "story.base_fastforwarded", "story.base_updated", "story.review_retried",
+  "story.reopened", "story.base_fastforwarded", "story.base_updated", "story.conflict_turn",
+  "story.review_retried",
   "story.work_rescued",
   "story.touches_widened",
   "epic.released",

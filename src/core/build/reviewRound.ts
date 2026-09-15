@@ -27,7 +27,10 @@ import {
   isFormatRejection, MAX_FORMAT_RETRIES, renderFormatRefusal, type Review,
 } from "./review.ts";
 import { readReviewLedger } from "./reviewLedger.ts";
-import { DEVELOPER_FAILED, dodRequeueRed, type DodResult, type StoryOutcome } from "./outcome.ts";
+import {
+  DEVELOPER_FAILED, dodRequeueRed, MAX_CONFLICT_TURN_FILES, type DodResult, type StoryOutcome,
+} from "./outcome.ts";
+import { inSurface } from "../run/boundary.ts";
 
 /**
  * The three bounds a review round is held to, each counting a DIFFERENT thing,
@@ -152,6 +155,70 @@ export class ReviewCounters {
   countDodRequeue(storyId: string, spent: number): void {
     this.dodRequeues.set(storyId, spent + 1);
   }
+
+  /**
+   * Conflict turns granted to this story since its last `story.reopened` (gh
+   * #286) — a fifth map, for the fifth thing: a merge the facilitator handed the
+   * developer. It spends an attempt like the other two requeues and is neither
+   * of them. This process first, then the ledger's `conflictTurns`, for the
+   * reason every bound here reads both.
+   */
+  private readonly conflictTurns = new Map<string, number>();
+
+  conflictTurnsSpent(runDir: string, storyId: string): number {
+    return this.conflictTurns.get(storyId) ?? readReviewLedger(runDir, storyId).conflictTurns;
+  }
+
+  /** Allocate the turn `conflictTurnRefusal` just granted. */
+  countConflictTurn(storyId: string, spent: number): void {
+    this.conflictTurns.set(storyId, spent + 1);
+  }
+}
+
+/**
+ * Why bringing a story up to its epic that CONFLICTED gets no conflict turn
+ * (gh #286) — or `null`, which grants one.
+ *
+ * Every refusal is today's block, sentence and clean tree unchanged, with this
+ * reason after it. In the order a person would ask:
+ *
+ *   - git named no conflicted file: there is nothing to hand anyone.
+ *   - more than `MAX_CONFLICT_TURN_FILES` files: an overlap, not a collision.
+ *   - a file outside the story's declared `touches`: the developer would be
+ *     resolving code the plan never gave it — `inSurface` is the boundary
+ *     condition's matcher (`run/boundary.ts`), the one `classifyDirty` uses, so
+ *     "declared" means the same thing on every path that asks (§7).
+ *   - a turn already granted since the last `story.reopened`: one per story. A
+ *     second conflict is the race #286's recurrence measured — the set grows
+ *     with every sibling that merges — and it goes to a person.
+ *   - no attempt left: the same `attempt < attempts` bound `dodRedRequeue` and a
+ *     `changes` verdict are held to.
+ */
+export function conflictTurnRefusal(parts: {
+  readonly conflicts: readonly string[];
+  readonly touches: readonly string[];
+  readonly turnsSpent: number;
+  readonly attempt: number;
+  readonly attempts: number;
+}): string | null {
+  const n = parts.conflicts.length;
+  if (n === 0) return "No conflict turn: git named no conflicted file to hand a developer.";
+  if (n > MAX_CONFLICT_TURN_FILES) {
+    return `No conflict turn: ${String(n)} files conflict, more than the ${String(MAX_CONFLICT_TURN_FILES)} `
+      + "one turn is handed.";
+  }
+  const outside = parts.conflicts.filter((path) => !inSurface(path, parts.touches));
+  if (outside.length > 0) {
+    return `No conflict turn: ${outside.map((f) => `\`${f}\``).join(", ")} is outside the story's declared `
+      + "`touches`.";
+  }
+  if (parts.turnsSpent > 0) {
+    return "No conflict turn: this story already had its conflict turn since it was last reopened.";
+  }
+  if (parts.attempt >= parts.attempts) {
+    return `No conflict turn: attempt ${String(parts.attempt)} of ${String(parts.attempts)} was the last.`;
+  }
+  return null;
 }
 
 /**
