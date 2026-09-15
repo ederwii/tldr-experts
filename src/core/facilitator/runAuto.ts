@@ -51,7 +51,11 @@ import type { TldrxEvent } from "../events/Event.ts";
 import { ambiguousRunLines } from "../run/openRuns.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { PROJECT_WORK_DIR } from "../paths.ts";
-import { AUTO_GATE_ACTOR, reevaluateAutoGate, type AutoGateVerdict } from "../run/autoGate.ts";
+import {
+  AUTO_GATE_ACTOR, AUTO_GATE_CHECK_RETRIES, AUTO_GATE_RETRY_ACTOR, AUTO_GATE_RETRY_NOTE_PREFIX, checkRetryVerdict,
+  reevaluateAutoGate, type AutoGateVerdict,
+} from "../run/autoGate.ts";
+import { withWorkspaceLock, workspaceRootOfRunDir } from "../lock/workspaceLock.ts";
 import { flatten, isAttendedByHost, isFinished, type RunFile } from "../run/RunFile.ts";
 import { gateStories, outcomeLine } from "../run/runOutcome.ts";
 import { runTally } from "../budget/budgetView.ts";
@@ -77,7 +81,7 @@ import {
   type NotifyContext, type WaitingGate,
 } from "../notify/notifications.ts";
 import { GATE_SIGNER_ROLE } from "./gateSigner.ts";
-import { approve } from "../run/gates.ts";
+import { approve, reject } from "../run/gates.ts";
 import { runNext, type NextOutcome } from "./runNext.ts";
 import { REBALANCE_SOURCE } from "../budget/rebalance.ts";
 import { realShipTransport, shipRun } from "../run/ship.ts";
@@ -1099,7 +1103,33 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
                 root: options.root,
                 policy: gate.policy,
                 at: options.at,
-              });
+              }, (reason) => say(`not re-running ${gate.stage} — ${reason} — waiting for a person: `
+                + "`tldrx reject --and-continue --note \"…\"` or `tldrx approve`"));
+              if (waited.resolution === "retry") {
+                // gh #231: an `auto` gate refused by failed checks ALONE, inside the bound.
+                // The move a person made by hand on 2026-09-14 — `tldrx reject
+                // --and-continue --note '<the finding>'` — made through the same `reject`
+                // door, signed by the loop rather than by anybody's name, and then the
+                // same `continue` an `--and-continue` rejection takes: `next` re-runs the
+                // stage with the note as the primary instruction.
+                const recorded = rejectForRetry(runDir, gate.stageId, {
+                  root: options.root,
+                  at: at(),
+                  note: `${AUTO_GATE_RETRY_NOTE_PREFIX} Fix these findings:\n${waited.findings}`,
+                });
+                if (recorded) {
+                  say(`waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — the auto gate on `
+                    + `${gate.stage} is refused only by failed checks; re-running the stage with the findings `
+                    + `as the note (automatic re-run ${String(waited.attempt)} of ${String(AUTO_GATE_CHECK_RETRIES)}, `
+                    + `signed "${AUTO_GATE_RETRY_ACTOR}"): ${waited.findings.split("\n")[0] ?? ""}`);
+                } else {
+                  // The gate moved between the measurement and the write — a person signed it,
+                  // either way. Their decision stands; the next iteration reads it.
+                  say(`not re-running ${gate.stage} — its gate changed before the automatic re-run `
+                    + "could be recorded, and whatever changed it stands");
+                }
+                continue;
+              }
               if (waited.resolution === "approved") {
                 say(`waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — `
                   + `the gate on ${gate.stage} is approved, resuming`);
@@ -1328,19 +1358,34 @@ function gatePolicyNow(runDir: string): GatePolicy | null {
  * and `and_continue` (#242) rides along in that same read, because which KIND of rejection
  * this was is a property of the rejection and a second read could land after a write.
  */
+type GateWaited =
+  | {
+    readonly resolution: "approved" | "rejected" | "lapsed";
+    readonly ms: number;
+    readonly note: string | null;
+    /** Only ever true on a `rejected` resolution: the rejection asked the loop to carry on. */
+    readonly andContinue: boolean;
+  }
+  | {
+    /** gh #231: an `auto` gate refused by failed checks alone, with a re-run left in the bound. */
+    readonly resolution: "retry";
+    readonly ms: number;
+    /** The failed checks' findings — what the re-run is told to fix. */
+    readonly findings: string;
+    /** Which automatic re-run of this stage this would be, 1-based. */
+    readonly attempt: number;
+  };
+
 async function waitForGate(
   runDir: string,
   stageId: string,
   limitMs: number,
   gate: GateWait,
-): Promise<{
-  readonly resolution: "approved" | "rejected" | "lapsed";
-  readonly ms: number;
-  readonly note: string | null;
-  /** Only ever true on a `rejected` resolution: the rejection asked the loop to carry on. */
-  readonly andContinue: boolean;
-}> {
+  /** Told why a re-run was withheld, once per distinct reason (gh #231). */
+  withheldBecause: (reason: string) => void = () => {},
+): Promise<GateWaited> {
   const started = Date.now();
+  let lastWithheld: string | null = null;
   for (;;) {
     const elapsed = Date.now() - started;
     const found = gateOf(runDir, stageId);
@@ -1361,8 +1406,33 @@ async function waitForGate(
     // already said the machine may close this gate; before #203 the offer expired the
     // moment `next` handed the gate over, so an auto gate held by four open questions
     // stayed a human gate forever once the answers landed.
-    if (found !== null && await selfCloseAutoGate(runDir, stageId, gate)) {
+    const measured = found === null ? null : await selfCloseAutoGate(runDir, stageId, gate);
+    if (measured !== null && measured.closed) {
       return { resolution: "approved", ms: Date.now() - started, note: null, andContinue: false };
+    }
+    // gh #231 — the refusal is measured already; ask whether a re-run may answer it. Only
+    // an `auto` policy ever has a verdict here (`autoGateVerdict` is null for `human` and
+    // `agent`), so a person's gate never reaches this line.
+    if (measured !== null && measured.verdict !== null && !measured.verdict.ok) {
+      const decision = checkRetryVerdict(measured.verdict);
+      let withheld: string | null = null;
+      if (decision.retry) {
+        const spent = loopRetriesOf(runDir, stageId);
+        if (spent < AUTO_GATE_CHECK_RETRIES) {
+          return { resolution: "retry", ms: Date.now() - started, findings: decision.findings, attempt: spent + 1 };
+        }
+        withheld = `its auto gate is refused only by failed checks, but the automatic re-run bound is spent `
+          + `(${String(spent)} of ${String(AUTO_GATE_CHECK_RETRIES)} already run by "${AUTO_GATE_RETRY_ACTOR}")`;
+      } else if (decision.checksHeld) {
+        // Only said when a failed check IS part of the refusal: "why did it not re-run" is a
+        // question nobody asks about a gate held by questions alone, and an unattended
+        // transcript that answers it every time would bury the one that matters.
+        withheld = decision.reason;
+      }
+      if (withheld !== null && withheld !== lastWithheld) {
+        lastWithheld = withheld;
+        withheldBecause(withheld);
+      }
     }
     if (elapsed >= limitMs) return { resolution: "lapsed", ms: elapsed, note: null, andContinue: false };
     const pollMs = pollInterval(limitMs);
@@ -1437,9 +1507,13 @@ async function autoGateVerdict(
   }
 }
 
-async function selfCloseAutoGate(runDir: string, stageId: string, gate: GateWait): Promise<boolean> {
+async function selfCloseAutoGate(
+  runDir: string,
+  stageId: string,
+  gate: GateWait,
+): Promise<{ readonly closed: boolean; readonly verdict: AutoGateVerdict | null }> {
   const verdict = await autoGateVerdict(runDir, stageId, gate);
-  if (verdict === null || !verdict.ok) return false;
+  if (verdict === null || !verdict.ok) return { closed: false, verdict };
   try {
     const store = RunStore.open(runDir);
     const approved = await approve(store, {
@@ -1448,7 +1522,53 @@ async function selfCloseAutoGate(runDir: string, stageId: string, gate: GateWait
       at: gate.at ?? new Date().toISOString(),
       note: verdict.note,
     });
-    return approved.ok;
+    return { closed: approved.ok, verdict };
+  } catch {
+    return { closed: false, verdict };
+  }
+}
+
+/**
+ * How many times the loop has already re-run this stage on its own (gh #231) — read off the
+ * run's event log, never held in memory, so `--until-done`'s relaunch and a person's
+ * relaunch both see the bound as spent. Counted over the whole run: a stage re-opened later
+ * does not buy the machine another paid attempt, and the direction that costs less is the
+ * one that hands the decision to a person.
+ */
+function loopRetriesOf(runDir: string, stageId: string): number {
+  try {
+    return EventLog.forRun(runDir).read()
+      .filter((event) => event.type === "gate.rejected" && event.stage === stageId && event.actor === AUTO_GATE_RETRY_ACTOR)
+      .length;
+  } catch {
+    // An unreadable log cannot show the bound is unspent — so it is spent.
+    return AUTO_GATE_CHECK_RETRIES;
+  }
+}
+
+/**
+ * Record the automatic re-run as `tldrx reject --and-continue` records one (gh #231) —
+ * the SAME `reject`, signed `AUTO_GATE_RETRY_ACTOR`.
+ *
+ * A compare-and-set, for `recordRefusal`'s reason (`autoGate.ts`): the gate is re-read
+ * INSIDE the workspace lock and written only while it is provably still `pending` on a
+ * stage still `awaiting_gate` at the cursor. A person's `approve` or `reject` landing
+ * between the measurement and this write wins, and false says so.
+ */
+function rejectForRetry(
+  runDir: string,
+  stageId: string,
+  input: { readonly root: string; readonly at: string; readonly note: string },
+): boolean {
+  try {
+    return withWorkspaceLock(workspaceRootOfRunDir(runDir), () => {
+      const store = RunStore.open(runDir);
+      const found = flatten(store.run).find((entry) => entry.stage.id === stageId);
+      if (found === undefined || store.run.cursor.stage !== stageId) return false;
+      if (found.stage.status !== "awaiting_gate" || found.stage.gate.status !== "pending") return false;
+      reject(store, { root: input.root, actor: AUTO_GATE_RETRY_ACTOR, at: input.at, note: input.note, andContinue: true });
+      return true;
+    });
   } catch {
     return false;
   }

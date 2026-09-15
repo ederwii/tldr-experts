@@ -60,6 +60,14 @@ export interface AutoGateVerdict {
   readonly note: string;
   /** Only the conditions that failed, for the "why not" line. Empty when `ok`. */
   readonly why: string;
+  /**
+   * The declared checks that FAILED, with their own findings (gh #231).
+   *
+   * Condition 1's detail names only `id:status` — enough to say which check held a gate,
+   * not enough to fix it. A bounded re-run (`checkRetryVerdict`) hands these to the stage
+   * as its note, so they travel on the verdict rather than being re-run a second time.
+   */
+  readonly failedChecks: readonly CheckOutcome[];
 }
 
 export interface AutoGateInput {
@@ -89,6 +97,96 @@ export async function evaluateAutoGate(input: AutoGateInput): Promise<AutoGateVe
     conditions,
     note: `auto-gate: ${conditions.map(render).join("; ")}`,
     why: failed.map(render).join("; "),
+    failedChecks: input.checks.filter((check) => check.status === "failed"),
+  };
+}
+
+/**
+ * Who signs the rejection a bounded re-run writes (gh #231) — the LOOP, by name.
+ *
+ * Not `AUTO_GATE_ACTOR`: that is the gate's own signature, and `gateAuthority` reads it as
+ * "the facilitator closed this gate". Not the operator's name either, which is what
+ * `run auto`'s own `actor` is: nobody typed this rejection, and an audit trail that says a
+ * person did lies in the dangerous direction (AGENTS.md §7).
+ */
+export const AUTO_GATE_RETRY_ACTOR = "run auto";
+
+/**
+ * How many times `run auto --wait-gates` re-runs ONE stage on its own because its `auto`
+ * gate was refused only by failed checks (gh #231). Counted per stage over the run's whole
+ * event log, so a relaunched loop cannot reset it.
+ *
+ * One, because the measurement is one: the field run that produced this issue needed
+ * exactly one `reject --and-continue` with the finding in it. A stage that fails the same
+ * check again after being told the exact line is not converging on its own, a second paid
+ * re-run is money spent on a guess, and the person the loop falls back to is told why.
+ */
+export const AUTO_GATE_CHECK_RETRIES = 1;
+
+/** The head of every note a bounded re-run writes — what the next prompt and a reader see first. */
+export const AUTO_GATE_RETRY_NOTE_PREFIX = "run auto re-ran this stage: its auto gate was refused only by failed checks.";
+
+/** The conditions a re-run with the findings in its prompt can plausibly fix. */
+const RETRYABLE_CONDITIONS: ReadonlySet<string> = new Set(["checks", "claim-sources"]);
+
+/** Findings are clipped to this many characters so the note stays well inside an event payload (§2.9). */
+const MAX_FINDINGS_CHARS = 1500;
+
+/**
+ * May a refused `auto` gate be answered by re-running its stage with the findings? (gh #231)
+ *
+ * Yes only when EVERY condition holding the gate is a failed check — condition 1 (a
+ * declared check that failed) or condition 5 (`claim-sources` FAILED, i.e. a citation was
+ * refused). Each no carries its reason, because the caller prints it when it falls back to
+ * waiting for a person:
+ *
+ *  - `questions` and `budget` have their own paths (`--wait-answers`,
+ *    `questions_policy: recommended`, the budget refusal) and a re-run would spend over a
+ *    decision nobody took;
+ *  - `stories`, `boundary` and `status` are judgements about the WORK, not a finding a
+ *    prompt can be told to fix;
+ *  - a `claim-sources` held by an UNVERIFIED citation is not a failure — nothing could
+ *    check it, which is exactly the one a person should look at.
+ */
+export function checkRetryVerdict(
+  verdict: AutoGateVerdict,
+):
+  | { readonly retry: true; readonly findings: string }
+  | {
+    readonly retry: false;
+    readonly reason: string;
+    /** True when a failed check is PART of the refusal — the case whose "why not" is worth printing. */
+    readonly checksHeld: boolean;
+  } {
+  const held = verdict.conditions.filter((condition) => !condition.ok);
+  if (verdict.ok || held.length === 0) return { retry: false, reason: "the auto gate is not refused", checksHeld: false };
+  const checksHeld = held.some((condition) => RETRYABLE_CONDITIONS.has(condition.id));
+  const other = held.filter((condition) => !RETRYABLE_CONDITIONS.has(condition.id)).map((condition) => condition.id);
+  if (other.length > 0) {
+    return {
+      retry: false,
+      checksHeld,
+      reason: `the refusal is also held by ${other.join(", ")} — only a refusal held by failed checks alone is re-run`,
+    };
+  }
+  const claims = held.find((condition) => condition.id === "claim-sources");
+  if (claims !== undefined && !claims.detail.startsWith("failed")) {
+    return {
+      retry: false,
+      checksHeld,
+      reason: `claim-sources holds it on an unverified citation, not a failed one (${claims.detail}) — a person judges that`,
+    };
+  }
+  const lines = [
+    ...held.map(render),
+    ...verdict.failedChecks
+      .filter((check) => check.id !== "claim-sources" || claims === undefined)
+      .map((check) => `${check.id}: ${check.detail}`),
+  ];
+  const text = lines.join("\n");
+  return {
+    retry: true,
+    findings: text.length <= MAX_FINDINGS_CHARS ? text : `${text.slice(0, MAX_FINDINGS_CHARS)}… (clipped)`,
   };
 }
 

@@ -51,6 +51,20 @@
   a letter naming none of the options the question lists (`question-recommended-option`). A
   seed question that lists no options is not judged on its letter — the options are the What
   stage's to write. A §2.7 block's unreadable line is still ignored rather than refused.
+- **An unattended run is no longer stranded by its own provenance, or by a refused check it could
+  fix itself (#231).** Measured 2026-09-14 on a `run auto` validation run (0.27.0): a What stage
+  wrote `[src: absent:.tldrx/memory/facts.yml#tenant-credits]`, true when written; the loop then
+  auto-answered that stage's questions, the new facts' `source:` maps read
+  `run: 260914-tenant-credits`, and `claim-sources` refused the absence on the run id. The refused
+  `auto` gate then waited for a person, who typed `reject --and-continue` with the finding —
+  intervention #2 of that run. Two fixes. An `absent:…#<needle>` over the workspace's
+  `facts.yml` no longer searches a fact's `source: {who, when, run, q, decided_by}` map — that is
+  who recorded it, not what it says; a map with any other key is searched in full, and a needle in
+  a fact's content still refuses, even on a fact this run just wrote. And under `--wait-gates`,
+  an `auto` gate refused by failed checks ALONE (a declared check, or `claim-sources` failing)
+  re-runs its stage once through the same `reject --and-continue` path, signed `run auto` with the
+  findings as the note; past that bound, or on a `human`/`agent` gate, or when questions, budget,
+  stories, boundary or status also hold it, the loop waits for a person as before and prints why.
 
 ## 0.27.0 — 2026-09-14
 

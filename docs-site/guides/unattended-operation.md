@@ -588,6 +588,14 @@ Three policies, three different things happen when a stage finishes:
   question closes itself as soon as the question is answered. Only `auto` — the run already
   granted that authority — and your own `approve` or `reject` overrides it at any moment.
 
+  When the only thing refusing an `auto` gate is a **failed check** — a declared check, or
+  `claim-sources` refusing a citation — the loop does what you would have typed: it records
+  `tldrx reject --and-continue` with the checks' findings as the note, signed `run auto` so
+  the trail shows no person did, and re-runs the stage. Once per stage. If the re-run is
+  refused the same way, it waits for you and prints `not re-running … the automatic re-run
+  bound is spent`. Never for a `human` or `agent` gate, and never when questions, budget,
+  stories, boundary or status also hold the gate — those have their own paths.
+
 Both wait flags may be given together — that is the shape of a fully unattended launch:
 `--wait-answers 4h --wait-gates 4h`.
 
