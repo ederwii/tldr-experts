@@ -98,9 +98,15 @@ budget: finished phase(s) hold $16.25 unspent (01-what $16.25), which covers the
 `tldrx run auto --rebalance-finished` to make that move on the record automatically.
 ```
 
-`tldrx run auto --rebalance-finished` hace exactamente ese movimiento antes de rechazar, y sigue.
-Viene **apagado por defecto**: un techo de fase es una decisión de una persona sobre dinero, y el
-flag eres tú tomándola para ese lanzamiento. "Terminada" es estricto — todas las etapas de la fase
+`tldrx run auto` hace exactamente ese movimiento antes de rechazar, y sigue. Viene **encendido
+por defecto** (gh #330): `--no-rebalance-finished` lo apaga para un lanzamiento cuyos techos de
+fase deben significar exactamente lo que se fijó, y `--rebalance-finished` se sigue aceptando.
+Salió apagado, porque un techo de fase es una decisión de una persona sobre dinero; se encendió
+después de que una auditoría de runs desatendidos encontrara 22 intervenciones humanas por el
+tamaño de las fases cuyas notas de aumento, según la lectura de la auditoría, nunca cambiaron el
+trabajo. `tldrx next` por sí solo nunca hace el movimiento, y cuando ese movimiento financiaría un
+lanzamiento, el hook `budget-gate` deja arrancar `run auto` en vez de rechazarlo antes (gh #321).
+"Terminada" es estricto — todas las etapas de la fase
 en `done` o `skipped`, ninguna stale, cobrada en `metered-usd` y sin turnos no medidos (cuyo gasto
 solo sería una cota inferior). Una fase con una etapa todavía por correr, como `05-watch` mientras
 Build está bloqueado, nunca aporta. Mueve solo el faltante, nunca sube el techo del run, nunca

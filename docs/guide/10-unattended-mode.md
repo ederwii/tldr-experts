@@ -787,6 +787,13 @@ never twice over the same refusal — the refusal itself, not the advice line ev
 death ends with (gh #297). Pass the run id as `--run <id>`: a bare `--until-done`
 followed by a positional id reads the id as its count and refuses it.
 
+A phase short on money while FINISHED phases hold enough unspent ceiling is not a
+`budget.blocked` at all under `run auto`: the loop moves exactly the shortfall out of them first,
+by default (gh #330; the rules and the `budget.raised` it writes are in
+`06-budgets-and-cost.md`), and the `budget-gate` hook lets such a launch through instead of
+denying it before the loop runs (gh #321). `--no-rebalance-finished` turns that off for a launch
+whose phase ceilings must mean exactly what they say.
+
 **An `auto` gate is the exception, and it is the same authority the run already granted.** While
 it waits, each poll re-runs the seven auto conditions off disk; the moment every one holds, the
 loop signs through the same `tldrx approve` door — checks re-run, actor `auto`, the

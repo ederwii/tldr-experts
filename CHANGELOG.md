@@ -20,8 +20,38 @@
   now states the rule under `changes` and carries the `[src: …]` grammar on every review, not only
   when `fixlist` is on the table. The citation is read, not resolved: a token that parses but
   points at nothing still passes, so this refuses the hollow envelope, not a wrong one.
+- **`tldrx run auto` now moves a blocked phase's shortfall out of finished phases by default
+  (closes #330).** The rebalance shipped opt-in in #314 because a phase ceiling is a person's
+  decision about money. An audit of `run auto`'s intervention episodes across two client
+  workspaces ranked stage/phase sizing as the #2 cause of a human stepping in: 22 episodes, 27
+  `budget.raised`, 7 `budget.blocked` (counts the audit measured, cited from #330), and not one raise note changed the work
+  (the audit's inferred reading of those notes). In a validation run the flag moved money twice
+  with nobody present. So a person was signing a move the framework could already prove safe.
+  Now a bare `run auto` makes it, and `--no-rebalance-finished` turns it off for a launch whose
+  phase ceilings must mean exactly what they say. `--rebalance-finished` is still accepted, and
+  passing both flags is exit 1, by name. The rules are unchanged: the run ceiling never grows, no
+  move passes a recorded grant, donors must be finished and metered with no unmetered turn, the
+  move is the exact shortfall or nothing, and each move is one `budget.raised` with the same
+  `source: run auto --rebalance-finished`. `tldrx next` on its own still never rebalances. The
+  `tldrx drive` mandate is unchanged on purpose: its unattended mode is refused `run auto`
+  outright (`attended_by: host`), and its attended mode drives `tldrx next`. No mandate-driven
+  turn ever reaches the move, so a sentence about it would teach something the driver cannot do.
 
 ### Fixed
+
+- **The `budget-gate` hook no longer refuses the `run auto` launch that would fix the shortfall
+  (closes #321).** It priced a `tldrx run auto` spawn against the cursor phase's own ceiling
+  alone. On a phase already short, it denied the launch and wrote `budget.blocked` before the
+  loop could run its in-process rebalance, even when finished phases held the money. With the
+  rebalance on by default, that turned into the common case. Reproduced on the hook fixture
+  before the fix: 02-how was $2.39 short, finished 01-what held $2.86 unspent, and
+  `tldrx run auto` was denied. Now, when finished phases cover the WHOLE shortfall under the
+  loop's own rules, the gate allows and says why on stderr, writing no event. It checks that
+  with the same `planRebalance`, `--take-from` validation and grant verdict the loop uses, read
+  against the full `run.yml` so a stale donor still counts as unfinished. The gate itself moves
+  nothing; the move and its `budget.raised` are the loop's. Denied exactly as before:
+  `tldrx next`, a launch with `--no-rebalance-finished`, a run-ceiling shortfall, a shortfall
+  the finished phases cover only in part, a stale donor, and a move past a recorded grant.
 
 - **A parallel Build wave no longer hands two developers the same unspent money (closes #325).**
   Every per-story cap reads the stage's METERED remainder, which is only right when stories run

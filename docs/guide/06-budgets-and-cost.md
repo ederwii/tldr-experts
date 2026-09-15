@@ -321,10 +321,17 @@ under its ceiling and the run total had $141 of room; a person typed
 names finished phases' unspent ceiling and the exact `--take-from` move that covers the
 shortfall, and `budget.blocked` records `short_usd`, `finished_unspent_usd` and `uncovered_usd`.
 
-`tldrx run auto --rebalance-finished` makes that move itself, before refusing. It is an opt-in
-flag, not a default and not a `budget.yml` key: a phase ceiling is a person's decision about
-money (the reason `--retry-failed` and `--until-done` never touch exit 2), so the loop may only
-re-split one when the person who launched it said so, on the command they typed. A phase is a
+`tldrx run auto` makes that move itself, before refusing — **on by default**
+(gh #330); `--no-rebalance-finished` turns it off for a launch, and `--rebalance-finished` is
+still accepted and says the default out loud. It shipped opt-in (#314), on the reasoning that a
+phase ceiling is a person's decision about money. The default flipped on measurement: an audit
+of `run auto`'s intervention episodes across two client workspaces counted 22 episodes on
+stage/phase sizing, with 27 `budget.raised` and 7 `budget.blocked` events (counts the audit measured, cited from gh #330), and
+no raise note in them changed the work (the audit's inferred reading of those notes), while the
+flag moved money twice in a validation run with nobody present. What it may move did not change,
+and neither did its event. It is still not a `budget.yml` key, and `tldrx next` alone never
+rebalances. Launch with `--no-rebalance-finished` when a run's phase ceilings must mean exactly
+what they were set to. A phase is a
 donor only when every stage in it is `done` or `skipped`, none is `stale`, it is priced in
 `metered-usd`, none of its task rows is unmetered (a lower-bound spend proves nothing about
 what is left), and it has at least a cent unspent. Donors give in run order, each at most what
@@ -531,6 +538,14 @@ path behaves exactly as it always did.
 `tldrx next`, `tldrx run auto`, `tldrx expert train`, `tldrx seed triage`. It denies when the
 cursor phase cannot afford the estimate and appends `budget.blocked`. The denial names the
 exact `tldrx budget raise` command, shortfall included.
+
+One exception, for `tldrx run auto` only (gh #321): when finished phases hold enough unspent
+ceiling to cover the WHOLE shortfall, under the same rules the loop's rebalance applies (the
+donor rules above, `--take-from`'s validation, no move past a recorded grant), the gate allows
+the launch and says so on stderr, writing no `budget.blocked` — the loop makes the move itself,
+on its own `budget.raised`. Denying it would refuse the very launch that fixes the shortfall. The
+gate moves nothing. `tldrx next`, a launch with `--no-rebalance-finished`, a run-ceiling
+shortfall and a shortfall the finished phases cannot fully cover are denied exactly as before.
 
 On a phase priced in `host-tokens` it never denies — there is no dollar ceiling there to
 enforce — and says so on stderr. The refusal that matters for such a phase is `tldrx next`'s

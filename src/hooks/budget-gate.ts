@@ -29,6 +29,10 @@ import { economyFor, isHostTokens } from "../core/budget/RunBudget.ts";
 import { remainingWork } from "../core/budget/remainingWork.ts";
 import { wouldExceed, wouldExceedHostTokens } from "../core/budget/wouldExceed.ts";
 import { raiseCommand, shortBy } from "../core/budget/budgetView.ts";
+import { applyRebalance, describeRebalance, planRebalance, REBALANCE_SOURCE } from "../core/budget/rebalance.ts";
+import { raiseGrantVerdict } from "../core/budget/raiseBudget.ts";
+import type { RunBudget } from "../core/budget/RunBudget.ts";
+import type { RunFile } from "../core/run/RunFile.ts";
 import { EventLog } from "../core/events/EventLog.ts";
 import { parseYaml } from "../core/yaml.ts";
 import { PROJECT_WORK_DIR } from "../core/paths.ts";
@@ -45,6 +49,8 @@ import { PROJECT_WORK_DIR } from "../core/paths.ts";
  */
 const SPAWN_RE = /^(claude -p|tldrx next|tldrx run auto|tldrx expert train|tldrx seed triage)\b/;
 const RUN_ARG_RE = /--run[= ]([\w.-]+)/;
+const RUN_AUTO_RE = /^tldrx run auto\b/;
+const NO_REBALANCE_RE = /(?:^|\s)--no-rebalance-finished(?:[\s=]|$)/;
 
 /**
  * The default ceiling each non-`next` spender uses when it is given no flag.
@@ -233,6 +239,30 @@ await runHook("budget-gate", async () => {
     return;
   }
 
+  // gh #321: `tldrx run auto` rebalances finished phases IN-PROCESS before it refuses, by
+  // default since #330 — so denying its spawn on a phase that move would fund refuses the
+  // very launch that fixes it, and the move never gets the chance to run. When the finished
+  // phases cover the WHOLE shortfall, under the same rules the loop applies (the donor rules
+  // and exact-shortfall-or-nothing of `planRebalance`, `raiseBudget --take-from`'s validation,
+  // never past a recorded grant), the gate allows and says why. The hook moves nothing: the
+  // move, and its `budget.raised`, are the loop's. Phase scope only — a rebalance never grows
+  // the run ceiling. `tldrx next` and `--no-rebalance-finished` are refused exactly as before.
+  if (decision.scope === "phase" && RUN_AUTO_RE.test(command) && !NO_REBALANCE_RE.test(command)) {
+    const short = shortBy(estimate, decision.remaining);
+    const covered = finishedPhasesCover(view.dir, budget, view.cursor.phase, short);
+    if (covered !== null) {
+      process.stderr.write(
+        `tldrx hook budget-gate: ${view.cursor.phase} has $${decision.remaining.toFixed(2)} left of `
+        + `$${decision.ceiling.toFixed(2)} and the stage estimate is $${estimate.toFixed(2)} — NOT refusing: `
+        + `\`run auto\` rebalances finished phases before it refuses, and ${covered}, which covers the `
+        + `$${short.toFixed(2)} shortfall. The loop makes that move on its own record (\`budget.raised\`, `
+        + `source: ${REBALANCE_SOURCE}); launch with --no-rebalance-finished to be refused here instead.`
+        + `${economies === null ? "" : ` ${economies}`}\n`,
+      );
+      return;
+    }
+  }
+
   new EventLog(join(view.dir, "events.jsonl")).tryAppend({
     ts: nowRfc3339(),
     run: view.run,
@@ -315,6 +345,32 @@ function estimateFor(command: string, stageBudget: number | null): number {
     return Number.isFinite(flagged) ? flagged : DEFAULT_TRIAGE_USD;
   }
   return stageBudget ?? 0;
+}
+
+/**
+ * What finished phases hold, as `describeRebalance` says it, when `run auto`'s in-process
+ * rebalance (gh #314) would cover `shortUsd` for `phaseId` — or null when it would not.
+ *
+ * Composed from the loop's own pieces rather than re-derived, so the gate and the loop
+ * cannot disagree about a donor: `planRebalance` (finished, not stale, metered-usd, no
+ * unmetered turn, the whole shortfall or no moves), `applyRebalance` (`raiseBudget
+ * --take-from`'s validation) and `raiseGrantVerdict` (no move past a grant, under either
+ * `on_grant_exceed`). It reads the FULL run.yml, because a donor's `stale` mark is not in the
+ * hooks' tolerant view. Anything unreadable or refused is null, and null DENIES as before:
+ * this path may only ever turn a refusal into an allow on evidence it could read.
+ */
+function finishedPhasesCover(runDir: string, budget: RunBudget, phaseId: string, shortUsd: number): string | null {
+  try {
+    const doc = parseYaml(readFileSync(join(runDir, "run.yml"), "utf8")) as { phases?: unknown } | null;
+    if (doc === null || !Array.isArray(doc.phases)) return null;
+    const plan = planRebalance(budget, doc as Pick<RunFile, "phases">, phaseId, shortUsd);
+    if (plan.moves.length === 0) return null;
+    const applied = applyRebalance(budget, plan);
+    if (applied.outcomes.some((outcome) => raiseGrantVerdict(budget, outcome).exceeds)) return null;
+    return describeRebalance(plan);
+  } catch {
+    return null;
+  }
 }
 
 /**

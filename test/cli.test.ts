@@ -284,6 +284,14 @@ describe("unknown flags", () => {
     expect(flagNames(["--", "positional"], takesValue)).toEqual([]);
   });
 
+  // gh #330: the opt-out is a declared flag, and giving both directions is refused by name.
+  test("`tldrx run auto` declares --no-rebalance-finished and refuses it beside --rebalance-finished", async () => {
+    const run = await tldrx("run", "auto", "--rebalance-finished", "--no-rebalance-finished");
+    expect(run.code).toBe(EXIT_USAGE);
+    expect(run.stderr).not.toContain("unknown flag");
+    expect(run.stderr).toContain("--rebalance-finished and --no-rebalance-finished are opposite directions");
+  });
+
   test("`--flag=value` is checked by its name", async () => {
     const run = await tldrx("status", "--nope=1");
     expect(run.code).toBe(EXIT_USAGE);

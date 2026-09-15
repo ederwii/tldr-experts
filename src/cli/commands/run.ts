@@ -114,6 +114,24 @@ function untilDoneFlag(args: ParsedArgs): number | undefined {
   return value;
 }
 
+/**
+ * `--rebalance-finished` is ON by default under `run auto` (gh #330); `--no-rebalance-finished`
+ * is the opt-out and `--rebalance-finished` stays accepted, saying the default out loud. Both
+ * at once is two opposite instructions about a person's money, refused by name rather than
+ * settled by argv order.
+ */
+function rebalanceFinishedFlag(args: ParsedArgs): boolean {
+  const on = boolFlag(args, "rebalance-finished");
+  const off = boolFlag(args, "no-rebalance-finished");
+  if (on && off) {
+    throw new UsageError(
+      "run auto: --rebalance-finished and --no-rebalance-finished are opposite directions — pass one "
+      + "(the rebalance is on by default; --no-rebalance-finished turns it off for this launch)",
+    );
+  }
+  return !off;
+}
+
 export const runCommand: Command = {
   name: "run",
   summary: "Create, inspect or auto-run a piece of work",
@@ -127,7 +145,8 @@ export const runCommand: Command = {
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
     "                      [--notify-every <duration>] [--wait-answers <duration>]\n" +
     "                      [--wait-gates <duration>] [--prompt-max-bytes <n>] [--max-reads <n>]\n" +
-    "                      [--retry-failed <n>] [--until-done [<n>]] [--rebalance-finished]\n" +
+    "                      [--retry-failed <n>] [--until-done [<n>]]\n" +
+    "                      [--rebalance-finished | --no-rebalance-finished]\n" +
     "                  [--yolo] [--parallel <n>] [--gate-agent] [--ui scene|compact|plain|off]\n" +
     "                  [--run <id>] [--root <path>]\n" +
     "       tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>] [--root <path>]\n" +
@@ -336,6 +355,7 @@ function runAttend(argv: readonly string[]): number {
 async function runAutoLoop(argv: readonly string[]): Promise<number> {
   try {
     const args = parseArgs(argv, VALUE_FLAGS);
+    const rebalanceFinished = rebalanceFinishedFlag(args);
     const root = workspaceRootFrom(args);
     // The scene persists across the whole loop; `runNext` re-titles the
     // blackboard at each stage boundary.
@@ -358,7 +378,7 @@ async function runAutoLoop(argv: readonly string[]): Promise<number> {
         waitGatesMs: durationFlag(args, "wait-gates"),
         retryFailedStages: retryFailedFlag(args),
         untilDone: untilDoneFlag(args),
-        rebalanceFinished: boolFlag(args, "rebalance-finished"),
+        rebalanceFinished,
         actor: currentActor(),
         at: nowRfc3339(),
         // Erase the view, let the stage line scroll past on stdout, repaint. A

@@ -92,9 +92,14 @@ budget: finished phase(s) hold $16.25 unspent (01-what $16.25), which covers the
 `tldrx run auto --rebalance-finished` to make that move on the record automatically.
 ```
 
-`tldrx run auto --rebalance-finished` makes exactly that move before refusing, and carries on.
-It is **off by default**: a phase ceiling is a person's decision about money, and the flag is you
-making it for that launch. "Finished" is strict — every stage of the phase `done` or `skipped`,
+`tldrx run auto` makes exactly that move before refusing, and carries on. It is **on by
+default** (gh #330): `--no-rebalance-finished` turns it off for a launch whose phase ceilings must
+mean exactly what they were set to, and `--rebalance-finished` is still accepted. It shipped
+off, because a phase ceiling is a person's decision about money; it was turned on after an audit
+of unattended runs found 22 human interventions on phase sizing whose raise notes, by the
+audit's reading, never changed the work. `tldrx next` on its own never makes the move, and when
+a launch would be funded by it, the `budget-gate` hook lets `run auto` start instead of refusing
+it first (gh #321). "Finished" is strict — every stage of the phase `done` or `skipped`,
 none stale, priced in `metered-usd`, and no unmetered turn (whose spend would only be a lower
 bound). A phase with a stage still to run, such as `05-watch` while Build is blocked, never gives.
 It moves only the shortfall, never grows the run ceiling, never passes a recorded grant, and
