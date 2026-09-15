@@ -77,6 +77,9 @@ function finding(overrides: Partial<FixFinding>): FixFinding {
     resolved: false,
     resolvedSha: null,
     resolvedShaRefusal: null,
+    claimedSha: null,
+    closedOnEpicSha: null,
+    swept: null,
     ...overrides,
   };
 }

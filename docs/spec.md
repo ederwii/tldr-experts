@@ -4467,7 +4467,8 @@ EXECUTOR from the envelope (the reviewer holds no write tool, the same reason th
 shape: a heading, the round's own facts (verdict, attempt, diff command, commit), then one
 `## <n> · <finding>␣␣[<severity>]` section per finding — **two spaces** before the bracket — carrying `Where:`
 (the literal `(not stated)` when the envelope gave none), `Kind:`, `Disposition:`, an optional
-`Normalised-from:` and `Resolved:`. The disposition is written
+`Normalised-from:`, `Resolved:` and an optional `Swept:` (written by the run-level sweep below, absent until
+one has run over the finding). The disposition is written
 and **read back bolded**: `Disposition: **fix-now**`. A host editing the file closes a finding with
 `Resolved: yes <sha>` or re-routes it by changing the value between those asterisks; a `Disposition:` line without
 them does not parse, and the finding it belongs to is dropped rather than half-read.
@@ -4513,6 +4514,36 @@ them does not parse, and the finding it belongs to is dropped rather than half-r
   approval away from `done` with the defect alive. The accounting was written from an agent's REPORT rather than from
   a verified code state, which is the one thing the framework refuses everywhere else. Verification only ever moves a
   finding from closed to OPEN; nothing here closes one, and a `Resolved: no` is never touched.
+- **Before the Build gate, every still-open finding is re-checked against the EPIC tip, and a close a
+  LATER story landed is recorded as `Resolved: yes-on-epic <sha>` (#163).** Verification asks whether a
+  claim's sha is reachable from the STORY's own branch, and it asks at the moment that story settles —
+  so a fix that lands later, on somebody else's branch, and reaches the epic through a merge is a close
+  the per-story question has no answer for. Measured 2026-09-05 on a Next.js workspace: three
+  `defer-with-log` entries read `Resolved: no` at a Build gate, two of them over defects a different
+  story had already closed, and a human told the three apart by reading the code. The run-level sweep
+  runs once, after the last story settles and before `handoff.md` is written, over every finding not
+  already closed with evidence — `fix-now` and `defer-with-log` alike. A sha the record already names
+  that is reachable from the epic tip and **not** from the story's own branch is written down as
+  `Resolved: yes-on-epic <sha>`, canonicalised to 40 hex like any other. **The word is deliberately not
+  `yes`:** the story's own close and a later story's close are different facts about who fixed it, and
+  `yes-on-epic` parses with `resolved: false`, so the finding is exactly as open as it was and no gate
+  outcome moves. Nothing is re-marked on inference — a reachable commit the record already names is the
+  only evidence accepted; a changed file never re-marks anything. **Every finding the sweep examined
+  gains a `Swept:` line** naming what was measured and against which tip, including the ones it closed
+  nothing over: a `Resolved: no` that has been re-checked against the whole run and one nobody ever
+  re-checked read identically until that line existed. A sweep that could not be TAKEN — no epic branch
+  recorded, a tip git will not resolve, a file that cannot be re-read — writes its reason there and in
+  `## Unknowns` instead of reporting a clean sweep (§7). For a finding nothing evidenced a close for,
+  the sweep also asks the WEAKER question — did a commit reachable from the epic tip and **not** from
+  this story's own branch change the file the finding's `Where:` cites? — and names up to three such
+  commits on the `Swept:` line and in `## Unknowns`. **That is evidence of a change, never of a fix**:
+  the verdict word does not move, the finding stays exactly as open as it was, and a person reads those
+  commits and decides. The path comes from the finding's own `[src: <repo>:<path>]` citation,
+  repo-then-path, so a finding about another repo is not probed against the checkout this sweep happens
+  to hold. A probe git REFUSED — an unresolvable story ref, a repo that moved — is recorded as
+  `could not be measured — <git's reason>` on both surfaces, never as "no later commit changed this":
+  an empty answer and an unanswered question are different facts (§7). `Swept:` and `yes-on-epic` are additive; a fix list written before they existed reads exactly
+  as it did, with `swept` absent.
 - **A `Resolved:` sha that VERIFIES is rewritten to the canonical 40-hex object id (2026-09-06).** The same
   `rev-parse --verify <sha>^{commit}` that checks the claim already knows the full id, and the record was keeping the
   abbreviation instead — so `Resolved: yes (9f2c1ab)` named a PREFIX, which is a different thing from a commit: a

@@ -647,6 +647,69 @@ export async function canonicalSha(cwd: string, sha: string): Promise<string | n
   return resolved.ok && /^[0-9a-f]{40}$/.test(full) ? full : null;
 }
 
+/**
+ * How many commits `commitsTouching` will name before it stops counting.
+ *
+ * The answer it feeds is "somebody else changed this file, go look" — three shas
+ * say that as well as thirty, and a fix list is a document a person reads.
+ */
+export const TOUCHING_SCAN_MAX = 3;
+
+/**
+ * The commits reachable from `tip` and NOT from `notRef` that changed `path`
+ * (#163, sub-fix 2) — full object ids, newest first, at most `TOUCHING_SCAN_MAX`.
+ *
+ * This is EVIDENCE OF A CHANGE, and deliberately not evidence of a fix. It exists
+ * because the question a human answered by hand at a Build gate — "did a later
+ * story in this run already close this deferred defect?" — starts with "did
+ * anybody else touch that file", and the framework had no way to ask it. What it
+ * must never become is a close: a changed file is not a fixed defect, and §7's
+ * dangerous direction is exactly "this defect is gone" asserted from a diff
+ * nobody read. Callers name the commits; they do not resolve anything with them.
+ *
+ * `:(literal)` on the pathspec for the same reason `literalPathspec` exists at
+ * all: a file really named `a[1].ts` is a character class to git, and the file it
+ * answers about would not be the file it was asked about.
+ *
+ * `error` is the whole reason this returns a record rather than an array. An empty
+ * list used to mean two different things at once — nothing touched the path, or
+ * git would not ANSWER (a ref that does not resolve, a repo that moved) — and a
+ * caller that wrote "no later commit changed this" over the second one would be
+ * publishing a measurement nobody took in the words of one that was taken. §7:
+ * absent-with-reason, never a confident zero. A refusal is still not a throw: this
+ * runs while a run is settling, and no reconciliation note is worth failing a
+ * Build gate over — it is reported, not raised.
+ */
+export interface TouchingScan {
+  /** Newest first, capped at `max`. Empty whenever `error` is non-null. */
+  readonly commits: readonly string[];
+  /** git's own first line of refusal, or null when the question was answered. */
+  readonly error: string | null;
+}
+
+export async function commitsTouching(
+  cwd: string,
+  path: string,
+  tip: string,
+  notRef: string,
+  max = TOUCHING_SCAN_MAX,
+): Promise<TouchingScan> {
+  const result = await git(
+    ["log", `--max-count=${String(max)}`, "--format=%H", tip, `^${notRef}`, "--", literalPathspec(path)],
+    cwd,
+  );
+  if (!result.ok) {
+    // Never blank: a reason a reader cannot act on is the same silence this exists
+    // to remove, so an empty stderr falls back to naming the refusal by its code.
+    const said = firstLine(result.stderr.trim());
+    return { commits: [], error: said === "" ? `git log exited ${String(result.exitCode)}` : said };
+  }
+  return {
+    commits: result.stdout.split("\n").map((line) => line.trim()).filter((line) => /^[0-9a-f]{40}$/.test(line)),
+    error: null,
+  };
+}
+
 /** Best effort: a worktree that will not go away is a warning, never a failure. */
 export async function removeWorktree(cwd: string, path: string): Promise<boolean> {
   if (!existsSync(path)) return true;

@@ -99,8 +99,10 @@ import {
 import {
   CLAIMED_UNVERIFIED, FIXLIST_SETTLED_MARK, canonicalizeResolutions, fixlistRel, fixlistRetroLines, latestFixlist, markUnverified,
   openFindings, openFixlist, readFixlistAt, renderFixlistSection, writeFixlist, AUTO_CLOSED_MARK, autoCloseShown,
+  CLOSED_ON_EPIC,
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
+import { sweepFixlistAgainstEpic, type SweepOutcome } from "../../build/fixlistSweep.ts";
 import { renderBuildHandoff, type EpicSummaryRow, type NotStartedStory } from "../../build/handoff.ts";
 import {
   asidePayload, FOREIGN_ASIDE_EVENT, FOREIGN_RESTORED_EVENT, namePaths, notRestoredLine, pendingAsides,
@@ -4214,7 +4216,12 @@ class BuildSession {
     const outcomes = this.orderedOutcomes();
     const done = outcomes.filter((o) => o.status === "done").length;
     const notStarted = this.scheduledWithoutOutcome(outcomes);
-    this.writeHandoff(outcomes, notStarted);
+    // BEFORE the handoff, because the handoff is the gate document and this is the
+    // question a human was answering by hand at it (#163, sub-fix 2). It is also
+    // the earliest moment the question CAN be answered: a defect closed by a later
+    // story is only closed once that story has merged.
+    const sweep = await this.sweepFixlists(outcomes);
+    this.writeHandoff(outcomes, notStarted, sweep);
     return {
       ok: true,
       awaiting: false,
@@ -4278,9 +4285,86 @@ class BuildSession {
     return rows;
   }
 
+  /**
+   * Re-check every still-open fix-list finding of this run against its epic tip,
+   * and write down what came back (#163, sub-fix 2).
+   *
+   * The orchestrator's whole share of it: which stories have a fix list, where
+   * their repos are, and the single write per file. The judgement — what counts as
+   * a candidate, what evidences a close, how the two kinds of close are spelled
+   * apart, what a sweep that could not be taken says — lives in
+   * `build/fixlistSweep.ts` and takes DATA (§12).
+   *
+   * Nothing here decides anything. `yes-on-epic` is not `yes`, so every finding
+   * this touches is exactly as open afterwards as it was before, and no story's
+   * status is recomputed: `finish` runs after the last settlement. A file that
+   * cannot be read or a repo that cannot be located is reported as an absence with
+   * its reason, never as a story with nothing to sweep (§7).
+   */
+  private async sweepFixlists(outcomes: readonly StoryOutcome[]): Promise<readonly SweepOutcome[]> {
+    const rows: SweepOutcome[] = [];
+    for (const outcome of outcomes) {
+      const fixlist = latestFixlist(this.ctx.runDir, BUILD_PHASE, outcome.id);
+      if (fixlist === null) continue;
+      let repoDir: string;
+      let text: string;
+      try {
+        repoDir = repoDirOf(this.workspace, outcome.repo);
+        text = readFileSync(fixlist.path, "utf8");
+      } catch (error) {
+        const why = firstLine(error instanceof Error ? error.message : String(error));
+        rows.push({
+          storyId: outcome.id, rel: fixlist.rel, epicTip: null, closed: [], touched: [], unmeasured: [],
+          examined: 0,
+          absence: `its fix list could not be re-read for the sweep — ${why}`,
+        });
+        this.lines.push(
+          `  · ${outcome.id}: the run-level fix-list sweep could not be taken — ${why}`,
+        );
+        continue;
+      }
+      const swept = await sweepFixlistAgainstEpic(
+        {
+          storyId: outcome.id,
+          repo: outcome.repo,
+          repoDir,
+          branch: outcome.branch,
+          epicBranch: outcome.epicBranch,
+        },
+        fixlist,
+        text,
+        this.ctx.at,
+      );
+      if (swept.text !== null) writeFileSync(fixlist.path, swept.text, "utf8");
+      rows.push(swept.outcome);
+      if (swept.outcome.examined === 0) continue;
+      if (swept.outcome.absence !== null) {
+        this.lines.push(
+          `  · ${outcome.id}: the run-level fix-list sweep could not be taken — ${swept.outcome.absence}`,
+        );
+        continue;
+      }
+      this.lines.push(
+        `  · ${outcome.id}: ${String(swept.outcome.examined)} still-open fix-list finding(s) re-checked `
+        + `against \`${outcome.epicBranch}\` @ ${swept.outcome.epicTip ?? "(no tip)"} — `
+        + (swept.outcome.closed.length === 0
+          ? "none is evidenced closed by a later story, so each stays open and the file says the sweep ran"
+          : `${swept.outcome.closed.map((c) => `#${String(c.n)}`).join(", ")} `
+            + `closed on the EPIC by a later story, not by ${outcome.id} — recorded `
+            + `\`Resolved: ${CLOSED_ON_EPIC} ${swept.outcome.closed[0]?.sha ?? ""}\``)
+        + (swept.outcome.touched.length === 0
+          ? ""
+          : `; ${swept.outcome.touched.map((t) => `#${String(t.n)}`).join(", ")} still open with the `
+            + "cited file changed by a later story — named, not resolved"),
+      );
+    }
+    return rows;
+  }
+
   private writeHandoff(
     outcomes: readonly StoryOutcome[],
     notStarted: readonly NotStartedStory[],
+    sweep: readonly SweepOutcome[],
   ): void {
     const path = join(this.ctx.runDir, HANDOFF_REL);
     mkdirSync(join(path, ".."), { recursive: true });
@@ -4321,6 +4405,7 @@ class BuildSession {
       widenings: this.wideningRows(),
       epicReleases: this.epics.released,
       // The failed restores only. A stash that came back is not an unknown.
+      sweep,
       foreignWork: unrestored(this.restores).map((outcome) => ({
         repo: outcome.stash.repo,
         paths: outcome.conflicts.length > 0 ? outcome.conflicts : outcome.stash.paths,
