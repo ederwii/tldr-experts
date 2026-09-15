@@ -227,8 +227,30 @@ if (liveMarker !== null && liveDir !== undefined) {
   rmSync(liveMarker, { force: true });
 }
 
+/**
+ * gh #298 — `FAKE_BUILD_RATE_LIMIT` = `{"S1": "allowed_warning@0.94"}`: THIS
+ * turn's stream carries the provider's quota frame.
+ *
+ * `status[@utilization][@resetsAt]`, every value the provider's own. A missing
+ * or `none` utilization is a frame that states none at all — the absent case,
+ * which must never be read as a zero — and `@none` in the third slot is a frame
+ * with no reset instant. `S1#2` selects one attempt, like every other map here.
+ * Absent, the fake emits no frame at all, which is what it always did.
+ */
+const rateLimit = ((): { status: string; utilization?: number; resetsAt?: number | null } | undefined => {
+  const raw = perStory("FAKE_BUILD_RATE_LIMIT", devAttempt);
+  if (raw === null) return undefined;
+  const [status = "", utilization = "", resetsAt = ""] = raw.split("@");
+  return {
+    status,
+    ...(utilization === "" || utilization === "none" ? {} : { utilization: Number(utilization) }),
+    ...(resetsAt === "" ? {} : { resetsAt: resetsAt === "none" ? null : Number(resetsAt) }),
+  };
+})();
+
 process.stdout.write(claudeOutput(argv, {
   isError: failing,
+  ...(rateLimit === undefined ? {} : { rateLimit }),
   result: `fake ${role} for ${storyId}`,
   // `FAKE_BUILD_SESSION_PAD` pads the session id with N characters (#248). It is
   // the one field an `agent.result` carries that NO earlier event does, which is

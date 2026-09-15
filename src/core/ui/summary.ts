@@ -9,7 +9,7 @@
  * Pure functions with an explicit context, so every line is testable without a
  * clock, a terminal or a process.
  */
-import type { AgentEvent } from "../facilitator/agentEvents.ts";
+import { rateLimitLine, type AgentEvent } from "../facilitator/agentEvents.ts";
 
 export interface SummaryContext {
   /** Workspace root, so an absolute `file_path` prints as a repo-relative one. */
@@ -61,6 +61,14 @@ export function summarize(event: AgentEvent, ctx: SummaryContext): string | null
       // Counting is a footer fact, not a scrollback line: one row per Read would
       // push everything else off a six-line window.
       return null;
+    case "rate-limit":
+      // Only the provider's WARNING is worth a line (gh #298). An `allowed`
+      // frame arrives on healthy turns and says nothing a watcher can act on;
+      // the warning is the one that arrives BEFORE the wall, while the turn is
+      // still working, and it is the operator's chance to see it coming.
+      return event.status === "allowed"
+        ? null
+        : cut(`rate limit ${rateLimitLine(event)}`, width);
     case "error":
       return cut(`error: ${event.message}`, width);
     default:

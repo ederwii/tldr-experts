@@ -20,6 +20,32 @@
   wallpaper. The severe tail the channel exists for (0.095, >10× the stage) still speaks before the
   spawn.
 
+- **The provider's rate-limit warning is read instead of dropped, and a Build parks at a story
+  boundary before the wall instead of spending developers into it (#298, warning half).** The signal
+  was never missing, and the repo did not have to leave its own tree to find that out: `claude
+  --output-format stream-json` emits `{"type":"rate_limit_event","rate_limit_info":{…}}` WHILE a turn
+  is still working, `agentEvents.ts`'s own header has documented one since the transcript was
+  recorded, and `test/fixtures/agent/stream-json.jsonl:9` carries it in full — while
+  `test/agent-stream.test.ts` pinned it as noise, in the same list as `"{broken"`. It fell through
+  the dispatch `switch`'s `default:` and vanished, so the only trace a quota wall left was a
+  developer dying mid-story with the provider's own `success` on the record. Measured on a live
+  field turn (#298's thread): `status: "allowed_warning"` at `utilization: 0.92`, then `0.94`,
+  arriving BEFORE the limit bit, on a turn that then finished normally and cost $2.00 — and
+  `resetsAt` is an epoch integer, so a reader has a real deadline and never parses "resets 6pm". The
+  frame is now a typed `rate-limit` event, `AgentOutcome` carries the last one a turn streamed, and
+  a Build stage that sees a status the provider itself does not call `allowed` starts NO further
+  story: the stories already running finish and settle, the next one is not started, and the run
+  says so with the provider's own words on stdout and an `agent.rate_limited` event carrying the
+  status, the window, the utilization and the reset instant. The park test is the provider's WORD,
+  never a utilization threshold this repo picked — the CLI already owns the judgement of when a
+  window has surpassed its threshold, and a second opinion here would be a second implementation of
+  it. Nothing waits and nothing retries: waiting to a reset the provider stated, and classifying the
+  DEATH itself, need a terminal capture nobody has obtained (measured negative, twice) and are filed
+  as the other half. Absent stays absent — a frame that states no utilization records
+  `utilization_absent: "not recorded — …"` rather than a `0` that would read as an empty window, and
+  a Codex turn carries no frame at all rather than a fabricated `allowed`, because nothing here has
+  measured what `codex exec --json` says about a quota.
+
 - **`tldrx ship` refuses an epic carrying a merged diff NOBODY judged, instead of opening a PR over
   it (#311).** #282 closed the case where a reviewer read a story's diff and said `changes` — a
   rejection that stands, with the rejected code on the epic branch. It left the sibling open: three

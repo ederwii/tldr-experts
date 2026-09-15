@@ -53,7 +53,8 @@ import {
   describeDispatchNotes, loadDispatchNotes, type DispatchNotes,
 } from "../dispatchNotes.ts";
 import { preparedBundles, reviewBundles } from "../../run/prepared.ts";
-import { spawnAgent, BASE_TOOLS, bashGrantsFor } from "../spawnAgent.ts";
+import { spawnAgent, BASE_TOOLS, bashGrantsFor, type AgentRateLimit } from "../spawnAgent.ts";
+import { rateLimitLine } from "../agentEvents.ts";
 import { DEVELOPER_RESULT_SCHEMA, type AgentUsage } from "../envelope.ts";
 import {
   PendingError, PENDING_FILE, RAW_FILE, RESULT_FILE, readResult, readResultObject, resultPath,
@@ -117,6 +118,11 @@ const EVENTS_FILE = "events.jsonl";
 
 /** gh #286: the operator line for a story requeued with a merge to resolve — one spelling, two drivers. */
 const CONFLICT_REQUEUED_LINE = "bringing it up to its epic conflicted — requeued once with the merge to resolve";
+/**
+ * gh #298: the operator line for a story the provider's quota warning parked —
+ * one spelling, two doors (the serial loop and a wave's lanes).
+ */
+const RATE_LIMIT_PARK_LINE = "the provider warned its rate limit was close, so the run parked before it bit";
 /** gh #327: the operator line for a story requeued for its fix round — one spelling, three doors. */
 const FIX_ROUND_REQUEUED_LINE = "the reviewer signed with a fix list — requeued for its fix round, which spends no attempt";
 import { carriedReportFor, type CarriedReport } from "../../build/carriedRows.ts";
@@ -709,6 +715,18 @@ class BuildSession {
     readonly shown: readonly FixFinding[];
     readonly sessionId: string | null;
   }>();
+
+  /**
+   * The provider's quota WARNING, the first time one arrived on a turn's stream
+   * (gh #298), or null while it never has.
+   *
+   * It is the park order, and it is one-way: a later `allowed` frame does not
+   * clear it, because the window it warned about has not refilled — only the
+   * reset it named does, and that is a `tldrx next` away.
+   */
+  private rateLimitPark: AgentRateLimit | null = null;
+  /** The `agent.rate_limited` event is written once per stage, not once per story. */
+  private rateLimitParked = false;
 
   constructor(
     private readonly ctx: ExecutorContext,
@@ -1359,6 +1377,15 @@ class BuildSession {
         );
         return;
       }
+      // gh #298: the provider said the wall was close while an earlier turn was
+      // still working. Stop HERE, at a story boundary with everything before it
+      // settled, rather than spending this developer into the wall and recording
+      // its death. Nothing waits and nothing retries — `tldrx next` picks the
+      // run up, and the reset the provider stated is on the event.
+      if (this.rateLimitPark !== null) {
+        this.parkForRateLimit(planned.story.id, i === 0 ? "not started" : "not requeued");
+        return;
+      }
       await this.settleHalf(await this.buildHalf(planned));
       const outcome = this.outcomes.get(planned.story.id);
       // The developer never ran, so the story is back where it started and its
@@ -1521,6 +1548,13 @@ class BuildSession {
             );
             return;
           }
+          // gh #298, the same park per lane: a sibling lane's turn saw the
+          // provider's warning, so this lane dispatches nothing more. The lanes
+          // already in flight finish and are settled by half B.
+          if (this.rateLimitPark !== null) {
+            this.parkForRateLimit(id, "not started");
+            return;
+          }
           // A story a PERSON finished spawns no developer (#279): nothing to fund.
           if (this.asIsFor(planned) !== null) break;
           // Decided and reserved with no `await` between them, so two lanes can
@@ -1561,6 +1595,50 @@ class BuildSession {
     const rejected = settled.find((outcome) => outcome.status === "rejected");
     if (rejected !== undefined && rejected.status === "rejected") throw rejected.reason;
     return halves;
+  }
+
+  /**
+   * Keep the provider's quota warning, once (gh #298).
+   *
+   * `status: "allowed"` is a healthy turn reporting a healthy window and buys
+   * nothing; anything else is the provider itself saying the wall is close, and
+   * that is what parks the run. The test is the provider's own WORD, never a
+   * utilization threshold this repo picked: the CLI already decides when a
+   * window has surpassed its threshold, and a second opinion here would be a
+   * second implementation of a judgement we do not own.
+   */
+  private noteRateLimit(frame: AgentRateLimit | null): void {
+    if (frame === null || frame.status === "allowed" || this.rateLimitPark !== null) return;
+    this.rateLimitPark = frame;
+    this.lines.push(`  · the provider's rate limit is close: ${rateLimitLine(frame)}`);
+  }
+
+  /**
+   * The line a story that was NOT started gets, and the event that records it
+   * (gh #298). Absent-with-reason for every figure the frame did not state
+   * (AGENTS.md §7) — a missing utilization is not a zero and a missing reset is
+   * not a time.
+   */
+  private parkForRateLimit(storyId: string, what: "not started" | "not requeued"): void {
+    const frame = this.rateLimitPark;
+    if (frame === null) return;
+    this.lines.push(`  · ${storyId}: ${what} — ${RATE_LIMIT_PARK_LINE}: ${rateLimitLine(frame)}`);
+    if (this.rateLimitParked) return;
+    this.rateLimitParked = true;
+    this.ctx.emit("agent.rate_limited", {
+      phase: this.ctx.phaseId,
+      status: frame.status,
+      ...(frame.window === null
+        ? { window_absent: "not recorded — the provider's frame named no window" }
+        : { window: frame.window }),
+      ...(frame.utilization === null
+        ? { utilization_absent: "not recorded — the provider's frame stated no utilization" }
+        : { utilization: frame.utilization }),
+      ...(frame.resetsAt === null
+        ? { resets_at_absent: "not recorded — the provider's frame stated no resetsAt" }
+        : { resets_at: frame.resetsAt }),
+      parked: storyId,
+    }, 0, "build");
   }
 
   /**
@@ -3389,6 +3467,10 @@ class BuildSession {
       lane: this.lane(story),
       role: "developer",
     });
+    // gh #298: whatever the turn ITSELF did, its stream may have carried the
+    // provider's warning that the window is nearly gone. Read before the outcome
+    // is judged, because a turn that succeeded is exactly the one that can warn.
+    this.noteRateLimit(agent.rateLimit);
     if (agent.raw !== "") writeRaw(this.ctx.runDir, this.bundleKey(story.planned.story.id), agent.raw);
 
     this.tasks.push({
@@ -3673,6 +3755,8 @@ class BuildSession {
         lane: this.lane(story),
         role: "reviewer",
       });
+      // gh #298: a reviewer's stream warns exactly like a developer's.
+      this.noteRateLimit(agent.rateLimit);
 
       // A reviewer that did not finish has not approved anything — and has not
       // asked for changes either. `agent.ok === false` is a TRANSPORT outcome (the

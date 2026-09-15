@@ -1267,7 +1267,7 @@ paid for. The git blob memo above is the deliberate exception: its cap bounds FO
 Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with `run.yml`, `budget.yml` and the phase artefacts — one of the dashboard's data sources (#85).
 
 **Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `run.attended` `run.relaunched` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
-`stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
+`stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `agent.rate_limited` `question.asked` `question.answered`
 `gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `gate.policy_changed` `questions.policy_changed` `story.reopened` `story.base_fastforwarded` `story.base_updated` `story.conflict_turn` `story.review_retried` `story.work_rescued`
 `story.touches_widened` `plan.fix_round` `epic.released` `worktree.foreign_work_aside` `worktree.foreign_work_restored` `result.unreadable` `input.truncated` `operator_note` `check.passed` `check.failed` `budget.warned`
 `budget.blocked` `budget.raised` `budget.granted` `fact.added` `fact.retired` `fact.superseded` `fact.conflict_raised` `doc.superseded` `notify.sent` `notify.failed` `map.refreshed` `ticket.synced` `error`. Closed set: an
@@ -1294,6 +1294,20 @@ act with no record. Its payload carries `phase`, `amount_usd`, `take_from`, befo
 ceiling, and the operator's `--note`. Since gh #314 a move also carries `take_from_ceiling_before` / `take_from_ceiling_after`
 (omitted when nothing was taken), and a move made by `tldrx run auto --rebalance-finished` carries `source: "run auto
 --rebalance-finished"`, `short_usd` and `estimate_usd`, with the launcher as `actor` and `stage` naming the stage it unblocked.
+
+**`agent.rate_limited` was added 2026-09-15 (gh #298).** It is the provider's own quota frame, which arrives on the
+stream WHILE a turn is still working: `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning",
+"rateLimitType":"five_hour","utilization":0.92,"resetsAt":1789364400,…}}`, measured on a live turn that then finished
+normally. Until this event the framework parsed that line as noise, so the only trace a quota wall left was a developer
+dying mid-story carrying the provider's own `success`. Its payload carries `status` (the provider's word, never
+normalised — `allowed`, `allowed_warning`, and whatever it says when the wall is hit), `window`, `utilization`,
+`resets_at` (**epoch seconds, exactly as stated** — nothing derives a deadline the provider did not give) and `parked`
+(the story the run then did not start). Any of those three figures the frame did not state is ABSENT, with a
+`<field>_absent` sentence in its place rather than a zero that would read as "none of the window is used". Build writes
+it ONCE per stage, the first time a frame whose `status` is not `allowed` arrives, and it changes no outcome: stories
+already running finish and are settled, and only the NEXT story (or the next attempt) is not started — the run parks at
+a story boundary instead of spending developers into the wall. It never waits, and never retries: waiting to a reset the
+provider stated is the other half of #298 and is not built.
 
 **`run.created` carries `attended_by`** when `run new --attended-by host` set it, beside the fields it already carried;
 absent on every other run, so an ordinary `run.created` is what it was.

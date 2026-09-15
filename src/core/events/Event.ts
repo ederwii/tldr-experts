@@ -195,13 +195,28 @@ import {
  * is, 1-based), `of` (the bound) and `last_line` (the attempt's last line — its head and its TAIL,
  * bounded). It is never written over exit 4, over a `budget.blocked`, or twice
  * over the same last line — `facilitator/runAuto.ts`, `relaunchVerdict`.
+ *
+ * `agent.rate_limited` was added 2026-09-15 (issue #298). It is the provider
+ * saying, ON THE STREAM and while the turn is still working, that the quota
+ * window is nearly gone — `status: "allowed_warning"` at `utilization: 0.92`,
+ * measured on a live turn that then finished normally. The signal was in the
+ * stream all along and `agentEvents.ts` dropped it, so the only record a wall
+ * left was a developer dying mid-story with the provider's own `success` on it.
+ * Its payload carries `status` (the provider's own word, never normalised),
+ * `window`, `utilization`, `resets_at` (EPOCH SECONDS, as stated — nothing here
+ * converts a guess into a deadline) and `parked` (the story the run did not
+ * start because of it). A figure the frame did not state is ABSENT, with a
+ * `<field>_absent` sentence saying so rather than a zero that would read as
+ * "none used". It is written ONCE per Build stage, the first time a non-`allowed`
+ * frame arrives, and it changes no outcome: the stories already running finish,
+ * and only the NEXT one is not started.
  */
 export const EVENT_TYPES = [
   "run.created", "run.closed", "run.unlocked", "run.cancelled", "run.attended", "run.relaunched",
   "phase.started", "phase.done",
   "stage.started", "stage.done", "stage.failed", "stage.skipped",
   "task.started", "task.done",
-  "agent.spawned", "agent.result",
+  "agent.spawned", "agent.result", "agent.rate_limited",
   "question.asked", "question.answered",
   "gate.requested", "gate.approved", "gate.rejected", "gate.revoked", "gate.policy_changed",
   "questions.policy_changed",

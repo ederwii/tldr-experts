@@ -151,6 +151,14 @@ export interface AgentRequest {
   readonly role?: "developer" | "reviewer" | "gate-signer";
 }
 
+/**
+ * One `rate_limit_event` frame, as the provider stated it (gh #298).
+ *
+ * The parser's own event minus its `kind`, so there is ONE shape for this fact
+ * and no second derivation of it (AGENTS.md §7).
+ */
+export type AgentRateLimit = Omit<Extract<AgentEvent, { kind: "rate-limit" }>, "kind">;
+
 export interface AgentOutcome {
   readonly ok: boolean;
   readonly exitCode: number;
@@ -209,6 +217,19 @@ export interface AgentOutcome {
   readonly permissionRefusal: string | null;
   /** Completed `Read`/`Glob`/`Grep` calls seen on the stream. */
   readonly reads: number;
+  /**
+   * The LAST quota frame this turn's stream carried, or null (gh #298).
+   *
+   * Null means "the stream said nothing about the quota", NEVER "the quota is
+   * fine". A Codex turn is always null here: `codex exec --json` carries no
+   * rate-limit event this repo has measured (AGENTS.md §10), and writing a
+   * confident `allowed` for it would be the invented value §7 forbids.
+   *
+   * The LAST rather than the first, and not summed: the provider restates the
+   * whole window on every frame — 0.92 then 0.94 across one measured turn — so
+   * the newest frame is the only one that is still true.
+   */
+  readonly rateLimit: AgentRateLimit | null;
   /** `"max_reads"` when the read cap stopped this run, else null. */
   readonly stoppedBy: string | null;
   /**
@@ -383,6 +404,10 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
   // result total of 17), so a sum would be an invented aggregate the provider
   // never published. The last frame is a figure it did publish.
   let streamedUsage: AgentUsage | null = null;
+  // The last `rate_limit_event` the provider streamed (gh #298), or null when it
+  // streamed none — which is every Codex turn and every Claude turn whose stream
+  // carried no frame.
+  let lastRateLimit: AgentRateLimit | null = null;
 
   const schemaDir = provider === "codex" ? mkdtempSync(join(tmpdir(), "tldrx-codex-schema-")) : null;
   const schemaPath = schemaDir === null ? null : join(schemaDir, "output-schema.json");
@@ -405,6 +430,13 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
             // Every usage frame the provider streams, kept so a KILLED turn can
             // still report the last one (#207). Above the read cap on purpose: a
             // frame that arrived before the cap fired is a frame that arrived.
+            // The newest quota frame, kept for the outcome (gh #298). Above the
+            // read cap for the same reason the usage frame is: a frame that
+            // arrived before the cap fired is a frame that arrived.
+            if (event.kind === "rate-limit") {
+              const { kind: _kind, ...frame } = event;
+              lastRateLimit = frame;
+            }
             if (event.kind === "cost") {
               streamedUsage = {
                 input_tokens: event.inputTokens,
@@ -460,6 +492,7 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
   const timed: AgentOutcome = {
     ...outcome,
     ...partialUsage(outcome, streamedUsage),
+    rateLimit: lastRateLimit,
     durationMs: Math.max(0, Date.now() - startedMs),
   };
   // A process that died before its `result` event never emitted `done`. Say so,
@@ -542,6 +575,10 @@ export function interpret(
     raw: stdout,
     permissionRefusal: permissionRefusal(stdout, provider),
     reads: 0,
+    // `interpret` is handed a finished buffer, and the quota frames are STREAM
+    // lines it is not asked to re-read. Only `spawnAgent`, which watched them go
+    // past, can fill this in — and it does, below.
+    rateLimit: null,
     stoppedBy: null,
     // Not measurable from here — see `AgentOutcome.durationMs`. `spawnAgent`
     // overwrites it with the span it timed; a direct caller of `interpret` (only
