@@ -147,7 +147,7 @@ export const SENSITIVE_PATH_CLASSES: readonly {
       /(^|\/)(docker-)?compose[^/]*\.ya?ml$/,
       /(^|\/)terraform\//,
       /\.(tf|tfvars|hcl)$/,
-      /(^|\/)(k8s|kubernetes|helm|deploy|deployment|deployments|manifests)\//,
+      /(^|\/)(infra|k8s|kubernetes|helm|deploy|deployment|deployments|manifests)\//,
       /(^|\/)(Pulumi|serverless|fly|render|vercel|netlify)\.(ya?ml|toml|json)$/,
       /(^|\/)Procfile$/,
     ],

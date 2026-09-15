@@ -232,6 +232,7 @@ describe("the sensitive path classes (gh #331 review)", () => {
       ["infra/terraform/main.tf", "infra"],
       ["modules/vpc.tf", "infra"],
       ["deploy/k8s/web.yaml", "infra"],
+      ["infra/notes.yaml", "infra"],
       ["package.json", "dependencies"],
       ["web/pnpm-lock.yaml", "dependencies"],
       ["go.sum", "dependencies"],
