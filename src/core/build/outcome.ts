@@ -114,6 +114,81 @@ export interface DodResult {
    * where the old citations pointed anyway.
    */
   readonly outputLine?: number;
+  /**
+   * The SECOND reading of a red command (#163) — the identical command, run once
+   * more in the same tree, so `blocked` carries the evidence that the red was
+   * reproducible.
+   *
+   * ADDITIVE and optional: absent means "not asked", which is every record
+   * written before this field existed, every green row and every refusal (a
+   * command that never ran has nothing to re-run).
+   */
+  readonly recheck?: DodRecheck;
+}
+
+/**
+ * One re-measurement of a red DoD command (#163).
+ *
+ * Measured on a .NET workspace 2026-09-05: a DoD gate returned `dotnet test →
+ * exit 2`, the operator ran the identical suite twice and got exit 0 with 2860
+ * tests and 0 failing — contention over a container runtime — and that one red
+ * had spent the story's last attempt. A flake and a defect were written down
+ * identically, and `blocked` is terminal in-run.
+ *
+ * The two shapes are the two honest answers, and only one of them carries a
+ * number (§7, absent-with-reason). `exitCode` present: the second run happened
+ * and this is what it said. `exitCode` absent: it could not be taken, and
+ * `absentBecause` says why — never a confident second number nobody measured.
+ */
+export interface DodRecheck {
+  /** The second run's exit code. Absent — and only absent — when no second run was taken. */
+  readonly exitCode?: number;
+  /** True when the second run hit the timeout (its `exitCode` is then 124, as the first's is). */
+  readonly timedOut?: boolean;
+  /** The failure-looking line of the second run, when it was red again. */
+  readonly tail?: string;
+  /** Why there is no second exit code. Present exactly when `exitCode` is absent. */
+  readonly absentBecause?: string;
+}
+
+/**
+ * Did the red reproduce? `true` measured twice red, `false` measured red then
+ * green, `null` NOT ASKED — no second run, or one that could not be taken.
+ *
+ * ONE derivation (§7): the reason sentence, the event payload and every test
+ * read reproducibility off this, never off a re-comparison of two exit codes.
+ */
+export function dodRecheckReproduced(result: Pick<DodResult, "recheck">): boolean | null {
+  const recheck = result.recheck;
+  if (recheck === undefined || recheck.exitCode === undefined) return null;
+  return recheck.exitCode !== 0 || recheck.timedOut === true;
+}
+
+/**
+ * The exported phrases the reason sentence is built from — PHRASES, not bare
+ * English words, so a test asserting one cannot false-positive on prose (§8).
+ */
+export const RECHECK_REPRODUCED_MARK = "the identical command was run again and failed again";
+export const RECHECK_NOT_REPRODUCED_MARK = "the identical command was run again and PASSED, so this red did not reproduce";
+export const RECHECK_ABSENT_MARK = "no second run was taken";
+
+/**
+ * What the second reading adds to a red row's sentence, or "" when none was
+ * asked for — one derivation, so the block reason, the story log and the
+ * handoff cannot disagree about the same two runs.
+ */
+export function dodRecheckNote(result: Pick<DodResult, "recheck" | "exitCode">): string {
+  const recheck = result.recheck;
+  if (recheck === undefined) return "";
+  if (recheck.exitCode === undefined) {
+    return ` — ${RECHECK_ABSENT_MARK}: ${recheck.absentBecause ?? "the reason was not recorded"}`;
+  }
+  const second = `${String(recheck.exitCode)}${recheck.timedOut === true ? " (timed out)" : ""}`;
+  return dodRecheckReproduced(result) === true
+    ? ` — ${RECHECK_REPRODUCED_MARK} (exit ${String(result.exitCode ?? "?")}, then ${second})`
+    : ` — ${RECHECK_NOT_REPRODUCED_MARK}`
+      + ` (exit ${String(result.exitCode ?? "?")}, then ${second}); the story is blocked on a red that was`
+      + " measured once and not the second time — read the kept output before you read the code";
 }
 
 /** True when the gate DECLINED to run this command. Absent status means it ran. */
@@ -560,7 +635,9 @@ export function dodFailureReason(result: DodResult, repo: string): string {
   // An exit 127 whose tree never had the binary is not a red test, and the
   // sentence that says so is derived in ONE place (gh #209).
   if (result.absent !== undefined && result.absent !== null) {
-    return binaryAbsentReason(result, repo, result.absent);
+    // #163: the second reading is named here too — for a 127 it is always the
+    // absent one, and saying WHY none was taken is the whole point of the field.
+    return `${binaryAbsentReason(result, repo, result.absent)}${dodRecheckNote(result)}`;
   }
   // The kept output is CITED, not inlined: this sentence is a bullet in the
   // handoff and a line on the executor's stdout, and the whole failure report
@@ -569,7 +646,10 @@ export function dodFailureReason(result: DodResult, repo: string): string {
     + `${result.timedOut ? " (timed out)" : ""} — ${result.tail}`
     + (result.outputPath === undefined
       ? ""
-      : ` [src: ${result.outputPath}:${String(result.outputLine ?? 1)}]`);
+      : ` [src: ${result.outputPath}:${String(result.outputLine ?? 1)}]`)
+    // #163: and what the SECOND reading of the same command said — appended, so
+    // a record written before the re-measure existed reads exactly as it did.
+    + dodRecheckNote(result);
 }
 
 /** One line for `run status` and the executor's stdout: `S1 done`, `S2 blocked`. */

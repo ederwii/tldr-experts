@@ -1526,6 +1526,22 @@ command, and their prose names what ran. `scope: "full"` ⇒ the declared comman
 row additionally carries `lane`, the epic branch, and `story` is the LAST story merged — the one a red blocks; a
 `check: "install"` run in the epic worktree before it carries the same `lane`. All three keys are additive.
 
+**A RED `check: "dod"` carries the SECOND reading of the same command (2026-09-15, #163, sub-fix 1).** When a
+Definition-of-Done command goes red on a story, the identical command is run once more in the same tree before the
+event is emitted, and the payload says what that second run found — `recheck_exit_code` (an integer, plus
+`recheck_timed_out: true` and `recheck_detail`, its failure-looking line, when they apply) OR `recheck_absent`, one
+sentence saying why no second run was taken. **Never both keys, never neither, and never a second exit code nobody
+measured** (§7's absent-with-reason): a command whose binary the tree never had (`absent_binary`) would only measure
+the same absence again and says so, and an error raised by the re-run is recorded verbatim. Both keys are ADDITIVE and
+absent on every green row and every refusal — a refused command never ran, so it has no first reading to reproduce —
+which is also every record written before this existed; such a record reads back with no second reading at all, and
+every reader renders that as "not asked" rather than as a reproduction. Measured on a .NET workspace 2026-09-05: a
+gate returned `dotnet test` → exit 2, the operator ran the identical suite twice by hand and got exit 0 with 2860
+tests and 0 failing — contention over a container runtime — and that one red had spent the story's last attempt.
+Nothing about terminality changes: a red that reproduces blocks exactly as it did, and a red that does NOT reproduce
+also still blocks, it is only no longer written down identically to a defect. The blocked-story reason names both
+readings in one sentence.
+
 **`check: "install"` (2026-09-09, gh #209).** Emitted once per FRESH story worktree, for a repo that declares
 `commands.install` (§2.1), before the developer is dispatched. It carries `phase`, `check: "install"`, `story`, `repo`,
 `command`, `duration_ms`, `tree: "worktree"`, `detail`, and — by the same rule the DoD row obeys — `exit_code` when the

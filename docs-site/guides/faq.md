@@ -205,6 +205,14 @@ story's worktree is removed. The story's own log, `04-build/log/<story>.md`, quo
 failure-looking lines in a fenced block and cites the file, and the `check.failed` event
 carries the same excerpt plus `output_path` and `output_bytes`.
 
+The blocked reason also tells you whether the red **reproduced**. A command that goes red on a
+story is run once more, identically, in the same tree, and both exit codes are recorded — so a
+suite that failed once because something else on the box was holding a container reads as
+"run again and PASSED" rather than as a defect. A red that does not reproduce still blocks the
+story: the second reading is evidence for the person who reopens it, not a verdict the framework
+overrides itself with. When no second run could be taken — the command's binary is not in the
+worktree, the gate refused it — the record says that, and never a second exit code nobody measured.
+
 Those files are **gitignored by default**: they hold a command's raw output, which can carry an
 `env` dump, a token in a connection string, or a stack trace with a credential. `tldrx init`'s
 managed `.gitignore` block excludes `tldrx-work/**/04-build/log/dod-output/`; the excerpt inside

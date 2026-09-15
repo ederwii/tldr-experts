@@ -516,6 +516,25 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
             ...(typeof payload.output_line === "number" ? { outputLine: payload.output_line } : {}),
           }
           : {}),
+        // #163: the SECOND reading of this red, when there was one. A pre-#163
+        // event carries neither key and comes back with no `recheck` at all —
+        // "not asked", which is the truth about every record written before the
+        // re-measure existed. A reason is never rebuilt as a number: the
+        // `recheck_absent` branch has no `exitCode`, and `dodRecheckReproduced`
+        // reads that as "not asked" rather than as a reproduction.
+        ...(typeof payload.recheck_exit_code === "number"
+          ? {
+            recheck: {
+              exitCode: payload.recheck_exit_code,
+              ...(payload.recheck_timed_out === true ? { timedOut: true } : {}),
+              ...(typeof payload.recheck_detail === "string" && payload.recheck_detail !== ""
+                ? { tail: payload.recheck_detail }
+                : {}),
+            },
+          }
+          : typeof payload.recheck_absent === "string"
+            ? { recheck: { absentBecause: payload.recheck_absent } }
+            : {}),
       });
       currentRequeue.push({
         ...(current.at(-1) as DodResult),

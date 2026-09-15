@@ -4,6 +4,28 @@
 
 ### Fixed
 
+- **A red Definition-of-Done command is measured TWICE before it pins a story `blocked`, and the
+  record carries both exit codes (#163, sub-fix 1).** MEASURED on a .NET workspace, 2026-09-05: a
+  story's DoD gate returned `dotnet test` → exit 2, so the story blocked; the operator then ran the
+  identical suite twice — in the story worktree and on the epic branch — and got exit 0 with 2860
+  tests and 0 failing. The red was contention over a container runtime, and it had consumed the
+  story's last attempt. `blocked` is terminal in-run, so a human had to reopen the story by hand.
+  The hole was not the terminality, which is a defensible rule: it was that a story's red was never
+  re-measured, so a flake and a defect were written down identically and nobody reading the block
+  could tell which one they had. The framework already did this one level up — the base-tree
+  pre-flight re-measures a command the cache cannot answer — and the story's own red had no
+  equivalent. It does now: when a command goes red on a story, the identical command runs once more
+  in the same tree, and the `check.failed` event, the story's `dod` row and the blocked reason all
+  carry what the second run said. **Nothing about terminality changes** — a red that reproduces
+  blocks exactly as before, and a red that does NOT reproduce also still blocks; it is now blocked
+  with a sentence that says the command passed the second time, which is the difference between
+  reopening the story and going looking for a bug that is not there. When no second run could be
+  taken the record says so with the reason and no number (§7): a command whose binary the tree
+  never had would only measure the same absence again, and a refused command never ran, so it has
+  no first reading to reproduce. Owner decision, answered on Slack: re-run the red command once and
+  record both exit codes. One reading per spawn, shared with the base-tree path, so the two cannot
+  disagree about what a timeout's exit code is or which line of a red suite is the summary.
+
 - **A fix-list sha that is too LONG is refused by name, instead of reading as no sha at all
   (#163, sub-fix 3).** The abbreviation edge of `Resolved: yes <sha>` was closed in 0.10.0 — a
   7-39 hex claim that verifies is rewritten to the 40 `rev-parse` returned — and the same
