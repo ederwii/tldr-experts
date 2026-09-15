@@ -135,7 +135,70 @@ export function toEnvelope(value: unknown): AgentEnvelope | null {
   const outputs = stringArray(doc.outputs);
   const questions = stringArray(doc.questions_asked);
   if (outputs === null || questions === null) return null;
-  return { outputs, questions_asked: questions, notes: typeof doc.notes === "string" ? doc.notes : "" };
+  return { outputs, questions_asked: questions, notes: readNotes(doc.notes).notes };
+}
+
+/**
+ * The ONE test for "is this array element a string the reader will keep?".
+ *
+ * `pending.ts`'s `strings()` filters `outputs`/`questions_asked` through it, and
+ * `readNotes` below filters a `notes` array through the same one — silently, in
+ * both cases: an element that fails it is simply not in what the reader returns.
+ * `tldrx next --commit --check` names those elements before the turn is spent,
+ * and it must name exactly the ones the reader drops, so it CALLS this rather
+ * than restating `typeof v === "string"` a second time (`checkDeveloper`,
+ * resultCheck.ts). One implementation per derivation: a second predicate is the
+ * only bug any of the three sides can have.
+ *
+ * It lives here, in the file that holds the schema those readers are reading
+ * against, because `envelope.ts` imports nothing — the leaf both the spawned path
+ * and the host path can reach without a cycle.
+ */
+export function isResultStringElement(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+/** What `readNotes` did, so `--check` can say it without re-deriving it. */
+export interface NotesRead {
+  /** What the reader returns for this field. */
+  readonly notes: string;
+  /** `string`: taken as written. `joined`: an array, joined. `empty`: neither. */
+  readonly kind: "string" | "joined" | "empty";
+  /** `joined` only: how many elements survived, and the indices that did not. */
+  readonly kept: number;
+  readonly dropped: readonly number[];
+}
+
+/**
+ * The ONE reader for the envelope's `notes` (gh #217).
+ *
+ * Measured on a 0.14.3 security-patch run: an in-session developer wrote `notes`
+ * as an ARRAY of strings, one per note, and both readers' `typeof … === "string"`
+ * ternaries read the whole field as `""`. A turn's stated caveats — what it could
+ * not verify, what the reviewer should look at, on that run a security patch's —
+ * vanished from `run.yml`, the story log and the handoff, and nothing on the
+ * `--commit` line said so. That record is wrong in the dangerous direction (§7):
+ * "no notes" reads as "nothing to say".
+ *
+ * An array of strings IS the notes, so it is JOINED with newlines rather than
+ * refused. The alternative — exit 1, "join them yourself" — spends the turn
+ * again over a file whose CONTENT is not in doubt, on the path that is tolerant
+ * by design (a missing `outputs` reads as `[]` here, `envelope.ts` header). What
+ * is NOT tolerable is doing it silently, so `--check` names the join and names
+ * any dropped element, through this same return value.
+ *
+ * Anything else — a number, an object, absent — still reads as `""`: absent with
+ * a reason `--check` states, never invented (§7).
+ */
+export function readNotes(value: unknown): NotesRead {
+  if (typeof value === "string") return { notes: value, kind: "string", kept: 1, dropped: [] };
+  if (Array.isArray(value)) {
+    const elements = value as unknown[];
+    const dropped = elements.flatMap((entry, index) => (isResultStringElement(entry) ? [] : [index]));
+    const kept = elements.filter(isResultStringElement);
+    return { notes: kept.join("\n"), kind: "joined", kept: kept.length, dropped };
+  }
+  return { notes: "", kind: "empty", kept: 0, dropped: [] };
 }
 
 /**
