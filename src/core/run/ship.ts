@@ -117,6 +117,7 @@ import { wideningRows } from "../build/measuredTouches.ts";
 import { latestFixlist, openFindings } from "../build/fixlist.ts";
 import { carriedReportFor, phaseDirsOf, scanStories } from "../build/carriedRows.ts";
 import { readReviewLedger } from "../build/reviewLedger.ts";
+import { reviewNeverCompleted } from "../build/outcome.ts";
 import { installCommandFor } from "../build/worktreeDeps.ts";
 import { isAllowedDodCommand, lastMeaningfulLine, splitArgv } from "../../hooks/lib/story.ts";
 import { validateStoryFile } from "../schemas/story.ts";
@@ -336,6 +337,48 @@ export async function shipRun(options: ShipOptions): Promise<ShipOutcome> {
           : `\`tldrx story reopen <id> --note "<why>"\` for each`)
         + ") and re-run Build so a verdict that stands lands over it,",
       "  or open the PR by hand if you mean to ship the branch as it stands.",
+    ]);
+  }
+
+  // A MERGED DIFF NOBODY JUDGED (gh #311) — #282's sibling.
+  //
+  // #282 above covers the reviewer who READ the diff and rejected it. Three
+  // settle paths park a story at `review` with `merged: true` beside a verdict
+  // that is not a verdict at all: the reviewer refused for want of money and
+  // never spawned (#289), the run cancelled before the review (#305) — both
+  // `n-a` — and a reviewer that FAILED mid-read (`error`). The ledger already
+  // names the class in those words (`reviewLedger.ts` on `lastMerge`: "`n-a` and
+  // `error` mean nothing did"), and `reviewNeverCompleted` is the ONE predicate
+  // for it (§7): the as-is path reads it to re-run the review instead of a
+  // developer, and this reads the same one rather than re-listing the verdicts.
+  //
+  // Separate from #282's line and not folded into its predicate, because the
+  // REMEDY differs and a refusal that names the wrong one sends the operator to
+  // the wrong verb: a rejection is a story to reopen and build again, while an
+  // unjudged merge is a review still owed — `tldrx next` settles a story parked
+  // at `review` by re-running the REVIEW, with no developer spawned.
+  //
+  // Family 2, like #282: what is missing is a GATE. The review is a check
+  // (`check.failed check:review` is emitted for the cancelled path by name), and
+  // no check ever ran over this diff — one of the three causes is literally the
+  // money refusal (#289), which is the other half of that family's sentence.
+  const unjudged = unjudgedOnEpic(store.runDir, stories, view);
+  if (unjudged.length > 0) {
+    const ids = unjudged.map((row) => row.id);
+    return refuse([
+      `${store.runId} carries a story whose merged diff nobody judged, and it is on \`${branch}\``,
+      ...unjudged.map((row) =>
+        `  ${row.id} — its last merge into the epic (commit ${row.commit.slice(0, 7)} over epic base `
+        + `${row.epicBase.slice(0, 7)}) settled under \`${row.verdict}\`, which is no verdict`
+        + `${row.reason === null ? "" : `: ${row.reason}`}`),
+      "  A story merges into the epic BEFORE its review, so a review that never ran leaves the diff on the branch",
+      "  with nothing having read it: `n-a` is a reviewer that was never spawned (cancelled run, or refused for",
+      "  want of money) and `error` is one that died mid-read.",
+      `  A PR over \`${branch}\` would carry that code, and its body would list ${ids.join(", ")} under "Not done"`,
+      "  without saying the diff is there.",
+      "  Re-run the review: `tldrx next` settles a story parked at `review` with the REVIEW, not a new developer",
+      "  (one refused for want of money needs the stage's `budget_usd` raised first, which the Build's own",
+      "  refusal names). Or open the PR by hand if you mean to ship a diff nobody judged.",
     ]);
   }
 
@@ -1474,6 +1517,47 @@ function rejectedOnEpic(
       id: story.id,
       commit: merge.commit,
       epicBase: merge.epicBase,
+      reason: view?.unfinished.find((row) => row.id === story.id)?.reason ?? null,
+    });
+  }
+  return rows;
+}
+
+/**
+ * A story that is not `done` whose LAST merge into the epic settled under a
+ * verdict that judged NOTHING (gh #311) — the unjudged diff is on the branch.
+ *
+ * Same shape and same read as `rejectedOnEpic`, one predicate apart:
+ * `reviewNeverCompleted` (`outcome.ts`) is the single place that decides which
+ * verdicts mean "no reviewer's opinion exists", so this line and the as-is path
+ * cannot come to disagree about `n-a` and `error` (§7, one implementation per
+ * derivation). `verdict` travels into the refusal rather than being re-derived
+ * there: the two mean different things to an operator — never spawned versus
+ * died mid-read — and the sentence has to be able to say which one happened.
+ */
+interface UnjudgedOnEpic {
+  readonly id: string;
+  readonly commit: string;
+  readonly epicBase: string;
+  readonly verdict: string;
+  readonly reason: string | null;
+}
+
+function unjudgedOnEpic(
+  runDir: string,
+  stories: readonly ShipStory[],
+  view: StoriesView | null,
+): readonly UnjudgedOnEpic[] {
+  const rows: UnjudgedOnEpic[] = [];
+  for (const story of stories) {
+    if (story.status === "done") continue;
+    const merge = readReviewLedger(runDir, story.id).lastMerge;
+    if (merge === null || !reviewNeverCompleted(merge.verdict)) continue;
+    rows.push({
+      id: story.id,
+      commit: merge.commit,
+      epicBase: merge.epicBase,
+      verdict: merge.verdict,
       reason: view?.unfinished.find((row) => row.id === story.id)?.reason ?? null,
     });
   }

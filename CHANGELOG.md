@@ -4,6 +4,26 @@
 
 ### Fixed
 
+- **`tldrx ship` refuses an epic carrying a merged diff NOBODY judged, instead of opening a PR over
+  it (#311).** #282 closed the case where a reviewer read a story's diff and said `changes` — a
+  rejection that stands, with the rejected code on the epic branch. It left the sibling open: three
+  settle paths park a story at `review` with `merged: true` beside a verdict that is not an opinion
+  about anything. The reviewer was refused for want of money and never spawned (#289) or the run was
+  cancelled before the review (#305), both recorded `n-a`; or the reviewer died mid-read, recorded
+  `error`. The run's own ledger already said what that class means — "`n-a` and `error` mean nothing
+  did [judge it]" — and `ship` asked it nothing: with one story `done` beside the parked one, #210's
+  refusal does not fire, #282's predicate does not match, and the PR opens with an unread diff in it
+  while the body lists that story under `## Not done` without one word that its code is in the diff.
+  Under `--ship merge` that body is read by nobody before auto-merge arms. It is now a refusal of its
+  own (exit 2, the family #282 uses: what is missing is a gate, and one of the three causes is
+  literally the money refusal), reading the SAME predicate the as-is path reads — `reviewNeverCompleted`,
+  not a second list of verdicts to fall out of step. It is a separate line rather than a widening of
+  #282's, because the REMEDY differs and a refusal that names the wrong verb sends the operator to the
+  wrong place: a rejection is a story to reopen and build again, while an unjudged merge is a review
+  still owed, and `tldrx next` settles a story parked at `review` by re-running the review with no
+  developer spawned. The line says which of the two non-verdicts it was, never just "unjudged": never
+  spawned and died mid-read are different problems with different next steps.
+
 - **A red Definition-of-Done command is measured TWICE before it pins a story `blocked`, and the
   record carries both exit codes (#163, sub-fix 1).** MEASURED on a .NET workspace, 2026-09-05: a
   story's DoD gate returned `dotnet test` → exit 2, so the story blocked; the operator then ran the

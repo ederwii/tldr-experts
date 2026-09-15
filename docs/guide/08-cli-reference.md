@@ -1581,6 +1581,32 @@ diff never merged — DoD red, a conflict, a developer that died — has nothing
 parked at `review` under a *signed* fix list ships, with its findings listed under
 `## Open findings`. `--dry-run` is refused in the same words.
 
+**And it refuses an epic carrying a merged diff nobody judged** — exit `2` as well (#311). The
+refusal above is about a reviewer that read the diff and said no; this one is about the three
+ways a story's diff reaches the epic with *no* reviewer's opinion over it at all. The reviewer
+was refused for want of money and never spawned (#289), or the run was cancelled before the
+review (#305) — both recorded as `n-a` — or the reviewer died mid-read, recorded as `error`.
+Each parks the story at `review` with its code merged, and the run's own ledger already says
+what that means: `n-a` and `error` mean nothing judged it. The remedy is not the one above,
+which is why it is its own sentence — the diff is not rejected, the review is still *owed*:
+
+```
+260909-scoring carries a story whose merged diff nobody judged, and it is on `epic/scoring`
+  S5 — its last merge into the epic (commit 7fd2468 over epic base 48f8bdd) settled under `error`, which is no verdict: the reviewer FAILED and returned no verdict — …
+  A story merges into the epic BEFORE its review, so a review that never ran leaves the diff on the branch
+  with nothing having read it: `n-a` is a reviewer that was never spawned (cancelled run, or refused for
+  want of money) and `error` is one that died mid-read.
+  A PR over `epic/scoring` would carry that code, and its body would list S5 under "Not done"
+  without saying the diff is there.
+  Re-run the review: `tldrx next` settles a story parked at `review` with the REVIEW, not a new developer
+  (one refused for want of money needs the stage's `budget_usd` raised first, which the Build's own
+  refusal names). Or open the PR by hand if you mean to ship a diff nobody judged.
+```
+
+Every verdict a reviewer actually returned — `approve`, `changes`, `fixlist` — is an opinion
+and is not this case; a story whose diff never merged has nothing to refuse. `--dry-run` is
+refused in the same words.
+
 **It will not open a PR over a stale or red epic** — exit `2` (#315). Four PRs `ship` opened
 in one audit window came back red and needed a person: an epic cut from a `main` that had since
 moved, and checks that failed on the tree the PR really merges. So, per repo, before anything is
