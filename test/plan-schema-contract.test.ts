@@ -38,6 +38,7 @@ import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 import {
   PLAN_CONTRACT_HEADING, planContractExamples, renderPlanSchemaContract, STORY_OPTIONAL_KEYS,
 } from "../src/core/plan/schemaContract.ts";
+import { PLAN_SHAPE_RULES, WAVE_CAP_REASON_KEY } from "../src/core/plan/planShape.ts";
 
 // The #71 block spawns a real `bun bin/tldrx.ts` per case.
 setDefaultTimeout(spawnTestTimeout());
@@ -563,5 +564,47 @@ describe("the contract tells the agent how to COMPLETE `touches` (#132)", () => 
   test("the `touches` row points at the checklist rather than restating it", () => {
     const row = renderPlanSchemaContract().split("\n").find((line) => line.startsWith("| `touches` |"));
     expect(row ?? "(no `touches` row)").toContain("Completing");
+  });
+});
+
+/**
+ * Every prose field the per-item character cap bounds states it IN ITS OWN ROW,
+ * generated from `MAX_ITEM_CHARS`, with what to do instead (#328). A field run
+ * still wrote a 683-character `test_plan` item, and `wave_cap_reason` — held to
+ * the same cap at the gate — had no cap anywhere the Plan agent reads it.
+ */
+describe("the per-item character cap is stated where each capped field is described (#328)", () => {
+  function row(key: string): string {
+    return renderPlanSchemaContract().split("\n").find((line) => line.startsWith(`| \`${key}\` |`)) ?? `(no \`${key}\` row)`;
+  }
+
+  for (const key of ["acceptance", "test_plan"]) {
+    test(`the \`${key}\` row states the cap and says to split an item rather than lengthen it`, () => {
+      expect(row(key)).toContain(`at most ${String(MAX_ITEM_CHARS)} characters per item`);
+      expect(row(key)).toContain("one sentence");
+      expect(row(key)).toContain("split");
+    });
+  }
+
+  test("the Plan-shape rule that introduces `wave_cap_reason` states its cap", () => {
+    const rule = PLAN_SHAPE_RULES.find((r) => r.text.includes(WAVE_CAP_REASON_KEY))?.text ?? "(no rule names it)";
+    expect(rule).toContain(`at most ${String(MAX_ITEM_CHARS)} characters`);
+    expect(rule).toContain("one sentence");
+    expect(renderPlanSchemaContract()).toContain(rule);
+  });
+
+  test("the Caps list names `wave_cap_reason` beside the per-item character cap", () => {
+    const caps = renderPlanSchemaContract().split("\n").find((line) => line.startsWith(`- **${String(MAX_ITEM_CHARS)}** — `)) ?? "(no line)";
+    expect(caps).toContain(`\`${WAVE_CAP_REASON_KEY}\``);
+  });
+
+  test("neither source file types the number: it comes from the constant", () => {
+    for (const rel of ["src/core/plan/schemaContract.ts", "src/core/plan/planShape.ts"]) {
+      // Code only: a comment may cite the cap a past run tripped, as history.
+      const source = readFileSync(join(FRAMEWORK_ROOT, rel), "utf8").split("\n")
+        .filter((line) => !/^\s*(\*|\/\*\*|\/\/)/.test(line)).join("\n");
+      expect(`${rel}: ${source.includes(String(MAX_ITEM_CHARS)) ? "types the cap" : "reads the constant"}`)
+        .toBe(`${rel}: reads the constant`);
+    }
   });
 });

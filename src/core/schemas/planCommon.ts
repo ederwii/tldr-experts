@@ -114,8 +114,10 @@ export function requireStringList(
     if (item.length > MAX_ITEM_CHARS) {
       issues.push({
         path: at,
-        message: `${item.length} characters exceeds the ${MAX_ITEM_CHARS}-character cap on one list item `
-          + "— split it into several items",
+        // Length, cap and instruction FIRST and short (#328): a failed check's detail
+        // reaches the retry prompt squeezed to one line with its middle elided, and
+        // the old sentence lost "split it" to the ellipsis on a real plan.
+        message: `${item.length} characters (cap ${MAX_ITEM_CHARS}) — split it into several items`,
       });
     }
     if (rules.pattern !== undefined && !rules.pattern.test(item)) {
