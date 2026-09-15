@@ -6,6 +6,7 @@ import { parseYaml } from "../src/core/yaml.ts";
 import { EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../src/cli/exitCodes.ts";
 import { asRunBudget, validateRunBudget, type RunBudget } from "../src/core/budget/RunBudget.ts";
 import { buildBudgetView, raiseCommand, renderBudget, shortBy } from "../src/core/budget/budgetView.ts";
+import { retrySizing, wouldExceed } from "../src/core/budget/wouldExceed.ts";
 import { describeRaise, raiseBudget, BudgetRaiseError } from "../src/core/budget/raiseBudget.ts";
 import { renderAttempts, stageAttempts } from "../src/core/run/attempts.ts";
 import { asRunFile, type RunFile } from "../src/core/run/RunFile.ts";
@@ -430,5 +431,78 @@ describe("budget raise --stage moves the knob that caps the spawn (#244)", () =>
     expect(bad.code).toBe(EXIT_USAGE);
     expect(readFileSync(join(runDir, "budget.yml"), "utf8")).toBe(budgetBefore);
     expect(readFileSync(join(runDir, "run.yml"), "utf8")).toBe(runBefore);
+  });
+});
+
+describe("a phase that cannot hold a retry of its own stage (#232)", () => {
+  // The shape `run new` wrote BEFORE #170 sized a phase at `attempts ×` its
+  // stage: every phase ceiling equals ONE attempt of the stage it holds. Nothing
+  // is spent and no phase is finished, so #330's rebalance has no slack to move
+  // and the ceilings are what the run will live with. `attempts` is the shipped
+  // default (2) — the run declares a retry it cannot pay for.
+  const ONE_ATTEMPT: RunBudget = asRunBudget({
+    version: 1, run: "260901-legacy", ceiling_usd: 9, per_agent_max_usd: 3,
+    warn_at_pct: 80, on_exceed: "block",
+    phases: [
+      { id: "01-what", ceiling_usd: 2, spent_usd: 0 },
+      { id: "05-watch", ceiling_usd: 4, spent_usd: 0 },
+    ],
+  });
+  const LEGACY: RunFile = asRunFile({
+    version: 1, run: "260901-legacy", title: "A run older than #170", scope: "feature",
+    workflow: "feature", repos: ["lab"], created_at: null, updated_at: "2026-09-01T09:00:00Z",
+    status: "ready", cursor: { phase: "01-what", stage: "what", task: null },
+    budget: { ceiling_usd: 9, spent_usd: 0, per_agent_max_usd: 3 },
+    phases: [
+      { id: "01-what", status: "ready", stages: [stage("what", "ready", 2)] },
+      { id: "05-watch", status: "pending", stages: [stage("watch", "pending", 4)] },
+    ],
+  });
+
+  test("the refusal it ends in is arithmetically correct — there is no money to find", () => {
+    // The mechanism, so the warning below is not a guess: one cent of spend in a
+    // phase sized for exactly one attempt puts every retry out of reach, forever.
+    const spent = {
+      ...ONE_ATTEMPT,
+      phases: ONE_ATTEMPT.phases.map((p) => (p.id === "01-what" ? { ...p, spent_usd: 0.01 } : p)),
+    };
+    const decision = wouldExceed(spent, "01-what", 2);
+    expect(decision.exceeds).toBe(true);
+    expect(decision.blocked).toBe(true);
+    expect(decision.remaining).toBe(1.99);
+  });
+
+  test("`budget show` says so BEFORE the money is spent, and does not call it ok", () => {
+    const view = buildBudgetView(LEGACY, ONE_ATTEMPT);
+    expect(view.phases.map((p) => [p.id, p.retry_sizing, p.retry_short_by_usd])).toEqual([
+      ["01-what", "one-attempt-only", 2],
+      ["05-watch", "one-attempt-only", 4],
+    ]);
+    const text = renderBudget(view);
+    // The whole defect in one assertion: nothing was blocked yet, so the old
+    // table said `ok` on both rows and the operator learned otherwise at the
+    // refusal. `next` is not blocked — the warning is about SIZE, not remainder.
+    expect(view.blocked).toBeNull();
+    expect(text).toContain("holds one attempt");
+    expect(text).toContain("tldrx budget raise 05-watch 4.00 --run 260901-legacy");
+    expect(text).not.toMatch(/watch\s+\$4\.00\s+ok$/m);
+  });
+
+  test("a phase sized for the attempts its stage declares is not flagged", () => {
+    // 02-how holds $3 × 2 in a $7 ceiling. The guard that keeps this from firing
+    // on every run: the answer is about the DECLARED one-attempt figure and the
+    // stage's own `attempts`, not about how much is left.
+    const view = buildBudgetView(RUN, BUDGET);
+    expect(view.phases.find((p) => p.id === "02-how")?.retry_sizing).toBe("holds");
+    // A terminal phase runs nothing, so there is nothing to size — never a verdict.
+    expect(view.phases.find((p) => p.id === "01-what")?.retry_sizing).toBe("not-evaluable");
+  });
+
+  test("`attempts: 1` is policy, not a trap: one attempt's worth is the right size", () => {
+    expect(retrySizing(4, 4, 1).sizing).toBe("holds");
+    expect(retrySizing(4, 4, 2).sizing).toBe("one-attempt-only");
+    expect(retrySizing(8, 4, 2).sizing).toBe("holds");
+    // No declared one-attempt figure is not a pass — it is a refusal to judge.
+    expect(retrySizing(4, 0, 2).sizing).toBe("not-evaluable");
   });
 });

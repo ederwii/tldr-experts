@@ -26,6 +26,24 @@
   did not before — the file would have named the 41-character token while the report a human reads
   first said `named no commit to point at`, which is two records of one event disagreeing.
 
+- **`budget show` says a phase cannot afford its own retry BEFORE the money is spent, instead of
+  labelling it `ok` up to the refusal (closes #232).** A phase whose ceiling equals ONE attempt of
+  its stage refuses every retry after the first cent — by arithmetic, not by policy — and the
+  framework's own remedy for a failed stage ("cost is recorded, not refunded — retry with `tldrx
+  next`") is exactly what it then refuses. Measured twice in one run, and on a second workspace in
+  the LAST phase, where every dollar has already gone. `run new` has sized phases at `attempts ×`
+  their stage since #170 so it can no longer be created, and #330's rebalance reaches it only when
+  some FINISHED phase has slack to give — with none, the run stops at exit 2, the one exit nothing
+  unattended can leave. The `next` column now answers the SIZE question in its own word: `NO-RETRY`
+  with the exact raise, and `n/e` for a phase there is nothing to size in. The verdict reads the
+  stage's DECLARED `budget_usd` and its own `attempts:`, never the derived estimate beside it —
+  #232's own comments measured why: on a partly unmetered run the estimate is too small, so
+  `ceiling / est.` reports headroom that is not there, and the less a run is metered the safer that
+  ratio claims it is. A declaration does not move with metering. `attempts: 1` declares no retry, so
+  one attempt's worth is the right size for it and still reads `ok`. Nothing about the refusal moved:
+  `blocked`, `remaining` and `est.` are untouched and `tldrx next` still runs. One derivation
+  (`retrySizing`, `budget/wouldExceed.ts`), read back additively by `budget show --json`.
+
 - **A killed headless turn reads as `interrupted` and is handed a command the next line of code
   accepts, instead of being called a `--prepare` bundle that never existed (closes #246, half
   one).** MEASURED on a 0.16.1 field run: the `tldrx` process driving `run auto` died

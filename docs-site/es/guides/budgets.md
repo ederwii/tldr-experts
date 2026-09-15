@@ -114,6 +114,38 @@ rebasa una autorización registrada, y deja un `budget.raised` por fase donante 
 `source: run auto --rebalance-finished` y tu nombre. Si todas las fases terminadas juntas no cubren
 el faltante, no se mueve nada y el rechazo dice cuánto falta todavía.
 
+### Una fase que no puede pagar su propio reintento
+
+Una fase cuyo techo equivale a **un** intento de su etapa rechaza todo reintento después del
+primer centavo gastado —por aritmética, no por política. `tldrx run new` dimensiona cada fase
+en `attempts ×` su etapa desde gh #170, así que ya no puede crear una; un run creado antes la
+arrastra de por vida, y el dinero de una fase dimensionada así se gasta antes de que alguien se
+entere. La columna `next` ahora lo dice primero (gh #232):
+
+```
+  phase       ceiling      spent       left  next stage       est.  next
+> 04-build    $787.87      $1.43    $786.44  build          $71.00  NO-RETRY
+  05-watch    $175.08      $0.00    $175.08  watch         $175.08  NO-RETRY
+
+NO-RETRY: phase 05-watch holds one attempt of `watch` ($175.08) and that stage declares
+attempts: 2, so it must hold $350.16. The first failed attempt spends money the retry cannot
+then find, and a run that cannot retry stops where nothing unattended can restart it. Size it
+now:
+  tldrx budget raise 05-watch 175.08 --run <id>
+```
+
+El veredicto se mide contra el `budget_usd` **declarado** de la etapa y su propio `attempts:`,
+nunca contra la columna `est.` de al lado. En un run cuyos turnos están parcialmente sin medir
+la estimación queda corta, así que `ceiling / est.` reporta un margen que no existe: mientras
+menos medido está un run, más seguro lo declara esa razón. Una declaración no se mueve con la
+medición. `attempts: 1` es una decisión de que la etapa no tiene reintento, así que un techo
+que sostiene exactamente uno es el tamaño correcto para ella y dice `ok`. Una fase sin etapas
+por correr dice `n/e`: no hay nada que dimensionar, y callar no es lo mismo que decir que está
+bien.
+
+Es una advertencia, nunca un rechazo: `tldrx next` sigue corriendo, y la línea de "todo en
+orden" dice cuántas fases la arrastran.
+
 ## Las tres perillas, y cuál limita a un sub-agente
 
 Un `raise` como el de arriba mueve el **techo de la fase**, y un techo de fase decide una sola

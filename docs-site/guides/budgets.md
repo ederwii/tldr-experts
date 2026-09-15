@@ -107,6 +107,37 @@ records one `budget.raised` per donor with `source: run auto --rebalance-finishe
 If every finished phase together cannot cover the shortfall, nothing moves and the refusal says
 how short it still is.
 
+### A phase that cannot afford its own retry
+
+A phase whose ceiling equals **one** attempt of its stage refuses every retry after the first
+cent of spend — by arithmetic, not by policy. `tldrx run new` has sized every phase at
+`attempts ×` its stage since gh #170, so it cannot create one; a run created before that keeps
+it for life, and the money in a phase sized that way is spent before anyone finds out. The
+`next` column now says so first (gh #232):
+
+```
+  phase       ceiling      spent       left  next stage       est.  next
+> 04-build    $787.87      $1.43    $786.44  build          $71.00  NO-RETRY
+  05-watch    $175.08      $0.00    $175.08  watch         $175.08  NO-RETRY
+
+NO-RETRY: phase 05-watch holds one attempt of `watch` ($175.08) and that stage declares
+attempts: 2, so it must hold $350.16. The first failed attempt spends money the retry cannot
+then find, and a run that cannot retry stops where nothing unattended can restart it. Size it
+now:
+  tldrx budget raise 05-watch 175.08 --run <id>
+```
+
+The verdict is measured against the stage's **declared** `budget_usd` and its own `attempts:`,
+never against the `est.` column beside it. On a run whose turns are partly unmetered the
+estimate is too small, so `ceiling / est.` reports headroom that is not there — the less a run
+is metered, the safer that ratio claims it is. A declaration does not move with metering.
+`attempts: 1` is a decision that the stage gets no retry, so a ceiling holding exactly one is
+the right size for it and reads `ok`. A phase with no stage left to run reads `n/e`: there is
+nothing to size, and saying nothing is not the same as saying it is fine.
+
+It is a warning, never a refusal — `tldrx next` still runs, and the all-clear line says how
+many phases are carrying it.
+
 ## The three knobs, and which one caps a sub-agent
 
 A raise like the one above moves the **phase ceiling**, and a phase ceiling decides one thing:

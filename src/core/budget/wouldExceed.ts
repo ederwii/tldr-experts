@@ -6,6 +6,72 @@
  */
 import { hostTokenCeiling, type RunBudget } from "./RunBudget.ts";
 import { STAGE_TUNING_DEFAULTS } from "../schemas/stageTuning.ts";
+import { shortBy } from "../build/caps.ts";
+
+/**
+ * Whether a phase ceiling is big enough to hold the retries its stage is granted
+ * (gh #232). Three answers, never two — `not-evaluable` is a refusal to judge,
+ * not a pass.
+ */
+export type RetrySizing = "holds" | "one-attempt-only" | "not-evaluable";
+
+export interface RetrySizingDecision {
+  readonly sizing: RetrySizing;
+  readonly attempts: number;
+  /** The stage's DECLARED `budget_usd` — what ONE attempt costs. */
+  readonly oneAttemptUsd: number;
+  /** `attempts × oneAttemptUsd`: what the phase must hold. 0 when not evaluable. */
+  readonly holdsUsd: number;
+  /** What the ceiling is short of `holdsUsd`, rounded UP to the cent. 0 otherwise. */
+  readonly shortByUsd: number;
+}
+
+/**
+ * Since #170 `run new` sizes a phase at `attempts ×` its stage, so this can no
+ * longer be CREATED. It survives in every run file written before that (and in
+ * any hand-edited one), and there it is permanent: a phase whose ceiling equals
+ * one attempt of its stage refuses every retry after the first cent of spend,
+ * by arithmetic rather than by policy. Measured twice in one run on issue #232,
+ * and again on a second workspace where it was the LAST phase — the worst place
+ * to find it. #330's rebalance mitigates it only when some FINISHED phase has
+ * slack to give; with none, nothing moves and the run is stuck at exit 2, which
+ * is the one exit nothing unattended can leave.
+ *
+ * So this is a WARNING about size, not a refusal about remainder — it is true
+ * before a cent is spent, which is the only time it is free to fix.
+ *
+ * **It reads the DECLARED one-attempt figure, never a derived or metered one**,
+ * and that is the whole design. #232's own comments measured the trap in the
+ * obvious instrument: on a partly-unmetered run the estimate is too small, so
+ * `ceiling / estimate` reports headroom that is not there — the less a run is
+ * metered, the safer the ratio claims it is. `budget_usd` is a declaration on
+ * the stage; it is exactly as knowable on an unmetered run as on a metered one,
+ * so this answer never depends on how much of the run was priced.
+ *
+ * `attempts: 1` is a declaration that this stage gets no retry, so a ceiling
+ * holding one attempt is the RIGHT size for it, not a trap — it holds.
+ */
+export function retrySizing(
+  ceilingUsd: number,
+  oneAttemptUsd: number,
+  attempts: number = STAGE_TUNING_DEFAULTS.attempts,
+): RetrySizingDecision {
+  const wanted = Math.max(1, attempts);
+  // No declared figure ⇒ nothing to multiply. Saying "holds" here would be the
+  // confident-ok §7 forbids: absent-with-reason instead.
+  if (!(oneAttemptUsd > 0)) {
+    return { sizing: "not-evaluable", attempts: wanted, oneAttemptUsd, holdsUsd: 0, shortByUsd: 0 };
+  }
+  const holdsUsd = round(oneAttemptUsd * wanted);
+  const short = holdsUsd > ceilingUsd ? shortBy(holdsUsd, ceilingUsd) : 0;
+  return {
+    sizing: short > 0 ? "one-attempt-only" : "holds",
+    attempts: wanted,
+    oneAttemptUsd,
+    holdsUsd,
+    shortByUsd: short,
+  };
+}
 
 export function totalSpent(budget: RunBudget): number {
   return budget.phases.reduce((sum, p) => sum + p.spent_usd, 0);

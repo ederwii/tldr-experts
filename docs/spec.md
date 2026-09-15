@@ -2735,6 +2735,21 @@ every stage `done`/`skipped`, none stale, `metered-usd`, no unmetered row), `unc
 refusal names the `--take-from` move(s) that would cover the shortfall when finished phases can. The refusal prints the sum term by term — `remaining work: S4 dev $1.50 + reviewer $1.00 = $2.50` — and
 `tldrx budget show`'s `est.` column is computed by the same function, so the two cannot disagree.
 
+**A phase that cannot hold its own retry (gh #232).** `budget show`'s `next` column answers a SIZE question as well as
+the remainder one, and they are different words. A phase whose ceiling is below `attempts ×` the next stage's DECLARED
+`budget_usd` reads **`NO-RETRY`** where it used to read `ok`: the first failed attempt spends money the retry can then
+never find, permanently, and the operator used to learn it at the refusal — twice in one measured run, and on a second
+workspace in the LAST phase. `run new` has sized phases at `attempts ×` since gh #170 (`planBudget`), so this can no
+longer be created; it survives in every run file written before that, where #330's rebalance reaches it only if some
+FINISHED phase has slack. The verdict is a warning, not a refusal — `blocked`, `remaining` and the `est.` column are
+untouched and `tldrx next` still runs. One derivation, `retrySizing` (`budget/wouldExceed.ts`), and `budget show --json`
+carries it as `retry_sizing` / `retry_short_by_usd` / `retry_holds_usd` / `retry_attempts` (additive; the dashboard model
+version does not move). It reads the DECLARED figure and never the derived estimate beside it, because on a partly
+unmetered run the estimate is too small and `ceiling / est.` then reports headroom that is not there — the less a run is
+metered, the safer that ratio claims it is. `attempts: 1` declares no retry, so one attempt's worth is the RIGHT size and
+reads `ok`; a phase with no stage left to run, or one whose stage declares no budget, reads **`n/e`** — absent-with-reason
+(§7), never a pass.
+
 **Both economies, and who is driving (issue #22).** The hook reads its run through the tolerant reader
 (`hooks/lib/runFile.ts`), and that reader skipped `tasks[]` and `attended_by:` entirely — so a run whose turns a host
 session paid for reported `$0.00` metered and nothing else, and neither the hook nor the status line could tell "nobody
