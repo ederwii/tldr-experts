@@ -22,7 +22,7 @@ import { RunStore } from "../run/RunStore.ts";
 import { isAttendedByHost, isTerminal, type GateType, type RunFile, type RunPhase, type RunStage, type RunTask } from "../run/RunFile.ts";
 import { runChecks, runPrecondition, type PreconditionOutcome } from "../run/checks.ts";
 import { approve } from "../run/gates.ts";
-import { AUTO_GATE_ACTOR, AUTO_GATE_RETRY_ACTOR, evaluateAutoGate, heldBy, unreadableHeadings } from "../run/autoGate.ts";
+import { AUTO_GATE_ACTOR, AUTO_GATE_RETRY_ACTOR, evaluateAutoGate, heldBy, unreadableHeadings, warningLinesOf } from "../run/autoGate.ts";
 import {
   describeAgentFallthroughs, evaluateAgentGate, type AgentGateInput, type AgentGateVerdict,
 } from "../run/agentGate.ts";
@@ -2266,6 +2266,10 @@ async function finishStage(
       // seven conditions were checked and none of them held it" — the opposite of
       // "nothing looked". Absent with a reason, per AGENTS.md §7.
       ...(autoVerdict === null ? {} : { why: autoVerdict.why, held_by: heldBy(autoVerdict) }),
+      // gh #331: the conditions that did not hold but only WARN an auto gate
+      // (`boundary`). Additive, and present only when non-empty, so every gate
+      // without a warning appends the payload it always did.
+      ...(autoVerdict === null || autoVerdict.warnedBy.length === 0 ? {} : { warned_by: autoVerdict.warnedBy }),
     }));
     store.save();
     const doneLine =
@@ -2370,6 +2374,10 @@ async function finishStage(
     if (autoVerdict !== null) {
       const verdict = autoVerdict;
       let why = verdict.why;
+      // gh #331: a warning is said on its OWN line, on both exits — the note already
+      // carries it, but a note is one long line and a warning buried in it is the
+      // silence this change must not buy. Empty when nothing warned.
+      const warningLines = warningLinesOf(verdict);
       if (verdict.ok) {
         // Through the SAME door a person uses: `approve` re-runs the checks off
         // disk, records `by`/`at`/`note`, appends gate.approved + stage.done and
@@ -2385,6 +2393,7 @@ async function finishStage(
             ...notes,
             `${doneLine} · auto-approved`,
             ...storyNote,
+            ...warningLines,
             `  ${verdict.note}`,
             approved.advancedTo === null
               ? `run ${store.runId} is finished`
@@ -2399,6 +2408,7 @@ async function finishStage(
         doneLine,
         ...storyNote,
         `auto gate not taken — ${why}`,
+        ...warningLines,
         `gate pending: tldrx approve`,
       ]);
     }

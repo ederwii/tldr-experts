@@ -35,6 +35,23 @@ import { findingStatus } from "../build/handoff.ts";
 import type { FixFinding } from "../build/fixlist.ts";
 import type { CarriedRow, UnreadableStory } from "../build/carriedRows.ts";
 
+/**
+ * The heading of the section that lists what left the declared surface (gh #331).
+ * Exported so a test asserts the marker, not a bare English phrase (AGENTS.md §8).
+ */
+export const OUTSIDE_SCOPE_HEADING = "## Outside declared scope \u2014 review these";
+
+/**
+ * Paths outside the declared surface, grouped by the story whose own measured diff
+ * named them (gh #331). `story` is null for the paths no story's measured widening
+ * names — listed all the same, under a line that says so.
+ */
+export interface OutsideScopeRow {
+  readonly story: string | null;
+  /** `repo:path`, as `evaluateBoundary` names them. */
+  readonly paths: readonly string[];
+}
+
 /** One open fix-list finding, with the file it is still open in. */
 export interface OpenFindingRow {
   /** Run-relative path of the fix list — every bullet cites its own. */
@@ -87,6 +104,16 @@ export interface ShipBodyParts {
    * the ratio before the list — the list alone reads like the whole plan.
    */
   readonly outcome: string | null;
+  /**
+   * What the branch changed outside the run's declared surface (gh #331), from
+   * `run/boundary.ts` `evaluateBoundary` — NEVER re-derived here — grouped per story
+   * by the caller. An `auto` Build gate no longer stops on these, so this section is
+   * where a person meets them: in review, after the fact, by name.
+   *
+   * Absent or empty leaves the section out: the boundary measured nothing outside,
+   * or could not measure at all, and neither is a list to review.
+   */
+  readonly outsideScope?: readonly OutsideScopeRow[];
 }
 
 /** `## Findings` in a handoff: one bullet per story, with its status in it. */
@@ -149,6 +176,21 @@ export function renderShipBody(parts: ShipBodyParts): string {
       ...parts.unreadableStories.map((row) =>
         `- a story file could not be read, so its carried findings were not checked: `
         + `\`${row.rel}\` — ${row.reason}`),
+      "",
+    );
+  }
+
+  const outside = parts.outsideScope ?? [];
+  if (outside.length > 0) {
+    lines.push(
+      OUTSIDE_SCOPE_HEADING,
+      "",
+      "Paths this branch changed that no story's `touches:` and no What/How citation declared.",
+      "An `auto` gate does not stop on them — a reviewer decides whether they belong:",
+      "",
+      ...outside.map((row) =>
+        `- ${row.story === null ? "no story's measured diff names these" : row.story}: `
+        + row.paths.map((path) => `\`${path}\``).join(", ")),
       "",
     );
   }

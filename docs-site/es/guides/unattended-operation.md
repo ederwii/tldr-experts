@@ -173,7 +173,8 @@ en disco, y la rama epic que cortó se libera para el siguiente run de la misma 
 Lo que esta receta demuestra es que el *motor* puede llevar un cambio pequeño y bien
 sembrado hasta un PR sin nadie mirando. No hace desaparecer las cuatro cosas que siguen
 siendo de una persona — una decisión de producto nueva, un techo que sube, trabajo fuera
-del límite del What, el merge final —: `--gates none` y `--questions none` son tu decisión
+del límite del What (en una compuerta `auto` te llega en el cuerpo del PR y no en la
+compuerta), el merge final —: `--gates none` y `--questions none` son tu decisión
 registrada de que este run no tiene ninguna de ellas. Un run con una compuerta `human` o
 con una pregunta que la semilla no dejó respondida de antemano necesita el resto de esta
 página.

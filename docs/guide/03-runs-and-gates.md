@@ -383,10 +383,22 @@ the run declared: every `file:` citation in `01-what/handoff.md` and `02-how/han
 plus every `touches:` entry in the plan (a directory entry covers everything beneath it).
 A `file:` citation that named no repo widens **every** repo's surface, deliberately: a
 handoff that cited `src/Auth/Otp.cs` without saying which repo did not thereby scope one.
-A changed path outside that surface refuses the gate and is **named**, up to eight of them
-before `+N more`. Work nobody scoped may well be the right work — a module story that had to
-change a Platform file usually is — but widening a boundary is a decision, and it is yours.
-Approve over it and the reason lives in your note.
+A changed path outside that surface is **named**, up to eight of them before `+N more`. Work
+nobody scoped may well be the right work — a module story that had to change a Platform file
+usually is — but widening a boundary is a decision, and it is yours.
+
+On an `auto` gate that decision moves to the PR (gh #331): the boundary **warns** and does not
+hold. Every one of the seven intervention episodes a hold-surface audit traced to this condition
+ended in an approval or a widen, so the gate now signs when the other six hold, and the paths are
+carried: the note ends in `· warned by: boundary`, `tldrx next` prints a `warning: boundary` line,
+`tldrx run status` marks the row `— warning: boundary`, and `tldrx ship` lists every path under
+`## Outside declared scope — review these`, per story. The exception is a SENSITIVE path — CI
+definitions, secrets and key files, infra-as-code, dependency manifests and lockfiles
+(`SENSITIVE_PATH_CLASSES` in `run/boundary.ts`) — outside the surface: that still holds the auto
+gate, named with its class (`app:.github/workflows/deploy.yml [ci]`), until a story declares it or
+you approve. On an `agent` gate it still falls to a
+person, and on a `human` gate you are the one signing anyway — approve over it and the reason
+lives in your note.
 
 **And there is a verb for saying yes.** `tldrx story widen <id> <path> --note "<why>"` adds the
 path to that story's `touches:` and records one `story.touches_widened` carrying the paths, the

@@ -45,7 +45,8 @@ claim-sources=passed; stories=n/a (not a build stage); boundary=n/a (not a build
 5. the stage did not fail;
 6. every claim it wrote resolved to a real source ([evidence](/concepts/evidence));
 7. on a Build stage only — every story reached `done`, **and** the epic branch changed
-   nothing the run never declared it would touch.
+   nothing the run never declared it would touch. That last half **warns** an `auto` gate
+   rather than holding it: see below.
 
 Any one of them failing falls back to the human gate and says which one, and what it
 measured. A citation that nothing could check does not fail the stage, but it does stop an
@@ -64,9 +65,34 @@ waiting gate on 01-what/what — held by claim-sources — `tldrx approve` or `t
 `tldrx run status --verbose` quotes the whole note, the passing conditions' values included:
 "was it the money" is a question a list of failures alone cannot answer.
 
+### On an `auto` gate the boundary is a warning
+
+A path outside the declared surface does not stop an `auto` gate. Every intervention a
+hold-surface audit traced to it ended in an approval or a widen, so the gate signs when
+everything else holds, and the paths travel with the run instead: the note ends in
+`· warned by: boundary`, `tldrx run status` marks the row, and `tldrx ship` lists them in the
+PR body, per story:
+
+```
+## Outside declared scope — review these
+
+- S2: `app:src/app/validator/checks.py`, `app:tests/test_extract.py`
+- no story's measured diff names these: `app:docs/inventory.md`
+```
+
+**Except where it is sensitive.** An outside path in one of four classes still holds an `auto`
+gate: CI and workflow definitions (`.github/workflows/`, `.gitlab-ci.yml`, …), secrets and
+credentials (`.env*` except `.env.example`, `secrets/`, key and certificate files), infra-as-code
+(`Dockerfile*`, `docker-compose*`, `terraform/`, `*.tf`, `k8s/`, `deploy/` manifests) and
+dependency manifests and lockfiles. The refusal names the path and its class —
+`app:.github/workflows/deploy.yml [ci]` — and a story that declares the path in `touches:` clears
+it, like any other.
+
+An `agent` gate still falls to a person on it, and a `human` gate is yours to sign anyway.
+
 ### Getting past the boundary: `tldrx story widen`
 
-The seventh condition is the one you will meet most. A story had to change a path the plan
+On a `human` or `agent` gate the seventh condition is the one you will meet most. A story had to change a path the plan
 never scoped, so the gate refuses and names the paths. Work nobody scoped is often the right
 work — and saying so is a decision, with a verb:
 

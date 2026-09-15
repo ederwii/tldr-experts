@@ -20,7 +20,7 @@ import {
 import { gatePolicyFor, type GatePolicy, type GatesPolicy } from "./gatePolicy.ts";
 import { describeGateSignature } from "./gateAuthority.ts";
 import { failureReason, waitingFor, type Waiting, type WaitingKind } from "./waiting.ts";
-import { heldByNote } from "./autoGate.ts";
+import { heldByNote, warnedByNote } from "./autoGate.ts";
 import {
   flatten, isFinished, isTerminal, recordedVersion,
   type AttendedBy, type RunFile, type RunGateAuthority, type RunGateExecutor, type RunPhase,
@@ -492,7 +492,10 @@ function describeGate(row: GateRow): string {
   // signing as themselves and for every record written before the fields existed,
   // and `agent alan (delegated by alan, policy: agent)` when the name in `by`
   // belongs to somebody who was not the one checking.
-  if (row.status === "approved") return `approved by ${describeGateSignature(row)}`;
+  // gh #331: a condition that WARNED an auto gate instead of holding it (`boundary`)
+  // is named on the row it signed — read off the note, so a gate with no warning
+  // renders the same bytes as before.
+  if (row.status === "approved") return `approved by ${describeGateSignature(row)}${warnedPart(row)}`;
   if (row.status === "rejected") return `rejected by ${describeGateSignature(row)}`;
   if (row.status === "n-a") return `${row.type}: n-a`;
   // WHICH of the seven is holding an `auto` gate open (gh #230). Only ever present
@@ -500,7 +503,14 @@ function describeGate(row: GateRow): string {
   // run.yml written before that note existed — renders the same bytes as before.
   const held = heldByNote(row.note ?? "");
   return `${row.type}: ${row.status}`
-    + (held.length === 0 ? "" : ` \u2014 held by ${held.join(", ")}`);
+    + (held.length === 0 ? "" : ` \u2014 held by ${held.join(", ")}`)
+    + warnedPart(row);
+}
+
+/** ` — warning: boundary`, or nothing (gh #331). */
+function warnedPart(row: GateRow): string {
+  const warned = warnedByNote(row.note ?? "");
+  return warned.length === 0 ? "" : ` \u2014 warning: ${warned.join(", ")}`;
 }
 
 /**

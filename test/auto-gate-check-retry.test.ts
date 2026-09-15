@@ -32,6 +32,7 @@ import { EventLog } from "../src/core/events/EventLog.ts";
 import type { TldrxEvent } from "../src/core/events/Event.ts";
 import {
   AUTO_GATE_CHECK_RETRIES, AUTO_GATE_RETRY_ACTOR, AUTO_GATE_RETRY_NOTE_PREFIX, checkRetryVerdict,
+  heldBy, heldByNote, refusalNote, warnedByNote,
   type AutoGateVerdict,
 } from "../src/core/run/autoGate.ts";
 import {
@@ -206,13 +207,16 @@ describe("an auto gate refused only by failed checks re-runs its stage (#231)", 
 });
 
 describe("which refusals a re-run may answer (#231)", () => {
-  function verdict(conditions: readonly { id: string; ok: boolean; detail: string }[]): AutoGateVerdict {
-    const failed = conditions.filter((c) => !c.ok);
+  function verdict(
+    conditions: readonly { id: string; ok: boolean; detail: string; warning?: string }[],
+  ): AutoGateVerdict {
+    const failed = conditions.filter((c) => !c.ok && c.warning === undefined);
     return {
       ok: failed.length === 0,
       conditions,
       note: "",
       why: failed.map((c) => `${c.id}=${c.detail}`).join("; "),
+      warnedBy: conditions.filter((c) => !c.ok && c.warning !== undefined).map((c) => c.id),
       failedChecks: [],
     };
   }
@@ -251,6 +255,29 @@ describe("which refusals a re-run may answer (#231)", () => {
       ]));
       expect(answer).toMatchObject({ retry: false, reason: expect.stringContaining(id) });
     }
+  });
+
+  /**
+   * gh #331: a boundary that only WARNS an auto gate is not part of the refusal — not in
+   * `held_by`, not a reason to skip a check re-run — and a refusal note still carries it.
+   */
+  test("a WARNING boundary is not in the held set: a checks-only refusal is still retried", () => {
+    const v = verdict([
+      { id: "checks", ok: false, detail: "lint:failed" },
+      { id: "boundary", ok: false, detail: "1 outside — a human decides", warning: "1 outside — carried into the PR body" },
+    ]);
+    expect(heldBy(v)).toEqual(["checks"]);
+    expect(checkRetryVerdict(v).retry).toBe(true);
+    const note = refusalNote(v);
+    expect(heldByNote(note)).toEqual(["checks"]);
+    expect(warnedByNote(note)).toEqual(["boundary"]);
+  });
+
+  test("warnedByNote reads only a machine note, and only a plain id tail", () => {
+    expect(warnedByNote("auto-gate: checks=none declared \u00b7 warned by: boundary")).toEqual(["boundary"]);
+    expect(warnedByNote("looked fine \u00b7 warned by: boundary")).toEqual([]);
+    expect(warnedByNote("auto-gate: boundary=1 outside: app:a \u00b7 warned by: b.cs; x")).toEqual([]);
+    expect(warnedByNote("auto-gate: checks=none declared")).toEqual([]);
   });
 
   test("a passing verdict is not a refusal at all", () => {

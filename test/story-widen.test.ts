@@ -277,13 +277,15 @@ describe("tldrx story widen — the sanctioned way to grow a story's surface", (
   });
 
   test("a widened story turns the boundary refusal into a pass", async () => {
-    const ws = workspace(DECLARED);
+    // A `human` Build gate: since gh #331 an `auto` gate signs over a boundary (it only
+    // warns) and finishes the run, and the refusal this test widens past is the one a
+    // human or agent gate still reads — `evaluateBoundary`'s own `ok`.
+    const ws = workspace({ ...DECLARED, gates: "build" });
     process.env.FAKE_BUILD_WRITE = JSON.stringify({
       S1: { "src/in.ts": "export const after = 2;\n", "platform/Auth.cs": "// nobody scoped this\n" },
     });
     const refused = await next(ws);
     expect(refused.code).toBe(4);
-    expect(refused.lines.join("\n")).toContain("outside the surface");
 
     const evaluate = () => evaluateBoundary({ root: ws.root, runDir: ws.runDir, phaseId: "04-build" });
     const before = await evaluate();
