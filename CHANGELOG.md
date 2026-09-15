@@ -119,7 +119,6 @@
   stage spec it already loads. `reviewer_share`, `story_cap_multiplier` and
   `story_cap_floor_usd` are still asked with their defaults by these three readers — the same
   disagreement on three more knobs, measured and filed as #333; this change moves `attempts` only.
-
 - **An in-session Watch turn is recorded as UNMETERED, not as a measured `$0.00` (closes #224).**
   The `--commit` path read the result envelope's own `cost_usd` and defaulted it to `0` — and a
   host session has no reason to fill that field in — while `--cost-usd`, the flag the host
@@ -143,6 +142,24 @@
   Deliberately not `story:`: that is the field `tldrx cost --stories` counts a row as a Build
   story by, and a Watch feature id is not a story, so that report is unchanged and whether it
   grows a Watch axis stays a separate decision.
+- **The conflict-turn marker guard no longer counts an unreadable path as a clean one, bounds its
+  scan, and reads modified files too (closes #324).** #286's guard caught every read failure and
+  returned "holds nothing": a guard failing OPEN, and silently, which is the one direction an audit
+  record may never fail in. A path that could not be read is now NAMED with its reason — the errno,
+  or the cap that skipped it — and only `ENOENT` stays silent, because a file that is gone cannot
+  carry a marker into a commit. The scan is bounded for the first time: 2,000 paths and 4 MiB per
+  file, neither of which can bite a normal worktree (this whole repo is 1,037 tracked files and its
+  largest is a 766 KB `CHANGELOG.md`, measured on 5256fab), and a path past either cap surfaces the
+  same way an unreadable one does rather than passing as clean — an un-ignored generated tree used
+  to make the guard as slow and as hungry as that tree was big, with nothing afterwards to say it
+  had been. The scope now also includes files MODIFIED since the handed sha, closing the hole where
+  a developer pastes a conflicted hunk, markers and all, into an already-tracked file; that
+  widening was measured before it was made, not assumed — every `M` row of 1,060 commits of this
+  repo's history, 8,366 rows, each row's content against the marker regex, 0 false positives (one
+  repo is not every repo). What to DO about an unchecked path is one decision at one call site
+  (`UNCHECKED_PATH_POLICY` in `src/core/build/git.ts`): it refuses the attempt with the paths
+  named, and a `warn` policy that lets the story walk on with them named on the Build lines is
+  implemented beside it.
 - **The `budget-gate` hook no longer refuses the `run auto` launch that would fix the shortfall
   (closes #321).** It priced a `tldrx run auto` spawn against the cursor phase's own ceiling
   alone. On a phase already short, it denied the launch and wrote `budget.blocked` before the

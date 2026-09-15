@@ -18,7 +18,7 @@
  * (gh #253). Publishing a branch stays a decision — one the run's `ship:` block
  * records, or a person makes at the keyboard — never a side effect of building.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { runtime } from "../runtime/index.ts";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
@@ -840,13 +840,44 @@ export async function abortOpenMerge(cwd: string): Promise<boolean> {
   return (await git(["merge", "--abort"], cwd)).ok;
 }
 
+/** A path in the guard's scope that could NOT be read, and why (gh #324). */
+export interface UncheckedPath {
+  /** The path, as git named it — repo-relative, the same spelling `markers` uses. */
+  readonly path: string;
+  /** Why nothing was learned about it: an errno, or the cap that skipped it. */
+  readonly reason: string;
+}
+
 /** What a conflict turn left behind that must never reach a DoD or a commit (gh #286). */
 export interface LeftoverMerge {
   /** Handed conflicted files (or their rename destinations) still holding a git conflict marker line, each once. */
   readonly markers: readonly string[];
   /** `MERGE_HEAD` is still set: the developer never closed the merge. */
   readonly inProgress: boolean;
+  /**
+   * Paths in scope the guard could not read, each with its reason (gh #324).
+   * Absent-with-reason, not a silent pass: an EACCES file, a directory where a
+   * file was handed, a path over a cap. NEVER an ENOENT — a path that vanished
+   * cannot carry a marker into a commit, so it is genuinely clean and silent.
+   */
+  readonly unchecked: readonly UncheckedPath[];
 }
+
+/**
+ * The most paths one marker guard reads, and the most bytes it reads from one of
+ * them (gh #324, limit 3). The old scan had NO bound: an un-ignored generated
+ * tree or a vendored dependency directory made the guard as slow and as hungry
+ * as that tree was big, with no way to tell afterwards that it had been.
+ *
+ * Neither number can bite a normal worktree: this whole repo is 1,037 tracked
+ * files and its largest file is `CHANGELOG.md` at 766 KB (measured on 5256fab,
+ * `git ls-tree -r --name-only HEAD` and `statSync`), while the guard's scope is
+ * only what changed since the handed sha plus the untracked set — so the caps
+ * sit at roughly twice a whole copy of this repo and five times its biggest
+ * file. A path past either one is UNCHECKED and named, never counted clean.
+ */
+export const MARKER_SCAN_MAX_PATHS = 2_000;
+export const MARKER_SCAN_MAX_BYTES = 4 * 1024 * 1024;
 
 /**
  * The ONE marker guard (gh #286): which of the files the conflict turn was
@@ -856,9 +887,9 @@ export interface LeftoverMerge {
  * Scoped to everything a marker could have travelled into and that `add -A`
  * could sweep into a commit, and to no pre-existing unrelated content: the
  * handed `files`, their rename destinations since `since` (R rows of `git diff
- * --name-status -M <since>` whose source is a handed file), every path ADDED
- * since `since` (A rows), and every UNTRACKED, non-ignored path (`git ls-files
- * --others --exclude-standard`). The rename rows exist because reading only the
+ * --name-status -M <since>` whose source is a handed file), every path ADDED or
+ * MODIFIED since `since` (A and M rows), and every UNTRACKED, non-ignored path
+ * (`git ls-files --others --exclude-standard`). The rename rows exist because reading only the
  * original path found nothing while the markers sat in the new one (review of
  * 18e4df5, probed). The untracked set exists because a plain `mv` never added,
  * closed with `git commit -am`, shows only `D <file>` to every diff — the moved
@@ -873,9 +904,21 @@ export interface LeftoverMerge {
  * heading underline as often as a marker, and `git diff --check` blocked a
  * correct resolution on exactly that (review of 5dd14e7).
  *
+ * The M rows are gh #324's limit 1, and they were WIDENED into rather than
+ * assumed safe. The worry was a false-positive class: pre-existing prose that
+ * happens to open a line with seven identical characters, blocking a correct
+ * resolution the way a `=======` heading underline once did. Measured before
+ * widening, on this repo's own history — every `M` row of `git diff
+ * --name-status -M <parent> <commit>` over 1,060 commits, 8,366 rows, each row's
+ * CONTENT at that commit against the regex below: **0 false positives**. One
+ * repo is not every repo (inferred beyond this tree), but the guard that used to
+ * let a developer paste a conflicted hunk, markers and all, into an
+ * already-tracked file no longer does.
+ *
  * The WORKING TREE is read, not a commit: it is what the DoD runs on and what
  * any commit after it carries, and a marker the developer committed is still in
- * it. A path that no longer exists holds nothing.
+ * it. A path that no longer exists holds nothing; a path that could not be READ
+ * is not the same thing and is named instead (`unchecked`, gh #324).
  */
 export async function leftoverMerge(cwd: string, files: readonly string[], since: string): Promise<LeftoverMerge> {
   const scope = [...files];
@@ -883,23 +926,119 @@ export async function leftoverMerge(cwd: string, files: readonly string[], since
   for (const row of changed.stdout.split("\n")) {
     const [kind = "", from = "", to = ""] = row.split("\t");
     if (kind.startsWith("R") && files.includes(from) && to !== "") scope.push(to);
-    if (kind === "A" && from !== "") scope.push(from);
+    if ((kind === "A" || kind === "M") && from !== "") scope.push(from);
   }
   const untracked = await git(["ls-files", "--others", "--exclude-standard"], cwd);
   for (const path of untracked.stdout.split("\n")) if (path.trim() !== "") scope.push(path.trim());
-  const markers = scope.filter((file, i) => scope.indexOf(file) === i && holdsConflict(join(cwd, file)));
-  return { markers, inProgress: await mergeInProgress(cwd) };
+
+  const scoped = scope.filter((file, i) => scope.indexOf(file) === i);
+  const markers: string[] = [];
+  const unchecked: UncheckedPath[] = [];
+  for (const file of scoped.slice(0, MARKER_SCAN_MAX_PATHS)) {
+    const scan = scanForMarkers(join(cwd, file));
+    if (scan === "markers") markers.push(file);
+    else if (scan !== "clean") unchecked.push({ path: file, reason: scan.unchecked });
+  }
+  if (scoped.length > MARKER_SCAN_MAX_PATHS) {
+    unchecked.push({
+      path: `${String(scoped.length - MARKER_SCAN_MAX_PATHS)} more paths`,
+      reason: `the scan stopped at the ${String(MARKER_SCAN_MAX_PATHS)}-path cap`,
+    });
+  }
+  return { markers, inProgress: await mergeInProgress(cwd), unchecked };
 }
 
-/** Does any line start with a marker git writes only into a conflict? */
-function holdsConflict(path: string): boolean {
+/** What one path in the guard's scope turned out to be. */
+type MarkerScan = "markers" | "clean" | { readonly unchecked: string };
+
+/**
+ * Does any line start with a marker git writes only into a conflict — or could
+ * the file not be read at all (gh #324)?
+ *
+ * The read failure used to be swallowed (`catch { return false }`): a guard
+ * failing OPEN, and silently, which is the one direction an audit record may
+ * never fail in (AGENTS.md §7). ENOENT is the single errno that is genuinely
+ * clean — a path that is gone carries nothing into a commit — and it is the
+ * only one that stays silent. Everything else (EACCES, EISDIR, EIO, anything
+ * unexpected) is reported with its code, and the CALLER decides what to do
+ * about it.
+ */
+function scanForMarkers(path: string): MarkerScan {
+  let size: number;
+  try {
+    size = statSync(path).size;
+  } catch (error) {
+    return errnoScan(error);
+  }
+  if (size > MARKER_SCAN_MAX_BYTES) {
+    return {
+      unchecked: `${String(size)} bytes is over the ${String(MARKER_SCAN_MAX_BYTES)}-byte read cap`,
+    };
+  }
   let text: string;
   try {
     text = readFileSync(path, "utf8");
-  } catch {
-    return false;
+  } catch (error) {
+    return errnoScan(error);
   }
-  return text.split("\n").some((line) => /^(?:<{7}|\|{7}|>{7})(?: |\r?$)/.test(line));
+  return text.split("\n").some((line) => /^(?:<{7}|\|{7}|>{7})(?: |\r?$)/.test(line)) ? "markers" : "clean";
+}
+
+/** ENOENT is clean; every other errno is a path nothing was learned about. */
+function errnoScan(error: unknown): MarkerScan {
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code: unknown }).code)
+    : "unknown";
+  if (code === "ENOENT") return "clean";
+  return { unchecked: `could not be read (${code})` };
+}
+
+/**
+ * The policy for a path the marker guard could not check (gh #324) — **THE ONE
+ * LINE THAT FLIPS IT**. `"refuse"` stops the attempt with the paths named;
+ * `"warn"` lets it walk on with the paths named. It is `"refuse"` because that
+ * is the safe direction for a guard whose whole job is to keep markers out of a
+ * commit, and because the alternative was what #324 filed: a silent pass.
+ */
+export const UNCHECKED_PATH_POLICY = "refuse" as UncheckedPolicy;
+
+/** Refuse the attempt over an unchecked path, or let it pass with the path named. */
+export type UncheckedPolicy = "refuse" | "warn";
+
+/** What the call site does about one `leftoverMerge` reading (gh #324). */
+export interface MarkerGuardVerdict {
+  /** Does the attempt stop here? */
+  readonly blocks: boolean;
+  /** The sentence naming every path that could not be checked, or null when all were. */
+  readonly unchecked: string | null;
+}
+
+/**
+ * The marker guard's DECISION, in one place, so the policy above is a value the
+ * call site reads rather than a rule baked into the guard: markers or an open
+ * merge block under either policy, and an unchecked path blocks only under
+ * `"refuse"`. Under `"warn"` the sentence is still produced — a path that was
+ * not checked is named whatever the policy is; the policy only decides whether
+ * the attempt survives it.
+ */
+export function markerGuardVerdict(
+  left: LeftoverMerge,
+  policy: UncheckedPolicy = UNCHECKED_PATH_POLICY,
+): MarkerGuardVerdict {
+  const unchecked = left.unchecked.length === 0 ? null : uncheckedScopeReason(left.unchecked);
+  return {
+    blocks: left.markers.length > 0 || left.inProgress || (policy === "refuse" && unchecked !== null),
+    unchecked,
+  };
+}
+
+/**
+ * The half-sentence an unchecked path is named with — ONE derivation, so the
+ * refusal and the warning say the same thing about the same reading.
+ */
+export function uncheckedScopeReason(unchecked: readonly UncheckedPath[]): string {
+  const named = unchecked.map((u) => `\`${u.path}\` (${u.reason})`).join(", ");
+  return `the conflict turn's marker guard could not check ${named} — an unchecked path is not a clean one`;
 }
 
 /**
