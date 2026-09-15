@@ -46,6 +46,20 @@ export interface PlanIssue extends ValidationIssue {
    * root violation ahead of it.
    */
   readonly cascade?: boolean;
+  /**
+   * The file this issue is about was never written, or is not there to fix
+   * (gh #288).
+   *
+   * ADDITIVE and set at exactly three sites: no story file at all, no epic file
+   * at all, and a missing `waves.yml`. It is the STRUCTURAL half of the question
+   * "can a second turn repair this in place, or does it have to plan again?" —
+   * `planIssuesAreRepairable` reads it, and reading it is the only way to answer
+   * that without matching on the wording of a message, which is someone's claim
+   * about the code rather than the code (AGENTS.md §1).
+   *
+   * Absent means the issue names a file that EXISTS and has a defect in it.
+   */
+  readonly absent?: boolean;
 }
 
 export interface PlanReport {
@@ -93,6 +107,10 @@ export function validatePlan(
   const addCascade = (file: string, issue: ValidationIssue): void => {
     issues.push({ ...issue, file, cascade: true });
   };
+  /** The file is not there at all — nothing on disk for a fix round to edit (#288). */
+  const addAbsent = (file: string, issue: ValidationIssue): void => {
+    issues.push({ ...issue, file, absent: true });
+  };
 
   const storyFiles = markdownIn(join(planDir, STORIES_DIR));
   const epicFiles = markdownIn(join(planDir, EPICS_DIR));
@@ -107,7 +125,7 @@ export function validatePlan(
   const unusableEpics = new Map<string, string>();
 
   if (storyFiles.length === 0) {
-    add(`${STORIES_DIR}/`, [{ path: "", message: "the Plan wrote no stories — there is nothing for Build to pick up" }]);
+    addAbsent(`${STORIES_DIR}/`, { path: "", message: "the Plan wrote no stories — there is nothing for Build to pick up" });
   }
   for (const name of storyFiles) {
     const rel = `${STORIES_DIR}/${name}`;
@@ -137,7 +155,7 @@ export function validatePlan(
   const epicChain = detectEpicChain(epicOfStory, dependsOn);
 
   if (epicFiles.length === 0) {
-    add(`${EPICS_DIR}/`, [{ path: "", message: "the Plan wrote no epics — a story with no epic has no branch to merge into" }]);
+    addAbsent(`${EPICS_DIR}/`, { path: "", message: "the Plan wrote no epics — a story with no epic has no branch to merge into" });
   }
   const claimedByEpic = new Map<string, string>();
   for (const name of epicFiles) {
@@ -191,7 +209,7 @@ export function validatePlan(
 
   const wavesPath = join(planDir, WAVES_FILE);
   if (!existsSync(wavesPath)) {
-    add(WAVES_FILE, [{ path: "", message: "missing — without it nothing knows what may run in parallel" }]);
+    addAbsent(WAVES_FILE, { path: "", message: "missing — without it nothing knows what may run in parallel" });
     return report(issues, storyIds.size, epicIds.size, 0, epicChain);
   }
 

@@ -30,6 +30,7 @@ import { buildProgress, BUILD_PHASE } from "./buildProgress.ts";
 import { loadStageSpec } from "../facilitator/stageSpec.ts";
 import { loadWorkspace, repoPath, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { describePlanIssues, validatePlan, writesPlanArtefacts, validatePlanBudget } from "../plan/validatePlan.ts";
+import { planFixFiles, planIssuesAreRepairable } from "../plan/planFixRound.ts";
 import { validatePlanShape } from "../plan/planShape.ts";
 import { branchModelFor, describeBranchModel } from "../plan/branchModel.ts";
 import { validateRunFile } from "./RunFile.ts";
@@ -45,6 +46,28 @@ export interface CheckOutcome {
   readonly id: string;
   readonly status: CheckStatus;
   readonly detail: string;
+  /**
+   * This refusal could be repaired by a second, TARGETED turn over the files in
+   * `repairFiles` — as opposed to one that can only be answered by doing the
+   * stage again (gh #288).
+   *
+   * ADDITIVE and set by exactly one check today (`plan`). Absent is what every
+   * check said before this existed and means "not claimed" — never "no": a check
+   * that has not been taught the question must not have an answer invented for
+   * it, and `runNext` spends a fix round only on an explicit `true`.
+   *
+   * It is a CLASSIFICATION, not a decision. Whether the round is actually taken
+   * is the facilitator's: it owns the bound (one per attempt), the money and the
+   * ledger.
+   */
+  readonly repairable?: boolean;
+  /**
+   * The files a `repairable` refusal names, relative to the phase directory —
+   * the ONLY files the repair turn is pointed at.
+   *
+   * Empty or absent whenever `repairable` is not `true`.
+   */
+  readonly repairFiles?: readonly string[];
 }
 
 export interface CheckContext {
@@ -389,7 +412,18 @@ function checkPlan(ctx: CheckContext): CheckOutcome {
   const shape = validatePlanShape(planDir);
   const issues = [...report.issues, ...validatePlanBudget(planDir), ...shape.issues];
   if (issues.length > 0) {
-    return { id: "plan", status: "failed", detail: describePlanIssues(issues) };
+    // Whether ONE targeted turn over the named files could fix this, or whether
+    // the plan has to be written again (gh #288). Computed here, from the issues
+    // themselves, because this is the only place that still has them: `detail` is
+    // a three-issue-wide summary and a caller matching on its wording would be
+    // reading a label instead of the code (AGENTS.md §1).
+    const repairable = planIssuesAreRepairable(issues);
+    return {
+      id: "plan",
+      status: "failed",
+      detail: describePlanIssues(issues),
+      ...(repairable ? { repairable, repairFiles: planFixFiles(issues) } : {}),
+    };
   }
   const model = branchModelFor(basename(ctx.runDir), report.epicChain);
   const over = planPricesOverStage(ctx, planDir);

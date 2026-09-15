@@ -1269,7 +1269,7 @@ Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with
 **Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `run.attended` `run.relaunched` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
 `gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `gate.policy_changed` `questions.policy_changed` `story.reopened` `story.base_fastforwarded` `story.base_updated` `story.conflict_turn` `story.review_retried` `story.work_rescued`
-`story.touches_widened` `epic.released` `worktree.foreign_work_aside` `worktree.foreign_work_restored` `result.unreadable` `input.truncated` `operator_note` `check.passed` `check.failed` `budget.warned`
+`story.touches_widened` `plan.fix_round` `epic.released` `worktree.foreign_work_aside` `worktree.foreign_work_restored` `result.unreadable` `input.truncated` `operator_note` `check.passed` `check.failed` `budget.warned`
 `budget.blocked` `budget.raised` `budget.granted` `fact.added` `fact.retired` `fact.superseded` `fact.conflict_raised` `doc.superseded` `notify.sent` `notify.failed` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
 
@@ -2878,7 +2878,9 @@ next(run, dry_run):
      if res.exit != 0 or res.is_error: goto FAIL
   for out in sy.outputs: if !exists(out.path) or !has_sections(out): goto FAIL  # re-read from disk;
                                                                                 # a <token> path matches ≥1 file (§2.3)
-  for c in sy.checks: run(c); append(check.passed|check.failed); if failed: goto FAIL
+  for c in sy.checks: run(c); append(check.passed|check.failed)
+     if failed: if plan_fix_round_available(c): spawn one repair turn; re-validate; re-run checks
+                else: goto FAIL                  # a second refusal always FAILs (#288, §5)
   st.cost_usd = Σ tasks; roll_up(b); st.status = done
   if sy.gate.type == approve: st.status = awaiting_gate; append(gate.requested); write; exit 4
   advance_cursor(); write(run.yml); append(stage.done); exit 0
@@ -4749,6 +4751,21 @@ overwritten (stages are idempotent by contract). A task that failed mid-stage ma
 **Failure path.** `stage.failed` never advances the cursor and never rolls back cost — money spent is recorded. The
 operator's options are `next` (retry, re-spending), `reject --note` (send the stage back to `ready` with the note fed
 into the next prompt), or editing the stage inputs by hand and re-running.
+
+**The `plan` check's one fix round (#288).** One exception to "a failed check fails the stage", and it is bounded on
+every side. When the `plan` check refuses and every issue it found names a file that EXISTS — a front matter that will
+not parse, a missing required key, a dod line the workspace does not declare, as against "the Plan wrote no stories",
+where there is nothing on disk to edit — `tldrx next` spawns the planner ONCE more, on the same files, with the
+refusal VERBATIM and the same `## Output schemas` contract, and re-runs the checks. Then it stops: a second refusal
+fails the stage exactly as before, with the same exit 5, naming both refusals. The round is headless-only (a
+`--prepare`/`--commit` cycle is a person, and the refusal is already their fix list), is taken at most once per
+planner turn (`run.yml` marks its task row `role: plan-fix`, and a turn after one is never granted another), and is
+refused outright when `wouldExceed` says the phase cannot fund a turn at the stage's own `agentCap` — the same
+predicate the budget gate decides on, so there is no second arithmetic. Its cost is an ordinary task row and an
+ordinary `agent.result`; the additive `plan.fix_round` event beside them says WHY the turn happened and names the row
+that holds the dollars. Measured on a live `run auto --until-done`: the planner joined two front-matter keys with a
+comma in three of three stories and the only recovery was a $2.19 re-plan plus one of five relaunches, for a defect
+the checker had already localised to a file and a column.
 
 ### 5.1 Ticket mirror (`tldrx tickets`)
 

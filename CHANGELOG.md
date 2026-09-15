@@ -41,6 +41,30 @@
   that depended on which build was slower today would be a diff that means nothing. A slot decided
   without starting anything — `run`, a command needing a shell, an absent one, a `--no-probe` skip
   — announces nothing, because it costs no wait to report.
+- **A Plan refused for a formatting slip gets ONE bounded repair turn instead of a full re-plan
+  (#288).** MEASURED on a live unattended run (0.18.3, `run auto --until-done`): the planner wrote
+  `acceptance: [ … ], test_plan: [ … ]` on one line — a flow-mapping comma inside a block mapping —
+  in three of three stories. The `plan` check refused it correctly, naming the file, the line and
+  the column; the stage then failed, because on a failed stage `tldrx next` IS a fresh stage. A
+  $2.19 Plan turn and one of the five `--until-done` relaunches were spent re-deriving a plan whose
+  only defect the checker had already localised, and the second planner passed only because it
+  happened to put one key per line. Build has always had the shape this needed — a verdict, then a
+  second turn on the same branch — and Plan had nothing between "refused" and "plan again". Now a
+  `plan` refusal whose every issue names a file that EXISTS re-spawns the planner ONCE over those
+  files, with the refusal VERBATIM and the same generated `## Output schemas` contract, and re-runs
+  the checks; a second refusal fails the stage exactly as before, in the same exit family, naming
+  both. Every bound is deliberate: the class is the CHECK's own answer computed from its issues and
+  not from the wording of its message (a refusal with nothing on disk to edit — "the Plan wrote no
+  stories" — earns no round, because a repair turn there is a re-plan wearing a fix round's
+  clothes); one round per planner turn, read off the `role: plan-fix` row rather than a counter
+  that could drift; headless only, since a `--prepare`/`--commit` cycle is a person for whom the
+  refusal is already the fix list, and it says so rather than doing nothing silently; and the money
+  goes through `wouldExceed`, the same predicate the budget gate decides on, at the same `agentCap`
+  the planner's own turn got — a phase that cannot fund the repair is told so and nothing is spent.
+  The turn is recorded like any other (a task row, an `agent.result`), with an additive
+  `plan.fix_round` event beside them saying why it happened and naming the row that holds the
+  dollars — one figure in one place. The Plan prompt also now states the rule the field run broke:
+  one key per line, never two joined by a comma.
 
 - **Five more stack-pack reviewer Checks asked the read-only reviewer to do something it holds no
   tool for, and one of them had no answer waiting for it anywhere (#195, #182's sibling).** #182

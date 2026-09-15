@@ -20,7 +20,7 @@ import { spentBasis, spentFigure, tallyOf } from "../budget/spentFigure.ts";
 import { ambiguousRunLines } from "../run/openRuns.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { isAttendedByHost, isTerminal, type GateType, type RunFile, type RunPhase, type RunStage, type RunTask } from "../run/RunFile.ts";
-import { runChecks, runPrecondition, type PreconditionOutcome } from "../run/checks.ts";
+import { runChecks, runPrecondition, type CheckOutcome, type PreconditionOutcome } from "../run/checks.ts";
 import { approve } from "../run/gates.ts";
 import { AUTO_GATE_ACTOR, AUTO_GATE_RETRY_ACTOR, evaluateAutoGate, heldBy, unreadableHeadings, warningLinesOf } from "../run/autoGate.ts";
 import {
@@ -31,9 +31,13 @@ import { carriedDetailLines, carriedReportFor } from "../build/carriedRows.ts";
 import { renderDecisionCard } from "../ui/decisionCard.ts";
 import { gatePolicyFor } from "../run/gatePolicy.ts";
 import type { BranchModelKind } from "../plan/branchModel.ts";
+import {
+  describeFixRoundRefusals, describeSpentFixRound, renderPlanFixPrompt, PLAN_FIX_ROLE,
+} from "../plan/planFixRound.ts";
+import { renderPlanSchemaContract } from "../plan/schemaContract.ts";
 import { PresetError, stageMdPath, type PlannedStage } from "../run/workflowPreset.ts";
 import { economyFor, isHostTokens } from "../budget/RunBudget.ts";
-import { remaining, wouldExceedHostTokens } from "../budget/wouldExceed.ts";
+import { remaining, wouldExceed, wouldExceedHostTokens } from "../budget/wouldExceed.ts";
 import {
   remainingWork, renderRemainingWork, remainingWorkContext, type RemainingWork,
 } from "../budget/remainingWork.ts";
@@ -2137,28 +2141,61 @@ async function finishStage(
   const ctx: PathContext = { root: options.root, runDir: store.runDir };
   const outputs = expandAll(spec.planned.outputs, store.run.repos);
 
-  const problems = validateOutputs(outputs, expandedSections(spec.planned, store.run.repos), ctx);
-  if (problems.length > 0) {
-    return failStage(store, options, phaseId, stageId, spec, describeProblems(problems), notes);
-  }
+  /**
+   * Outputs, then checks — TWICE at most (gh #288).
+   *
+   * The second pass exists only when the first ended in a refusal a targeted turn
+   * could repair AND that turn was taken; `planFixRound` answers false in every
+   * other case, and then this loop is the straight line it always was. Both
+   * passes re-read from disk and re-emit their `check.passed`/`check.failed`
+   * rows, because the repair turn wrote files between them and a ledger that
+   * recorded only the first pass would be describing a tree that no longer
+   * exists.
+   */
+  let checks: readonly CheckOutcome[] = [];
+  let firstRefusal: string | null = null;
+  for (;;) {
+    const problems = validateOutputs(outputs, expandedSections(spec.planned, store.run.repos), ctx);
+    if (problems.length > 0) {
+      return failStage(store, options, phaseId, stageId, spec, describeProblems(problems), notes);
+    }
 
-  const checks = await runChecks(spec.planned.checks, {
-    root: options.root,
-    runDir: store.runDir,
-    stage: spec.planned,
-  });
-  for (const check of checks) {
-    store.append(event(options, store.runId, stageId, check.status === "failed" ? "check.failed" : "check.passed", {
-      phase: phaseId,
-      check: check.id,
-      status: check.status,
-      detail: check.detail,
-    }));
-  }
-  const failed = checks.find((c) => c.status === "failed");
-  if (failed !== undefined) {
+    checks = await runChecks(spec.planned.checks, {
+      root: options.root,
+      runDir: store.runDir,
+      stage: spec.planned,
+    });
+    for (const check of checks) {
+      store.append(event(options, store.runId, stageId, check.status === "failed" ? "check.failed" : "check.passed", {
+        phase: phaseId,
+        check: check.id,
+        status: check.status,
+        detail: check.detail,
+      }));
+    }
+    const failed = checks.find((c) => c.status === "failed");
+    if (failed === undefined) break;
     store.save();
-    return failStage(store, options, phaseId, stageId, spec, `check \`${failed.id}\` failed: ${failed.detail}`, notes);
+    if (firstRefusal === null) {
+      if (await planFixRound(store, options, phaseId, stageId, spec, failed, notes)) {
+        firstRefusal = failed.detail;
+        continue;
+      }
+      return failStage(
+        store, options, phaseId, stageId, spec,
+        `check \`${failed.id}\` failed: ${failed.detail}`,
+        notes,
+      );
+    }
+    // Both refusals in full on the operator's output. The stage-death reason below
+    // carries the pair too, but it goes through `oneLine` — and a truncated second
+    // half would leave the round looking like it was never taken.
+    notes.push(...describeFixRoundRefusals(firstRefusal, failed.detail));
+    return failStage(
+      store, options, phaseId, stageId, spec,
+      describeSpentFixRound(firstRefusal, failed.detail),
+      notes,
+    );
   }
   const checkSummary = checks.length === 0 ? "no checks declared" : checks.map((c) => `${c.id}:${c.status}`).join(", ");
 
@@ -3059,6 +3096,195 @@ function advanceCursor(store: RunStore): { phase: string; stage: string } | null
 }
 
 // --- odds and ends ---------------------------------------------------------
+
+/**
+ * ONE bounded repair turn on a `plan` refusal a targeted edit could fix (gh #288).
+ *
+ * ## What it buys
+ *
+ * Measured on a live `run auto --until-done` (0.18.3): the planner joined two
+ * front-matter keys with a comma in all three stories, the `plan` check refused it
+ * naming file, line and column, and the ONLY recovery was a fresh Plan turn —
+ * $2.19 and one of the five relaunches, spent on a two-character slip the checker
+ * had already localised. Build has had the shape since it shipped: a verdict and a
+ * second turn on the same branch. This is that shape for Plan, and nothing more.
+ *
+ * ## Every bound, and where it comes from
+ *
+ *   - **The class** is the check's own (`CheckOutcome.repairable`), computed in
+ *     `checkPlan` from the issues and NOT from the wording of `detail`. Absent
+ *     reads as "not claimed"; only an explicit `true` spends anything.
+ *   - **One per attempt**: the round is spent when the stage's last task row is
+ *     one. There is no counter to drift — see `PLAN_FIX_ROLE`.
+ *   - **Headless only.** `--prepare`/`--commit` is a host session driving the run
+ *     by hand; the framework does not spawn on it (spec §2.2), and the refusal it
+ *     already prints IS the fix list for a person. Said out loud rather than done
+ *     silently, so a host can see the round it did not get.
+ *   - **The money goes through the gate everything else does**: `wouldExceed`,
+ *     the same predicate the budget-gate hook and `budgetRefusal` decide on, over
+ *     the same `agentCap` the planner's own turn was dispatched under. No second
+ *     arithmetic and no second ceiling (AGENTS.md §7). Under `on_exceed: warn`
+ *     nothing blocks, which is the operator's declared choice, not this
+ *     function's. A phase priced in host tokens cannot reach here at all —
+ *     `economyRefusal` refuses a headless invocation under one before the stage
+ *     starts — so there is no dollars-versus-tokens comparison to get wrong.
+ *   - **The cost is recorded exactly like any other turn**: an `agent.spawned`,
+ *     a `run.yml` task row, an `agent.result` carrying the dollars. `plan.fix_round`
+ *     is the PROVENANCE row beside them — `cost_usd: 0` on the envelope because
+ *     the charge is on the turn and a figure written twice is a figure that can
+ *     disagree with itself. Its payload names the task that holds it.
+ *
+ * Returns true when a turn actually ran and the checks are worth re-running. Every
+ * false says why in `notes` — except the one case that is not about this stage at
+ * all (a refusal outside the class), which has nothing to report.
+ */
+async function planFixRound(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  stageId: string,
+  spec: StageSpec,
+  failed: CheckOutcome,
+  notes: string[],
+): Promise<boolean> {
+  if (failed.repairable !== true) return false;
+  const files = failed.repairFiles ?? [];
+  if (files.length === 0) return false;
+
+  if (options.mode !== "headless") {
+    notes.push(
+      `fix round: not taken — this invocation is \`--${options.mode}\` and the framework does not spawn `
+      + "on a host-driven cycle. The refusal above names every file and defect: fix them in place and "
+      + "run `tldrx next --commit` again, which re-runs the checks without a fresh plan.",
+    );
+    return false;
+  }
+
+  const stage = requireStage(store, phaseId, stageId);
+  if (stage.tasks[stage.tasks.length - 1]?.role === PLAN_FIX_ROLE) {
+    notes.push(
+      "fix round: already spent on this attempt — one repair turn per planner turn, and the last one "
+      + "did not clear the check. The stage fails; `tldrx next` plans again.",
+    );
+    return false;
+  }
+
+  const cap = agentCap(options, store, stage);
+  const money = wouldExceed(store.budget, phaseId, cap);
+  if (money.blocked) {
+    notes.push(
+      `fix round: not taken — phase ${phaseId} has $${money.remaining.toFixed(2)} left and the repair `
+      + `turn would be dispatched under $${cap.toFixed(2)}, which \`on_exceed: block\` refuses. The `
+      + "refusal above is unchanged and nothing was spent on it.",
+    );
+    return false;
+  }
+
+  const model = stageModel(options, stage, spec);
+  const effort = stageEffort(options, spec);
+  const maxReads = options.maxReads ?? spec.maxReads;
+  const version = frameworkVersionSync();
+  const taskId = nextTaskId(store, phaseId, stageId);
+  const prompt = renderPlanFixPrompt({
+    phaseDir: phaseId,
+    run: store.runId,
+    // VERBATIM, and it is the point of the round: the checker already knows the
+    // file, the line and the column, and the whole cost of #288 was throwing that
+    // away and asking a fresh planner to rediscover it.
+    refusal: failed.detail,
+    files,
+    // The SAME contract the planner's own prompt carried, from the same generator
+    // — a second, shorter restatement of the schema here is how the repair turn
+    // and the check that judges it would come to disagree (AGENTS.md §7).
+    contract: renderPlanSchemaContract(),
+  });
+
+  // Not `announce`: that reads a task number as an attempt ("attempt 2"), which is
+  // true of a re-run of the stage and false of a turn repairing this one. Same two
+  // bus calls, a heading that says what this turn is — the gate signer's precedent.
+  setProgressTitle(`${stageId} · ${store.runId} · plan fix round`);
+  setProgressCeiling(cap);
+  store.append(event(options, store.runId, stageId, "agent.spawned", {
+    phase: phaseId,
+    task: taskId,
+    role: PLAN_FIX_ROLE,
+    model,
+    effort,
+    max_budget_usd: cap,
+    tldrx_version: version,
+  }, 0, PLAN_FIX_ROLE));
+  store.save();
+
+  const workspace = loadWorkspace(options.root);
+  const agent = await spawnAgent({
+    prompt,
+    model,
+    effort,
+    maxBudgetUsd: cap,
+    workspaceCommands: [...workspace.commands],
+    yolo: options.yolo,
+    cwd: options.root,
+    timeoutMs: spec.planned.timeout_s * 1000,
+    maxReads,
+  });
+
+  recordTask(store, phaseId, stageId, {
+    id: taskId,
+    status: agent.ok ? "done" : "failed",
+    expert: stage.expert ?? spec.planned.experts[0] ?? null,
+    role: PLAN_FIX_ROLE,
+    model,
+    cost_usd: agent.metered ? round2(agent.costUsd) : null,
+    ...(agent.metered ? {} : { metered: false }),
+    error: agent.error,
+    session_id: agent.sessionId,
+    started_at: nowish(options),
+    ended_at: nowish(options),
+    outputs: agent.envelope?.outputs ?? [],
+    stopped_by: agent.stoppedBy,
+    ...tokenSplit(agent.usage.input_tokens, agent.usage.output_tokens),
+    ...cacheSplit(agent.usage.cache_creation_input_tokens, agent.usage.cache_read_input_tokens),
+    duration_ms: agent.durationMs,
+    duration_basis: "spawned",
+  });
+  store.save();
+
+  appendCappedEvent(store, options, phaseId, stageId, "agent.result", {
+    phase: phaseId,
+    task: taskId,
+    role: PLAN_FIX_ROLE,
+    session_id: agent.sessionId,
+    model,
+    effort,
+    outputs: agent.envelope?.outputs ?? [],
+    tldrx_version: version,
+    duration_ms: agent.durationMs,
+    duration_basis: "spawned",
+    ...(agent.metered ? {} : { metered: false }),
+    usage: usagePayload(agent.usage),
+    ...(agent.error === null ? {} : { error: agent.error }),
+  }, agent.metered ? round2(agent.costUsd) : 0, PLAN_FIX_ROLE);
+  // WHY that turn happened, beside the rows that hold what it cost. `cost_usd: 0`
+  // on this envelope is not a claim that the round was free — `task` names the row
+  // and the `agent.result` above that carry the dollars, and one figure in one
+  // place is the only way the two can never disagree.
+  store.append(event(options, store.runId, stageId, "plan.fix_round", {
+    phase: phaseId,
+    task: taskId,
+    check: failed.id,
+    files,
+    max_budget_usd: cap,
+    ok: agent.ok,
+  }, 0, PLAN_FIX_ROLE));
+  store.save();
+
+  notes.push(agent.ok
+    ? `fix round: one repair turn over ${files.join(", ")} — the \`plan\` check is re-run below, and a `
+      + "second refusal fails the stage naming both."
+    : `fix round: the repair turn failed (${agent.error ?? "no error reported"}). Its cost is recorded; `
+      + "the `plan` check is re-run below over whatever it left on disk.");
+  return true;
+}
 
 /**
  * `min(task share, per_agent_max_usd)` (spec §5), with `--max-usd` on top.
