@@ -225,6 +225,33 @@ export interface ExecutorContext {
     costUsd?: number,
     actor?: string | null,
   ) => void;
+  /**
+   * Record an epic branch this run has just taken — in `run.yml`, ON DISK, before
+   * this call returns (#262).
+   *
+   * `ExecutorOutcome.epicBranches` is the same claim made at the END of a stage,
+   * and for a Build phase that is twenty minutes too late: between cutting
+   * `epic/<slug>` in the repo and returning, a SIGKILL (a cancelled session, a
+   * power cut) leaves the branch on disk with nothing in the record to say this
+   * run cut it — and `branchClaims.ts`, reading `build.epic_branch`, then refuses
+   * the run its own epic on the next `run auto`. That is the same hole #248
+   * closed one line at a time inside `runNext`; this is the seam that lets the
+   * executor close it at the moment the branch is EARNED.
+   *
+   * Additive and idempotent (it goes through the same merge `epicBranches` does,
+   * so claiming twice, or claiming what the outcome will also carry, is a no-op).
+   * The model is written once and never rewritten.
+   *
+   * It is NOT best-effort: it writes `run.yml`, so it can throw what a write can
+   * throw — a `WorkspaceLockError` when a sibling process holds `.tldrx/.lock`.
+   * An executor must NOT swallow that. A claim that could not be written is
+   * exactly the state this seam exists to prevent, and a caught-and-ignored throw
+   * would hand back a run whose file lies about a branch that is really there —
+   * so the throw travels, `runNext`'s catch records whatever rows the executor
+   * carried on the error (`withPartialTasks`, #249) and fails the stage with the
+   * reason named.
+   */
+  readonly claimEpicBranch: (branch: string, branchModel: BranchModelKind) => void;
 }
 
 export interface ExecutorOutcome {

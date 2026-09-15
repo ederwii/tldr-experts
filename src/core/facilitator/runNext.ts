@@ -880,8 +880,12 @@ function appendCappedEvent(
  * started per-epic stays per-epic, whatever its plan says today.
  *
  * It SAVES what it claimed before returning (#248) — see the comment on the call.
+ *
+ * Exported only so the tests that build an `ExecutorContext` by hand can give
+ * `claimEpicBranch` (#262) the REAL merge instead of a second copy of it: a fake
+ * that no-ops would let a call site land green while `run.yml` said nothing.
  */
-function claimEpicBranches(
+export function claimEpicBranches(
   store: RunStore,
   claimed: readonly string[] | undefined,
   model: BranchModelKind | undefined,
@@ -1523,6 +1527,16 @@ async function runExecutor(
     agentCap: (share = 1) => agentCap(options, store, stage, share),
     emit: (type, payload, costUsd = 0, actor = null) => {
       appendCapped(type, payload, costUsd, actor);
+    },
+    // #262: the SAME merge `epicBranches` gets at the end of the stage, reachable
+    // while the stage is still running. A thin closure over the existing helper
+    // and nothing more — `claimEpicBranches` has done its own `store.mutate` +
+    // `store.save()` since #248, and a second save here would be a second
+    // implementation of one derivation.
+    //
+    // Whatever it throws travels: see the field's doc on `ExecutorContext`.
+    claimEpicBranch: (branch, branchModel) => {
+      claimEpicBranches(store, [branch], branchModel);
     },
   };
 

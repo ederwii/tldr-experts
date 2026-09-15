@@ -24,7 +24,7 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
+import { claimEpicBranches, runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { runAuto } from "../src/core/facilitator/runAuto.ts";
 import { spawnAgent } from "../src/core/facilitator/spawnAgent.ts";
 import { AttendedSpawnError, attendedRun, withAttendedGuard } from "../src/core/facilitator/attended.ts";
@@ -614,6 +614,9 @@ function executorContext(ws: BuildWorkspace, phaseId: string, stageId: string): 
     attendedByHost: true,
     agentCap: () => 2,
     emit: () => undefined,
+    // #262: the real merge, not a no-op — a fake that swallowed the claim would
+    // let a call site land green while `run.yml` said nothing.
+    claimEpicBranch: (branch, branchModel) => { claimEpicBranches(store, [branch], branchModel); },
   };
 }
 

@@ -31,7 +31,7 @@ import { capPayload, MAX_PAYLOAD_BYTES, validateEvent } from "../src/core/events
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { buildExecutor } from "../src/core/facilitator/executors/build.ts";
 import type { ExecutorContext } from "../src/core/facilitator/executors/index.ts";
-import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
+import { claimEpicBranches, runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { loadStageSpec } from "../src/core/facilitator/stageSpec.ts";
 import { loadRun, renderReplay } from "../src/core/replay/index.ts";
 import { splitFrontMatter } from "../src/core/schemas/frontMatter.ts";
@@ -831,6 +831,9 @@ describe("#249 — measureSurface never throws: the story's row and `done` land 
       costUsd: null, tokens: null, budgetUsd: 8, maxBudgetUsd: 2, yolo: false,
       at: "2026-08-29T09:00:00Z", keepWorktrees: false, reuseEpic: false, parallel: 1,
       discardPending: false, review: false, attendedByHost: false, agentCap: () => 2, emit,
+      // #262: the real merge, not a no-op — a fake that swallowed the claim would
+      // let a call site land green while `run.yml` said nothing.
+      claimEpicBranch: (branch, branchModel) => { claimEpicBranches(store, [branch], branchModel); },
     };
   }
 

@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { TEMPLATES_DIR } from "../src/core/paths.ts";
 import { watchExecutor } from "../src/core/facilitator/executors/watch.ts";
 import { executorFor, EXECUTORS, type ExecutorContext } from "../src/core/facilitator/executors/index.ts";
+import { claimEpicBranches } from "../src/core/facilitator/runNext.ts";
 import { loadStageSpec } from "../src/core/facilitator/stageSpec.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { validateHandoff } from "../src/core/text/handoff.ts";
@@ -212,6 +213,9 @@ function fixture(plan: Readonly<Record<string, string>> = defaultPlan()): Fixtur
       attendedByHost: false,
       agentCap: (share = 1) => Math.round(2 * share * 100) / 100,
       emit: () => undefined,
+      // #262: the real merge, not a no-op — a fake that swallowed the claim would
+      // let a call site land green while `run.yml` said nothing.
+      claimEpicBranch: (branch, branchModel) => { claimEpicBranches(store, [branch], branchModel); },
     },
   };
 }
