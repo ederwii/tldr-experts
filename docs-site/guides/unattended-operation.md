@@ -603,6 +603,29 @@ Three policies, three different things happen when a stage finishes:
 Both wait flags may be given together — that is the shape of a fully unattended launch:
 `--wait-answers 4h --wait-gates 4h`.
 
+### `--gates none` and `--wait-gates` are two different levers
+
+Opening the run and launching the engine are two separate commands, and dropping
+`--wait-gates` from the second one is the single most common way a zero-touch launch stops
+being zero-touch. The complete pair:
+
+```bash
+tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.md \
+  --gates none --questions none --ship merge --budget 40
+tldrx run auto --run <id> --until-done=5 --wait-gates 4h --wait-answers 4h
+```
+
+`--gates none` sets the **policy** — every gate may close itself, recorded once in `run.yml`.
+`--wait-gates` is what lets `run auto` actually **close** a gate that parked — without it the
+loop exits `awaiting human` on the first gate that parks on a question it then auto-answers
+under `--questions none` (measured, #342). The mechanism: the question does get answered —
+question-answering runs unconditionally — but re-signing the gate that was waiting on it only
+happens inside the `--wait-gates` poll loop. Skip that flag and the very next `next` call finds
+the stage already `awaiting_gate` and hands control to a person who has nothing left to decide.
+Launch `run auto` with `--wait-gates <duration>` on every run opened with `--gates none` —
+`--wait-answers <duration>`, its sibling for the open question itself, belongs beside it for the
+same reason.
+
 ## Retrying a stage that failed
 
 `--retry-failed <n>` is the one flag here that is a COUNT, not a duration: how many times in

@@ -621,6 +621,30 @@ Tres políticas, tres cosas distintas al terminar una etapa:
 Las dos banderas de espera pueden darse juntas — esa es la forma de un lanzamiento del todo
 desatendido: `--wait-answers 4h --wait-gates 4h`.
 
+### `--gates none` y `--wait-gates` son dos palancas distintas
+
+Abrir el run y lanzar el motor son dos comandos separados, y omitir `--wait-gates` del
+segundo es la forma más común de que un lanzamiento zero-touch deje de serlo. El par
+completo:
+
+```bash
+tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.md \
+  --gates none --questions none --ship merge --budget 40
+tldrx run auto --run <id> --until-done=5 --wait-gates 4h --wait-answers 4h
+```
+
+`--gates none` fija la **política** — cualquier compuerta puede cerrarse sola, registrado una
+vez en `run.yml`. `--wait-gates` es lo que deja que `run auto` de verdad **cierre** una
+compuerta que se quedó retenida — sin esa bandera el bucle sale `awaiting human` en la primera
+compuerta que queda retenida por una pregunta que él mismo responde bajo `--questions none`
+(medido, #342). El mecanismo: la pregunta sí se responde — el bucle contesta preguntas sin
+condición — pero volver a firmar la compuerta que esperaba esa respuesta solo ocurre dentro del
+bucle de sondeo de `--wait-gates`. Sin esa bandera, la siguiente llamada a `next` encuentra la
+etapa ya en `awaiting_gate` y le entrega el control a una persona que no tiene nada que decidir.
+Lanza `run auto` con `--wait-gates <duración>` en todo run abierto con `--gates none` —
+`--wait-answers <duración>`, su hermana para la pregunta abierta en sí, va a su lado por la
+misma razón.
+
 ## Reintentar una etapa que falló
 
 `--retry-failed <n>` es la única bandera de aquí que es una CUENTA y no una duración: cuántas

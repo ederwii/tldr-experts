@@ -395,6 +395,15 @@
   into `## Unknowns`, and is never counted as a clean probe. `Swept:` and the
   `yes-on-epic` word are additive: a fix list written before this change reads exactly as it did.
 
+### Changed
+
+- **The zero-touch launch recipe (EN and ES) now pairs `run auto` with `--wait-gates` and
+  `--wait-answers` everywhere it shows opening a run with `--gates none`, and says why: `--gates
+  none` sets the policy, but only `--wait-gates` lets `run auto` re-sign a parked `auto` gate once
+  the question that held it is auto-answered — without it the loop exits `awaiting human` on the
+  first gate that parks on a question, even though every one of its conditions already holds (see
+  #342).**
+
 ## 0.29.0 — 2026-09-15
 
 ### Changed
