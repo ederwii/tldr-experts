@@ -76,7 +76,7 @@ import {
 } from "../../build/implicitPlan.ts";
 import { evidenceFor, updateStoryFront } from "../../build/storyFile.ts";
 import {
-  buildDeveloperPrompt, REVIEW_SCHEMA, type ConflictTurnPrompt, type PreviousAttemptKind,
+  buildDeveloperPrompt, REVIEW_SCHEMA, type ConflictTurnPrompt, type PreviousAttemptKind, type ReopenNote,
 } from "../../build/prompts.ts";
 import { ITERATION_ONLY_SLOT } from "../../schemas/commandAllowlist.ts";
 
@@ -2622,7 +2622,7 @@ class BuildSession {
    * last plain reopen — it is the named defect still owed, and a plain reopen
    * granting more attempts does not close it (`reviewLedger.ts`, `fixRound`).
    */
-  private reopenFor(planned: PlannedStory): { note: string; actor: string; fix: boolean } | null {
+  private reopenFor(planned: PlannedStory): ReopenNote | null {
     const ledger = readReviewLedger(this.ctx.runDir, planned.story.id);
     if (ledger.fixRound !== null) return { note: ledger.fixRound.note, actor: ledger.fixRound.actor, fix: true };
     if (ledger.reopened !== null) return { note: ledger.reopened.note, actor: ledger.reopened.actor, fix: false };
@@ -3501,6 +3501,8 @@ class BuildSession {
   ): string {
     return reviewerPromptFor({
       diffBase,
+      // gh #322: the note the person signed — the same value #308's check reads.
+      reopenNote: this.reopenFor(story.planned),
       runDir: this.ctx.runDir,
       root: this.ctx.root,
       runId: this.ctx.runId,
@@ -4549,6 +4551,9 @@ class BuildSession {
       planNote: this.plan.implicit ? (story.planned.note ?? IMPLICIT_STORY_NOTE) : undefined,
       previousAttempt: story.previousAttempt,
       previousAttemptKind: story.previousAttemptKind,
+      // gh #322: why a person put this story back. It used to reach only a report
+      // line and #308's no-diff check, never the turn that had to act on it.
+      reopenNote: this.reopenFor(story.planned),
       notInWorktree: story.notInWorktree,
       ...(story.conflictTurn === undefined ? {} : { conflictTurn: story.conflictTurn }),
       dispatchNotes: this.dispatchNotesFor(story.planned.story.id).body,

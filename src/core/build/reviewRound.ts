@@ -22,7 +22,7 @@ import { stackChecks } from "../experts/packSections.ts";
 import { workspaceRecurring } from "../retro/reviewerFocus.ts";
 import { latestFixlist, MAX_FIXLIST_ROUNDS } from "./fixlist.ts";
 import { BUILD_PHASE, type PlannedStory } from "./plan.ts";
-import { buildReviewerPrompt, type RecurringClass } from "./prompts.ts";
+import { buildReviewerPrompt, type RecurringClass, type ReopenNote } from "./prompts.ts";
 import {
   isFormatRejection, MAX_FORMAT_RETRIES, renderFormatRefusal, type Review,
 } from "./review.ts";
@@ -334,6 +334,12 @@ export interface ReviewerPromptParts {
    * reviewed out of a bundle written by an older binary reads exactly as it did.
    */
   readonly diffBase?: string | null;
+  /**
+   * gh #322: the note a person reopened this story with (`reopenFor`, off the
+   * ledger), or null. Handed in as data by BOTH doors, so a host review and a
+   * spawned one judge the diff against the same note.
+   */
+  readonly reopenNote: ReopenNote | null;
 }
 
 /**
@@ -359,6 +365,7 @@ export function reviewerPromptFor(parts: ReviewerPromptParts): string {
     // Straight through: `buildReviewerPrompt` owns the fallback, so the spawned
     // door and the bundle door cannot disagree about what a missing base means.
     diffBase: parts.diffBase,
+    reopenNote: parts.reopenNote,
     worktree: parts.worktree,
     conventions: renderConventions(parts.root, [parts.story.story.repo]),
     // Every field, including the ABSENCE of an exit code on a refused row —

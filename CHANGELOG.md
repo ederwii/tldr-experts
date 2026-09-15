@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.28.1 — unreleased
+
+### Fixed
+
+- **The note a story was reopened with now reaches the developer and the reviewer (closes #322).**
+  On a field run a person reopened a story with a note naming the exact gap two reviews had
+  refused it for; the next developer made a docstring-only commit and a reviewer approved it, and
+  neither turn had been shown the note. It was written only into `story.reopened` and read back
+  for a report line and #308's no-diff check — while the refusal for a `--for-fix` with no note
+  told the operator the note "is what scopes the fix round, and what the reviewer reads". Measured
+  before the fix: 0 of the post-reopen developer and reviewer prompts contained the note, for a
+  plain reopen and for `--for-fix`, and after a plain reopen the developer prompt had no
+  `## Previous attempt` either, so it was told nothing about why the story came back. Both
+  prompts now carry `## Why this story was reopened` — who signed it, whether it is a fix round,
+  the note verbatim — read off the same ledger value #308 already reads, so the prompt and the
+  refusal cannot name different notes; a story nobody reopened renders nothing new. The
+  reviewer's copy tells it that a diff leaving the named gap as it was is `changes`, but that
+  instruction is **prompt-advisory**: the framework does not enforce a `changes` verdict against
+  the note, and an `approve` is still accepted as the reviewer's judgement.
+- **`tldrx note --help` says where an operator note goes, and where it does not (closes #151,
+  docs only).** An `operator_note` is read by `run status`, `replay` and the dashboard and by no
+  prompt — so a note an owner wrote for the next stage's agents silently reached nobody. The gap
+  was the unwritten contract, not a missing reader: the help and the CLI reference now say the
+  note is for people and name `.agent/<stage>/dispatch-notes.md` as the channel that reaches
+  agents.
+
 ## 0.28.0 — 2026-09-15
 
 ### Added
