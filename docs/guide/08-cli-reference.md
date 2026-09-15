@@ -804,7 +804,10 @@ and no money is spent. It exists because there was no honest carrier for a maint
 at the moment it happened — the alternatives people reached for were a FUTURE gate note (late,
 and attached to a decision the note is not about) and `tldrx reject`, which undoes work. The
 note then shows up in `tldrx status` (the last few) and in `tldrx replay` (every one, in
-place). Exits: `0` `1` `2` `3`.
+place). It is for people, and it never reaches an agent: no prompt reads `operator_note`.
+Context meant for the next agent goes in `tldrx-work/<run>/.agent/<stage>/dispatch-notes.md`
+(for one Build story, `.agent/<stage>/<story>/dispatch-notes.md`), which the next prompt inlines
+under `## Dispatch notes`. Exits: `0` `1` `2` `3`.
 
 ## `tldrx facts`
 

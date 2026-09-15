@@ -198,6 +198,75 @@ export interface DeveloperPromptParts {
    * byte-identical to every prompt written before the field existed.
    */
   readonly conflictTurn?: ConflictTurnPrompt;
+  /**
+   * gh #322: the note a PERSON reopened this story with — `executors/build.ts`
+   * `reopenFor`, off the review ledger. Absent or null on a story nobody
+   * reopened, which renders nothing: byte-identical to every prompt before it.
+   */
+  readonly reopenNote?: ReopenNote | null;
+}
+
+/**
+ * The note a person put a story back with (gh #322) — the same value `reopenFor`
+ * hands #308's no-diff check, so the prompt and the refusal read one thing.
+ * `fix` is true while a `--for-fix` round is open, which wins over a plain reopen.
+ */
+export interface ReopenNote {
+  readonly note: string;
+  readonly actor: string;
+  readonly fix: boolean;
+}
+
+/** The section's heading — exported so tests assert the marker, not prose. */
+export const REOPEN_NOTE_HEADING = "## Why this story was reopened";
+
+/**
+ * The note, verbatim and fenced, under who signed it and which kind of reopen it
+ * was. Shared by both prompts; only the instruction after it differs by role.
+ * Not truncated: `story reopen` refuses a note the event payload cannot carry
+ * (`MAX_PAYLOAD_BYTES`), so every note that reaches here is already bounded.
+ */
+function reopenNoteLines(reopen: ReopenNote): readonly string[] {
+  const kind = reopen.fix
+    ? "`tldrx story reopen --for-fix`: a done story reopened to land ONE named defect"
+    : "`tldrx story reopen`: another run of attempts";
+  const fence = fenceFor(reopen.note);
+  return [
+    REOPEN_NOTE_HEADING,
+    "",
+    `A person (${reopen.actor === "" ? "actor not recorded" : reopen.actor}) put this story back with ${kind}.`,
+    "Their note, verbatim:",
+    "",
+    `${fence}text`,
+    reopen.note.replace(/\n$/, ""),
+    fence,
+    "",
+  ];
+}
+
+/** The developer's copy (gh #322), or nothing when nobody reopened the story. */
+function developerReopenSection(reopen: ReopenNote | null | undefined): readonly string[] {
+  if (reopen === undefined || reopen === null) return [];
+  return [
+    ...reopenNoteLines(reopen),
+    "This note is part of your brief. The acceptance criteria above still decide the story, and the",
+    "note names what the person found missing or wrong against them: change what it names. A diff",
+    "that leaves the named gap as it was is not an answer to it, and the reviewer is shown this note.",
+    "",
+  ];
+}
+
+/** The reviewer's copy (gh #322), or nothing when nobody reopened the story. */
+function reviewerReopenSection(reopen: ReopenNote | null | undefined): readonly string[] {
+  if (reopen === undefined || reopen === null) return [];
+  return [
+    ...reopenNoteLines(reopen),
+    "Judge the diff against this note as well as against the acceptance criteria: it names the gap",
+    "this attempt exists to close. If the diff leaves that gap as it was — it does not touch what the",
+    "note names, or it changes only comments or docs where the note asks for behaviour — the story is",
+    "not done: return `changes` and cite the note.",
+    "",
+  ];
 }
 
 /** What the conflict-turn section names (gh #286). */
@@ -330,6 +399,9 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     "",
     ...dispatchNotesSection(parts.dispatchNotes),
     ...projectSkillsSection(parts.projectSkills),
+    // Before `## Investigate`, whose step 1 says the inlined files ARE the brief —
+    // the note arriving after that sentence would read as something to disregard.
+    ...developerReopenSection(parts.reopenNote),
     ...conflictTurnSection(parts),
     "## Investigate",
     "",
@@ -527,6 +599,11 @@ export interface ReviewerPromptParts {
    * reviewed out of a bundle written by an older binary reads exactly as it did.
    */
   readonly diffBase?: string | null;
+  /**
+   * gh #322: the note a person reopened this story with. Absent or null renders
+   * nothing — byte-identical to a review of a story nobody reopened.
+   */
+  readonly reopenNote?: ReopenNote | null;
 }
 
 /**
@@ -662,6 +739,8 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
     "",
     ...story.acceptance.map((item) => `- ${item}`),
     "",
+    // Directly under the criteria it is judged beside (gh #322).
+    ...reviewerReopenSection(parts.reopenNote),
     "## Definition of Done — already re-run by the facilitator",
     "",
     ...(parts.dodResults.length === 0

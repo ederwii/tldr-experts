@@ -3266,6 +3266,16 @@ no stage — the story's branch, which carries the last developer's commits, is 
 back remains `reject`'s own signed decision. Reopenable states are `blocked`, `review` and `in_progress`; `done`
 refuses, because undoing finished work is a decision about the stage.
 
+**The note reaches the turns that act on it (#322).** From the reopen on — and while a `--for-fix` round is open, its
+defect, which wins over a later plain reopen (the same `reopenFor` value #308's no-diff check reads) — both the
+developer prompt and the reviewer prompt carry a `## Why this story was reopened` section: who signed it, whether it is
+a fix round, and the note verbatim in a fence. The developer's copy sits before `## Investigate` and names the note as
+part of the brief; the reviewer's sits under `## Acceptance criteria` and tells it that a diff leaving the named gap
+as it was is `changes`. A story nobody reopened renders no section, so its prompts are byte-identical to before. It
+was measured absent: the note used to reach only a report line and #308's check, and a person's named gap was
+answered by a docstring-only commit a reviewer approved without ever being shown it. `tldrx note`'s `operator_note`
+is different and reaches no prompt at all — agent-facing context is `.agent/<stage>/dispatch-notes.md` (§5).
+
 **Reopening a blocked dependency releases what it alone held (#312).** Reopening a `blocked` story makes every
 dependent's `dependency <id> blocked` hold stale in the same instant, and before this nothing re-read it: measured three
 times in one day on a live run, every dependent needed its own reopen. So the same command releases, to `todo`, every

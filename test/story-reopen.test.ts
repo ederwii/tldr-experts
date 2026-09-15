@@ -35,6 +35,7 @@ import { loadRun, renderReplay } from "../src/core/replay/index.ts";
 import { validateEvent } from "../src/core/events/Event.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+import { REOPEN_NOTE_HEADING } from "../src/core/build/prompts.ts";
 
 // Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
 // property of the machine, not of the code, so bun's fixed 5000 ms default measures the box:
@@ -1238,3 +1239,89 @@ describe("a story already on the epic whose review never completed (#295)", () =
 // ---------------------------------------------------------------------------
 // gh #295, second half — END.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// gh #322 — the note a person reopened a story with reaches the agents.
+// ---------------------------------------------------------------------------
+
+/**
+ * gh #322, measured on a field run: a person reopened a story with a note naming
+ * the exact gap two reviews had refused it for, and the next developer made a
+ * docstring-only commit that a reviewer approved — neither turn was ever shown
+ * the note. It was written only into the `story.reopened` payload and read back
+ * for a report line and #308's no-diff check. `reopenStory.ts` told the operator
+ * the `--for-fix` note "is what scopes the fix round, and what the reviewer reads".
+ * These make that sentence true, for both kinds of reopen, on both turns.
+ */
+describe("the reopen note reaches the developer and the reviewer (#322)", () => {
+  /** A marker no prompt template could contain by accident. */
+  const MARK = "wire ThreadPane into route.tsx — marker 322-a7f3";
+
+  function prompt(ws: BuildWorkspace, role: "developer" | "reviewer", n: number): string {
+    return readFileSync(join(ws.root, "prompts", `${role}-S1-${String(n)}.md`), "utf8");
+  }
+
+  test("a plain reopen: the next developer and reviewer prompts quote the note", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_PROMPT_DIR = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "changes", "approve"] });
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: blocked");
+
+    expect(reopen(ws, "S1", MARK).code).toBe(0);
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({ "S1#3": { "s1.txt": "S1, after the reopen\n" } });
+    reenter(ws, "S1 was reopened");
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+    expect(story(ws, "S1")).toContain("status: done");
+
+    expect(prompt(ws, "developer", 3)).toContain(MARK);
+    expect(prompt(ws, "reviewer", 3)).toContain(MARK);
+    for (const role of ["developer", "reviewer"] as const) {
+      const text = prompt(ws, role, 3);
+      expect(text).toContain(REOPEN_NOTE_HEADING);
+      // Who signed it, and that it is a plain reopen, not a fix round.
+      expect(text).toContain("A person (alan)");
+      expect(text).not.toContain("--for-fix");
+    }
+    // The reviewer is told to judge the diff against it, not merely shown it.
+    expect(prompt(ws, "reviewer", 3)).toContain("return `changes` and cite the note");
+  }, 60_000);
+
+  test("guard: a story nobody reopened gets no reopen section on either prompt", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_PROMPT_DIR = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "approve"] });
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: done");
+    // Two attempts, a `changes` between them — a retry is not a reopen.
+    for (const n of [1, 2]) {
+      expect(prompt(ws, "developer", n)).not.toContain(REOPEN_NOTE_HEADING);
+      expect(prompt(ws, "reviewer", n)).not.toContain(REOPEN_NOTE_HEADING);
+    }
+  }, 60_000);
+
+  test("`--for-fix`: the fix round's developer and reviewer prompts quote the defect", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_PROMPT_DIR = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_COST = "0";
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: done");
+
+    expect(reopen(ws, "S1", MARK, { forFix: true }).code).toBe(0);
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({ S1: { "s1.txt": "S1, with the fix\n" } });
+    reenter(ws, "S1 has a defect to fix");
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+    expect(story(ws, "S1")).toContain("status: done");
+
+    expect(prompt(ws, "developer", 2)).toContain(MARK);
+    expect(prompt(ws, "reviewer", 2)).toContain(MARK);
+    for (const role of ["developer", "reviewer"] as const) {
+      expect(prompt(ws, role, 2)).toContain("`tldrx story reopen --for-fix`");
+    }
+    // The original round, before anyone reopened it, carried no section.
+    expect(prompt(ws, "developer", 1)).not.toContain(REOPEN_NOTE_HEADING);
+    expect(prompt(ws, "reviewer", 1)).not.toContain(REOPEN_NOTE_HEADING);
+  }, 60_000);
+});

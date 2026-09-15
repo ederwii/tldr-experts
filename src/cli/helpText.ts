@@ -939,6 +939,7 @@ const ENTRIES: readonly CommandHelp[] = [
       "It appends exactly one `operator_note` event and touches NOTHING else: run.yml and budget.yml are byte-identical across the call, no gate is signed or revoked, no cursor moves and no money is spent.",
       "It exists because there was no honest carrier for a maintenance action at the moment it happened. The alternatives people reached for were a FUTURE gate note (late, and attached to a decision the note is not about) and `tldrx reject` (which undoes work).",
       "The note shows up in `tldrx run status` (the last few) and in `tldrx replay` (every one, in place).",
+      "It is for PEOPLE reading `tldrx run status`, `tldrx replay` and the dashboard, and it never reaches an agent: no prompt reads `operator_note`. Context meant for the next agent goes in `tldrx-work/<run>/.agent/<stage>/dispatch-notes.md` (for one Build story, `.agent/<stage>/<story>/dispatch-notes.md`), beside that stage's `prompt.md`, which the next prompt inlines under `## Dispatch notes`.",
     ],
   },
   {
