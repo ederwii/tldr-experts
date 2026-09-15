@@ -12,7 +12,7 @@
 import { isTerminal, type RunFile, type RunStage, isAttendedByHost } from "../run/RunFile.ts";
 import { economyFor, type RunBudget } from "./RunBudget.ts";
 import { remainingWork, renderRemainingWork } from "./remainingWork.ts";
-import { totalSpent, wouldExceed } from "./wouldExceed.ts";
+import { retrySizing, totalSpent, wouldExceed, type RetrySizing } from "./wouldExceed.ts";
 import { spentFigure, tallyOf, type SpentTally } from "./spentFigure.ts";
 import { shortBy } from "../build/caps.ts";
 import { EventLog } from "../events/EventLog.ts";
@@ -44,6 +44,23 @@ export interface BudgetPhaseView {
   readonly next_estimate_detail: string | null;
   /** True when `next` would be refused here and `on_exceed: block`. */
   readonly blocked: boolean;
+  /**
+   * ADDITIVE (#232): whether this ceiling is big enough to hold the retries the
+   * next stage is granted — `attempts ×` its DECLARED `budget_usd`, never the
+   * derived estimate beside it (`retrySizing` says why). A phase sized for one
+   * attempt refuses its own retry after the first cent, permanently, and until
+   * now the column below called it `ok` right up to the refusal.
+   *
+   * `not-evaluable` when the phase has no stage left to run, or when that stage
+   * declares no budget — a refusal to judge, never a pass.
+   */
+  readonly retry_sizing: RetrySizing;
+  /** What the ceiling is short of holding those attempts, rounded up. 0 otherwise. */
+  readonly retry_short_by_usd: number;
+  /** What it must hold: `attempts ×` the declared one-attempt figure. 0 when not evaluable. */
+  readonly retry_holds_usd: number;
+  /** The `attempts:` this verdict was measured against. */
+  readonly retry_attempts: number;
   /** What the ceiling is short by, rounded up to the cent. `0` when it is not. */
   readonly short_by_usd: number;
   readonly is_cursor: boolean;
@@ -144,6 +161,11 @@ export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string
       });
     const estimate = work === null ? staticEstimate : work.usd;
     const decision = wouldExceed(budget, phase.id, estimate, attempts);
+    // A phase with nothing left to run is sized for nothing — there is no verdict
+    // to give, so it gets none rather than a reassuring one.
+    const sizing = next === null
+      ? retrySizing(phase.ceiling_usd, 0, attempts)
+      : retrySizing(phase.ceiling_usd, staticEstimate, attempts);
     return {
       id: phase.id,
       ceiling_usd: phase.ceiling_usd,
@@ -155,6 +177,10 @@ export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string
       next_estimate_static_usd: staticEstimate,
       next_estimate_detail: work === null || work.basis === "static" ? null : renderRemainingWork(work),
       blocked: next !== null && decision.blocked,
+      retry_sizing: sizing.sizing,
+      retry_short_by_usd: sizing.shortByUsd,
+      retry_holds_usd: sizing.holdsUsd,
+      retry_attempts: sizing.attempts,
       short_by_usd: next === null || !decision.exceeds ? 0 : shortBy(estimate, decision.remaining),
       is_cursor: phase.id === run.cursor.phase,
       authorized_usd: phase.authorized_usd,
@@ -299,7 +325,7 @@ export function renderBudget(view: BudgetView): string {
         `${pad(usd(phase.spent_usd))}  ${pad(usd(phase.remaining_usd))}  ` +
         `${(phase.next_stage ?? "—").padEnd(stageWidth)}  ` +
         `${pad(phase.next_stage === null ? "—" : usd(phase.next_estimate_usd))}  ` +
-        `${phase.next_stage === null ? "—" : phase.blocked ? "BLOCKED" : "ok"}`,
+        `${nextLabel(phase)}`,
     );
   }
   // Where the est. column is no longer the stage's own price, show the sum: a
@@ -311,9 +337,19 @@ export function renderBudget(view: BudgetView): string {
         + `(stage estimate ${usd(phase.next_estimate_static_usd)})`);
     }
   }
+  const noRetry = view.phases.filter((p) => p.retry_sizing === "one-attempt-only");
   const blocked = view.blocked;
   if (blocked === null) {
-    lines.push("", "`tldrx next` is affordable in every phase that still has a stage to run.");
+    lines.push(
+      "",
+      // The all-clear now says which question it answered (#232). It has always
+      // been about the NEXT attempt, and on a phase sized for exactly one of them
+      // it was read as an all-clear about the run — right up to the refusal.
+      noRetry.length === 0
+        ? "`tldrx next` is affordable in every phase that still has a stage to run."
+        : "`tldrx next` is affordable in every phase that still has a stage to run — but see "
+          + `NO-RETRY below: ${String(noRetry.length)} phase(s) cannot afford a SECOND attempt.`,
+    );
   } else {
     lines.push(
       "",
@@ -324,8 +360,38 @@ export function renderBudget(view: BudgetView): string {
       `Or move the money instead of adding it:  ${view.fix_command ?? ""} --take-from <phase>`,
     );
   }
+  // #232: a phase that cannot afford its own retry, said BEFORE the spend that
+  // makes it permanent. One block per phase, each with the raise that sizes it —
+  // the same subcommand the BLOCKED case prints, aimed at the same phase.
+  for (const phase of noRetry) {
+    lines.push(
+      "",
+      `NO-RETRY: phase ${phase.id} holds one attempt of \`${phase.next_stage ?? "?"}\` `
+        + `(${usd(phase.next_estimate_static_usd)}) and that stage declares `
+        + `attempts: ${String(phase.retry_attempts)}, so it must hold ${usd(phase.retry_holds_usd)}. `
+        + "The first failed attempt spends money the retry cannot then find, and a run that "
+        + "cannot retry stops where nothing unattended can restart it. Size it now:",
+      `  ${raiseCommand(view.run, phase.id, phase.retry_short_by_usd)}`,
+    );
+  }
   if (view.given_away.length > 0) lines.push("", ...view.given_away);
   return lines.join("\n");
+}
+
+/**
+ * The `next` column, and the only place it is decided (#232).
+ *
+ * It used to answer `ok` for everything that was not refused right now, which is
+ * the confident-ok §7 forbids: a phase sized for exactly one attempt of its own
+ * stage was labelled `ok` until the retry it cannot pay for was refused. The
+ * refusal is a different question from the SIZE, so it keeps a different word.
+ */
+function nextLabel(phase: BudgetPhaseView): string {
+  if (phase.next_stage === null) return "—";
+  if (phase.blocked) return "BLOCKED";
+  if (phase.retry_sizing === "one-attempt-only") return "NO-RETRY";
+  if (phase.retry_sizing === "not-evaluable") return "n/e";
+  return "ok";
 }
 
 function pad(text: string): string {
