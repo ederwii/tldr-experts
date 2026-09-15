@@ -16,7 +16,7 @@
  */
 import { isRecord } from "../schemas/validation.ts";
 import { SRC_GRAMMAR_HEADING } from "../text/srcGrammarContract.ts";
-import { parseFixFindings, type FixFinding } from "./fixlist.ts";
+import { firstCitationProblem, parseFixFindings, type FixFinding } from "./fixlist.ts";
 import { AS_IS_MARK, AS_IS_REVIEW_ONLY_MARK, DOD_REFUSAL_FALLBACK, dodRefused, scopedNote } from "./outcome.ts";
 import type { DodResult, StoryOutcome, Verdict } from "./outcome.ts";
 import { renderReviewerProvenance } from "./reviewerProvenance.ts";
@@ -70,6 +70,22 @@ export interface Review {
    * Fail-closed is right and is unchanged. Silent is the part that was wrong.
    */
   readonly verdictProblem: string | null;
+  /**
+   * Why a DECLARED `changes` was refused for carrying no evidence (#326), or null.
+   *
+   * Measured on run `260914-tenant-credits` (tldrx 0.27.0): a reviewer returned
+   * `changes` with summary "test" and findings ["a","b"], and it was recorded as a
+   * real review — it spent the story's attempt and quoted "test" to the next
+   * developer as the reason. A request for changes is a claim about the diff, so it
+   * pays what a `refuted` finding already pays: at least one `[src: …]` token that
+   * parses, in the summary or in any finding. One without is a fault in the REPORT,
+   * indexed on `formatProblems`, and takes the existing bounded format retry.
+   *
+   * Optional so a `Review` built outside `parseReview` — a reviewer that never ran,
+   * a review the executor narrows — declares nothing it did not check. Absent reads
+   * exactly as null.
+   */
+  readonly citationProblem?: string | null;
 }
 
 /** The story-review grammar. NOT the gate-evidence one — see `verdictProblem`. */
@@ -134,6 +150,9 @@ export function parseReview(structured: unknown, fallback: string): Review {
   // A DECLARED `fixlist` that fell to `changes` is already reported on
   // `fixlistProblems`; reporting it twice would read as two different faults.
   const verdictProblem = declared === "fixlist" ? null : unreadableVerdict(declared);
+  // Only a DECLARED `changes`: an envelope that FELL to `changes` was refused for
+  // something else already, and that refusal is the one the reviewer must fix.
+  const citationProblem = declared === "changes" ? uncitedChanges(structured) : null;
   const findings = [
     ...readFindings(structured.findings),
     ...(verdictProblem === null ? [] : [verdictProblem]),
@@ -152,8 +171,10 @@ export function parseReview(structured: unknown, fallback: string): Review {
     formatProblems: [
       ...(verdict === "fixlist" ? [] : (parsed?.format ?? [])),
       ...(verdictProblem === null ? [] : [verdictProblem]),
+      ...(citationProblem === null ? [] : [citationProblem]),
     ],
     verdictProblem,
+    citationProblem,
   };
 }
 
@@ -197,7 +218,8 @@ export function parseReview(structured: unknown, fallback: string): Review {
  */
 export function isFormatRejection(review: Review): boolean {
   // Every reason the envelope was refused, counted where each is RECORDED.
-  const refusals = review.fixlistProblems.length + (review.verdictProblem === null ? 0 : 1);
+  const refusals = review.fixlistProblems.length + (review.verdictProblem === null ? 0 : 1)
+    + ((review.citationProblem ?? null) === null ? 0 : 1);
   return review.verdict === "changes"
     && review.formatProblems.length > 0
     && review.formatProblems.length === refusals;
@@ -247,6 +269,33 @@ export function renderFormatRefusal(problems: readonly string[]): string {
     "Do not soften the verdict to get past this check: the judgement is not what was refused.",
     "",
   ].join("\n");
+}
+
+/**
+ * The refusal for a `changes` that cites nothing (#326), or null for one that does.
+ *
+ * The candidates are every LINE of the summary and of each finding — a string
+ * finding whole, an object finding field by field — because the token is anchored
+ * to the end of its line. Read by the one citation reader `refuted` uses, so a
+ * malformed token gets #77's diagnosis rather than "you cited nothing".
+ */
+function uncitedChanges(structured: Record<string, unknown>): string | null {
+  const lines = [structured.summary, ...findingValues(structured.findings)]
+    .flatMap((value) => (typeof value === "string" ? value.split("\n") : []));
+  return firstCitationProblem(
+    lines,
+    "the `changes` verdict cites nothing — a request for changes is a claim about the diff, and "
+    + "it carries its evidence or it is not one: the `summary`, or one LINE of a finding, must END "
+    + "with a `[src: …]` token that parses. Cite the line that is wrong, the acceptance criterion "
+    + "that is unmet (`[src: 03-plan/stories/<id>.md:<line>]`), or where missing work should be "
+    + `(\`[src: absent:<path>]\`) — the full grammar is under "${SRC_GRAMMAR_HEADING}" in your prompt.`,
+  );
+}
+
+/** A `findings` value flattened to the strings it holds, one level into objects. */
+function findingValues(value: unknown): readonly unknown[] {
+  const items = Array.isArray(value) ? (value as unknown[]) : [value];
+  return items.flatMap((item) => (isRecord(item) ? Object.values(item) : [item]));
 }
 
 /** The sentence for a verdict outside the enum, or null for one inside it. */

@@ -2,6 +2,25 @@
 
 ## 0.29.0 — unreleased
 
+### Changed
+
+- **A reviewer's `changes` verdict must cite its evidence, or it is refused as a malformed
+  envelope (closes #326).** MEASURED on a field run: a reviewer returned `changes` with summary
+  "test" and findings `["a","b"]`, and the framework recorded it as a real review — it spent the
+  story's attempt, blocked `done`, and would have quoted "test" to the next developer as why the
+  story is not done. Nothing checked a `changes` verdict's content; only a `refuted` fix-list
+  finding had to carry a citation. Owner decision (2026-09-14): a `changes` now pays the same
+  price — its `summary`, or one line of a finding, must END with an `[src: …]` token the §2.8
+  parser reads (the diff line that is wrong, the unmet acceptance criterion as
+  `03-plan/stories/<id>.md:<line>`, or `absent:<path>` for missing work). One that cites nothing
+  is a fault in the REPORT, so it takes the existing bounded format retry — re-prompted with the
+  refusal, no attempt spent, two corrections — and the third is recorded as `changes` exactly as
+  before. This deliberately reverses the part of #79's pin that called a citation-less `changes` a
+  judgement about the work; a `changes` that DOES cite still costs the attempt. The reviewer prompt
+  now states the rule under `changes` and carries the `[src: …]` grammar on every review, not only
+  when `fixlist` is on the table. The citation is read, not resolved: a token that parses but
+  points at nothing still passes, so this refuses the hollow envelope, not a wrong one.
+
 ### Fixed
 
 - **A parallel Build wave no longer hands two developers the same unspent money (closes #325).**

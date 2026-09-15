@@ -339,8 +339,18 @@ function fixlistFor(id: string): Record<string, unknown> {
   return rows === undefined ? {} : { fixlist: rows };
 }
 
+/**
+ * The findings a `changes` verdict carries. Since #326 a `changes` must cite its
+ * evidence in the §2.8 grammar or it is refused as a malformed envelope, so the
+ * default cites the story's own file — the acceptance criteria it says are unmet.
+ *
+ * `FAKE_BUILD_FINDINGS` = `{"S1": ["a", "b"]}` replaces them verbatim, which is how
+ * a test reproduces #326's hollow envelope through the real spawn path.
+ */
 function verdictFindings(id: string): string[] {
-  return nextVerdictPeek(id) === "changes" ? [`${id}: the acceptance criteria are not met yet`] : [];
+  if (nextVerdictPeek(id) !== "changes") return [];
+  const map = JSON.parse(process.env.FAKE_BUILD_FINDINGS ?? "{}") as Record<string, string[]>;
+  return map[id] ?? [`${id}: the acceptance criteria are not met yet [src: 03-plan/stories/${id}.md:1]`];
 }
 
 function nextVerdictPeek(id: string): string {

@@ -87,6 +87,10 @@ envelope looks like, and nothing about which of these is true.
 - `approve` — every acceptance criterion is met by the diff and the conventions hold.
 - `changes` — something is missing, wrong or unconventional. It costs a whole second
   attempt, so ask only for what the acceptance criteria or the conventions require.
+  It MUST carry evidence: your summary, or one line of a finding, ends with an `[src: …]`
+  citation — the diff line that is wrong, the acceptance criterion that is unmet
+  (`[src: 03-plan/stories/S1.md:<line>]`), or where missing work should be (`[src: absent:<path>]`).
+  A `changes` that cites nothing is refused and you will be asked for the envelope again.
 - `fixlist` — you would sign, AND you found defects the acceptance criteria never
   covered. Costs the story no attempt, and there is exactly one such round. The schema
   has a slot for each defect and for how it is to be treated: `fix-now` is this story's

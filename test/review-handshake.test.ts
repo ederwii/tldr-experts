@@ -413,7 +413,7 @@ describe("--commit --review", () => {
     await stallAtReview(ws);
     await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
 
-    answerReview(ws, "S1", { verdict: "changes", summary: "the criteria are not met", findings: ["fix it"] });
+    answerReview(ws, "S1", { verdict: "changes", summary: "the criteria are not met", findings: ["fix it [src: 03-plan/stories/S1.md:1]"] });
     await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
 
     // One `changes` at attempt 1 requeues, exactly as a spawned one does.
@@ -430,7 +430,7 @@ describe("--commit --review", () => {
     const ws = workspace();
     await stallAtReview(ws);
     await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
-    answerReview(ws, "S1", { verdict: "changes", summary: "round one", findings: [] });
+    answerReview(ws, "S1", { verdict: "changes", summary: "round one [src: 03-plan/stories/S1.md:1]", findings: [] });
     await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
 
     // Attempt 2: developer, then a second host review that also asks for changes.
@@ -460,7 +460,7 @@ describe("--commit --review", () => {
     const ws = workspace({ ...ONE_STORY, attempts: 3 });
     await stallAtReview(ws);
     await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
-    answerReview(ws, "S1", { verdict: "changes", summary: "round one", findings: [] });
+    answerReview(ws, "S1", { verdict: "changes", summary: "round one [src: 03-plan/stories/S1.md:1]", findings: [] });
     await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
 
     // Attempt 2: developer, then a second review that also asks for changes —
@@ -534,7 +534,8 @@ describe("attended_by: host", () => {
       "utf8",
     );
     await next(ws, { mode: "commit", at: "2026-08-29T09:30:00Z" });
-    answerReview(ws, "S1", { verdict, summary: `host says ${verdict}`, findings: [] });
+    // #326: a `changes` must cite its evidence or it is refused as FORM.
+    answerReview(ws, "S1", { verdict, summary: `host says ${verdict} [src: 03-plan/stories/S1.md:1]`, findings: [] });
     await next(ws, { mode: "commit", review: true, at: "2026-08-29T09:40:00Z" });
   }
 

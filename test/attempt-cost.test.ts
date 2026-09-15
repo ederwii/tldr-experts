@@ -51,7 +51,7 @@ const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
   "FAKE_BUILD_WRITE", "FAKE_BUILD_VERDICTS", "FAKE_BUILD_COST", "FAKE_BUILD_STATE",
   "FAKE_BUILD_ARGV_LOG", "FAKE_BUILD_PROMPT_DIR", "FAKE_BUILD_IS_ERROR",
-  "FAKE_BUILD_FAIL", "FAKE_BUILD_FAIL_REASON", "FAKE_BUILD_FIXLIST",
+  "FAKE_BUILD_FAIL", "FAKE_BUILD_FAIL_REASON", "FAKE_BUILD_FIXLIST", "FAKE_BUILD_FINDINGS",
 ] as const;
 
 /** The event that records one free re-prompt. Attempt bookkeeping stays auditable. */
@@ -390,6 +390,16 @@ describe("#79 — every envelope-FORMAT refusal re-prompts, not just the citatio
     await freeRound(ws, "sign");
   }, 120_000);
 
+  test("a `changes` that cites nothing is re-prompted, and costs no attempt (#326)", async () => {
+    const ws = workspace();
+    // #326's envelope, measured on a live run: `changes` over findings ["a","b"].
+    // The fake's summary ("reviewed S1") carries no citation either.
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "approve"] });
+    process.env.FAKE_BUILD_FINDINGS = JSON.stringify({ S1: ["a", "b"] });
+
+    await freeRound(ws, "`changes` verdict cites nothing");
+  }, 120_000);
+
   test("the bound is the SHAPE refusal's too — the third one costs the attempt", async () => {
     const ws = workspace();
     // Three refused envelopes: two free, the third counted. Then the developer
@@ -509,10 +519,40 @@ describe("isFormatRejection — the scope guard, in one predicate", () => {
     expect(isFormatRejection(review)).toBe(true);
   });
 
+  /**
+   * #326 — this REVERSES part of #79's pin, deliberately. Until 0.29.0 the two
+   * `changes` envelopes below that cite nothing were pinned as "a judgement about
+   * the WORK" and charged the attempt. A live run then recorded `changes` with
+   * summary "test" and findings ["a","b"] as a real review. Owner decision (Slack
+   * q_mu21pp70cf5ec908, Alan, 2026-09-14, choice "A: exigir [src:]"): a `changes`
+   * verdict must carry at least one `[src: …]` token that parses, in its summary or
+   * any finding, or the envelope is refused as FORM and takes the existing bounded
+   * format-retry path. A `changes` that DOES cite is still content and still costs.
+   */
+  test("a `changes` that cites nothing is FORM, not a judgement (#326)", () => {
+    for (const [why, envelope] of [
+      ["#326's measured envelope", { verdict: "changes", summary: "test", findings: ["a", "b"] }],
+      ["a `changes` with findings but no citation", { verdict: "changes", summary: "the criteria are not met", findings: ["a"] }],
+      ["a bare `changes`", { verdict: "changes", summary: "the criteria are not met", findings: [] }],
+      ["a citation MID-line, which the grammar cannot read", { verdict: "changes", summary: "s", findings: ["see [src: app:s1.txt:1] for it"] }],
+    ] as const) {
+      const review = parseReview(envelope, "");
+      expect(review.verdict, why).toBe("changes");
+      expect(review.formatProblems, why).toHaveLength(1);
+      expect(isFormatRejection(review), why).toBe(true);
+    }
+  });
+
+  test("a `changes` whose finding carries a malformed token is told about THAT token (#326)", () => {
+    const review = parseReview({ verdict: "changes", summary: "s", findings: ["unmet [src: app:s1.txt]"] }, "");
+    expect(review.formatProblems[0] ?? "").toContain("rule `");
+  });
+
   test("a judgement about the WORK is never one", () => {
     for (const [why, envelope] of [
-      ["a content `changes`", { verdict: "changes", summary: "the criteria are not met", findings: ["a"] }],
-      ["a bare content `changes`", { verdict: "changes", summary: "the criteria are not met", findings: [] }],
+      ["a content `changes` citing the diff", { verdict: "changes", summary: "the criteria are not met", findings: ["the retry is unbounded [src: app:src/retry.ts:12]"] }],
+      ["a content `changes` citing the unmet criterion", { verdict: "changes", summary: "criterion 2 is not met [src: 03-plan/stories/S1.md:9]", findings: [] }],
+      ["a content `changes` citing missing work", { verdict: "changes", summary: "no migration was written", findings: ["the migration does not exist [src: absent:app:db/migrations]"] }],
       ["an approval", { verdict: "approve", summary: "ok", findings: [] }],
       ["no envelope at all", null],
     ] as const) {

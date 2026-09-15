@@ -148,7 +148,7 @@ is the primary instruction for this one; everything else in this prompt still ap
 >
 > reviewed S1
 >
-> - S1: the acceptance criteria are not met yet
+> - S1: the acceptance criteria are not met yet [src: 03-plan/stories/S1.md:1]
 
 ## Stop
 
