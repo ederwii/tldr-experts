@@ -212,6 +212,15 @@ antes de que se elimine el worktree de la story. El log de la story,
 la falla, y el evento `check.failed` lleva ese mismo extracto más `output_path` y
 `output_bytes`.
 
+La razón del bloqueo también dice si el rojo **se reprodujo**. Un comando que da rojo en una story
+se corre una vez más, idéntico, en el mismo árbol, y se registran los dos códigos de salida: así
+una suite que falló una sola vez porque otra cosa en la máquina tenía tomado un contenedor se lee
+como "se corrió de nuevo y PASÓ", y no como un defecto. Un rojo que no se reproduce igual bloquea
+la story: la segunda lectura es evidencia para quien la reabre, no un veredicto con el que el
+framework se contradice solo. Cuando no se pudo tomar una segunda corrida —el binario del comando
+no está en el worktree, la compuerta lo rechazó— el registro lo dice, y nunca inventa un segundo
+código de salida que nadie midió.
+
 Esos archivos están **ignorados por git de forma predeterminada**: guardan la salida cruda de un
 comando, que puede traer un volcado de `env`, un token dentro de una cadena de conexión o un
 stack trace con una credencial. El bloque de `.gitignore` que administra `tldrx init` excluye

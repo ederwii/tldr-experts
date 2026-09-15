@@ -13,7 +13,9 @@
  * within a process the file is opened at most once. A cache that reloaded per
  * call would make a resumed run re-pay for a `dotnet test`.
  */
-import { DodCommandRefused, runDodCommand, runScopedDodCommand } from "../../hooks/lib/story.ts";
+import {
+  DodCommandRefused, runDodCommand, runScopedDodCommand, type CommandResult,
+} from "../../hooks/lib/story.ts";
 import { FALLBACK_DEFAULT_BRANCH, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import type { EventType } from "../events/Event.ts";
 import {
@@ -21,7 +23,7 @@ import {
 } from "./dodOutput.ts";
 import { repoDirOf, shaOf } from "./git.ts";
 import { dodRefused } from "./outcome.ts";
-import type { BuildRefusal, DodResult, SerialWrite } from "./outcome.ts";
+import type { BuildRefusal, DodRecheck, DodResult, SerialWrite } from "./outcome.ts";
 import type { PlannedStory } from "./plan.ts";
 import {
   BaseGateFailure, baseRefusalLines, baseResultFor, commandHash, EMPTY_PREFLIGHT, loadPreflight, PREFLIGHT_REL,
@@ -91,6 +93,83 @@ export class PreflightCache {
   }
 }
 
+/**
+ * ONE spawn of one gate command, read the same way wherever it is read (§7).
+ *
+ * The two normalisations below were spelled out twice — once in `baseResultOf`
+ * for the base tree and once in `runStoryDod` for the story's — and #163 needed
+ * a third reading for the re-run. A timed-out run is exit 124 (the process has
+ * no exit code of its own), and a NON-GREEN run's one line is the
+ * failure-looking line rather than the last line of `stdout + stderr` (#211);
+ * `outcome.tail` is the old reading and survives only where there is no output
+ * to choose from, which is every green row.
+ */
+interface OneRun {
+  readonly exitCode: number;
+  readonly timedOut: boolean;
+  readonly output: string;
+  readonly tail: string;
+  /** The line that actually ran — a scoped template arrives here rendered. */
+  readonly command: string;
+}
+
+async function measureOnce(spawn: () => Promise<CommandResult>): Promise<OneRun> {
+  const outcome = await spawn();
+  const exitCode = outcome.timedOut ? 124 : outcome.exitCode;
+  const output = outcome.output ?? "";
+  const green = exitCode === 0 && !outcome.timedOut;
+  return {
+    exitCode,
+    timedOut: outcome.timedOut,
+    output,
+    tail: green ? outcome.tail : failureSummaryLine(output),
+    command: outcome.command,
+  };
+}
+
+/**
+ * The SECOND reading of a red story DoD command (#163) — the same command, the
+ * same tree, once.
+ *
+ * Measured on a .NET workspace 2026-09-05: a gate's `dotnet test → exit 2`
+ * pinned a story `blocked` on its last attempt, and the identical suite run
+ * twice by hand exited 0 with 2860 tests and 0 failing. It was contention over a
+ * container runtime. Nothing in the record could tell that from a defect, and
+ * `blocked` is terminal in-run — so the story needed a human. Owner decision
+ * (Slack q_mu2lhfin2d03c3c5): re-run the red command once and record BOTH exit
+ * codes. A red that reproduces is still a red and still blocks; this changes
+ * what the block SAYS, never what it does.
+ *
+ * `null` means "do not ask": a REFUSED row never ran, so it has no first reading
+ * to reproduce. Every other non-green row gets an answer, and when the answer
+ * cannot be a number it is a REASON (§7) — a 127 whose binary the tree never had
+ * would only measure the same absence again, and an error re-running is recorded
+ * verbatim rather than rounded into a second exit code nobody took.
+ */
+async function recheckRed(
+  result: DodResult, spawn: () => Promise<CommandResult>,
+): Promise<DodRecheck | null> {
+  if (dodRefused(result)) return null;
+  if (result.absent !== undefined && result.absent !== null) {
+    return {
+      absentBecause: "the command's binary is absent from this worktree, so a second run would "
+        + "measure the same environment absence and not the story",
+    };
+  }
+  try {
+    const again = await measureOnce(spawn);
+    return {
+      exitCode: again.exitCode,
+      ...(again.timedOut ? { timedOut: true } : {}),
+      ...(again.tail === "" ? {} : { tail: again.tail }),
+    };
+  } catch (error) {
+    // Including `DodCommandRefused`, which the first run cannot have raised —
+    // if it ever does, the reason is what is written down, never a number.
+    return { absentBecause: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 /** What `baseResultOf` and `redBaseRefusal` need, as data the executor owns. */
 export interface BaseParts {
   readonly workspace: WorkspaceContext;
@@ -140,9 +219,11 @@ export async function baseResultOf(
   const timeoutMs = parts.timeoutMs;
   let measured: BaseCommandResult;
   try {
-    const outcome = await runDodCommand(command, repoDir, timeoutMs, parts.workspace.commands);
-    const exitCode = outcome.timedOut ? 124 : outcome.exitCode;
-    const output = outcome.output ?? "";
+    const outcome = await measureOnce(
+      () => runDodCommand(command, repoDir, timeoutMs, parts.workspace.commands),
+    );
+    const exitCode = outcome.exitCode;
+    const output = outcome.output;
     // #229: a RED base refuses the WHOLE stage before anything is dispatched, so
     // it keeps what the command SAID — through the same seam a red story DoD has
     // used since #211, never a second reading of it. A GREEN base still writes
@@ -153,10 +234,9 @@ export async function baseResultOf(
       : writeDodOutput(parts.runDir, baseOutputId(repo, command), 0, output);
     measured = {
       repo, command, baseRef, baseSha, exitCode, timedOut: outcome.timedOut,
-      // The failure-looking line, not the last line of stdout+stderr.
-      // `outcome.tail` is the old reading, kept only when there is no output to
-      // choose from — which is every green row and an empty red one.
-      tail: kept === null ? outcome.tail : failureSummaryLine(output),
+      // The failure-looking line, not the last line of stdout+stderr — chosen by
+      // `measureOnce`, the one reading every spawn goes through (§7).
+      tail: outcome.tail,
       ...(kept === null ? {} : {
         excerpt: failureExcerpt(output),
         outputPath: kept.rel,
@@ -301,13 +381,16 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
     const scope: Pick<DodResult, "scope" | "paths"> = parts.scoped === undefined
       ? {}
       : { scope: scopedRun ? "paths" : "full", ...(scopedRun ? { paths: [...paths] } : {}) };
+    // ONE spawn recipe for this row, so the re-run below is the SAME command in
+    // the SAME tree and not a second reading of what it ought to have been.
+    const spawn = (): Promise<CommandResult> => (scopedRun && template !== undefined
+      ? runScopedDodCommand(template, paths, parts.worktree, timeoutMs)
+      : runDodCommand(command, parts.worktree, timeoutMs, parts.workspaceCommands));
     let result: DodResult;
     try {
-      const outcome = scopedRun && template !== undefined
-        ? await runScopedDodCommand(template, paths, parts.worktree, timeoutMs)
-        : await runDodCommand(command, parts.worktree, timeoutMs, parts.workspaceCommands);
-      const exitCode = outcome.timedOut ? 124 : outcome.exitCode;
-      const output = outcome.output ?? "";
+      const outcome = await measureOnce(spawn);
+      const exitCode = outcome.exitCode;
+      const output = outcome.output;
       // Only a RED check's output is kept (#211). A green one has nothing anybody
       // has ever needed at 2am, and writing a file per passing command would put
       // megabytes of `npm test` chatter in every run dir — the record exists to
@@ -324,10 +407,9 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
         timedOut: outcome.timedOut,
         ...scope,
         ...(scopedRun ? { rendered: outcome.command } : {}),
-        // #211: the failure-looking line, not the last line of stdout+stderr.
-        // `outcome.tail` is the old reading and is kept only when there is no
-        // output to choose from (a record replayed through an older seam).
-        tail: kept === null ? outcome.tail : failureSummaryLine(output),
+        // #211: the failure-looking line, not the last line of stdout+stderr —
+        // chosen by `measureOnce`, the one reading every spawn goes through (§7).
+        tail: outcome.tail,
         ...(kept === null ? {} : {
           excerpt: failureExcerpt(output),
           outputPath: kept.rel,
@@ -351,8 +433,16 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
       // 126 was rendered as a measurement by three documents (#165).
       result = { command, status: "refused", refusedBecause: error.message, timedOut: false, tail: "", ...scope };
     }
-    results.push(result);
     const green = !dodRefused(result) && result.exitCode === 0 && !result.timedOut;
+    // #163: a red is MEASURED TWICE before it pins a story. Before the event is
+    // emitted, because the event ledger is what a resumed invocation rebuilds
+    // these rows from — a reading that does not reach the payload is not
+    // recorded at all.
+    if (!green) {
+      const recheck = await recheckRed(result, spawn);
+      if (recheck !== null) result = { ...result, recheck };
+    }
+    results.push(result);
     parts.emit(green ? "check.passed" : "check.failed", {
       phase: parts.phaseId,
       check: "dod",
@@ -386,6 +476,21 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
         output_bytes: result.outputBytes ?? 0,
         output_line: result.outputLine ?? 1,
       }),
+      // #163: the second reading of a red command — ONE of these two keys, never
+      // both and never neither, so the ledger can tell a measurement from a
+      // reason. ADDITIVE and absent on every green row and every refusal, which
+      // is what the golden for a build without a red DoD proves. `recheck_detail`
+      // is ONE `failureSummaryLine`, bounded at 200 characters by the function
+      // itself, so this payload keeps the headroom #160/#211 bought `detail`:
+      // the event that says WHY a story blocked must never be the one the
+      // §2.9 cap trims.
+      ...(result.recheck === undefined ? {} : (result.recheck.exitCode === undefined
+        ? { recheck_absent: result.recheck.absentBecause ?? "" }
+        : {
+          recheck_exit_code: result.recheck.exitCode,
+          ...(result.recheck.timedOut === true ? { recheck_timed_out: true } : {}),
+          ...(result.recheck.tail === undefined ? {} : { recheck_detail: result.recheck.tail }),
+        })),
     });
     if (green) continue;
     // A scoped red is the story's own: the base tree ran the FULL command, and
