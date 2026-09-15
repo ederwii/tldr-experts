@@ -27,7 +27,7 @@ import {
   STORY_CAP_FLOOR_USD, STORY_CAP_MULTIPLIER, developerAttemptDivisor, storyCeilingUsd,
 } from "../src/core/facilitator/executors/build.ts";
 import {
-  capDeathReason, describeStoryCap, planOverStageAdvisory, plannedSumUsd, reviewerCap,
+  capDeathReason, describeStoryCap, planOverStageAdvisory, plannedSumUsd, priceScale, reviewerCap,
   reviewerUnderfunded, storyCapDerivation, type CapParts,
 } from "../src/core/build/caps.ts";
 import { cacheSplit, tokenSplit } from "../src/core/facilitator/runNext.ts";
@@ -795,6 +795,44 @@ describe("the per-story cap says what it was derived from (gh #281)", () => {
     // The largest-priced story as the worked example, so the factor has a face.
     expect(text).toContain("max($16.00 × 0.1421 × 3, $4.00) = $6.82");
     expect(text).toContain("`tldrx budget raise 04-build 97.80 --run r --stage build`");
+  });
+
+  /**
+   * gh #302: the proactive channel gets a bar, the reactive one keeps none.
+   *
+   * #281 shipped the advisory at any `scale < 1`, and it then fired on 8 of 30
+   * measured priced run dirs — 27% overall, 54% in one workspace — with no
+   * regard for how mild the overage was. These three cases pin the owner's
+   * decision: silent below 2×, spoken above it, and `capDeathReason` unmoved.
+   */
+  test("a plan asking less than 2× its stage no longer says so before a spawn (gh #302)", () => {
+    // scale 0.60 — the plan asks 1.67× the stage; mild, and usually never fatal.
+    const mild = priced({ S1: 20 }, 12);
+    expect(priceScale(mild)).toBeCloseTo(0.6, 10);
+    expect(planOverStageAdvisory(mild, lever)).toBeNull();
+    // Exactly 2× is still silent: the bar is `scale < 0.5`, not `<=`.
+    const exactly = priced({ S1: 20 }, 10);
+    expect(priceScale(exactly)).toBeCloseTo(0.5, 10);
+    expect(planOverStageAdvisory(exactly, lever)).toBeNull();
+  });
+
+  test("a plan asking more than 2× its stage still says so before a spawn (gh #302)", () => {
+    // scale 0.40 — the severe end, where a story is far likelier to die on its cap.
+    const severe = priced({ S1: 20 }, 8);
+    expect(priceScale(severe)).toBeCloseTo(0.4, 10);
+    const text = planOverStageAdvisory(severe, lever);
+    expect(text).not.toBeNull();
+    expect(text).toContain("$20.00 of stories into a stage whose budget_usd is $8.00");
+    expect(text).toContain("2.5× what the stage holds");
+  });
+
+  test("GUARD (passed before gh #302): the at-death channel has no threshold at all", () => {
+    // The same mild 0.60 plan the proactive channel is now silent about: when a
+    // story actually dies on its cap there, it is still told exactly why.
+    const mild = priced({ S1: 20 }, 12);
+    const died = capDeathReason("Reached maximum budget ($26.00)", mild, "S1", 1, lever);
+    expect(died).toContain("cannot move this cap while the plan is scaled");
+    expect(died).toContain("`tldrx budget raise 04-build 8.00 --run r --stage build`");
   });
 });
 

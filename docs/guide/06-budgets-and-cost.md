@@ -406,7 +406,10 @@ are scaled down proportionally, so the ratio the plan decided survives and the t
 escape the ceiling — and the framework says so (#281): the `plan` gate's detail and the Build's
 stderr at entry both carry the factor ("7.0× what the stage holds"), the scale, the largest
 story's cap as a worked example and the `tldrx budget raise … --stage` command that lifts the
-scale to 1. Measured on a live run: a $16.20 stage over a $114.00 plan is a scale of 0.1421,
+scale to 1. That advisory speaks only when the overage is severe — the plan asking for more than
+2× what the stage holds, a scale below 0.5 (#302). A milder overage is silent on purpose: it
+fired on 8 of 30 measured priced runs at any overage, 54% of them in one workspace, and a line
+that routine is one you stop reading before the run where it mattered. Measured on a live run: a $16.20 stage over a $114.00 plan is a scale of 0.1421,
 so a story priced $14.00 was capped at $5.97, not $42 — and raising every price ×4 moved
 nothing, because a uniform raise keeps the ratio and the sum. The cap death reason shows that
 formula with its inputs and, on a scaled plan, names the stage's `budget_usd` as the lever

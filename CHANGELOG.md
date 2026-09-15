@@ -4,6 +4,22 @@
 
 ### Fixed
 
+- **The plan-over-stage advisory speaks only when the plan asks for more than 2× what the stage
+  holds, instead of on every overage (#302).** #281 gave a scaled plan a voice before a spawn —
+  right, and the reason a $16.20 stage over a $114.00 plan no longer has to be learned from a dead
+  developer. Unconditioned, that voice was loud: MEASURED by the #281 pre-merge reviewer over 30
+  priced run dirs on one machine, 8 of them (27%; 54% in one of the two workspaces) had
+  `priceScale < 1`, at severities from 0.095 to 0.85 — and at the mild end the plan asks ~18% more
+  than the stage and usually finishes without one story reaching its scaled cap. A line on every
+  Build entry and every Plan gate for a case that harmless is the wallpaper that teaches an
+  operator to skip the channel before the run where it matters, the same shape #285/#290 already
+  cost once. So the PROACTIVE channel gets a bar — `PLAN_OVER_STAGE_ADVISORY_SCALE`, strictly below
+  0.5, in `caps.ts` beside the reasoning, one constant that both call sites inherit by calling the
+  same function — and the REACTIVE one keeps none: `capDeathReason` still names the formula, the
+  scale and the lever at every scale, because a story that actually died on its cap is never
+  wallpaper. The severe tail the channel exists for (0.095, >10× the stage) still speaks before the
+  spawn.
+
 - **`tldrx ship` refuses an epic carrying a merged diff NOBODY judged, instead of opening a PR over
   it (#311).** #282 closed the case where a reviewer read a story's diff and said `changes` — a
   rejection that stands, with the rejected code on the epic branch. It left the sibling open: three

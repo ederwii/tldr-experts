@@ -680,15 +680,38 @@ export function capDeathReason(
 }
 
 /**
+ * The bar the PROACTIVE advisory speaks above (gh #302): `priceScale` strictly
+ * below this — a plan asking for more than 2× what the stage holds.
+ *
+ * gh #281 shipped the advisory at any `scale < 1`, and a read-only sample of 30
+ * priced run dirs then measured it firing on 8 of them — 27% overall, 54% in one
+ * workspace — at severities as mild as 0.85, where the plan asks ~18% more than
+ * the stage and usually finishes without one story reaching its scaled cap. A
+ * line on every Build entry and every Plan gate for a case that mild is the
+ * wallpaper that teaches an operator to skip the channel before the one time it
+ * matters (the same sample's 0.095 tail, >10× the stage). 0.5 is where the
+ * owner put the line: the overage has to be large enough that a story is
+ * plausibly going to die on its cap before a spawn is interrupted to say so.
+ *
+ * It bounds the PROACTIVE channel only. `capDeathReason` — the reactive one —
+ * has no threshold and must not grow one: a story that actually died on its cap
+ * is told why at every scale, however mild.
+ */
+export const PLAN_OVER_STAGE_ADVISORY_SCALE = 0.5;
+
+/**
  * The Plan-time advisory (gh #281): a plan whose prices sum past the Build
  * stage's `budget_usd` used to pass its gate without a word, and the operator
- * learned the scale from a dead developer. Null when the plan fits. The gate
- * still passes — the scale is a deliberate tolerance, not a refusal — and this
- * says what it will do, with the factor and the command that undoes it.
+ * learned the scale from a dead developer. The gate still passes — the scale is
+ * a deliberate tolerance, not a refusal — and this says what it will do, with
+ * the factor and the command that undoes it.
+ *
+ * Null when the plan fits, and null for a MILD overage too (gh #302): the bar is
+ * `PLAN_OVER_STAGE_ADVISORY_SCALE`, and the reason it exists is written there.
  */
 export function planOverStageAdvisory(parts: CapParts, lever: CapLever): string | null {
   const scale = priceScale(parts);
-  if (scale >= 1) return null;
+  if (scale >= PLAN_OVER_STAGE_ADVISORY_SCALE) return null;
   const sum = plannedSumUsd(parts);
   const factor = (sum / parts.budgetUsd).toFixed(1);
   let largest: string | null = null;
