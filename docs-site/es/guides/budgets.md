@@ -207,9 +207,11 @@ tope de una story es `max(price × scale × 3, $4.00)`, y `scale` vale 1 solo mi
 de `03-plan/budget.yml` suman dentro de la etapa: una etapa de $16.20 sobre un plan de $114.00 es
 una escala de 0.1421, así que una story valuada en $14.00 queda topada en $5.97, no en $42 — y
 subir todos los precios no mueve nada, porque una subida uniforme conserva la proporción y la
-suma. El detalle de la compuerta `plan` y el stderr del Build al entrar lo dicen, con el factor
-y el comando `--stage` que lleva la escala a 1; un developer que muere contra su tope recibe la
-fórmula con sus entradas y la misma perilla nombrada.
+suma. Cuando el plan pide más de 2× lo que la etapa aguanta — una escala por debajo de 0.5 — el
+detalle de la compuerta `plan` y el stderr del Build al entrar lo dicen, con el factor y el
+comando `--stage` que lleva la escala a 1. Un exceso más leve se queda callado a propósito, para
+que la línea siga significando algo; un developer que muere contra su tope recibe la fórmula con
+sus entradas y la misma perilla nombrada a cualquier escala, por leve que sea.
 
 El reviewer es el único turno que el framework no va a financiar a medias: cuando lo que le
 queda a la etapa está por debajo de lo que cuesta una revisión, no se lanza reviewer alguno.

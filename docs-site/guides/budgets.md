@@ -197,9 +197,11 @@ The stage's `budget_usd` is also what the plan's prices are **scaled** to. A sto
 `max(price × scale × 3, $4.00)`, and `scale` is 1 only while `03-plan/budget.yml`'s prices sum
 inside the stage: a $16.20 stage over a $114.00 plan is a scale of 0.1421, so a story priced
 $14.00 is capped at $5.97, not $42 — and raising every price moves nothing, because a uniform
-raise keeps the ratio and the sum. The `plan` gate's detail and the Build's stderr at entry say
-so, with the factor and the `--stage` command that lifts the scale to 1; a developer that dies
-on its cap gets the formula with its inputs and the same lever named.
+raise keeps the ratio and the sum. When the plan asks for more than 2× what the stage holds — a
+scale below 0.5 — the `plan` gate's detail and the Build's stderr at entry say so, with the
+factor and the `--stage` command that lifts the scale to 1. A milder overage stays quiet, so the
+line keeps meaning something; a developer that dies on its cap gets the formula with its inputs
+and the same lever named at any scale, however mild.
 
 A reviewer is the one turn the framework will not under-fund: when what the stage has left is
 below what a review costs, no reviewer is spawned at all. The story parks with its diff merged
