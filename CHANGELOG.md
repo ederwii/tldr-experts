@@ -24,6 +24,24 @@
   developer spawned. The line says which of the two non-verdicts it was, never just "unjudged": never
   spawned and died mid-read are different problems with different next steps.
 
+- **`tldrx init` probes a repo's four commands at once, and says which one it is waiting on
+  (#180).** MEASURED on `6fd2af2` with four 500 ms probes: they started at 0, 501, 1003 and
+  1504 ms and `probeCommands` returned after 2006 ms — the SUM of the four deadlines, not the
+  longest. The same shape at the real `PROBE_TIMEOUT_MS` is 4 × 120 s = eight minutes for ONE
+  repo whose toolchain hangs, multiplied by the repo count, and for all of it detection had
+  nothing to say: `repoStart` fires once per repo and the next line is the repo's summary.
+  Nothing about a probe ever wanted the one before it — each has its own argv, races its OWN
+  deadline and writes its OWN key — so the four now run together, which puts the same fixture at
+  502 ms (4.0×) and bounds one repo at one deadline. Bounding the wait was only half of it: two
+  minutes of a live view with nothing on it still reads as hung, so a probe that starts a process
+  announces itself and its outcome, `init` names the repo and the slots still in flight, and the
+  plain-mode heartbeat — the CI-log line, where there is no spinner to prove anything is alive —
+  carries that detail instead of only a clock. The rows are still assembled in slot order, not in
+  the order the probes happened to finish: `workspace.yml` is a file people diff, and a key order
+  that depended on which build was slower today would be a diff that means nothing. A slot decided
+  without starting anything — `run`, a command needing a shell, an absent one, a `--no-probe` skip
+  — announces nothing, because it costs no wait to report.
+
 - **A red Definition-of-Done command is measured TWICE before it pins a story `blocked`, and the
   record carries both exit codes (#163, sub-fix 1).** MEASURED on a .NET workspace, 2026-09-05: a
   story's DoD gate returned `dotnet test` → exit 2, so the story blocked; the operator then ran the

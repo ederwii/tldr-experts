@@ -200,6 +200,41 @@ describe("the step reporter", () => {
     ]);
   });
 
+  /**
+   * The plain-mode heartbeat says what the step is DOING, not only how long it has
+   * been doing it (#180).
+   *
+   * `tick` is dropped from a log on purpose — a log with both "starting x" and
+   * "finished x" for sixteen experts is a log nobody reads — but the heartbeat is
+   * already a line every five seconds, and "still detecting repos — 35 s" tells a CI
+   * log reader nothing about which of four parallel probes is the one that is hanging.
+   * One line every `HEARTBEAT_MS`, carrying the latest live detail, is the whole
+   * difference between a clock and a diagnosis.
+   */
+  test("the plain-mode heartbeat carries the live detail, not just the clock", () => {
+    const out = recorder();
+    let beat: (() => void) | null = null;
+    let clock = 0;
+    const view = startSteps({
+      root: "/work/scavtopia", isTty: false, cols: 100, rows: 40, env: {},
+      write: out.write,
+      now: () => clock,
+      schedule: (fn) => { beat = fn; return null; },
+    });
+    const step = view.begin("detecting repos");
+    step.tick("lab: probing build, test");
+    clock += HEARTBEAT_MS;
+    (beat as unknown as () => void)();
+    step.done("multi-repo — 2 repos: api-service, lab");
+    view.stop();
+
+    expect(out.lines).toEqual([
+      "  · detecting repos…",
+      "      still detecting repos — 5 s · lab: probing build, test",
+      "  ✓ multi-repo — 2 repos: api-service, lab  (5 s)",
+    ]);
+  });
+
   test("a terminal gets a spinner, colour and an in-place rewrite", () => {
     const out = recorder();
     const view = steps(out, { isTty: true, flag: "compact" });

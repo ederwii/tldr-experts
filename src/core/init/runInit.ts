@@ -16,6 +16,7 @@
 import { join, relative, resolve } from "node:path";
 import { basename } from "node:path";
 import { detectWorkspace } from "../detect/detectWorkspace.ts";
+import type { CommandSlot } from "../detect/types.ts";
 import { isGreenfield } from "../detect/greenfield.ts";
 import { repoSlug } from "../detect/repoSlug.ts";
 import { toPosix } from "../detect/walk.ts";
@@ -100,9 +101,30 @@ export async function runInit(options: InitOptions, deps: InitDependencies): Pro
   // The probe's clock is THIS run's `timestamp`, not a second `new Date()` inside
   // detection: `detected_at` and every `command_probes.*.at` in the same document have
   // to be one answer to "when was this taken".
+  // Which probes of which repo are still out (#180). They run together now, so "probing
+  // build" alone would name whichever one started last rather than what is being waited
+  // on; the set is the honest answer and it empties as the probes land.
+  const probing = new Map<string, Set<CommandSlot>>();
+  const stillProbing = (repo: string): Set<CommandSlot> => {
+    const pending = probing.get(repo) ?? new Set<CommandSlot>();
+    probing.set(repo, pending);
+    return pending;
+  };
   const workspace = await detectWorkspace(root, deps.runner, {
     repoStart: (name) => { detecting.tick(name); },
-    repoDone: (repo) => { detecting.note(describeRepo(repo)); },
+    repoDone: (repo) => { probing.delete(repo.name); detecting.note(describeRepo(repo)); },
+    probeStart: (repo, slot) => {
+      const pending = stillProbing(repo);
+      pending.add(slot);
+      detecting.tick(`${repo}: probing ${[...pending].join(", ")}`);
+    },
+    probeDone: (repo, slot, probe) => {
+      const pending = stillProbing(repo);
+      pending.delete(slot);
+      detecting.tick(pending.size === 0
+        ? `${repo}: ${slot} ${probe.status}`
+        : `${repo}: ${slot} ${probe.status} · still probing ${[...pending].join(", ")}`);
+    },
   }, {
     probe: {
       at: rfc3339(deps.now),

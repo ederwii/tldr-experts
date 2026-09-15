@@ -4,7 +4,7 @@ export { detectStack, type StackDetection, type PackageJson } from "./stack.ts";
 export { detectCommands, isSingleArgvCommand, type DetectedCommands } from "./commands.ts";
 export {
   probeCommands, PROBED_SLOTS, PROBE_STATUSES, PROBE_TIMEOUT_MS,
-  type CommandProbe, type CommandProbes, type ProbeOptions, type ProbeStatus,
+  type CommandProbe, type CommandProbes, type ProbeOptions, type ProbeProgress, type ProbeStatus,
 } from "./probeCommands.ts";
 export { detectCi } from "./ci.ts";
 export { detectDefaultBranch, FALLBACK_BRANCH, type DefaultBranch } from "./defaultBranch.ts";

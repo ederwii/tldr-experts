@@ -35,6 +35,19 @@
  * `exit_code` and `reason` are decided together, in one place, so they cannot drift:
  * `verified` is `status === "ok"` by construction, and `exit_code` is non-null only
  * for a status that means a process actually exited.
+ *
+ * The four probes of one repo run TOGETHER (#180). They were serial, and serial meant a
+ * repo's worst case was the SUM of four two-minute deadlines — eight minutes for one
+ * repo, measured on `6fd2af2` as four 500 ms probes starting at 0, 501, 1003 and 1504 ms
+ * for a 2006 ms total. Nothing about a probe wants the one before it: each has its own
+ * argv, races its OWN deadline, and writes its OWN key. The rows are still assembled in
+ * `COMMAND_SLOTS` order afterwards, not in the order the probes happened to finish —
+ * `workspace.yml` is a file people diff, and a key order that depends on which build was
+ * slower today would be a diff that means nothing.
+ *
+ * And a probe that costs time SAYS SO at both ends, through `ProbeOptions.progress`.
+ * Bounding the worst case at two minutes is only half of #180: two minutes of a live
+ * view that has nothing to report still reads as hung.
  */
 import { splitArgv } from "../../hooks/lib/story.ts";
 import type { CommandRunner } from "./CommandRunner.ts";
@@ -96,6 +109,22 @@ export interface CommandProbe {
 
 export type CommandProbes = Partial<Record<CommandSlot, CommandProbe>>;
 
+/**
+ * Told about each probe that really starts a process, and how it ended (#180).
+ *
+ * Only those: a `run` slot, a command that needs a shell, an absent command and a
+ * `--no-probe` skip are all decided without starting anything, so announcing them as
+ * "probing" would be a progress line reporting no elapsed time. Progress is about the
+ * wait, and those rows have none.
+ *
+ * `probeDone` carries the finished row rather than a status string, so a caller can say
+ * as much or as little as its view has room for without this file guessing which.
+ */
+export interface ProbeProgress {
+  readonly probeStart?: (slot: CommandSlot) => void;
+  readonly probeDone?: (slot: CommandSlot, probe: CommandProbe) => void;
+}
+
 export interface ProbeOptions {
   readonly at: string;
   readonly timeoutMs: number;
@@ -110,6 +139,8 @@ export interface ProbeOptions {
    * `run` keeps its own reason: it is not skipped, it is never probed.
    */
   readonly skip?: string;
+  /** Optional live view. Absent means this file announces nothing, as it always did. */
+  readonly progress?: ProbeProgress;
 }
 
 /**
@@ -135,52 +166,82 @@ export async function probeCommands(
   commands: Readonly<Partial<Record<CommandSlot, string | null>>>,
   options: ProbeOptions,
 ): Promise<CommandProbes> {
+  const rows = await Promise.all(
+    COMMAND_SLOTS.map((slot) => probeSlot(runner, repoDir, slot, commands[slot] ?? null, options)),
+  );
+  // Assembled here, from the slot order, rather than written as each probe lands: the
+  // rows are the same either way, but the KEY ORDER would otherwise be whichever build
+  // finished first.
   const probes: Record<string, CommandProbe> = {};
-  for (const slot of COMMAND_SLOTS) {
-    const command = commands[slot] ?? null;
-    if (command === null || command === "") continue;
-    const origin = options.synthesised.has(slot)
-      ? " (this command was synthesised from the language id, not read from a file)"
-      : "";
-    const row = (status: ProbeStatus, exitCode: number, reason: string): void => {
-      probes[slot] = probeRow(status, exitCode, options.at, `${reason}${origin}`);
-    };
-
-    if (!PROBED_SLOTS.includes(slot)) {
-      row("not-probed", 0, `not probed: \`${slot}\` starts a long-running process`);
-      continue;
-    }
-    if (options.skip !== undefined) {
-      row("skipped", 0, options.skip);
-      continue;
-    }
-    const argv = splitArgv(command);
-    if (argv === null) {
-      row("not-probed", 0, `not probed: \`${command}\` needs a shell and this probe does not open one`);
-      continue;
-    }
-
-    const outcome = await raceDeadline(runner, argv, repoDir, options.timeoutMs);
-    if (outcome.kind === "timeout") {
-      row("timed-out", 0, `not verified: \`${command}\` timed out after ${seconds(options.timeoutMs)}`);
-      continue;
-    }
-    if (outcome.kind === "unspawnable") {
-      row("unspawnable", 0, `not probed: \`${command}\` could not be started — ${outcome.why}`);
-      continue;
-    }
-    if (outcome.exitCode === 0) {
-      row("ok", 0, `verified: \`${command}\` exited 0`);
-      continue;
-    }
-    // 127 is a real exit code here — the command STARTED and exited 127, which is what
-    // `npm run build` does when the script's own binary is missing. Naming that is the
-    // difference between "your build is red" and "your toolchain is not installed", and
-    // the operator needs the second one first.
-    const missing = outcome.exitCode === 127 ? " — the command, or something it runs, was not found" : "";
-    row("failed", outcome.exitCode, `not verified: \`${command}\` exited ${String(outcome.exitCode)}${missing}`);
-  }
+  COMMAND_SLOTS.forEach((slot, index) => {
+    const row = rows[index];
+    if (row !== undefined && row !== null) probes[slot] = row;
+  });
   return probes;
+}
+
+/**
+ * One slot's row, or null when there is no command in it.
+ *
+ * Takes DATA and returns a value — it never writes into the caller's map — which is what
+ * lets the four run concurrently without sharing anything but the runner.
+ */
+async function probeSlot(
+  runner: CommandRunner,
+  repoDir: string,
+  slot: CommandSlot,
+  command: string | null,
+  options: ProbeOptions,
+): Promise<CommandProbe | null> {
+  if (command === null || command === "") return null;
+  const origin = options.synthesised.has(slot)
+    ? " (this command was synthesised from the language id, not read from a file)"
+    : "";
+  const row = (status: ProbeStatus, exitCode: number, reason: string): CommandProbe =>
+    probeRow(status, exitCode, options.at, `${reason}${origin}`);
+
+  if (!PROBED_SLOTS.includes(slot)) {
+    return row("not-probed", 0, `not probed: \`${slot}\` starts a long-running process`);
+  }
+  if (options.skip !== undefined) return row("skipped", 0, options.skip);
+  const argv = splitArgv(command);
+  if (argv === null) {
+    return row("not-probed", 0, `not probed: \`${command}\` needs a shell and this probe does not open one`);
+  }
+
+  options.progress?.probeStart?.(slot);
+  const outcome = await raceDeadline(runner, argv, repoDir, options.timeoutMs);
+  const probe = rowFor(outcome, command, options.timeoutMs, row);
+  options.progress?.probeDone?.(slot, probe);
+  return probe;
+}
+
+/**
+ * An outcome read as a row, in one place — the four branches the probe can land in.
+ *
+ * Separated from `probeSlot` only so the announce/await/announce span reads as three
+ * lines; every row it can build still goes through `probeRow`, which stays the single
+ * derivation of `verified` and `exit_code`.
+ */
+function rowFor(
+  outcome: Outcome,
+  command: string,
+  timeoutMs: number,
+  row: (status: ProbeStatus, exitCode: number, reason: string) => CommandProbe,
+): CommandProbe {
+  if (outcome.kind === "timeout") {
+    return row("timed-out", 0, `not verified: \`${command}\` timed out after ${seconds(timeoutMs)}`);
+  }
+  if (outcome.kind === "unspawnable") {
+    return row("unspawnable", 0, `not probed: \`${command}\` could not be started — ${outcome.why}`);
+  }
+  if (outcome.exitCode === 0) return row("ok", 0, `verified: \`${command}\` exited 0`);
+  // 127 is a real exit code here — the command STARTED and exited 127, which is what
+  // `npm run build` does when the script's own binary is missing. Naming that is the
+  // difference between "your build is red" and "your toolchain is not installed", and
+  // the operator needs the second one first.
+  const missing = outcome.exitCode === 127 ? " — the command, or something it runs, was not found" : "";
+  return row("failed", outcome.exitCode, `not verified: \`${command}\` exited ${String(outcome.exitCode)}${missing}`);
 }
 
 type Outcome =

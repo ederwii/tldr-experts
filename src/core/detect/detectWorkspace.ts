@@ -15,12 +15,12 @@ import { detectStack } from "./stack.ts";
 import { detectOverlays } from "./overlays.ts";
 import { detectSkills } from "./skills.ts";
 import { countCodeFiles } from "./codeFiles.ts";
-import { probeCommands, PROBE_TIMEOUT_MS } from "./probeCommands.ts";
+import { probeCommands, PROBE_TIMEOUT_MS, type CommandProbe } from "./probeCommands.ts";
 import { scoreConfidence } from "./confidence.ts";
 import { repoSlug, uniqueSlug } from "./repoSlug.ts";
 import { toPosix } from "./walk.ts";
 import type { CommandRunner } from "./CommandRunner.ts";
-import type { DetectedRepo, DetectedWorkspace, Evidence } from "./types.ts";
+import type { CommandSlot, DetectedRepo, DetectedWorkspace, Evidence } from "./types.ts";
 import { basename } from "node:path";
 
 /**
@@ -35,6 +35,17 @@ export interface DetectProgress {
   /** The repo's slug, before anything about it has been read. */
   readonly repoStart?: (name: string) => void;
   readonly repoDone?: (repo: DetectedRepo) => void;
+  /**
+   * One repo's probe started, and ended (#180).
+   *
+   * `repoStart` fires once and then detection is silent for as long as probing takes —
+   * which is now bounded at one deadline rather than four (`probeCommands.ts`), but one
+   * deadline is still two minutes. Both callbacks carry the REPO as well as the slot,
+   * because in a multi-repo workspace "which repo is this" is half of what the person
+   * waiting needs and the slot alone cannot answer it.
+   */
+  readonly probeStart?: (repo: string, slot: CommandSlot) => void;
+  readonly probeDone?: (repo: string, slot: CommandSlot, probe: CommandProbe) => void;
 }
 
 /**
@@ -100,6 +111,10 @@ export async function detectWorkspace(
         timeoutMs: options.probe.timeoutMs ?? PROBE_TIMEOUT_MS,
         synthesised: commands.synthesised,
         ...(options.probe.skip === undefined ? {} : { skip: options.probe.skip }),
+        progress: {
+          probeStart: (slot) => { progress.probeStart?.(name, slot); },
+          probeDone: (slot, probe) => { progress.probeDone?.(name, slot, probe); },
+        },
       },
     );
     const ci = await detectCi(absPath);
