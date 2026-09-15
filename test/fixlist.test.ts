@@ -997,6 +997,36 @@ describe("`Resolved: yes` is gated on the fix existing on a ref (#130)", () => {
     expect(after).toContain("no commit to point at");
   }, 90_000);
 
+  test("an over-long sha is named in the REPORT a human reads, not only in the file (#163)", async () => {
+    const ws = workspace();
+    await handOffReview(ws);
+    await fixlistRound(ws, "2026-08-29T10:00:00Z");
+
+    const overLong = `${"0123456789abcdef0123456789abcdef01234567"}0`;
+    const path = fixlistPath(ws, "S1", 1);
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replaceAll("Resolved: no", `Resolved: yes ${overLong}`),
+      "utf8",
+    );
+    await next(ws, { mode: "prepare", review: true, at: "2026-08-29T10:20:00Z" });
+    answerReview(ws, "S1", { verdict: "approve", summary: "re-read the diff", findings: [] });
+    await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:30:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+    // The defect this asserts: the FILE said one thing about this event and the
+    // report said another — `named no commit to point at`, over a line that named
+    // 41 characters. Two records of one event, and the vague one is the one a
+    // human reads first.
+    const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+    expect(log).toContain(overLong);
+    expect(log).toContain("hex characters");
+    expect(log).not.toContain("no commit to point at");
+    const after = readFileSync(path, "utf8");
+    expect(after).toContain("Resolved: claimed-unverified");
+    expect(after).toContain(overLong);
+  }, 90_000);
+
   test("a sha that is not on the story branch is refused by name, not believed", async () => {
     const ws = workspace();
     await handOffReview(ws);

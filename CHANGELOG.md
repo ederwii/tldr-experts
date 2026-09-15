@@ -20,7 +20,11 @@
   depend on which side of the bad token a good one happens to sit. 7-39 is still accepted and
   still canonicalised — nothing a person legitimately types is refused. The grammar now lives in
   one leaf, `readResolvedSha`, read by both the parser and the rewriter, which is what makes the
-  token that gets verified and the token that gets replaced provably the same span.
+  token that gets verified and the token that gets replaced provably the same span. The refusal is
+  written once and read everywhere: `verifyResolutions` is the single site that withdraws a claim,
+  so the file, the story's blocked reason and the stdout report all carry the SAME sentence. They
+  did not before — the file would have named the 41-character token while the report a human reads
+  first said `named no commit to point at`, which is two records of one event disagreeing.
 
 - **A killed headless turn reads as `interrupted` and is handed a command the next line of code
   accepts, instead of being called a `--prepare` bundle that never existed (closes #246, half

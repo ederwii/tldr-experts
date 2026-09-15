@@ -297,7 +297,7 @@ describe("the sha SHAPE is refused, never read as no sha (#163)", () => {
     expect(isOpen(finding!)).toBe(true);
   });
 
-  test("the refusal reaches the FILE as `claimed-unverified — <why>`, named once", async () => {
+  test("canonicalizing walks PAST a refused finding — withdrawing a claim is not this leaf's job", async () => {
     const { dir } = bareRepo();
     const text = [
       "## 1 · Finding  [major]", "", "Disposition: **fix-now**", `Resolved: yes ${OVER_LONG}`, "",
@@ -305,12 +305,14 @@ describe("the sha SHAPE is refused, never read as no sha (#163)", () => {
 
     const result = await canonicalizeResolutions(dir, parseFixlistFile(text), text);
 
-    expect(result.text).toContain(`Resolved: ${CLAIMED_UNVERIFIED} —`);
-    expect(result.text).toContain(OVER_LONG);
-    expect(result.text).not.toContain(`Resolved: yes ${OVER_LONG}`);
-    expect(result.lines).toHaveLength(1);
-    expect(result.lines[0]).toContain(OVER_LONG);
-    expect(result.findings[0]?.resolved).toBe(false);
+    // The DOWNGRADE has exactly one site — `verifyResolutions`, which is also the
+    // only writer of `claimed-unverified` (§7). A second site that could withdraw
+    // a claim is the duplicate that rule exists to refuse. Asserted by what this
+    // leaf does NOT do; the refusal reaching the file and the report is asserted
+    // end-to-end in `fixlist.test.ts`.
+    expect(result.text).toBe(text);
+    expect(result.lines).toEqual([]);
+    expect(result.findings[0]?.resolvedSha).toBeNull();
     expect(isOpen(result.findings[0]!)).toBe(true);
   });
 
@@ -329,17 +331,19 @@ describe("the sha SHAPE is refused, never read as no sha (#163)", () => {
     expect(finding?.resolvedShaRefusal).toContain(OVER_LONG);
   });
 
-  test("a second pass over its own refusal changes nothing further", async () => {
-    const { dir } = bareRepo();
-    const text = [
-      "## 1 · Finding  [major]", "", "Disposition: **fix-now**", `Resolved: yes ${OVER_LONG}`, "",
-    ].join("\n");
+  test("the written refusal reads back as a withdrawn claim, so a second round does not refuse it twice", () => {
+    // The sentence keeps the offending token in it, which is the point — and it
+    // must not read as a fresh claim carrying a bad sha on the next pass. The
+    // `Resolved:` value is the whole test: it is no longer `yes`.
+    const finding = parseFixlistFile([
+      "## 1 · Finding  [major]", "", "Disposition: **fix-now**",
+      `Resolved: ${CLAIMED_UNVERIFIED} — named \`${OVER_LONG}\` — 41 hex characters`, "",
+    ].join("\n"))[0];
 
-    const first = await canonicalizeResolutions(dir, parseFixlistFile(text), text);
-    const second = await canonicalizeResolutions(dir, parseFixlistFile(first.text), first.text);
-
-    expect(second.text).toBe(first.text);
-    expect(second.lines).toEqual([]);
+    expect(finding?.resolved).toBe(false);
+    expect(finding?.resolvedSha).toBeNull();
+    expect(finding?.resolvedShaRefusal).toBeNull();
+    expect(isOpen(finding!)).toBe(true);
   });
 
   test("GUARD (green before this change): 7, 39 and 40 hex are all still accepted, and none is refused", () => {

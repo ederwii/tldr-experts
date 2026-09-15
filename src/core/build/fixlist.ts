@@ -910,12 +910,12 @@ export function canonicalizeResolvedSha(text: string, n: number, sha: string): s
  * routes the three things back — the possibly-rewritten findings, the
  * possibly-rewritten text, and the report lines to say what happened.
  *
- * It also carries the OTHER edge of the same grammar (#163): a token of 41+ hex
- * characters, which `readResolvedSha` refuses by name. Both ends are one job —
- * make the record say exactly what git says, or say why it cannot — and both ends
- * are the same three returns, so the call site still has no conditional of its
- * own. The two directions never meet: a refusal has `resolvedSha: null` already,
- * so nothing is ever canonicalised and withdrawn in one pass.
+ * The OTHER edge of the same grammar — a token of 41+ hex characters, which
+ * `readResolvedSha` refuses by name (#163) — is deliberately NOT handled here.
+ * That is a DOWNGRADE, and `verifyResolutions` is the one place a claim is ever
+ * withdrawn (`markUnverified`, one direction only); a second site that could also
+ * withdraw one is the duplicate §7 refuses. A refused finding arrives here with
+ * `resolvedSha: null` already, so this walks past it like any other open finding.
  */
 export async function canonicalizeResolutions(
   repoDir: string,
@@ -926,23 +926,6 @@ export async function canonicalizeResolutions(
   const rewrites: string[] = [];
   let body = text;
   for (const finding of findings) {
-    // The shape refusal, written down (#163). It is handled HERE rather than at
-    // the call site for the reason the docstring gives: this is the one leaf that
-    // owns both the record's sha and the sentence that explains it. The claim is
-    // withdrawn the way #130 withdraws every unverifiable one — `claimed-unverified`
-    // with the reason — so the finding keeps holding the story and the file says
-    // WHY, instead of a token nobody can resolve reading as a `yes` that named
-    // nothing. Re-reading the rewritten line yields `resolved: false` and no
-    // refusal, which is what makes a second pass a no-op.
-    if (finding.resolvedShaRefusal !== null) {
-      out.push({ ...finding, resolved: false, resolvedSha: null });
-      body = markUnverified(body, finding.n, finding.resolvedShaRefusal);
-      rewrites.push(
-        `fix-list finding #${String(finding.n)} ${finding.resolvedShaRefusal} — recorded as `
-        + `\`${CLAIMED_UNVERIFIED}\`, and it still blocks \`done\``,
-      );
-      continue;
-    }
     if (!finding.resolved || finding.resolvedSha === null) {
       out.push(finding);
       continue;
