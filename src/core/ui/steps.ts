@@ -148,7 +148,13 @@ export function startSteps(options: StepOptions): StepReporter {
     if (open === null) return;
     const waited = now() - open.startedAt;
     if (waited < HEARTBEAT_MS) return;
-    write(`      ${ink.dim(`still ${open.label} — ${duration(waited)}`)}\n`);
+    // With the latest live detail on it (#180). `tick` itself is still dropped from a
+    // log — a log carrying both "starting x" and "finished x" for sixteen experts is a
+    // log nobody reads — but this line is already one every five seconds, and "still
+    // detecting repos — 35 s" tells a CI log reader nothing about WHICH of four parallel
+    // probes is the one hanging. One line, the same cadence, and now a diagnosis.
+    const doing = open.detail === null ? "" : ` · ${open.detail}`;
+    write(`      ${ink.dim(`still ${open.label} — ${duration(waited)}${doing}`)}\n`);
   };
 
   const handle: StepReporter = {

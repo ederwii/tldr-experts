@@ -188,6 +188,30 @@ describe("detectWorkspace", () => {
     }
   });
 
+  /**
+   * The per-probe hook reaches the caller with the REPO on it (#180).
+   *
+   * `repoStart` fires once per repo and then detection is silent for however long
+   * probing takes; in a multi-repo workspace "which repo" is half of what the waiting
+   * person needs, so the slot alone would not answer it.
+   *
+   * The fake runner answers everything, so nothing here really builds: its fallback is
+   * exit 127 with no `spawnFailed`, which is a MEASURED red (`status: "failed"`).
+   */
+  test("probe progress names the repo as well as the slot (#180)", async () => {
+    const events: string[] = [];
+    await detectWorkspace(multi.root, fakeRunner(new Map()), {
+      probeStart: (repo, slot) => { events.push(`${repo}:${slot} start`); },
+      probeDone: (repo, slot, probe) => { events.push(`${repo}:${slot} ${probe.status}`); },
+    }, { probe: { at: "2026-09-15T00:00:00Z", timeoutMs: 1_000 } });
+
+    expect(events).toContain("lab:build start");
+    expect(events).toContain("lab:build failed");
+    expect(events).toContain("lab:typecheck start");
+    // `run` starts a server and is never probed, so it never announces one.
+    expect(events.some((event) => event.includes(":run "))).toBe(false);
+  });
+
   test("a repo with no manifest is low confidence rather than guessed at", async () => {
     const bare = join(multi.root, "notes");
     await Bun.write(join(bare, "README.md"), "# notes\n");
@@ -256,6 +280,105 @@ describe("command probes", () => {
     expect(probes.build?.at).toBe(AT);
     // A null slot is absent from the probes, never a guessed row.
     expect(probes.lint).toBeUndefined();
+  });
+
+  /**
+   * The four probeable slots run TOGETHER, not one after the other (#180).
+   *
+   * Measured on `6fd2af2` before this changed: four probes of 500 ms each started at
+   * 0, 501, 1003 and 1504 ms and `probeCommands` returned after 2006 ms — the SUM of
+   * the four, not the longest of them. With the real `PROBE_TIMEOUT_MS` (120 s) that is
+   * eight minutes for one repo whose toolchain hangs, and a multi-repo workspace
+   * multiplies it by the repo count.
+   *
+   * The assertion is a BARRIER, not a stopwatch: none of the runner's promises settles
+   * until the test releases them, so "all four argvs reached the runner" can only be
+   * true if no probe waited for the one before it. A serial loop leaves exactly one
+   * call recorded however long the test waits, so this cannot pass by being fast.
+   */
+  test("the four probeable slots are probed concurrently, not one after the other (#180)", async () => {
+    const calls: string[] = [];
+    const release: (() => void)[] = [];
+    const gated: CommandRunner = {
+      run: (argv: readonly string[]): Promise<CommandResult> => {
+        calls.push(argv.join(" "));
+        return new Promise<CommandResult>((resolve) => {
+          release.push(() => { resolve({ exitCode: 0, stdout: "", stderr: "" }); });
+        });
+      },
+    };
+
+    const pending = probeCommands(gated, "/repo", {
+      build: "npm run build", test: "npm run test", lint: "npm run lint",
+      typecheck: "npm run typecheck", run: "npm run dev",
+    }, defaults());
+    await new Promise((resolve) => { setTimeout(resolve, 20); });
+    expect(calls).toEqual(["npm run build", "npm run test", "npm run lint", "npm run typecheck"]);
+
+    for (const settle of release) settle();
+    const probes = await pending;
+    expect(Object.values(probes).filter((probe) => probe.status === "ok")).toHaveLength(4);
+  });
+
+  test("probing in parallel does not shuffle the rows — they stay in slot order", async () => {
+    // A GUARD, not a proof: the serial loop this replaces already wrote the keys in
+    // `COMMAND_SLOTS` order, and it is kept because `workspace.yml` is a file people
+    // diff — the order probes happen to FINISH in must never become the order they are
+    // written in. `test` settles first here and `build` last.
+    const delays = new Map([["npm run build", 40], ["npm run test", 0], ["npm run lint", 20]]);
+    const staggered: CommandRunner = {
+      run: (argv: readonly string[]): Promise<CommandResult> => new Promise<CommandResult>((resolve) => {
+        setTimeout(() => { resolve({ exitCode: 0, stdout: "", stderr: "" }); }, delays.get(argv.join(" ")) ?? 0);
+      }),
+    };
+    const probes = await probeCommands(staggered, "/repo", {
+      build: "npm run build", test: "npm run test", lint: "npm run lint", run: "npm run dev",
+    }, defaults());
+    expect(Object.keys(probes)).toEqual(["build", "test", "lint", "run"]);
+  });
+
+  /**
+   * A probe that costs time says so at both ends (#180).
+   *
+   * Only the slots a process is really started for: `run` is never probed, a command
+   * that needs a shell is not probed, and a null slot has nothing to probe — none of
+   * the three costs a second, and announcing them as "probing" would be a progress
+   * line that reports nothing.
+   */
+  test("every probe that actually runs says when it started and how it ended (#180)", async () => {
+    const events: string[] = [];
+    const probes = await probeCommands(recordingRunner({ exitCode: 1 }), "/repo", {
+      build: "npm run build", test: "npm test | tee log", lint: null,
+      typecheck: "npm run typecheck", run: "npm run dev",
+    }, {
+      ...defaults(),
+      progress: {
+        probeStart: (slot) => { events.push(`start ${slot}`); },
+        probeDone: (slot, probe) => { events.push(`done ${slot} ${probe.status}`); },
+      },
+    });
+
+    expect(events.filter((event) => event.startsWith("start "))).toEqual(["start build", "start typecheck"]);
+    expect(events.filter((event) => event.startsWith("done ")).sort())
+      .toEqual(["done build failed", "done typecheck failed"]);
+    // Started before it finished, for each slot — the pair is a span, not two labels.
+    expect(events.indexOf("start build")).toBeLessThan(events.indexOf("done build failed"));
+    expect(events.indexOf("start typecheck")).toBeLessThan(events.indexOf("done typecheck failed"));
+    expect(probes.test?.status).toBe("not-probed");
+    expect(probes.run?.status).toBe("not-probed");
+  });
+
+  test("`skip` announces nothing — there is no probe to watch", async () => {
+    const events: string[] = [];
+    await probeCommands(recordingRunner({ exitCode: 0 }), "/repo", { build: "npm run build" }, {
+      ...defaults(),
+      skip: "skipped: --no-probe",
+      progress: {
+        probeStart: (slot) => { events.push(`start ${slot}`); },
+        probeDone: (slot) => { events.push(`done ${slot}`); },
+      },
+    });
+    expect(events).toEqual([]);
   });
 
   test("a non-zero exit is recorded as measured-and-red, not as absent", async () => {
