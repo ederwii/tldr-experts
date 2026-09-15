@@ -72,9 +72,10 @@ answer is the project's own convention when it has one.
 - Did the developer record, beside each new test, that it was seen to fail — what was broken
   and that it went red? verify: read each new test in the diff for that sentence; a new test
   carrying none is a finding, and the test reading correctly is not a substitute for it
-- Are the test and lint commands green on this change, unfiltered? verify: run the test and
-  lint commands declared in .tldrx/workspace.yml and read each exit code — and say so when
-  the workspace leaves that slot empty rather than letting the check pass
+- Are the test and lint commands green on this change, unfiltered? verify: read their rows
+  in the Definition of Done section above — the facilitator already ran every declared
+  command — and confirm each exit code is 0; a row reading `(no dod commands)` means there is
+  nothing to confirm, so say that rather than letting the check pass
 - Is a `console` call left on a path that ships? verify: grep the diff for `console.`
 - Does the diff build code from a string at run time? verify: grep the diff for `eval(`
   and `new Function(`

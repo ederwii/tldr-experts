@@ -33,6 +33,9 @@ silent, and a Check's accepted answer is the project's existing pattern when it 
 - Keep the container tests grouped apart from the fast unit tests the way the repo already
   separates them, so one slow suite does not gate every change.
   — overridden by: the test grouping and filters the repo already declares
+- Prove a new database test does not depend on run order: run it alone, then again in the
+  same run as its neighbours, and record beside the test that both gave the same result.
+  — overridden by: an ordering harness or seed strategy the repo's fixture already enforces
 
 ## Checks (always asked in review)
 
@@ -42,8 +45,10 @@ silent, and a Check's accepted answer is the project's existing pattern when it 
   verify: grep the diff for `localhost`, for a port number and for a connection-string literal
 - Do the migrations run against the container before the tests that need them? verify: read
   the fixture's setup and find the migration step
-- Do two tests share state, so their order decides the result? verify: run the new tests alone,
-  then again in the same run as their neighbours, and compare the two results
+- Did the developer record, beside each new database test, that it was run alone and again
+  with its neighbours, with the same result? verify: read each new test in the diff for that
+  record; a new test carrying none is a finding, and the test passing today is not a
+  substitute for it
 - Does a schema change land without that migration running in the test container? verify: read
   the fixture's setup against the migration the diff adds
 - Is the container runtime precondition stated where a reader will meet it? verify: read the

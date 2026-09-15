@@ -76,9 +76,10 @@ convention when it has one.
 - Is a nullable warning silenced with the null-forgiving operator rather than handled?
   verify: grep the diff for `!` directly after an identifier or member access —
   `!.`, `!;`, `!)`, `!,` — and read what each value can actually be
-- Are the build, test and lint commands green on this change, unfiltered? verify: run the
-  build, test and lint commands declared in .tldrx/workspace.yml and read each exit code —
-  and say so when the workspace leaves that slot empty rather than letting the check pass
+- Are the build, test and lint commands green on this change, unfiltered? verify: read their
+  rows in the Definition of Done section above — the facilitator already ran every declared
+  command — and confirm each exit code is 0; a row reading `(no dod commands)` means there is
+  nothing to confirm, so say that rather than letting the check pass
 - Is a disposable created without `using` or an explicit dispose on every path? verify: read
   each `new` of a disposable type added in the diff
 - Does new code read configuration straight from the configuration root instead of the bound
