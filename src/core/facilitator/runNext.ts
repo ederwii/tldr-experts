@@ -22,7 +22,7 @@ import { RunStore } from "../run/RunStore.ts";
 import { isAttendedByHost, isTerminal, type GateType, type RunFile, type RunPhase, type RunStage, type RunTask } from "../run/RunFile.ts";
 import { runChecks, runPrecondition, type PreconditionOutcome } from "../run/checks.ts";
 import { approve } from "../run/gates.ts";
-import { AUTO_GATE_ACTOR, evaluateAutoGate, heldBy, unreadableHeadings } from "../run/autoGate.ts";
+import { AUTO_GATE_ACTOR, AUTO_GATE_RETRY_ACTOR, evaluateAutoGate, heldBy, unreadableHeadings } from "../run/autoGate.ts";
 import {
   describeAgentFallthroughs, evaluateAgentGate, type AgentGateInput, type AgentGateVerdict,
 } from "../run/agentGate.ts";
@@ -2752,7 +2752,11 @@ export function describePreviousAttempt(
   if (stage.gate.status === "rejected" && stage.gate.note.trim() !== "") {
     if (lines.length > 0) lines.push("");
     lines.push(
-      "A human rejected the previous attempt. Their note is the primary instruction for this one:",
+      // Said as it happened (gh #231): a rejection the loop signed after failed checks is
+      // not a person's verdict, and a prompt that calls it one lies about who is watching.
+      stage.gate.by === AUTO_GATE_RETRY_ACTOR
+        ? "The previous attempt's auto gate was refused by failed checks, and `run auto` re-ran it. Its note is the primary instruction for this one:"
+        : "A human rejected the previous attempt. Their note is the primary instruction for this one:",
       "",
       ...stage.gate.note.trim().split("\n").map((line) => `> ${line}`),
     );

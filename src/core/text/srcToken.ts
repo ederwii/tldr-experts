@@ -954,7 +954,7 @@ function resolveAbsent(
   const found = firstExisting(absentBases(path, ctx));
   // (3a) nothing anywhere it could have been — the absence is literal.
   if (found === null) return OK;
-  if (needle !== null) return searchForNeedle(found, needle, path);
+  if (needle !== null) return searchForNeedle(found, needle, path, isWorkspaceFacts(found, ctx));
   const held = whatIsThere(found);
   // (3b) it is there and it is empty, which is the same absence one level down.
   if (held === null) return OK;
@@ -984,7 +984,7 @@ const EMPTY_PROBE_MAX_BYTES = 64 * 1024;
  * thing being there in ANY casing, and the direction that costs less is the one
  * that sends a writer back to look again.
  */
-function searchForNeedle(abs: string, needle: string, path: string): SrcResolution {
+function searchForNeedle(abs: string, needle: string, path: string, factsFile: boolean): SrcResolution {
   let stat;
   try {
     stat = statSync(abs);
@@ -1009,7 +1009,8 @@ function searchForNeedle(abs: string, needle: string, path: string): SrcResoluti
   const wanted = needle.toLowerCase();
   const lines = text.split("\n");
   for (let i = 0; i < lines.length; i++) {
-    if ((lines[i] ?? "").toLowerCase().includes(wanted)) {
+    const line = factsFile ? withoutFactProvenance(lines[i] ?? "") : (lines[i] ?? "");
+    if (line.toLowerCase().includes(wanted)) {
       return refused(
         `\`${needle}\` IS at ${path}:${String(i + 1)} — that is a presence, not an absence`,
         abs,
@@ -1018,6 +1019,61 @@ function searchForNeedle(abs: string, needle: string, path: string): SrcResoluti
   }
   // The one shape in which an absence over an existing file is genuinely CHECKED.
   return OK;
+}
+
+/**
+ * True when `abs` IS the workspace's own `.tldrx/memory/facts.yml` — the one file whose
+ * record shape the framework writes itself (`emitFact`), and so the one file in which a
+ * span can be proven to be provenance rather than content (gh #231).
+ */
+function isWorkspaceFacts(abs: string, ctx: SrcContext): boolean {
+  return normalize(abs) === normalize(join(ctx.root, PROJECT_FRAMEWORK_DIR, "memory", "facts.yml"));
+}
+
+/** The keys `emitFact` writes inside a fact's `source:` map — and nothing else. */
+const PROVENANCE_KEYS: ReadonlySet<string> = new Set(["who", "when", "run", "q", "decided_by"]);
+const SOURCE_OPEN_RE = /(^|[\s,{])source:\s*\{/;
+/** One `key: value` entry of a flow map: a plain scalar, or a JSON-quoted one (`yamlScalar`). */
+const PROVENANCE_ENTRY_RE = /^\s*([a-z_]+):\s*("(?:[^"\\]|\\.)*"|[^,{}"]*?)\s*([,}])/;
+
+/**
+ * The line with a fact's `source: {who, when, run, q, decided_by}` map blanked out, or the
+ * line unchanged (gh #231).
+ *
+ * Measured 2026-09-14: `absent:.tldrx/memory/facts.yml#tenant-credits` was written true and
+ * refused a moment later, because `run auto` answered the stage's own questions and every
+ * fact it appended carried `source: {… run: 260914-tenant-credits …}`. The needle matched the
+ * RUN ID — who recorded a fact, when, in which run, for which question — and none of that is
+ * anything a fact says. So those five fields are not searched.
+ *
+ * Deliberately narrow, because the direction this can fail in is the dangerous one (an
+ * absence passed over content that contradicts it):
+ *
+ *  - only the workspace facts file (`isWorkspaceFacts`) — a `source: {…}` line in a YAML
+ *    config or a code file is content, and is searched as it always was;
+ *  - only a flow map `emitFact` could have written: EVERY key must be one of the five, or
+ *    nothing on the line is blanked. A hand-edited `source: {…, note: …}` is not provably
+ *    provenance, so it is searched in full;
+ *  - never the rest of a fact. A fact THIS run just recorded whose `fact:`, `area:`,
+ *    `alternatives:` or `recommended_why:` holds the needle still refuses, because then the
+ *    absence really has stopped being true — and the loop's bounded re-run (gh #231 B) is
+ *    the path that recovers it, not a blind spot here.
+ *
+ * Blanked with spaces rather than cut, so a match elsewhere on the same line is still found
+ * and every column the message could name stays where it was.
+ */
+function withoutFactProvenance(line: string): string {
+  const open = SOURCE_OPEN_RE.exec(line);
+  if (open === null) return line;
+  const start = open.index + (open[1] ?? "").length;
+  let at = open.index + open[0].length;
+  for (;;) {
+    const entry = PROVENANCE_ENTRY_RE.exec(line.slice(at));
+    if (entry === null || !PROVENANCE_KEYS.has(entry[1] ?? "")) return line;
+    at += entry[0].length;
+    if (entry[3] === "}") break;
+  }
+  return line.slice(0, start) + " ".repeat(at - start) + line.slice(at);
 }
 
 /**

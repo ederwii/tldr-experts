@@ -41,6 +41,11 @@ afirmación, y así es como se le pone fuente. Se rechaza en una afirmación **p
 fuera de la sección `Unknowns`: no puedes citar un directorio vacío como prueba de que algo
 existe.
 
+Agrega `#<lo que buscaste>` — `absent:docs/retention.md#30 days` — y la ausencia se busca de
+verdad: si aparece, se rechaza nombrando la línea. En `.tldrx/memory/facts.yml` no se busca en
+el mapa `source:` de un hecho (quién lo registró, cuándo, en qué run, para qué pregunta): un id
+de run no es algo que un hecho diga. Todo lo demás del hecho sí se busca.
+
 **Un comando rechazado no lleva ninguna cita `$ … → exit <n>`.** Esa forma necesita un
 código de salida, y un comando del Definition of Done que tu `workspace.yml` no declara — o uno
 que necesita un shell, que la compuerta nunca abre — nunca corrió, así que no hay ninguno que

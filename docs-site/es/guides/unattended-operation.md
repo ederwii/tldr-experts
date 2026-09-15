@@ -605,6 +605,15 @@ Tres políticas, tres cosas distintas al terminar una etapa:
   por una pregunta abierta se cierra sola apenas se responde la pregunta. Solo `auto` — el run
   ya concedió esa autoridad — y tu propio `approve` o `reject` la anula en cualquier momento.
 
+  Cuando lo único que rechaza una compuerta `auto` es un **check fallido** — un check
+  declarado, o `claim-sources` rechazando una cita — el bucle hace lo que habrías tecleado tú:
+  registra `tldrx reject --and-continue` con los hallazgos de los checks como nota, firmado
+  `run auto` para que el rastro muestre que no fue una persona, y vuelve a correr la etapa. Una
+  vez por etapa. Si esa nueva corrida se rechaza igual, te espera e imprime `not re-running …
+  the automatic re-run bound is spent`. Nunca en una compuerta `human` o `agent`, y nunca
+  cuando también la retienen preguntas, presupuesto, historias, frontera o estado — esos
+  tienen sus propios caminos.
+
 Las dos banderas de espera pueden darse juntas — esa es la forma de un lanzamiento del todo
 desatendido: `--wait-answers 4h --wait-gates 4h`.
 

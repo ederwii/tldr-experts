@@ -765,6 +765,13 @@ result of. `tldrx reject --and-continue` means *redo it this way and carry on*: 
 back to `ready` with your note exactly the same way, and the loop re-runs it instead of
 exiting, which is what relaunching by hand used to do.
 
+One rejection the loop writes itself (gh #231): when an `auto` gate is refused by failed checks
+and nothing else — a declared check, or `claim-sources` refusing a citation — the finding is the
+whole note a person would have typed. So the loop records `reject --and-continue` with the
+findings, signed `run auto`, and re-runs the stage once. If that re-run is refused the same way,
+it waits for you and prints that the bound is spent. It never does this for a `human` or `agent`
+gate, nor when questions, budget, stories, boundary or status also hold the gate.
+
 It waits FOR a signature, and produces one only where the run already said it could. A stage on
 `gates_policy: agent` has already had the engine's own gate signer run on it — one bounded turn
 that writes `.agent/<stage>/evidence.md` and goes through the unchanged `approve --as-agent`
