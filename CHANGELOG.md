@@ -22,8 +22,15 @@
   reopening the story and going looking for a bug that is not there. When no second run could be
   taken the record says so with the reason and no number (§7): a command whose binary the tree
   never had would only measure the same absence again, and a refused command never ran, so it has
-  no first reading to reproduce. Owner decision, answered on Slack: re-run the red command once and
-  record both exit codes. One reading per spawn, shared with the base-tree path, so the two cannot
+  no first reading to reproduce. **A red that TIMED OUT is re-run too, so a timing-out
+  Definition-of-Done command now costs up to two timeout periods instead of one.** That is stated
+  rather than buried: the owner approved one extra run of the suite, and doubling a timeout is a
+  fair reading of it but was not in the framing. Timeouts are deliberately not carved out — the
+  measured case was contention over a container runtime, and contention is exactly what makes a
+  suite hang rather than fail cleanly, so a carve-out would leave the likeliest flake the one thing
+  never measured. The blocked reason names both readings and marks either of them `(timed out)`,
+  so the record says which kind of red was paid for twice. Owner decision, answered on Slack:
+  re-run the red command once and record both exit codes. One reading per spawn, shared with the base-tree path, so the two cannot
   disagree about what a timeout's exit code is or which line of a red suite is the summary.
 
 - **A fix-list sha that is too LONG is refused by name, instead of reading as no sha at all
