@@ -95,6 +95,19 @@ sells: measured over asserted, refused over guessed, named over silent.
   them, and the one wave that reviewed after merging left its defect on `main` for ~2 hours.
   This gates the MERGE PATH only — `scripts/release.sh` commits on `main` directly, waves
   nothing, and is untouched.
+  `against:` is a CITATION, not a declaration: it must be COPIED from the output of
+  `git rev-parse HEAD` (or `git log --format=%H`) run in the reviewed worktree — never typed
+  from memory, and never expanded by hand from a short sha. A short sha copied verbatim is
+  fine; inventing the missing characters is not. Measured 2026-09-15: a reviewer wrote a
+  40-character `against:` that did not exist, by padding the real short sha `0a29ad5` with
+  fabricated characters — no command in its transcript had ever printed that sha, and it was
+  caught only by hand-comparing the record against `git log`. The existing gate is not the
+  control here: it refuses a record whose sha is not an ancestor of the branch head with no
+  non-`.review/` changes since, so a fabricated sha usually falls there — but one that by
+  chance exists and is an ancestor would pass, and the record would then assert a review that
+  never happened. The control is the copying, not the gate. Safest practice: whoever commits
+  the record takes the sha from `rev-parse` in the same command that writes the file, using a
+  reviewer-reported sha only as a cross-check.
 - **Agents touch the shared checkout ONLY through `scripts/merge-wave.sh`.** Everything else
   happens in your own worktree
   (`git fetch origin && git worktree add <scratch>/wt-<topic> -b <branch> origin/main`). Never
