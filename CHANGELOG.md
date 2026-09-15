@@ -42,6 +42,23 @@
   without starting anything — `run`, a command needing a shell, an absent one, a `--no-probe` skip
   — announces nothing, because it costs no wait to report.
 
+- **Five more stack-pack reviewer Checks asked the read-only reviewer to do something it holds no
+  tool for, and one of them had no answer waiting for it anywhere (#195, #182's sibling).** #182
+  moved the can-it-fail Check to the developer because the mutation it asked for needs a write and
+  a test run, and the reviewer's whole allowance is `Read`, `Grep`, `Glob`, `Bash(git diff *)` — but
+  four more Checks, one per language pack, carried the identical contradiction: "run the typecheck
+  and lint commands declared in `.tldrx/workspace.yml`" sits sixty-odd lines above the SAME rendered
+  prompt's "Do not re-run them. They passed; that is why you are being asked," which follows the
+  `## Definition of Done — already re-run by the facilitator` section that already hands the
+  reviewer every declared command's exit code. Unlike #182's mutation, this one is not a producer's
+  obligation moved to whoever can perform it — the answer was already ON THE PAGE, so the four
+  Checks now point the reviewer at the Definition of Done section instead of asking it to run
+  anything a second time. The `postgres-testcontainers` overlay's ordering Check ("run the new tests
+  alone, then again … and compare") is a different case: nothing re-runs it at the Definition of
+  Done, so owner decision (Slack) gives it #182's shape instead — the overlay's own Defaults section
+  now asks the developer to run each new database test alone and with its neighbours and record the
+  result beside the test, and the Check asks the reviewer only whether that record is there.
+
 - **A red Definition-of-Done command is measured TWICE before it pins a story `blocked`, and the
   record carries both exit codes (#163, sub-fix 1).** MEASURED on a .NET workspace, 2026-09-05: a
   story's DoD gate returned `dotnet test` → exit 2, so the story blocked; the operator then ran the

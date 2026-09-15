@@ -292,3 +292,64 @@ describe("the can-it-fail Check asks the reviewer for a read, not a mutation", (
     expect(offenders).toEqual([]);
   });
 });
+
+/**
+ * The "are the declared commands green" Check is asked of the reviewer, so it asks for a
+ * READ of what the facilitator already ran, not a run of its own (gh #195, #182's sibling).
+ *
+ * Distinct from #182's shape even though the retired verb is the same word ("run"): #182's
+ * mutation has no other answer anywhere in the prompt, so the fix moved it to whoever holds
+ * the pen. This Check's answer already sits in the SAME rendered document — `buildReviewerPrompt`
+ * emits `## Definition of Done — already re-run by the facilitator` (`prompts.ts`) with every
+ * declared command's exit code, ~60 lines above `## Stack checks`, followed by "Do not re-run
+ * them. They passed; that is why you are being asked." So the fix here is not a new obligation
+ * for the developer — it is pointing the reviewer at a section of its own prompt it was never
+ * told to read.
+ */
+describe("the DoD-echoing Checks ask the reviewer for a read of what already ran, not a run of their own (gh #195)", () => {
+  const ASKS_FOR_THE_DOD_READ = "Definition of Done";
+  /** The imperative the retired wording aimed at a role holding no Bash but `git diff`. */
+  const RETIRED = ["verify: run the", "commands declared in .tldrx/workspace.yml"];
+
+  for (const lang of PACK_LANGUAGES) {
+    test(`${lang}.md points the reviewer at the Definition of Done section instead of asking it to run anything`, () => {
+      const text = readFileSync(packBodyPath(lang), "utf8");
+      const check = bullets(section(text, CHECKS_HEADING))
+        .find((item) => item.includes(ASKS_FOR_THE_DOD_READ));
+      expect(check, `${lang}.md still asks the reviewer to consult "${ASKS_FOR_THE_DOD_READ}"`).toBeDefined();
+      expect(check ?? "", `${lang}.md asks for an exit code already on the page`).toContain("exit code");
+      for (const retired of RETIRED) {
+        expect((check ?? "").toLowerCase(), `${lang}.md no longer asks the reviewer to ${retired}`)
+          .not.toContain(retired.toLowerCase());
+      }
+    });
+  }
+});
+
+/**
+ * The testcontainers ordering Check has no DoD equivalent — nothing re-runs "alone, then with
+ * neighbours" at the Definition of Done — so unlike the four language-pack Checks above, #195
+ * moves THIS one to the developer's obligation, #182-shaped: the overlay's own Defaults section
+ * (read by the developer) gains the run-and-record step, and the overlay's Checks section keeps
+ * only the reviewer's read of whether it was recorded.
+ */
+describe("the testcontainers ordering Check becomes a developer obligation, #182-shaped (gh #195)", () => {
+  const overlayText = () => readFileSync(overlayTemplatePath("postgres-testcontainers"), "utf8");
+
+  test("the overlay's Defaults ask the developer to run each new database test alone and with its neighbours, and record the result", () => {
+    const defaults = bullets(section(overlayText(), DEFAULTS_HEADING));
+    const item = defaults.find((d) => d.includes("alone") && d.includes("neighbours"));
+    expect(item, "postgres-testcontainers.md: Defaults ask for the alone/neighbours run").toBeDefined();
+    expect(item ?? "", "the Default asks for a record beside the test").toContain("record");
+  });
+
+  test("the overlay's Check asks the reviewer whether the developer recorded it, not to run anything", () => {
+    const checks = bullets(section(overlayText(), CHECKS_HEADING));
+    const item = checks.find((c) => c.toLowerCase().includes("did the developer record"));
+    expect(item, "postgres-testcontainers.md: a Check asks whether the developer recorded the ordering proof").toBeDefined();
+    expect(item ?? "", "the Check points the reviewer at the diff").toContain("diff");
+    expect(item ?? "", "a missing record is a finding").toContain("finding");
+    expect((item ?? "").toLowerCase(), "the reviewer is no longer asked to run the new tests itself")
+      .not.toContain("verify: run the new tests");
+  });
+});
