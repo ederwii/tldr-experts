@@ -209,6 +209,7 @@ export const EVENT_TYPES = [
   "story.review_retried",
   "story.work_rescued",
   "story.touches_widened",
+  "plan.fix_round",
   "epic.released",
   "worktree.foreign_work_aside", "worktree.foreign_work_restored",
   "result.unreadable",
