@@ -20,6 +20,8 @@ import { PLAN_STATUSES, type PlanStatus } from "../schemas/planCommon.ts";
 import { withoutSrcToken } from "../text/srcToken.ts";
 import { spentFigure } from "../budget/spentFigure.ts";
 import type { WideningRow } from "./measuredTouches.ts";
+import { CLOSED_ON_EPIC } from "./fixlist.ts";
+import type { SweepOutcome } from "./fixlistSweep.ts";
 import { withCure } from "./refusalKind.ts";
 
 export interface EpicSummaryRow {
@@ -202,6 +204,25 @@ export interface BuildHandoffParts {
    * every scheduled story reached an outcome.
    */
   readonly notStarted?: readonly NotStartedStory[];
+  /**
+   * What the run-level fix-list sweep found, one row per story with a fix list
+   * (#163, sub-fix 2).
+   *
+   * Only three of its answers reach this document, because only three of them need
+   * a human: a finding a LATER story closed, a still-open finding whose FILE a
+   * later story changed (together, the fact a person narrated by hand at the gate
+   * transcript N came from), and a sweep that could not be TAKEN (an absence,
+   * which must never read as a clean sweep). The first two are separate bullets in
+   * separate words: one is evidence of a close, the other is only evidence of a
+   * change, and one sentence carrying both strengths is the defect itself. A story
+   * whose findings were all re-checked and nothing came back says so in its own
+   * fix-list file, on each finding's `Swept:` line, and adds no bullet here — a
+   * document that grew a line per story per run would bury the ones that matter.
+   *
+   * Absent behaves exactly as empty and changes no byte of a document from a run
+   * with no fix list in it.
+   */
+  readonly sweep?: readonly SweepOutcome[];
 }
 
 /** A scheduled story with no outcome at all — named with WHY, never dropped. */
@@ -354,7 +375,7 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
     ...(notDone.length === 0 && (parts.carried ?? []).length === 0
       && (parts.unreadableStories ?? []).length === 0 && (parts.foreignWork ?? []).length === 0
       && (parts.notStarted ?? []).length === 0 && refusedButMeasured.length === 0
-      && diedButMeasured.length === 0
+      && diedButMeasured.length === 0 && sweepBullets(parts.sweep ?? []).length === 0
       ? [`- none — every scheduled story reached \`done\` and no carried finding is unowned `
         + `[src: absent:04-build/log]`]
       : []),
@@ -387,6 +408,7 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
         `${row.reason} [src: ${row.rel}:1]`,
     ),
     ...carriedBullets(parts.carried ?? []),
+    ...sweepBullets(parts.sweep ?? []),
     ...(parts.unreadableStories ?? []).map((row) =>
       `- a story file could not be read, so its carried findings were not checked: ` +
       `\`${row.rel}\` — ${row.reason} [src: absent:${row.rel}]`),
@@ -594,6 +616,65 @@ function carriedBullets(rows: readonly CarriedRow[]): readonly string[] {
     `- +${String(rows.length - MAX_CARRIED_BULLETS)} more carried findings — see the fix list `
     + `[src: ${first === undefined ? "absent:04-build/fixlist" : `${first.rel}:1`}]`,
   ];
+}
+
+/**
+ * The run-level sweep's two reportable answers, as `## Unknowns` bullets (#163).
+ *
+ * A close by a LATER story is here, and not in `## Decisions`, because it is the
+ * sentence a human had to supply at the gate transcript N came from: "this defect
+ * is gone, and the story that owns the finding is not why". It reads as good news
+ * and it is still a thing somebody has to decide about — the finding is not
+ * closed, and whoever owns the deferred work needs to know it may already be
+ * done.
+ *
+ * A sweep that could not be TAKEN is here for the plainer reason: it is an
+ * absence, and a document that stayed quiet about it would let `Resolved: no`
+ * go on meaning "checked against the whole run" when nothing checked anything.
+ */
+function sweepBullets(rows: readonly SweepOutcome[]): readonly string[] {
+  const bullets: string[] = [];
+  for (const row of rows) {
+    if (row.absence !== null) {
+      bullets.push(
+        `- the run-level fix-list sweep could not be taken for ${row.storyId}, so a finding another `
+        + `story may have closed still reads open: ${row.absence} [src: ${row.rel}:1]`);
+      continue;
+    }
+    if (row.closed.length > 0) {
+      bullets.push(
+        `- ${row.storyId} has ${String(row.closed.length)} fix-list finding(s) whose defect a LATER story `
+        + `in this run closed, not ${row.storyId}: `
+        + `${row.closed.map((c) => `#${String(c.n)} at \`${c.sha}\``).join(", ")}, reachable from `
+        + `\`${row.epicTip ?? ""}\` and recorded \`Resolved: ${CLOSED_ON_EPIC} <sha>\` — the finding is `
+        + `still open on its own story, and a person decides whether it needs anything more `
+        + `[src: ${row.rel}:1]`);
+    }
+    // The weaker fact, in its own bullet and in its own words. Folding it into the
+    // one above would hand a reader two different strengths of evidence under one
+    // sentence, which is the defect this whole sweep exists to stop.
+    if (row.touched.length > 0) {
+      bullets.push(
+        `- ${row.storyId} has ${String(row.touched.length)} still-open fix-list finding(s) whose FILE a `
+        + `later story in this run changed: `
+        + `${row.touched.map((t) => `#${String(t.n)} at \`${t.path}\` (${t.commits.map((sha) => `\`${sha}\``).join(", ")})`).join(", ")}`
+        + ` — a changed file is not a closed defect, so nothing here is recorded as resolved; `
+        + `a person reads those commits and decides whether the work is still owed `
+        + `[src: ${row.rel}:1]`);
+    }
+    // A question git refused, said as that and not as an answer. Without this the
+    // fix-list line above would be the only trace, and `Resolved: no` would go back
+    // to meaning whatever the reader assumed it meant.
+    if (row.unmeasured.length > 0) {
+      bullets.push(
+        `- ${row.storyId} has ${String(row.unmeasured.length)} still-open fix-list finding(s) whose file `
+        + `could not be measured for a later story's changes: `
+        + `${row.unmeasured.map((u) => `#${String(u.n)} at \`${u.path}\` (${u.reason})`).join(", ")}`
+        + ` — git refused the question, so nothing here is a clean probe and the finding may have been `
+        + `closed elsewhere without this run being able to tell [src: ${row.rel}:1]`);
+    }
+  }
+  return bullets;
 }
 
 function decisions(parts: BuildHandoffParts): readonly string[] {

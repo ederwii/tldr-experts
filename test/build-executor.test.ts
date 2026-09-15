@@ -3536,6 +3536,9 @@ describe("a carried finding nobody's story owns reaches `## Unknowns` (#171)", (
       kind: "correctness", normalisedFrom: null,
       disposition: "defer-with-log", detail: "", doNot: [], resolved: false, resolvedSha: null,
       resolvedShaRefusal: null,
+      claimedSha: null,
+      closedOnEpicSha: null,
+      swept: null,
       ...overrides,
     };
   }
@@ -3684,6 +3687,9 @@ describe("the carried-findings leaf, and what every surface gets from it (#171, 
       kind: "correctness", normalisedFrom: null,
       disposition: "defer-with-log", detail: "", doNot: [], resolved: false, resolvedSha: null,
       resolvedShaRefusal: null,
+      claimedSha: null,
+      closedOnEpicSha: null,
+      swept: null,
       ...overrides,
     };
   }

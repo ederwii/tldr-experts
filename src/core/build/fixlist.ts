@@ -178,6 +178,55 @@ export interface FixFinding {
    * rather than performed in silence.
    */
   readonly resolvedShaRefusal: string | null;
+  /**
+   * The commit the `Resolved:` line NAMES, whatever verdict word it carries
+   * (#163, sub-fix 2) — or null when the line names none.
+   *
+   * `resolvedSha` answers "what closes this finding", and it is deliberately
+   * null for every line that is not a plain `yes`. This answers a different
+   * question — "what commit does the record point at" — and it stays readable
+   * after the claim has been withdrawn: a `Resolved: claimed-unverified — named
+   * \`abc…\`, which is not reachable from \`story/S3\`` still names a commit, and
+   * that commit is exactly the candidate the run-level sweep has to re-check
+   * against the epic tip once the LATER stories have merged.
+   *
+   * Read through `readResolvedSha` like every other sha in this file (§7, one
+   * grammar), and only off a verdict word this file writes — a `Resolved: no` is
+   * never mined for hex, because reading a sha out of prose nobody claimed would
+   * invent evidence.
+   *
+   * Null on every record written before this field existed (§7: `version: 1`
+   * formats only grow), which is the same thing it means for a `no`.
+   */
+  readonly claimedSha: string | null;
+  /**
+   * The commit a LATER story closed this finding with — `Resolved: yes-on-epic
+   * <sha>` — or null (#163, sub-fix 2).
+   *
+   * Kept apart from `resolvedSha` on purpose, because they are not the same fact:
+   * one says "the story that owns this finding fixed it", the other says "the
+   * defect is gone from the epic, and somebody else's story is why". Flattening
+   * them into one `Resolved: yes` is exactly what made a human narrate the
+   * difference by hand at a Build gate (transcript N, 2026-09-05).
+   *
+   * It closes NOTHING on its own: `yes-on-epic` is not `yes`, so `resolved` is
+   * false, `isOpen` still holds the story, and nothing this sweep writes changes
+   * what a gate decides. Recording is the whole of it.
+   */
+  readonly closedOnEpicSha: string | null;
+  /**
+   * What the run-level sweep recorded about THIS finding — the `Swept:` line — or
+   * null when no sweep has run over it (#163, sub-fix 2).
+   *
+   * Written for every finding the sweep examined, including the ones it closed
+   * nothing over: a `Resolved: no` that has been re-checked against the epic tip
+   * and a `Resolved: no` nobody ever re-checked are different facts, and until
+   * this line existed they read identically — which is how `Resolved: no` came to
+   * mean "correct PER STORY" to the one human who knew that, and "unfixed" to
+   * everybody else. A sweep that could not be taken writes its REASON here rather
+   * than staying silent (§7, absent-with-reason).
+   */
+  readonly swept: string | null;
 }
 
 /**
@@ -413,6 +462,9 @@ export function parseFixFindings(value: unknown): ParsedFixlist {
       resolved: false,
       resolvedSha: null,
       resolvedShaRefusal: null,
+      claimedSha: null,
+      closedOnEpicSha: null,
+      swept: null,
     });
   }
   if (findings.length === 0 && problems.length === 0) {
@@ -554,6 +606,10 @@ export function renderFixlist(parts: FixlistParts): string {
           + "not hold a story; it is routed here with its citation and keeps its place in the record",
         ]),
       `Resolved: ${resolvedLine(finding)}`,
+      // Only when a sweep has actually said something about this finding. A fresh
+      // fix list — the only kind this function is ever handed — carries none, so
+      // nothing this renderer writes changed shape (#163, sub-fix 2).
+      ...(finding.swept === null ? [] : [`Swept: ${finding.swept}`]),
       "",
     );
     if (finding.detail !== "") lines.push(finding.detail, "");
@@ -570,6 +626,10 @@ export function renderFixlist(parts: FixlistParts): string {
  * it does not close anything.
  */
 function resolvedLine(finding: FixFinding): string {
+  // An epic-level close is written down as what it IS, never as `yes` and never
+  // as `no` (#163, sub-fix 2). It is asked FIRST because it is the one state a
+  // `resolved: false` finding can be in that `no` would misreport.
+  if (finding.closedOnEpicSha !== null) return `${CLOSED_ON_EPIC} ${finding.closedOnEpicSha}`;
   if (!finding.resolved) return "no";
   return finding.resolvedSha === null ? "yes" : `yes ${finding.resolvedSha}`;
 }
@@ -586,6 +646,38 @@ const KIND_RE = /^Kind:\s*(.*)$/;
 const NORMALISED_RE = /^Normalised-from:\s*([a-z-]+)\s*(?:—.*)?$/;
 const DISPOSITION_RE = /^Disposition:\s*\*\*([a-z-]+)\*\*\s*(?:—\s*(.*))?$/;
 const RESOLVED_RE = /^Resolved:\s*(\S+)\s*(.*)$/;
+/**
+ * What the run-level sweep wrote about this finding, verbatim (#163, sub-fix 2).
+ *
+ * A line of its own rather than prose on the `Resolved:` line, for the reason
+ * `Normalised-from:` is a line of its own: the two say different things, a reader
+ * has to be able to tell them apart, and a `Resolved:` line that grew a second
+ * clause would be one the existing `RESOLVED_RE` tail silently absorbs.
+ *
+ * Absent from every fix list written before this existed, and `swept: null` is
+ * that tolerant read (§7). The parser must consume it explicitly: an unrecognised
+ * line falls into the finding's `detail`, and a sweep sentence appearing inside a
+ * developer's instructions would be the record leaking into the work.
+ */
+const SWEPT_RE = /^Swept:\s*(.*)$/;
+/**
+ * The third and fourth verdict words a `Resolved:` line may carry — the two ways
+ * a claim ends up NOT being a plain `yes`.
+ *
+ * `CLOSED_ON_EPIC` is the sweep's spelling for "a LATER story closed this", and
+ * it is deliberately not `yes`: `parseFixlistFile` narrows `resolved` to the
+ * literal `yes`, so an epic-level close leaves `isOpen` exactly as it found it.
+ * The sweep RECORDS; it does not decide what a gate decides.
+ */
+export const CLOSED_ON_EPIC = "yes-on-epic";
+/**
+ * The verdict words whose line may NAME a commit — `claimedSha`'s domain.
+ *
+ * A `Resolved: no` is not among them: nothing was claimed, so hex on that line is
+ * prose, and mining it would invent evidence for a claim nobody made. Same rule
+ * the `resolvedSha` read has always obeyed, one list for both.
+ */
+const CLAIMING_VERDICTS: ReadonlySet<string> = new Set(["yes", CLAIMED_UNVERIFIED, CLOSED_ON_EPIC]);
 /** git's own abbreviation floor: fewer hex characters is not a sha to look up. */
 export const SHA_ABBREV_MIN = 7;
 /** A git object id. Anything longer is not one, however it was produced. */
@@ -682,6 +774,7 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
     normalisedFrom: Disposition | null;
     where: string; disposition: Disposition | null; resolved: boolean; resolvedSha: string | null;
     resolvedShaRefusal: string | null;
+    claimedSha: string | null; closedOnEpicSha: string | null; swept: string | null;
     detail: string[]; doNot: string[];
   } | null = null;
   const flush = (): void => {
@@ -699,6 +792,9 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
       resolved: current.resolved,
       resolvedSha: current.resolvedSha,
       resolvedShaRefusal: current.resolvedShaRefusal,
+      claimedSha: current.claimedSha,
+      closedOnEpicSha: current.closedOnEpicSha,
+      swept: current.swept,
     });
   };
   for (const line of text.split("\n")) {
@@ -711,6 +807,7 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
         severity: (heading[3] ?? "unrated").trim(),
         kind: null, normalisedFrom: null,
         where: "", disposition: null, resolved: false, resolvedSha: null, resolvedShaRefusal: null,
+        claimedSha: null, closedOnEpicSha: null, swept: null,
         detail: [], doNot: [],
       };
       continue;
@@ -745,13 +842,25 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
     }
     const resolved = RESOLVED_RE.exec(line);
     if (resolved !== null) {
-      current.resolved = (resolved[1] ?? "").toLowerCase() === "yes";
-      // Only a `yes` may carry a sha. A `no` line with a hex word in it is prose,
-      // and reading a sha out of it would invent evidence for a claim nobody made
-      // — which is also why a `no` can carry no refusal: nothing was claimed.
-      const read = current.resolved ? readResolvedSha(resolved[2] ?? "") : null;
-      current.resolvedSha = read?.sha ?? null;
-      current.resolvedShaRefusal = read?.refusal ?? null;
+      const verdict = (resolved[1] ?? "").toLowerCase();
+      current.resolved = verdict === "yes";
+      // Only a CLAIMING verdict may carry a sha. A `no` line with a hex word in it
+      // is prose, and reading a sha out of it would invent evidence for a claim
+      // nobody made — which is also why a `no` can carry no refusal: nothing was
+      // claimed. One read for all three claiming words (§7): `claimedSha` is what
+      // the line points at, `resolvedSha` is what CLOSES it, and only a plain
+      // `yes` ever does that.
+      const read = CLAIMING_VERDICTS.has(verdict) ? readResolvedSha(resolved[2] ?? "") : null;
+      current.claimedSha = read?.sha ?? null;
+      current.resolvedSha = current.resolved ? read?.sha ?? null : null;
+      current.resolvedShaRefusal = current.resolved ? read?.refusal ?? null : null;
+      current.closedOnEpicSha = verdict === CLOSED_ON_EPIC ? read?.sha ?? null : null;
+      continue;
+    }
+    const swept = SWEPT_RE.exec(line);
+    if (swept !== null) {
+      const value = (swept[1] ?? "").trim();
+      current.swept = value === "" ? null : value;
       continue;
     }
     const doNot = DO_NOT_RE.exec(line);
@@ -798,6 +907,71 @@ export function markUnverified(text: string, n: number, why: string): string {
     if (at !== n || !RESOLVED_RE.test(line)) return line;
     return `Resolved: ${CLAIMED_UNVERIFIED} — ${why}`;
   }).join("\n");
+}
+
+/** What the run-level sweep leaves on ONE finding (#163, sub-fix 2). */
+export interface SweepMark {
+  /**
+   * The whole value of the `Resolved:` line, or null to leave that line exactly
+   * as it is.
+   *
+   * Null is the common case by a wide margin: most findings a sweep examines are
+   * not closed by anybody, and the sweep's only output for them is the sentence
+   * below. A non-null value is only ever `yes-on-epic <sha> — …`, which is the
+   * one rewrite this whole path may make.
+   */
+  readonly resolved: string | null;
+  /**
+   * The `Swept:` sentence — never null, never blank. A finding the sweep LOOKED
+   * at and could not close still says so; that is the difference between a record
+   * that was checked and one nobody checked, and it is the whole reason this line
+   * exists.
+   */
+  readonly swept: string;
+}
+
+/**
+ * Write one finding's sweep result into the TEXT of a fix list (#163, sub-fix 2).
+ *
+ * A sibling of `markUnverified` and `canonicalizeResolvedSha`, and it obeys their
+ * rule: text in, text out, no I/O, one finding, and every other byte of the file
+ * untouched. It differs from both in that it may ADD a line — the `Swept:` a file
+ * written before this existed does not have — and it adds it immediately after
+ * the `Resolved:` line so the two facts about a close sit together. An existing
+ * `Swept:` line is REPLACED, never appended beside, so a second sweep leaves one
+ * sentence rather than a growing pile.
+ *
+ * A finding with no `Resolved:` line at all is left completely alone: it is not a
+ * finding this file's own writer produced, and inventing the two lines for it
+ * would be the record asserting a shape it never read.
+ */
+export function markSwept(text: string, n: number, mark: SweepMark): string {
+  let at: number | null = null;
+  let wrote = false;
+  const out: string[] = [];
+  for (const line of text.split("\n")) {
+    const heading = HEADING_RE.exec(line);
+    if (heading !== null) {
+      at = Number(heading[1] ?? "0");
+      out.push(line);
+      continue;
+    }
+    if (at !== n) {
+      out.push(line);
+      continue;
+    }
+    // A stale `Swept:` from an earlier pass is dropped here and rewritten below,
+    // beside the `Resolved:` line it describes.
+    if (SWEPT_RE.test(line)) continue;
+    if (!RESOLVED_RE.test(line) || wrote) {
+      out.push(line);
+      continue;
+    }
+    wrote = true;
+    out.push(mark.resolved === null ? line : `Resolved: ${mark.resolved}`);
+    out.push(`Swept: ${mark.swept}`);
+  }
+  return out.join("\n");
 }
 
 /**

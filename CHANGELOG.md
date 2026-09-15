@@ -227,6 +227,51 @@
   different hands — the schema bytes the child was handed, asserted in the test on every run,
   and that one live call, which is not re-run by any gate.
 
+- **A still-open fix-list finding is re-checked against the EPIC tip before the Build gate, so a
+  defect a LATER story closed says so with the closing sha instead of reading `Resolved: no`
+  (#163, sub-fix 2).** MEASURED on a Next.js workspace, 2026-09-05: at a Build gate all 6
+  `fix-now` findings carried a resolving sha and the 3 `defer-with-log` entries read
+  `Resolved: no` — "correct PER STORY", in the host agent's own words — but two of those three
+  defects had in fact been closed later in the same run by a DIFFERENT story, which the host
+  verified by reading the code. Exactly one finding had genuinely shipped unfixed, the record
+  could not tell those apart, and so a human narrated the difference by hand at the gate. The hole
+  was structural rather than careless: verification asks whether a claim's sha is reachable from
+  the STORY's own branch, and it asks at the moment that story settles — a fix that lands later,
+  on somebody else's branch, and reaches the epic through a merge did not exist when the question
+  was asked and is not on the branch it was asked about. There was no third answer for it, so it
+  was recorded as the second. There is one now. After the last story settles and before the
+  handoff is written, every finding not already closed with evidence is re-checked against its
+  epic tip, and a sha that is reachable from the epic and NOT from the story's own branch is
+  recorded as what it is. **The two kinds of close are spelled apart, never flattened**:
+  `Resolved: yes <sha>` stays the story's own close, and a close a later story landed is
+  `Resolved: yes-on-epic <sha>` — a different word because it is a different fact about who fixed
+  it and where the fix lives. `yes-on-epic` is not `yes`, so nothing the sweep writes changes what
+  any gate decides; the finding is exactly as open afterwards as it was before, and a finding that
+  genuinely shipped unfixed still reads unfixed. **Nothing is ever re-marked on inference.** A
+  reachable commit the record already names is the only thing that closes anything here — never a
+  changed file, never a heading that resembles another story's work — so the sweep cannot invent
+  the one direction §7 refuses to be wrong in. **And it does not go quiet when it finds nothing.**
+  Every finding it examined gets a `Swept:` line saying what was measured and against which tip,
+  because a `Resolved: no` that has been re-checked against the whole run and one that only ever
+  meant "correct per story" were indistinguishable, and that indistinguishability is the defect.
+  A sweep that could NOT be taken — no epic branch recorded, a tip git will not resolve, a file
+  that cannot be re-read — names its reason on every finding and in the handoff's `## Unknowns`,
+  rather than reporting a clean sweep over a measurement nobody took. **And it asks the weaker
+  question too, in words that say it is weaker.** The three entries that Next.js gate got wrong
+  named no commit at all — nobody had claimed one — so re-checking shas the record already names
+  has nothing to say about exactly the findings a human had to read the code for. For those, the
+  sweep asks what that human asked first: did a commit on the EPIC, and not on this story's own
+  branch, CHANGE the file this finding cites? Up to three such commits come back named, on the
+  `Swept:` line and as their own `## Unknowns` bullet — and they resolve NOTHING. A changed file
+  is not a closed defect, and writing `Resolved: yes` off one would be the same lie arrived at
+  from the other side; what this replaces is a person grepping the run's commits by hand at the
+  gate, never a person's judgement about them. **A probe git REFUSED says that, too.** An
+  unresolvable story ref and a file nobody changed both come back as no commits, and writing
+  "no later commit changed this" over the first would be a measurement nobody took wearing the
+  words of one that was — so the refusal carries git's own reason onto the `Swept:` line and
+  into `## Unknowns`, and is never counted as a clean probe. `Swept:` and the
+  `yes-on-epic` word are additive: a fix list written before this change reads exactly as it did.
+
 ## 0.29.0 — 2026-09-15
 
 ### Changed
