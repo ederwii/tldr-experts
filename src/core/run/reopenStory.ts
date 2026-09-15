@@ -48,14 +48,13 @@ import { join } from "node:path";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import { RunStore } from "./RunStore.ts";
 import { ambiguousRunLines } from "./openRuns.ts";
-import { BUILD_PHASE, buildProgress, PLAN_DIR } from "./buildProgress.ts";
+import { BUILD_PHASE, buildProgress, PLAN_DIR, storyDependsOn } from "./buildProgress.ts";
 import { IMPLICIT_PLAN_FILE, updateImplicitPlan } from "../build/implicitPlan.ts";
 import { StoryWriteError, updateStoryFront } from "../build/storyFile.ts";
 import { readReviewLedger } from "../facilitator/executors/build.ts";
 import { buildStageDefaults } from "./workflowPreset.ts";
 import type { RunStage } from "./RunFile.ts";
 import { validateEvent, type TldrxEvent } from "../events/Event.ts";
-import { parseFrontMatter } from "../schemas/frontMatter.ts";
 import { dependencyHoldOfLog, releasedByReopen, type ReleaseCandidate } from "../build/dependencyHold.ts";
 import { LOG_DIR } from "../build/plan.ts";
 
@@ -388,7 +387,7 @@ function prepareCascade(
   const candidates: ReleaseCandidate[] = rows.map((planned) => ({
     id: planned.id,
     status: planned.status,
-    dependsOn: dependsOnOf(store.runDir, planned.id),
+    dependsOn: storyDependsOn(store.runDir, planned.id),
     hold: planned.status === "blocked" ? holdOf(store.runDir, planned.id) : null,
   }));
   const { released, stayed } = releasedByReopen(reopened, candidates);
@@ -437,17 +436,6 @@ function prepareCascade(
   }
   for (const held of stayed) lines.push(`  ${held.id} stays \`blocked\`: ${held.reason}`);
   return { writes, lines };
-}
-
-/** A story file's `depends_on`, read tolerantly: an unreadable file depends on nothing it can prove. */
-function dependsOnOf(runDir: string, id: string): readonly string[] {
-  try {
-    const doc = parseFrontMatter(readFileSync(join(runDir, PLAN_DIR, "stories", `${id}.md`), "utf8")).doc;
-    const list = (doc as { depends_on?: unknown } | null)?.depends_on;
-    return Array.isArray(list) ? list.filter((x): x is string => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
 }
 
 /** The dependency a story's review log says blocked it, or null — `dependencyHoldOfLog`, off the file. */

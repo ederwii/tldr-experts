@@ -268,7 +268,9 @@ the same path a person's is, with `by: auto` and a note carrying all seven value
 not the auto gate's private business: `gate.requested` for a Build stage carries
 `stories: {total, done, in_progress, review, blocked, todo}` on EVERY policy, plus
 `blocked_story` and `blocked_reason` for the first blocked one — its own words, read out of
-`04-build/handoff.md`'s `## Findings`. The terminal line, the decision card and the
+`04-build/handoff.md`'s `## Findings` — and `waiting_story`, `waiting_on` and `waiting_reason`
+for the first `todo` story waiting on a dependency at `review`/`in_progress` (#303), since that
+story is not `blocked` and the dependency is the thing to act on. The terminal line, the decision card and the
 notification summary all say the same sentence: `0 of 1 stories delivered, S1 blocked (…)`.
 Measured 2026-09-09: two `human` Build gates announced themselves as a dollar figure and one
 green check while every story was `blocked` or `todo`, and were approved from a phone. The

@@ -15,6 +15,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseYaml } from "../yaml.ts";
+import { parseFrontMatter } from "../schemas/frontMatter.ts";
 import { asWavesFile, validateWaves } from "../schemas/waves.ts";
 import { IMPLICIT_PLAN_FILE } from "../build/implicitPlan.ts";
 import type { TldrxEvent } from "../events/Event.ts";
@@ -126,6 +127,21 @@ function statusOf(runDir: string, id: string): string {
     return STATUS_RE.exec(readFileSync(path, "utf8"))?.[1] ?? "todo";
   } catch {
     return "todo";
+  }
+}
+
+/**
+ * A story file's `depends_on`, read tolerantly: an unreadable file depends on
+ * nothing it can prove. ONE reader (§7) — `story reopen`'s release rule and the
+ * gate's waiting-dependent view (#303) both ask it.
+ */
+export function storyDependsOn(runDir: string, id: string): readonly string[] {
+  try {
+    const doc = parseFrontMatter(readFileSync(join(runDir, PLAN_DIR, "stories", `${id}.md`), "utf8")).doc;
+    const list = (doc as { depends_on?: unknown } | null)?.depends_on;
+    return Array.isArray(list) ? list.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
   }
 }
 

@@ -346,7 +346,10 @@ de decir cuánto costó:
 
 Los conteos y el motivo de la primera historia bloqueada viajan en el payload de
 `gate.requested` como `stories`, `blocked_story` y `blocked_reason`, así que un script puede
-enrutar con ellos. **Lo que RETIENE la compuerta también viaja, como campo**: `holding` es
+enrutar con ellos. Una historia que quedó en `todo` porque espera a una dependencia todavía en
+`review` o `in_progress` no está `blocked`, así que viaja aparte como `waiting_story`, `waiting_on`
+y `waiting_reason`, y el resumen dice *"S2 waits on S1 (`review`)"*: sobre lo que actuás es la
+dependencia, porque `tldrx story reopen` rechaza una historia que ya está en `todo`. **Lo que RETIENE la compuerta también viaja, como campo**: `holding` es
 `questions`, `stories` o `none` — la misma rama por la que se eligió el `command` de arriba,
 dicha una vez como dato, para que un adaptador nunca tenga que olfatearla del prefijo de una
 cadena de CLI. Y donde la compuerta puede nombrar con sus propias palabras qué hay que cambiar,

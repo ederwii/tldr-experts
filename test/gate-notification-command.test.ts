@@ -53,6 +53,7 @@ function stories(done: number, total: number): StoriesView {
     counts: { total, done, in_progress: 0, review: 0, blocked: unfinished.length, todo: 0 },
     unfinished,
     firstBlocked: unfinished.length === 0 ? null : blocked,
+    firstWaiting: null,
   };
 }
 
@@ -213,6 +214,7 @@ describe("the gate payload names what holds it and how to send it back (#243)", 
         { id: "S3", status: "todo", reason: REASON_NOT_RECORDED },
       ],
       firstBlocked: null,
+      firstWaiting: null,
     };
 
     const payload = gateNotification(ctx, 1.78, "human", [], todoOnly);
@@ -227,6 +229,7 @@ describe("the gate payload names what holds it and how to send it back (#243)", 
       counts: { total: 2, done: 1, in_progress: 0, review: 0, blocked: 1, todo: 0 },
       unfinished: [{ id: "S2", status: "blocked", reason: REASON_NOT_RECORDED }],
       firstBlocked: { id: "S2", status: "blocked", reason: REASON_NOT_RECORDED },
+      firstWaiting: null,
     };
 
     const payload = gateNotification(ctx, 1.78, "human", [], noReason);
