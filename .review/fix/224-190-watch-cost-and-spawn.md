@@ -1,3 +1,3 @@
 verdict: merge
 reviewed-by: Claude Sonnet 5 (pre-merge reviewer agent)
-against: ada35c3b5eccd2853fa105795824197e530bd63f
+against: cb42b319e85f1f8e0f6e46e8c9d5d4015c5e3406
