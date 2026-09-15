@@ -36,6 +36,20 @@
   `tldrx drive` mandate is unchanged on purpose: its unattended mode is refused `run auto`
   outright (`attended_by: host`), and its attended mode drives `tldrx next`. No mandate-driven
   turn ever reaches the move, so a sentence about it would teach something the driver cannot do.
+- **A headless fix list now buys its fix round in the same run, and the approving reviewer's
+  signature closes what it was shown (#327, owner decision "A: ronda + auto-cierre").** A reviewer
+  that signed with a `fix-now` finding used to park the story at `review`, on the grounds that
+  routing a fix list needed a host — measured live, that park stranded the story and the two
+  stories of the next wave behind it until a person intervened. Now the story is requeued without
+  spending an attempt, the developer is handed the open findings, and the next reviewer is shown
+  each one verbatim with the rule "approve only if every one is fixed". Its `approve` rewrites each
+  finding it was shown as `Resolved: yes <commit> — auto-closed: …` naming the reviewer session,
+  attempt and run — the existing line grammar, so every reader parses it unchanged, and checked
+  against git before the story may settle, so a sha that is not on the story branch reopens it. A
+  finding that reached the file after the prompt was rendered stays open and still blocks. The
+  test that pinned the park ("a headless run … parks the story") is inverted, citing the decision.
+  A host review is shown the same findings and closes nothing. No new event, `run.yml` field or
+  CLI verb.
 
 ### Fixed
 
@@ -52,7 +66,18 @@
   nothing; the move and its `budget.raised` are the loop's. Denied exactly as before:
   `tldrx next`, a launch with `--no-rebalance-finished`, a run-ceiling shortfall, a shortfall
   the finished phases cover only in part, a stale donor, and a move past a recorded grant.
-
+- **A re-reviewed story's `changes` is consumed instead of parking the story (closes #327).** A
+  story whose earlier reviewer died or was unfunded is re-reviewed alone, and that path returned
+  right after the verdict — so a `changes` with attempts left parked at `review` and its
+  dependents never started, on the serial path and in a wave alike. It now enters the attempt loop
+  (or the wave's next round) under the same ledger bound every other requeue uses.
+- **A story `blocked` on an approving review whose fix list was closed later now settles `done`
+  (closes #329).** Measured live: a fix landed, the reviewer approved, the story blocked on a
+  `Resolved: no` nobody had rewritten — and after a person rewrote it, `story reopen` dispatched a
+  developer with nothing to change and `--as-is` refused a branch already on its epic. Before the
+  frontier walk, `tldrx next` and `--prepare` now settle such a story `done` with no agent spawned,
+  after holding every `Resolved: yes` to git, and say why in one line. The refusal that blocks a
+  story on its fix list names that remedy instead of `tldrx story reopen`.
 - **A parallel Build wave no longer hands two developers the same unspent money (closes #325).**
   Every per-story cap reads the stage's METERED remainder, which is only right when stories run
   one at a time. Measured live: a $21.60 stage spawned S1 under $21.00 and S2 under $16.50 in one

@@ -181,6 +181,22 @@ rechaza — gratis, sin gastarle un intento a la story — y una lista de arregl
 que este campo existiera se lee como *no declarado*, que bloquea como cualquier otra cosa sin
 clasificar.
 
+## Un reviewer adjuntó una lista de arreglos, ¿quién la arregla y quién la cierra?
+
+Una corrida desatendida. Cuando un reviewer firma con hallazgos `fix-now`, la story vuelve
+directamente a un developer en la misma corrida, sin gastar uno de sus intentos, con los hallazgos
+abiertos en su prompt. Al siguiente reviewer se le muestra cada uno de esos hallazgos palabra por
+palabra, con la instrucción de aprobar solo si todos están arreglados en el diff. Cuando aprueba,
+cada hallazgo que se le mostró se cierra en la lista de arreglos como `Resolved: yes <commit>`,
+seguido de una nota que nombra esa revisión — y ese commit se verifica después como cualquier otra
+afirmación, así que uno que no está en la rama de la story vuelve a abrir el hallazgo. Un hallazgo
+que no estaba en el prompt de ese reviewer sigue abierto y sigue sosteniendo la story.
+
+Si en cambio cerrás un hallazgo a mano — escribís `Resolved: yes <sha>` en el archivo después de
+que la story terminó `blocked` sobre una revisión que aprobó — devolvé la etapa de Build con
+`tldrx reject --note "…"` y corré `tldrx next`: la story queda `done` sin iniciar ningún agente, y
+la salida dice por qué.
+
 ## Una story se bloqueó en su DoD, ¿dónde está la falla de verdad?
 
 En `04-build/log/dod-output/<story>-<n>.txt`: las últimas 200 líneas (o 16 KB, lo que sea

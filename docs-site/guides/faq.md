@@ -176,6 +176,21 @@ is absent, unreadable or outside the enum is refused — for free, costing the s
 and a fix list written before this field existed reads as *not stated*, which blocks like anything
 else unclassified.
 
+## A reviewer attached a fix list — who fixes it, and who closes it?
+
+A headless run does. When a reviewer signs with `fix-now` findings, the story goes straight back
+to a developer in the same run, without spending one of its attempts, with the open findings in
+its prompt. The next reviewer is shown each of those findings word for word and told to approve
+only if every one is fixed in the diff. When it approves, each finding it was shown is closed in
+the fix list as `Resolved: yes <commit>`, followed by a note naming that review — and that
+commit is then checked like any other claim, so one that is not on the story branch reopens the
+finding. A finding that was not in that reviewer's prompt stays open and still holds the story.
+
+If you close a finding by hand instead — you write `Resolved: yes <sha>` in the file after the
+story ended `blocked` on an approving review — send the Build stage back with
+`tldrx reject --note "…"` and run `tldrx next`: the story settles `done` without starting any
+agent, and the output says why.
+
 ## A story blocked on its DoD — where is the real failure?
 
 In `04-build/log/dod-output/<story>-<n>.txt`: the last 200 lines (or 16 KB, whichever is

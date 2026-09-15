@@ -22,7 +22,7 @@ import { stackChecks } from "../experts/packSections.ts";
 import { workspaceRecurring } from "../retro/reviewerFocus.ts";
 import { latestFixlist, MAX_FIXLIST_ROUNDS } from "./fixlist.ts";
 import { BUILD_PHASE, type PlannedStory } from "./plan.ts";
-import { buildReviewerPrompt, type RecurringClass, type ReopenNote } from "./prompts.ts";
+import { buildReviewerPrompt, type FixRoundPrompt, type RecurringClass, type ReopenNote } from "./prompts.ts";
 import {
   isFormatRejection, MAX_FORMAT_RETRIES, renderFormatRefusal, type Review,
 } from "./review.ts";
@@ -340,6 +340,11 @@ export interface ReviewerPromptParts {
    * spawned one judge the diff against the same note.
    */
   readonly reopenNote: ReopenNote | null;
+  /**
+   * gh #327: the open `fix-now` findings this review is shown, or null. Handed in
+   * as data by BOTH doors so the bundle's prompt stays the spawn's, byte for byte.
+   */
+  readonly fixRound: FixRoundPrompt | null;
 }
 
 /**
@@ -366,6 +371,7 @@ export function reviewerPromptFor(parts: ReviewerPromptParts): string {
     // door and the bundle door cannot disagree about what a missing base means.
     diffBase: parts.diffBase,
     reopenNote: parts.reopenNote,
+    fixRound: parts.fixRound,
     worktree: parts.worktree,
     conventions: renderConventions(parts.root, [parts.story.story.repo]),
     // Every field, including the ABSENCE of an exit code on a refused row —

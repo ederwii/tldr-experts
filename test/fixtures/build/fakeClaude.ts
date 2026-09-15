@@ -197,6 +197,17 @@ if (failWork === "committed" || failWork === "uncommitted") {
   }
 }
 
+// gh #327/#329 — `FAKE_BUILD_REVIEWER_APPEND` = `{"S1#2": {"path": "<abs>", "text": "…"}}`:
+// the Nth reviewer of a story appends `text` to `path` while it runs. It is how a
+// test puts a fix-list finding on disk AFTER the reviewer's prompt was rendered —
+// the one finding an audited auto-close must leave open, because nobody showed it.
+if (role === "reviewer" && !failing && (process.env.FAKE_BUILD_REVIEWER_APPEND ?? "") !== "") {
+  const nth = attemptCount(`append:reviewer:${storyId}`);
+  const map = JSON.parse(process.env.FAKE_BUILD_REVIEWER_APPEND ?? "{}") as Record<string, { path: string; text: string }>;
+  const append = map[`${storyId}#${String(nth)}`];
+  if (append !== undefined) appendFileSync(append.path, append.text, "utf8");
+}
+
 // A failing instance produces NOTHING — no verdict, no envelope. That is the
 // point: `Reached maximum budget` kills the process mid-turn, and a fake that
 // still returned a verdict on the way out would be testing the wrong thing.
