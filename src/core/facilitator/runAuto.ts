@@ -209,11 +209,14 @@ export interface AutoOptions {
    * person typed by hand on the field run — or move nothing. Passed to every `next` this loop
    * makes (`NextOptions.rebalanceFinished` says what it will and will not move).
    *
-   * OPT-IN, and absent means exactly what every launch before it got: a phase ceiling is a
-   * person's decision about money (see `retryFailedStages`), so a loop may only re-split one
-   * when the person who launched it said so, on the command they typed. It never grows the
-   * run ceiling, so a `budget.blocked` it cannot cover is still `held` — nothing else
-   * in-process moves that ceiling.
+   * ON BY DEFAULT since gh #330 (owner-approved 2026-09-15): absent means `true`, and only an
+   * explicit `false` — `--no-rebalance-finished` — turns it off. It shipped opt-in (#314); the
+   * audit that flipped it counted 22 intervention episodes on stage/phase sizing and 27
+   * `budget.raised`, none of whose notes changed the work (inferred from those notes), while the flag moved money twice with
+   * nobody present. What it may move did not change: never the run ceiling, never past a
+   * recorded grant, only finished+metered donors, the exact shortfall or nothing — so a
+   * `budget.blocked` it cannot cover is still `held`, and nothing else in-process moves that
+   * ceiling. `tldrx next` alone never rebalances; this loop is the only caller that defaults it.
    */
   readonly rebalanceFinished?: boolean;
   /** Called with each line as it happens, so a long loop is not silent. */
@@ -431,7 +434,7 @@ function finishedClause(event: TldrxEvent): string {
   }
   return payload(event, "rebalance_finished") === true
     ? `; finished phases hold $${unspent.toFixed(2)} unspent and the move was not made`
-    : `; finished phases hold $${unspent.toFixed(2)} unspent, enough — --rebalance-finished would move it`;
+    : `; finished phases hold $${unspent.toFixed(2)} unspent, enough — a launch without --no-rebalance-finished would move it`;
 }
 
 /**
@@ -929,7 +932,7 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
         parallel: options.parallel,
         promptMaxBytes: options.promptMaxBytes,
         maxReads: options.maxReads,
-        rebalanceFinished: options.rebalanceFinished,
+        rebalanceFinished: options.rebalanceFinished !== false,
         actor: options.actor,
         at: options.at,
       });

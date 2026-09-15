@@ -653,6 +653,8 @@ over:
   `--wait-gates` are the flags that wait for you.
 - **Money.** A `budget.blocked` names `remaining_usd < estimate_usd`, and nothing in-process
   moves that ceiling — the stop line says the two figures, and `tldrx budget raise` is yours.
+  A phase that finished phases' unspent ceiling can cover never gets there: `run auto` moves
+  exactly the shortfall first, by default (gh #330; `--no-rebalance-finished` turns it off).
   The loop's own `--max-usd` spans every relaunch rather than resetting with each one.
 - **The same refusal twice.** A refusal that repeats verbatim is not one a relaunch moves;
   one relaunch proves it, and the loop stops rather than hammering it. What is compared is the

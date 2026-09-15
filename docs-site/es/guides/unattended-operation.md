@@ -674,7 +674,9 @@ cosas sobre las que nunca relanza:
   son tuyas; `--wait-answers` y `--wait-gates` son las banderas que te esperan.
 - **Dinero.** Un `budget.blocked` nombra `remaining_usd < estimate_usd`, y nada dentro del
   proceso mueve ese techo — la línea de parada dice las dos cifras, y `tldrx budget raise` es
-  tuyo. El `--max-usd` propio del bucle abarca todos los relanzamientos en vez de reiniciarse
+  tuyo. Una fase cuyo faltante cubre el techo sin gastar de fases terminadas nunca llega ahí:
+  `run auto` mueve exactamente el faltante antes, por defecto (gh #330; `--no-rebalance-finished`
+  lo apaga). El `--max-usd` propio del bucle abarca todos los relanzamientos en vez de reiniciarse
   con cada uno.
 - **El mismo rechazo dos veces.** Un rechazo que se repite textualmente no es uno que un
   relanzamiento mueva; un relanzamiento lo demuestra, y el bucle se detiene en vez de

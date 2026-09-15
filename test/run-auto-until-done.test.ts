@@ -323,14 +323,15 @@ describe("never over money", () => {
 
   /**
    * gh #314. Measured on a field run: 04-build refused $11.07 short while 01-what had finished
-   * $16.25 under, and a person typed `budget raise 04-build 12 --take-from 01-what`. Without
-   * the opt-in nothing moves — a phase ceiling is still a person's decision — but the refusal
-   * now names the finished phase holding the money and the exact move.
+   * $16.25 under, and a person typed `budget raise 04-build 12 --take-from 01-what`. With the
+   * opt-OUT (gh #330: on by default) nothing moves — the launcher said a phase
+   * ceiling means exactly what it was set to — but the refusal still names the finished phase
+   * holding the money and the exact move.
    */
-  test("without --rebalance-finished the refusal stands, and names the finished phase holding unspent ceiling", async () => {
+  test("with --no-rebalance-finished the refusal stands, and names the finished phase holding unspent ceiling", async () => {
     const ws = workspace();
     starve(ws, "02-how", 1);
-    const outcome = await auto(ws, { untilDone: 5 });
+    const outcome = await auto(ws, { untilDone: 5, rebalanceFinished: false });
     expect(outcome.code).toBe(2);
     expect(attempts(ws)).toBe(1);
     expect(events(ws).filter((event) => event.type === "budget.raised")).toEqual([]);
@@ -400,6 +401,51 @@ describe("never over money", () => {
     expect(outcome.code).toBe(2);
     expect(events(ws).filter((event) => event.type === "budget.raised")).toEqual([]);
     expect(outcome.lines.join("\n")).toContain("F001");
+  });
+
+  /**
+   * gh #330 (owner-approved 2026-09-15): the rebalance is ON by default under `run auto`. The
+   * audit behind it: 22 intervention episodes on stage/phase sizing, 27 `budget.raised`, none of
+   * which changed the work. No flag given ⇒ the same move `--rebalance-finished` made, under the
+   * same rules and the same `source`.
+   */
+  test("by default (no flag) the shortfall moves out of the finished phase, on the record, and the run finishes (#330)", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    const outcome = await auto(ws, { untilDone: 5 });
+    expect(outcome.code).toBe(0);
+    const raised = events(ws).filter((event) => event.type === "budget.raised");
+    expect(raised).toHaveLength(1);
+    expect(raised[0]?.payload).toMatchObject({
+      phase: "02-how", amount_usd: 1, take_from: "01-what", run_ceiling_before: 10, run_ceiling_after: 10,
+      source: "run auto --rebalance-finished",
+    });
+    expect(events(ws).filter((event) => event.type === "budget.blocked")).toEqual([]);
+  });
+
+  test("the CLI default reaches the loop: a bare `tldrx run auto` moves the money and finishes (#330)", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    const code = await runCommand.run(["auto", "--root", ws.root, "--ui", "off"]);
+    expect(code).toBe(0);
+    expect(events(ws).filter((event) => event.type === "budget.raised")).toHaveLength(1);
+  });
+
+  test("`tldrx run auto --no-rebalance-finished` opts out: nothing moves and the refusal is exit 2 (#330)", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    const code = await runCommand.run(["auto", "--no-rebalance-finished", "--root", ws.root, "--ui", "off"]);
+    expect(code).toBe(2);
+    expect(events(ws).filter((event) => event.type === "budget.raised")).toEqual([]);
+    expect(events(ws).filter((event) => event.type === "budget.blocked")).toHaveLength(1);
+  });
+
+  test("both `--rebalance-finished` and `--no-rebalance-finished` is a usage refusal, exit 1, nothing spawned (#330)", async () => {
+    const ws = workspace();
+    starve(ws, "02-how", 1);
+    const code = await runCommand.run(["auto", "--rebalance-finished", "--no-rebalance-finished", "--root", ws.root, "--ui", "off"]);
+    expect(code).toBe(1);
+    expect(attempts(ws)).toBe(0);
   });
 
   test("the CLI flag reaches the loop: `tldrx run auto --rebalance-finished` moves the money and finishes", async () => {

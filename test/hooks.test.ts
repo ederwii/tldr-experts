@@ -853,6 +853,80 @@ describe("budget-gate (PreToolUse Bash)", () => {
   // --- M6: the three spenders the gate could not see (2026-08-29 audit, §A) ---
 
   test("`tldrx run auto` is gated — the command that can spend a whole run", async () => {
+    // `--no-rebalance-finished`: the fixture's finished 01-what holds $2.86, which covers
+    // 02-how's $2.39 shortfall, and a default launch would move it itself (#330/#321, below).
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: `tldrx run auto --run ${FIXTURE_RUN} --no-rebalance-finished` },
+    });
+    expect(denialText(run)).toContain('refusing to start stage "contracts"');
+  });
+
+  // --- #321: the spawn gate knows what `run auto` rebalances in-process (#314/#330) ---
+
+  function budgetBlocked(): readonly unknown[] {
+    return EventLog.forRun(workspace().runDir).read().filter((e) => e.type === "budget.blocked");
+  }
+
+  test("#321: `tldrx run auto` on a blocked cursor is ALLOWED when finished phases cover the shortfall — the loop moves it", async () => {
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: `tldrx run auto --run ${FIXTURE_RUN}` },
+    });
+    expect(denial(run)).toBeNull();
+    expect(run.stdout).toBe("");
+    expect(budgetBlocked()).toEqual([]);
+    expect(run.stderr).toContain("NOT refusing");
+    expect(run.stderr).toContain("$2.39");
+    expect(run.stderr).toContain("01-what");
+    // The hook moves nothing: the move is the loop's, on its own record.
+    expect(readFileSync(join(workspace().runDir, "budget.yml"), "utf8")).toContain("{id: 02-how, ceiling_usd: 7.0, spent_usd: 6.39}");
+  });
+
+  test("#321: an explicit `--rebalance-finished` is allowed the same way", async () => {
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: `tldrx run auto --run ${FIXTURE_RUN} --rebalance-finished` },
+    });
+    expect(denial(run)).toBeNull();
+    expect(budgetBlocked()).toEqual([]);
+  });
+
+  test("#321: `tldrx next` is still denied — only `run auto` rebalances", async () => {
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: `tldrx next --run ${FIXTURE_RUN}` },
+    });
+    expect(denialText(run)).toContain('refusing to start stage "contracts"');
+  });
+
+  test("#321: still denied when finished phases cannot cover the WHOLE shortfall", async () => {
+    const path = join(workspace().runDir, "budget.yml");
+    writeFileSync(path, readFileSync(path, "utf8").replace("{id: 01-what, ceiling_usd: 4.0, spent_usd: 1.14}",
+      "{id: 01-what, ceiling_usd: 4.0, spent_usd: 3.0}"), "utf8");
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: `tldrx run auto --run ${FIXTURE_RUN}` },
+    });
+    expect(denialText(run)).toContain('refusing to start stage "contracts"');
+    expect(budgetBlocked()).toHaveLength(1);
+  });
+
+  test("#321: still denied when the only finished phase is stale — it will run again", async () => {
+    const path = join(workspace().runDir, "run.yml");
+    writeFileSync(path, readFileSync(path, "utf8").replace("{id: intent, status: done,", "{id: intent, status: done, stale: true,"), "utf8");
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: `tldrx run auto --run ${FIXTURE_RUN}` },
+    });
+    expect(denialText(run)).toContain('refusing to start stage "contracts"');
+  });
+
+  test("#321: still denied when the move would pass a recorded grant — the loop would not make it either", async () => {
+    const path = join(workspace().runDir, "budget.yml");
+    writeFileSync(path, readFileSync(path, "utf8")
+      .replace("{id: 02-how, ceiling_usd: 7.0, spent_usd: 6.39}", "{id: 02-how, ceiling_usd: 7.0, spent_usd: 6.39, authorized_usd: 8.0}")
+      .replace("on_exceed: block", "on_exceed: block\nauthorized_by: F001\nauthorized_at: \"2026-09-14T00:00:00Z\"\non_grant_exceed: warn"), "utf8");
     const run = await hook("budget-gate", {
       hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
       tool_input: { command: `tldrx run auto --run ${FIXTURE_RUN}` },

@@ -288,7 +288,8 @@ tldrx run auto     [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--ef
                           [--parallel <n>] [--yolo] [--gate-agent] [--ui <mode>] [--run <id>]
                           [--notify-every <duration>] [--wait-answers <duration>]
                           [--wait-gates <duration>] [--prompt-max-bytes <n>] [--max-reads <n>]
-                          [--retry-failed <n>] [--until-done [<n>]] [--rebalance-finished]
+                          [--retry-failed <n>] [--until-done [<n>]]
+                          [--rebalance-finished | --no-rebalance-finished]
 tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>]
 tldrx run questions set <stage>:<human|recommended> --note <text> [--run <id>]
 tldrx run unlock   [<run>] [--force] [--run <id>]
@@ -436,13 +437,18 @@ never relaunches over exit `4` (a person's — the `--wait-*` flags own it), ove
 Put the run id before the flag, or write `--until-done=3`. `n` outside `0..5` and a
 fraction are exit `1`, by name.
 
-`--rebalance-finished` (opt-in, gh #314) lets the budget gate, before it refuses a phase,
+The finished-phase rebalance (gh #314; **on by default**, gh #330 —
+`--no-rebalance-finished` turns it off, `--rebalance-finished` says the default and is refused
+beside its opposite with exit `1`) lets the budget gate, before it refuses a phase,
 move exactly its shortfall out of FINISHED phases' unspent ceiling — every stage `done` or
 `skipped`, none stale, `metered-usd`, no unmetered turn — with `budget raise --take-from`'s
 own validation. It never grows the run ceiling, never passes a recorded grant, and never
 makes a partial move: a shortfall the finished phases cannot cover is the same
 `budget.blocked` and exit `2`, naming how short it is. Each move is one `budget.raised` with
-`source: run auto --rebalance-finished`. Without the flag the refusal still names the move.
+`source: run auto --rebalance-finished` (the spelling stays, default or not). With
+`--no-rebalance-finished` the refusal still names the move. The `budget-gate` hook allows a
+`tldrx run auto` launch that this move would fund, rather than denying it before the loop runs
+(gh #321).
 
 `auto`'s `--model`, `--effort`, `--max-usd`, `--ui` and `--yolo` are the same flags
 [`tldrx next`](#tldrx-next) explains, passed to every stage the loop runs — so `--yolo` here
