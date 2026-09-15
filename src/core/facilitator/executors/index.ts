@@ -125,6 +125,16 @@ export interface ExecutorContext {
   readonly maxBudgetUsd: number;
   readonly yolo: boolean;
   readonly at: string;
+  /**
+   * This invocation is a `run auto` RELAUNCH, not the command a person typed (#339).
+   *
+   * It exists for one rule: a CACHED measurement taken before the previous attempt's
+   * refusal is not evidence about the tree this attempt is looking at, because that
+   * refusal's whole content was "go and fix this". Build re-measures a red base
+   * rather than re-serve one. `false` everywhere else, including a person's own
+   * second `tldrx next`, which nothing told to expect a repair.
+   */
+  readonly relaunching: boolean;
   /** `--keep-worktrees` — Build keeps its story worktrees after a story settles. */
   readonly keepWorktrees: boolean;
   /**
@@ -307,6 +317,21 @@ export interface ExecutorOutcome {
    * added tomorrow inherits the fallback instead of being born blind.
    */
   readonly signature?: string;
+  /**
+   * Whether the evidence behind `signature`/`error` was MEASURED by this attempt or
+   * re-used from a record an earlier one wrote (#339).
+   *
+   * The supervisor's repeat guard stops a `--until-done` loop when two attempts are
+   * refused by the same sentence — "a refusal that repeats verbatim is not one a
+   * relaunch moves". That reading is only true of a refusal that LOOKED. Measured on
+   * a live run: a red base cached for 30 minutes reproduced its refusal byte for byte
+   * across a repair the operator had already made, and the loop stopped itself on the
+   * identity of two strings neither of which was a fresh measurement.
+   *
+   * ADDITIVE and optional. Absent is "this producer does not say", which is what every
+   * producer said before this existed and is read as such — never as `measured`.
+   */
+  readonly signatureFreshness?: "measured" | "cached";
   /**
    * Force the gate type, whatever the stage file says. Build sets `approve`:
    * concept §9 ends the phase at "epic merges to main after integration tests +

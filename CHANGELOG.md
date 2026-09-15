@@ -115,6 +115,28 @@
   invented value the house rules forbid. The failure's `signature` (#297) is untouched and is still
   the failure's own sentence, never this line.
 
+- **A Build refusal built from a CACHED base reading says so, and a relaunch re-measures the red
+  instead of being served it (#339).** MEASURED on a live `run auto --until-done`, 2026-09-15: two
+  Definition-of-Done commands exited 127 on the untouched base tree, the framework refused, the
+  operator installed the two missing binaries and confirmed all four commands green by hand — and
+  the next attempt printed the SAME refusal, byte for byte, over a base tree that was by then
+  repaired. Then the supervisor stopped the loop on it: "a refusal that repeats verbatim is not one
+  a relaunch moves", with four relaunches unspent and the run ended early on a workspace where the
+  thing complained about was fixed. Two halves compose into that. A cached refusal reproduces
+  itself exactly — which is correct for a cache and is the one condition the repeat guard reads —
+  and nothing anywhere said the second reading had not been taken. So: a refusal whose evidence was
+  re-used now names it as re-used, says when it was measured, against which base sha, and when it
+  stops being trusted, and it adds the sentence the generic advice cannot carry — that an edit to
+  `.tldrx/workspace.yml` or a base that moves clears a cached reading, but a repair the cache
+  cannot see (a binary installed, a service started) is not re-measured until that expiry. The
+  supervisor's repeat guard now reads a FRESHNESS field the producer sets rather than diffing text:
+  a repeat whose evidence was measured stops the loop exactly as it did, a repeat that was re-used
+  is relaunched and says why. And the relaunch is no longer served the same cache — an attempt that
+  follows a refusal re-probes a RED base unconditionally, the way `--prepare` already did, because
+  the attempt before it asked for exactly this repair. Greens are still re-used, so the cost of
+  that is bounded by the commands that are actually broken. The 30-minute red TTL is untouched;
+  it was never what saved this run, and the reason it was not is filed separately (#340).
+
 - **A red Definition-of-Done command is measured TWICE before it pins a story `blocked`, and the
   record carries both exit codes (#163, sub-fix 1).** MEASURED on a .NET workspace, 2026-09-05: a
   story's DoD gate returned `dotnet test` → exit 2, so the story blocked; the operator then ran the

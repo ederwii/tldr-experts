@@ -3813,6 +3813,25 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    absent `command_hash` is a missing answer, not a mismatch, and an absent per-row `checked_at` falls back to the
    file-level one, with neither making a row stale.
 
+   **A re-used reading SAYS it was re-used, and a relaunch does not get one (2026-09-15, #339).** A refusal built
+   from a cached row is byte-identical to one that measured — which is correct for a cache and is exactly what a
+   supervisor's verbatim-repeat guard reads as "nothing moved". Measured on a live `run auto --until-done`: two
+   commands exited 127 on base, the operator installed the missing binaries, and the next attempt printed the same
+   refusal over a repaired tree; the loop then stopped itself on the identity of the two texts, four relaunches
+   unspent. So a refusal now carries one extra line per re-used row — when the measurement was taken, against which
+   base sha, and when it stops being trusted — plus one closing sentence naming what actually clears a cached
+   reading (an edit to `.tldrx/workspace.yml`, a base that moves, `tldrx next --prepare`, the next relaunch) as
+   against what does not (a binary installed, a service started). The **refusal's comparand is deliberately
+   unchanged**: two sentences differing only by a timestamp would make the repeat guard fire never, which is the
+   same failure in the other direction. Instead the refusal carries the freshness as its own field and the
+   supervisor reads that — a repeat whose evidence was MEASURED stops the loop exactly as before, a repeat whose
+   evidence was re-used is relaunched and says why. And the relaunch itself re-probes a RED base unconditionally,
+   the way `--prepare` already did and for the same reason: the attempt before it refused and asked for exactly
+   this repair, so a reading taken before it is evidence about a tree that may no longer exist. A green is still
+   re-used, so a relaunch re-pays only for the commands that are actually broken. Nothing is added to
+   `preflight.yml` — whether a given READER was handed a row instead of spawning is a fact about the read, not
+   about the record.
+
    **A RED base keeps its output (2026-09-11, #229).** A red base refuses the whole stage before anything is
    dispatched, and until this it kept ONE line — `outcome.tail`, the last line of stdout+stderr — while a red story
    DoD, which blocks a single story, had kept the failing line, an excerpt and a file since #211. Measured: a

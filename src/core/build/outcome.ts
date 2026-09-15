@@ -666,6 +666,15 @@ export function describeOutcome(outcome: StoryOutcome): string {
 export interface BuildRefusal {
   readonly lines: readonly string[];
   readonly error: string;
+  /**
+   * Whether the evidence behind `error` was MEASURED by this attempt or re-used
+   * from what an earlier one wrote down (#339).
+   *
+   * ADDITIVE and optional: a refusal that does not say is read as "unknown", which
+   * is what the supervisor's repeat guard already assumed of every refusal before
+   * this existed — not as "measured", which would be a freshness nobody established.
+   */
+  readonly freshness?: "measured" | "cached";
 }
 
 /**

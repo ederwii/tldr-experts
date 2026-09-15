@@ -690,11 +690,16 @@ cosas sobre las que nunca relanza:
   `run auto` mueve exactamente el faltante antes, por defecto (gh #330; `--no-rebalance-finished`
   lo apaga). El `--max-usd` propio del bucle abarca todos los relanzamientos en vez de reiniciarse
   con cada uno.
-- **El mismo rechazo dos veces.** Un rechazo que se repite textualmente no es uno que un
-  relanzamiento mueva; un relanzamiento lo demuestra, y el bucle se detiene en vez de
+- **El mismo rechazo dos veces, MEDIDO dos veces.** Un rechazo que se repite textualmente no es
+  uno que un relanzamiento mueva; un relanzamiento lo demuestra, y el bucle se detiene en vez de
   martillarlo. Lo que se compara es el rechazo que la parada NOMBRA — no la última línea
   impresa, que en una etapa fallada es siempre el mismo consejo sobre el costo, y compararla
-  detenía runs que sí estaban avanzando.
+  detenía runs que sí estaban avanzando. Un rechazo SERVIDO DESDE EL PROPIO REGISTRO del run, en
+  vez de medido en ese intento, no cuenta como repetición: se reproduce idéntico porque eso es lo
+  que hace un registro, y la repetición no dice nada sobre el workspace. El pre-vuelo del árbol
+  base de Build es el único productor que cachea, y su rechazo ahora nombra una lectura reusada
+  — cuándo se midió, contra qué sha base, cuándo expira y qué la limpia — mientras que el
+  relanzamiento posterior vuelve a medir un base rojo en vez de leer el registro otra vez.
 
 Pon el id del run antes de la bandera, pásalo como `--run <id>`, o escribe `--until-done=3`: un `--until-done` sin
 valor seguido de un id de run lee el id como su número y lo rechaza, por nombre.

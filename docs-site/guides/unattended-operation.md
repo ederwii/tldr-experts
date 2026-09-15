@@ -668,10 +668,16 @@ over:
   A phase that finished phases' unspent ceiling can cover never gets there: `run auto` moves
   exactly the shortfall first, by default (gh #330; `--no-rebalance-finished` turns it off).
   The loop's own `--max-usd` spans every relaunch rather than resetting with each one.
-- **The same refusal twice.** A refusal that repeats verbatim is not one a relaunch moves;
-  one relaunch proves it, and the loop stops rather than hammering it. What is compared is the
-  refusal the stop NAMES — not the last line printed, which for a stage death is the same advice
-  about cost every time, and comparing it stopped runs that were making progress.
+- **The same refusal twice, MEASURED twice.** A refusal that repeats verbatim is not one a
+  relaunch moves; one relaunch proves it, and the loop stops rather than hammering it. What is
+  compared is the refusal the stop NAMES — not the last line printed, which for a stage death is
+  the same advice about cost every time, and comparing it stopped runs that were making progress.
+  A refusal that was SERVED FROM THE RUN'S OWN RECORD rather than measured this attempt does not
+  count as a repeat: it reproduces itself exactly because that is what a record does, and the
+  repeat says nothing about the workspace. The Build base pre-flight is the one producer that
+  caches, and its refusal now names a re-used reading — when it was measured, against which base
+  sha, when it expires, and what clears it — while the relaunch after it re-measures a red base
+  rather than reading the record again.
 
 Put the run id before the flag, pass it as `--run <id>`, or write `--until-done=3`: a bare `--until-done` followed
 by a run id reads the id as its number and refuses it, by name.

@@ -203,6 +203,7 @@ function fixture(plan: Readonly<Record<string, string>> = defaultPlan()): Fixtur
       maxBudgetUsd: 2,
       yolo: false,
       at: "2026-08-30T10:00:00Z",
+      relaunching: false,
       // wave5 added these three to ExecutorContext; `runNext` supplies them for
       // real. Here they are the identity: no worktrees, no split, no ledger.
       keepWorktrees: false,

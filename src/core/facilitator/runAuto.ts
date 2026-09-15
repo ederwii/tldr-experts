@@ -365,6 +365,13 @@ export function relaunchVerdict(input: {
   readonly code: number;
   /** What this attempt was refused by — the producer's sentence, or its last line. */
   readonly comparand: string;
+  /**
+   * Whether THIS attempt measured the evidence behind `comparand`, or was handed a
+   * reading an earlier one took (gh #339). Undefined is "the producer does not say",
+   * which is every producer but Build's base pre-flight and is treated as it always
+   * was — the comparison stands on the strings alone.
+   */
+  readonly comparandFreshness?: "measured" | "cached";
   readonly previousComparand: string | null;
   readonly held: string | null;
   readonly attempt: number;
@@ -389,18 +396,33 @@ export function relaunchVerdict(input: {
     };
   }
   if (input.previousComparand !== null && input.comparand === input.previousComparand) {
-    return {
-      relaunch: false,
-      reason: "its refusal is the same as the previous attempt's — a refusal that repeats "
-        + "verbatim is not one a relaunch moves",
-    };
+    // gh #339: two identical sentences prove nothing moved only when the SECOND one was
+    // measured. A refusal served from a cache reproduces itself exactly — that is what a
+    // cache is for — so its repeat is evidence about a record, not about the workspace.
+    // Measured on a live run: a Build base pre-flight held its red for 30 minutes, the
+    // operator installed the two missing binaries, and the next attempt printed the same
+    // refusal byte for byte over a base that was by then green. The loop stopped on it
+    // with four relaunches unspent. A FRESH repeat still stops, exactly as before.
+    if (input.comparandFreshness !== "cached") {
+      return {
+        relaunch: false,
+        reason: "its refusal is the same as the previous attempt's — a refusal that repeats "
+          + "verbatim is not one a relaunch moves",
+      };
+    }
   }
   const family = code === EXIT_AGENT_FAILED
     ? "a stage failed past --retry-failed"
     : code === EXIT_REFUSED
       ? "a refusal with no money behind it"
       : "the loop ended with exit 1";
-  return { relaunch: true, reason: `${family}: ${input.comparand}` };
+  // The repeat that was let through above says WHY it was let through: the sentence is
+  // the same, and the only thing this loop knows about it is that nobody took it.
+  const repeated = input.previousComparand !== null && input.comparand === input.previousComparand
+    ? " (the same sentence as the previous attempt, but that attempt's evidence was re-used "
+      + "from the run's record rather than measured, so the repeat says nothing about the workspace)"
+    : "";
+  return { relaunch: true, reason: `${family}: ${input.comparand}${repeated}` };
 }
 
 /**
@@ -520,6 +542,9 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
     const comparand = comparandOf(outcome.signature, outcome.lines);
     const verdict = outcome.verdict ?? relaunchVerdict({
       code: outcome.code, comparand, previousComparand, held: null, attempt, of: bound, runDir: outcome.runDir,
+      ...(outcome.signature === undefined || outcome.signatureFreshness === undefined
+        ? {}
+        : { comparandFreshness: outcome.signatureFreshness }),
     });
     if (!verdict.relaunch) {
       // Said only when there is something to explain: a bound that was used, or an exit
@@ -573,10 +598,16 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
    * `relaunchVerdict` decide on the exit and the lines alone. Unsupervised, the verdict
    * is null and nothing here changes.
    */
-  const leave = (code: number, held: string | null = null, signature?: string): AttemptOutcome => ({
+  const leave = (
+    code: number,
+    held: string | null = null,
+    signature?: string,
+    signatureFreshness?: "measured" | "cached",
+  ): AttemptOutcome => ({
     code,
     lines,
     ...(signature === undefined ? {} : { signature }),
+    ...(signatureFreshness === undefined ? {} : { signatureFreshness }),
     runId: resolved?.runId ?? null,
     runDir: resolved?.runDir ?? null,
     baseline,
@@ -585,6 +616,9 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
       // The refusal's own words when `next` named them, and the attempt's last line when
       // it did not (gh #297) — `comparandOf` is the ONE place that choice is made.
       comparand: comparandOf(signature, lines),
+      // Only where the producer SAID (gh #339); `comparandOf`'s last-line fallback names
+      // no evidence, so it claims no freshness either.
+      ...(signature === undefined || signatureFreshness === undefined ? {} : { comparandFreshness: signatureFreshness }),
       previousComparand: supervision.previousComparand,
       held,
       attempt: supervision.attempt,
@@ -738,9 +772,12 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
       spentUsd: number,
       held: string | null = null,
       signature?: string,
+      signatureFreshness?: "measured" | "cached",
     ): Promise<AttemptOutcome> => {
       if (heartbeat !== null) clearInterval(heartbeat);
-      const outcome = leave(code, held ?? budgetBlockedReason(readEvents(log).slice(attemptStart)), signature);
+      const outcome = leave(
+        code, held ?? budgetBlockedReason(readEvents(log).slice(attemptStart)), signature, signatureFreshness,
+      );
       if (outcome.verdict?.relaunch === true) return outcome;
       if (notifier !== null) {
         const run = RunStore.open(runDir).run;
@@ -972,6 +1009,10 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
         rebalanceFinished: options.rebalanceFinished !== false,
         actor: options.actor,
         at: options.at,
+        // gh #339: from attempt 2 on, the attempt before this one refused and asked
+        // somebody to repair something. A cached RED taken before that repair is not
+        // evidence about the tree this attempt is looking at, so Build re-measures it.
+        relaunching: (supervision?.attempt ?? 1) > 1,
       });
       // `notify.*` is filtered out before anything reads this. Those lines are appended by
       // the heartbeat timer, which can fire mid-stage, and a run that appended NOTHING but a
@@ -1241,7 +1282,7 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
         }
         // `next`'s own signature travels with the exit: what refused this attempt is what
         // the supervisor compares against the next one (gh #297).
-        return await finish(outcome.code, spentByLoop, null, outcome.signature);
+        return await finish(outcome.code, spentByLoop, null, outcome.signature, outcome.signatureFreshness);
       }
       // Exit 0 with nothing appended and the cursor unmoved would loop forever on a
       // run whose files disagree with themselves. Stop and say so instead.

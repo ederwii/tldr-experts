@@ -606,6 +606,7 @@ function executorContext(ws: BuildWorkspace, phaseId: string, stageId: string): 
     maxBudgetUsd: 2,
     yolo: false,
     at: "2026-08-28T09:00:00Z",
+    relaunching: false,
     keepWorktrees: false,
     reuseEpic: false,
     parallel: 1,

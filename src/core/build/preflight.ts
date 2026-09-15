@@ -438,6 +438,110 @@ export interface BaseFreshness {
   readonly at?: string;
   /** True under `tldrx next --prepare`: a 0-second prepare over a red is the lie. */
   readonly prepare?: boolean;
+  /**
+   * True on a `run auto` RELAUNCH (#339): the previous attempt was refused and
+   * told somebody to go fix the base tree, so a red measured BEFORE that repair
+   * is not evidence about the tree this attempt is looking at.
+   *
+   * `prepare`'s sibling, and for the same reason it exists — "a 0-second prepare
+   * over a red nobody measured today is the lie". Measured on a live
+   * `run auto --until-done`: a red base refused at 18:48, the operator installed
+   * the two missing binaries, and the 21:45 attempt printed the refusal again
+   * byte-for-byte because the loop hands every attempt the clock of the command a
+   * person typed (`runAuto` → `runNext({ at: options.at })`), so the 30-minute TTL
+   * compares a stamp against itself and no red in a supervised loop is ever stale.
+   * That frozen clock is its own defect and is filed separately; this flag makes
+   * the relaunch re-measure regardless of what the clock says.
+   *
+   * It re-probes a RED only. A green is not re-paid for, which is what keeps the
+   * cost of a relaunch bounded by the commands that are actually broken.
+   */
+  readonly relaunch?: boolean;
+}
+
+/**
+ * Where a served base result CAME FROM: measured by the invocation printing it,
+ * or re-used from `04-build/preflight.yml` because an earlier one already paid
+ * for it (#339).
+ *
+ * DERIVED, never stored. The file records WHEN a row was measured; whether a
+ * given READER was handed that row instead of spawning is a fact about the read,
+ * not about the record — so `version: 1` grows nothing here.
+ *
+ * It exists because the two are byte-identical to the operator today. Measured on
+ * a live `run auto --until-done`: a red base refused, the operator installed the
+ * missing binaries, and the next attempt printed the SAME refusal — same rows,
+ * same sha, same `[src:]` citations — because the cache answered. A refusal that
+ * cannot claim it measured now must not read like one that did (§7).
+ */
+export interface BaseProvenance {
+  readonly source: "measured" | "cached";
+  /**
+   * RFC3339 of the measurement behind the row. `""` — and only `""` — when the
+   * record does not say: a `preflight.yml` written before per-row `checked_at`
+   * existed and with no file-level stamp either. Never guessed.
+   */
+  readonly measuredAt: string;
+  /**
+   * RFC3339 after which this cached RED stops being trusted — `measuredAt` plus
+   * `PREFLIGHT_RED_TTL_MS`. `""` when no expiry can be derived (no `measuredAt`,
+   * or one that does not parse) and `""` on a `measured` row, which has not
+   * expired because it has not been re-used.
+   */
+  readonly trustedUntil: string;
+}
+
+/** One served result and where it came from — `null` where the caller cannot say. */
+export interface BaseServed {
+  readonly result: BaseCommandResult;
+  /**
+   * `null` is "this reader does not know", never "it was measured now": a refusal
+   * renders no freshness clause at all rather than an invented one.
+   */
+  readonly provenance: BaseProvenance | null;
+}
+
+/**
+ * What a refusal built on these readings may claim about its own freshness — the ONE
+ * derivation, so the two refusal builders cannot drift (§7).
+ *
+ * `undefined` where NOTHING said: a thrower that carries no provenance claims none, which
+ * is what every producer claimed before this existed. `cached` when ANY reading was
+ * re-used — a refusal is only as fresh as its least fresh row, and the supervisor's
+ * repeat guard must not be told "measured" on the strength of the one row that was.
+ */
+export function refusalFreshness(
+  provenance: readonly (BaseProvenance | null)[],
+): "measured" | "cached" | undefined {
+  if (provenance.length === 0 || provenance.some((one) => one === null)) return undefined;
+  return provenance.some((one) => one?.source === "cached") ? "cached" : "measured";
+}
+
+/** `measuredAt` plus the red TTL, or `""` when no expiry can be derived from it. */
+export function redExpiryOf(measuredAt: string): string {
+  if (measuredAt === "") return "";
+  const then = Date.parse(measuredAt);
+  if (!Number.isFinite(then)) return "";
+  return `${new Date(then + PREFLIGHT_RED_TTL_MS).toISOString().slice(0, 19)}Z`;
+}
+
+/** This invocation took the measurement itself. */
+export function measuredProvenance(at: string): BaseProvenance {
+  return { source: "measured", measuredAt: at, trustedUntil: "" };
+}
+
+/**
+ * The row came off `04-build/preflight.yml`. `fileCheckedAt` is the file-level
+ * stamp the per-row one falls back to — the same fallback `baseResultFor` uses,
+ * so the line a refusal prints and the rule that served it read one clock.
+ */
+export function cachedProvenance(row: BaseCommandResult, fileCheckedAt: string): BaseProvenance {
+  const measuredAt = row.checkedAt ?? fileCheckedAt;
+  return {
+    source: "cached",
+    measuredAt,
+    trustedUntil: row.status === "failed" ? redExpiryOf(measuredAt) : "",
+  };
 }
 
 /**
@@ -452,7 +556,8 @@ export interface BaseFreshness {
  * command hash differs (the operator's `.tldrx/workspace.yml` fix can leave the
  * command string byte-identical), when it is older than `PREFLIGHT_RED_TTL_MS`,
  * or unconditionally under `--prepare` (a 0-second prepare over a red nobody
- * measured today is the lie this exists to stop). A green keeps today's rule —
+ * measured today is the lie this exists to stop) and on a `run auto` relaunch
+ * (#339 — the attempt before it asked for exactly this repair). A green keeps today's rule —
  * only the sha narrows it — and `unmeasured` is not evidence of anything, so
  * re-running a command the gate already declined to run would buy nothing.
  */
@@ -469,6 +574,9 @@ export function baseResultFor(
     if (baseSha !== "" && row.baseSha !== "" && row.baseSha !== baseSha) continue;
     if (row.status !== "failed") return row;
     if (freshness.prepare === true) continue;
+    // #339: a relaunch follows a refusal that told somebody to fix the base, so a
+    // red measured before that repair answers a question about a different tree.
+    if (freshness.relaunch === true) continue;
     if (
       freshness.commandHash !== undefined && row.commandHash !== undefined
       && freshness.commandHash !== row.commandHash
@@ -563,13 +671,22 @@ export function baseFailureLine(result: BaseCommandResult): string {
  * story that could not prove itself.
  */
 export function baseRefusalLines(
-  failures: readonly BaseCommandResult[],
+  failures: readonly BaseServed[],
   workspace?: WorkspaceContext,
 ): readonly string[] {
   const failed: string[] = [];
-  for (const result of failures) {
-    failed.push(baseFailureLine(result));
-    const probe = initProbeLine(workspace, result);
+  let cached = false;
+  for (const served of failures) {
+    failed.push(baseFailureLine(served.result));
+    // #339, before the `tldrx init` corroboration: it QUALIFIES the line above, and a
+    // reader who takes the reading for a measurement has already misread it by the
+    // time a second citation arrives.
+    const reading = cachedReadingLine(served.result, served.provenance);
+    if (reading !== null) {
+      failed.push(reading);
+      cached = true;
+    }
+    const probe = initProbeLine(workspace, served.result);
     if (probe !== null) failed.push(probe);
   }
   return [
@@ -578,7 +695,55 @@ export function baseRefusalLines(
     ...failed,
     `Fix ${WORKSPACE_FILE} (or the base tree), then run \`tldrx next\` again. `
       + "Nothing was dispatched and nothing was charged.",
+    // #339: the advice above is WRONG for a re-used reading — it sends somebody at a
+    // command the cache will refuse identically, without looking, until the expiry
+    // named above. So when one of these was not taken now, say what clears it.
+    ...(cached ? [cachedAdviceLine()] : []),
   ];
+}
+
+/**
+ * The one line that says a reading was NOT taken now — `null` for a measured one,
+ * and `null` where the caller could not say (#339).
+ *
+ * It names the three things the operator needs to tell a stale refusal from a
+ * fresh one: when the measurement behind it was taken, which base tree it was
+ * taken against, and when it stops being trusted. Absent-with-reason throughout:
+ * a record that does not carry the stamp says so rather than get one invented.
+ */
+export function cachedReadingLine(
+  result: BaseCommandResult, provenance: BaseProvenance | null,
+): string | null {
+  if (provenance === null || provenance.source !== "cached") return null;
+  const when = provenance.measuredAt === ""
+    ? `at a time ${PREFLIGHT_REL} does not record`
+    : `at ${provenance.measuredAt}`;
+  const against = result.baseSha === "" ? "" : ` against base \`${result.baseRef}\` (${result.baseSha})`;
+  const until = provenance.trustedUntil === ""
+    ? ", and no expiry can be derived from it — it stands until the command hash or the base sha moves"
+    : `, and it stands until ${provenance.trustedUntil} `
+      + `(a ${String(PREFLIGHT_RED_TTL_MS / 60_000)}-minute window)`;
+  return `    · this reading was re-used from ${PREFLIGHT_REL}, not taken now: measured ${when}`
+    + `${against}${until}.`;
+}
+
+/**
+ * What actually clears a re-used reading — the sentence the generic advice above
+ * cannot carry, because it is only true of a cache hit (#339).
+ *
+ * Measured, not listed from memory: `baseResultFor` re-probes a red when the
+ * command hash moves (any edit to a `commands:` anywhere in `.tldrx/workspace.yml`),
+ * when the base sha moves, when the row is older than the TTL, and unconditionally
+ * under `tldrx next --prepare` and on a `run auto` relaunch. Everything else — a
+ * binary installed, a service started, a `PATH` fixed — is invisible to it, which
+ * is exactly the repair the refusal's own advice asks for.
+ */
+function cachedAdviceLine(): string {
+  return `  One of the readings above was re-used rather than taken now, and not every fix clears one: `
+    + `an edit to ${WORKSPACE_FILE} does, and so does a base tree that moves, but a repair the cache `
+    + `cannot see — a binary installed, a service started — is not re-measured until the expiry named `
+    + "above. `tldrx next --prepare` re-measures a red base immediately, and so does the next "
+    + "`run auto` relaunch.";
 }
 
 /**
@@ -633,7 +798,16 @@ export function preExistingFailureReason(result: BaseCommandResult): string {
  * recorded.
  */
 export class BaseGateFailure extends Error {
-  constructor(readonly result: BaseCommandResult, readonly storyId: string | null) {
+  /**
+   * `provenance` is ADDITIVE and defaults to `null` — "this thrower did not say"
+   * — so the refusal it renders keeps exactly the bytes it always had rather than
+   * claim a freshness nobody established (#339).
+   */
+  constructor(
+    readonly result: BaseCommandResult,
+    readonly storyId: string | null,
+    readonly provenance: BaseProvenance | null = null,
+  ) {
     super(preExistingFailureReason(result));
     this.name = "BaseGateFailure";
   }

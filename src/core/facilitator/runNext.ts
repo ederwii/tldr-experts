@@ -182,6 +182,15 @@ export interface NextOptions {
    * a person at `tldrx next` is shown the same move in the refusal and can type it.
    */
   readonly rebalanceFinished?: boolean;
+  /**
+   * This invocation is a `run auto` RELAUNCH, not the command a person typed (#339).
+   *
+   * Only `runAuto` sets it, and only from attempt 2 on. It carries ONE rule into the
+   * executors: a cached measurement taken before the previous attempt's refusal is not
+   * evidence about the tree this attempt is looking at — the refusal's whole content
+   * was "go and fix this". Absent ⇒ false, which is every hand-typed `tldrx next`.
+   */
+  readonly relaunching?: boolean;
   readonly actor: string;
   readonly at: string;
 }
@@ -215,6 +224,20 @@ export interface NextOutcome {
    * which is what it always compared; the fallback is a weaker reading, never a wrong one.
    */
   readonly signature?: string;
+  /**
+   * Whether the evidence behind `signature` was MEASURED by this attempt (gh #339).
+   *
+   * The repeat guard reads it beside `signature`: two attempts refused by the same
+   * sentence prove nothing moved only when the second one LOOKED. Measured on a live
+   * `run auto --until-done` — a Build base pre-flight cached its red for 30 minutes,
+   * reproduced the refusal byte for byte across a repair the operator had already
+   * made, and the loop stopped on the identity of two strings, neither of which was a
+   * fresh measurement, with four relaunches unspent.
+   *
+   * Absent is "the producer does not say", which is every producer but one and is read
+   * as such — never as `measured`.
+   */
+  readonly signatureFreshness?: "measured" | "cached";
 }
 
 const EXIT_OK = 0;
@@ -1515,6 +1538,7 @@ async function runExecutor(
     maxBudgetUsd: agentCap(options, store, stage),
     yolo: options.yolo,
     at: options.at,
+    relaunching: options.relaunching === true,
     keepWorktrees: options.keepWorktrees === true,
     reuseEpic: options.reuseEpic === true,
     // `--parallel` beats the workflow's `<stage>: {parallel: N}`, which beats
@@ -1650,7 +1674,7 @@ async function runExecutor(
     }
     // Exit 1, matching `commitStage`'s refusal for the same mistake on a
     // single-agent stage: spec §3's "you asked for something impossible".
-    return out(EXIT_USAGE, [...notes, ...outcome.lines], [], executorSignature(outcome));
+    return out(EXIT_USAGE, [...notes, ...outcome.lines], [], executorSignature(outcome), outcome.signatureFreshness);
   }
 
   claimEpicBranches(store, outcome.epicBranches, outcome.branchModel);
@@ -1721,7 +1745,9 @@ async function runExecutor(
   if (outcome.refused === true) {
     setStatus(store, phaseId, stageId, "ready");
     store.save();
-    return out(EXIT_REFUSED, [...notes, ...outcome.lines], [], executorSignature(outcome));
+    return out(
+      EXIT_REFUSED, [...notes, ...outcome.lines], [], executorSignature(outcome), outcome.signatureFreshness,
+    );
   }
   if (!outcome.ok) {
     return failStage(store, options, phaseId, stageId, spec, outcome.error ?? "the executor failed", notes);
@@ -3823,6 +3849,7 @@ function out(
   lines: readonly string[],
   stderr: readonly string[] = [],
   signature?: string,
+  signatureFreshness?: "measured" | "cached",
 ): NextOutcome {
   const held = lines.filter((line) => line.includes(NOT_RESTORED_MARK));
   const ordered = held.length === 0
@@ -3833,5 +3860,6 @@ function out(
     lines: ordered,
     ...(stderr.length === 0 ? {} : { stderr }),
     ...(signature === undefined ? {} : { signature }),
+    ...(signatureFreshness === undefined ? {} : { signatureFreshness }),
   };
 }
