@@ -62,7 +62,7 @@ import {
 } from "../pending.ts";
 import {
   abortOpenMerge, addWorktree, commitsBetween, ensureBranch, firstLine, fullShaOf, git, GitError, headSha, leftoverMerge,
-  removeWorktree, repoDirOf, reviewDiffCommand, reviewDiffRange, shaReachability, uncountedCount,
+  markerGuardVerdict, removeWorktree, repoDirOf, reviewDiffCommand, reviewDiffRange, shaReachability, uncountedCount,
 } from "../../build/git.ts";
 import { BaseGateFailure, baseRefusalLines } from "../../build/preflight.ts";
 import {
@@ -1917,14 +1917,29 @@ class BuildSession {
     // framework makes. A conflict turn that left a marker anywhere — committed
     // or not — or never closed the merge BLOCKS: a requeue would hand the same
     // tree to the same bound, and a DoD over markers proves nothing.
+    //
+    // gh #324: a path the guard could not READ is no longer counted clean. The
+    // guard names it with its reason and the POLICY lives here, at the one call
+    // site, in `UNCHECKED_PATH_POLICY` (`src/core/build/git.ts`) — `"refuse"`
+    // blocks the attempt with the paths named, `"warn"` walks on with them named
+    // on the Build lines. Either way they are named; only this line decides
+    // whether the story survives them.
     if (story.conflictTurn !== undefined) {
       const left = await leftoverMerge(story.worktree, story.conflictTurn.files, handed);
-      if (left.markers.length > 0 || left.inProgress) {
+      const verdict = markerGuardVerdict(left);
+      const held = left.markers.length > 0 || left.inProgress;
+      if (verdict.blocks) {
         return {
           story, cost: spent, dod: [], commit: null,
-          failure: leftoverMergeReason(left.markers, left.inProgress),
+          failure: [
+            ...(held ? [leftoverMergeReason(left.markers, left.inProgress)] : []),
+            ...(verdict.unchecked === null ? [] : [verdict.unchecked]),
+          ].join(" "),
           developerError: null, before,
         };
+      }
+      if (verdict.unchecked !== null) {
+        this.lines.push(`  · ${story.planned.story.id}: warning — ${verdict.unchecked}`);
       }
     }
 

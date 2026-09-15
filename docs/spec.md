@@ -3846,10 +3846,16 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    intent and the stories that landed on the epic since the branch was cut (read off the epic's `merge(<id>): …`
    subjects, or the epic sha when there are none), and says that `git add` + `git commit` close the merge. Before the
    DoD, a **marker guard** (`leftoverMerge`: each conflicted file handed, any path it was renamed to, every path added
-   since the handed sha and every untracked, non-ignored path — everything a commit could sweep in — read for
+   or modified since the handed sha and every untracked, non-ignored path — everything a commit could sweep in — read
+   for
    ANY line starting `<<<<<<<`, `|||||||` or `>>>>>>>` — never a lone `=======`, which is a heading underline as often
    as a marker — plus `MERGE_HEAD`) BLOCKS — not requeues — a turn that left a marker in one of those files,
-   committed or not, or never closed the merge, naming the files. Refused otherwise, with the reason appended to the block above. Measured on the field run
+   committed or not, or never closed the merge, naming the files. Modified paths joined that scope in #324 after the
+   false-positive class was MEASURED rather than assumed: every `M` row of 1,060 commits of this repo's own history,
+   8,366 rows, each row's content against that regex — 0 false positives. A path the guard could not READ is
+   **unchecked, not clean** (#324): ENOENT alone is silent — a file that is gone carries nothing into a commit — while
+   any other errno, and any path skipped by the scan's two caps (2,000 paths; 4 MiB per file, both far above a whole
+   copy of this repo), is NAMED with its reason and blocks the attempt under the guard's `refuse` policy. Refused otherwise, with the reason appended to the block above. Measured on the field run
    that filed it (#286): one conflict in a counted test list on an otherwise-green story, resolved only by a person in a
    scratch worktree, and 1.5 h later the same story conflicting again in four files.
 4. **Merge into the epic**, `git merge --no-ff` inside a worktree checked out on the epic branch. On conflict the merge
