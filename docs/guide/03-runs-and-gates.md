@@ -392,7 +392,11 @@ hold. Every one of the seven intervention episodes a hold-surface audit traced t
 ended in an approval or a widen, so the gate now signs when the other six hold, and the paths are
 carried: the note ends in `· warned by: boundary`, `tldrx next` prints a `warning: boundary` line,
 `tldrx run status` marks the row `— warning: boundary`, and `tldrx ship` lists every path under
-`## Outside declared scope — review these`, per story. On an `agent` gate it still falls to a
+`## Outside declared scope — review these`, per story. The exception is a SENSITIVE path — CI
+definitions, secrets and key files, infra-as-code, dependency manifests and lockfiles
+(`SENSITIVE_PATH_CLASSES` in `run/boundary.ts`) — outside the surface: that still holds the auto
+gate, named with its class (`app:.github/workflows/deploy.yml [ci]`), until a story declares it or
+you approve. On an `agent` gate it still falls to a
 person, and on a `human` gate you are the one signing anyway — approve over it and the reason
 lives in your note.
 

@@ -80,6 +80,14 @@ PR body, per story:
 - no story's measured diff names these: `app:docs/inventory.md`
 ```
 
+**Except where it is sensitive.** An outside path in one of four classes still holds an `auto`
+gate: CI and workflow definitions (`.github/workflows/`, `.gitlab-ci.yml`, …), secrets and
+credentials (`.env*` except `.env.example`, `secrets/`, key and certificate files), infra-as-code
+(`Dockerfile*`, `docker-compose*`, `terraform/`, `*.tf`, `k8s/`, `deploy/` manifests) and
+dependency manifests and lockfiles. The refusal names the path and its class —
+`app:.github/workflows/deploy.yml [ci]` — and a story that declares the path in `touches:` clears
+it, like any other.
+
 An `agent` gate still falls to a person on it, and a `human` gate is yours to sign anyway.
 
 ### Getting past the boundary: `tldrx story widen`

@@ -32,6 +32,7 @@ import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { runStories, shipRun, type ShipTransport } from "../src/core/run/ship.ts";
 import { OUTSIDE_SCOPE_HEADING } from "../src/core/run/shipBody.ts";
+import { runNext } from "../src/core/facilitator/runNext.ts";
 import { declaredSurfaces } from "../src/core/build/carriedRows.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { renderBuildHandoff } from "../src/core/build/handoff.ts";
@@ -1013,6 +1014,48 @@ describe("tldrx ship — paths outside the declared scope (#331)", () => {
     // the declared path is not a review item
     expect(outside).not.toContain("s1.txt");
   });
+
+  /**
+   * The attribution does NOT depend on anybody widening (review question on #331). The
+   * executor measures each story's own diff against its `touches:` as it settles and
+   * writes `story.touches_widened` with `basis: "measured"` itself — so a real Build,
+   * with no person in it, is what this drives: fake agents, the real executor, the
+   * auto gate signing over the boundary, then `ship`.
+   */
+  test("after a real unattended Build, the path lands under the story that wrote it — nobody widened", async () => {
+    const ws = workspace({
+      stories: [{ id: "S1", epic: "E1", title: "Inside the surface", touches: ["src/in.ts"] }],
+      epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+      waves: [["S1"]],
+      gates: "none",
+      repoFiles: { "src/in.ts": "export const before = 1;\n" },
+    });
+    process.env.PATH = ws.binDir;
+    process.env.FAKE_BUILD_STATE = ws.statePath;
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "src/in.ts": "export const after = 2;\n", "platform/Auth.cs": "// nobody scoped this\n" },
+    });
+    try {
+      const built = await runNext({
+        root: ws.root, dryRun: false, mode: "headless", yolo: false, actor: "alan", at: "2026-08-29T09:00:00Z",
+      });
+      expect(built.code).toBe(0);
+      const widenedBy = readFileSync(join(ws.runDir, "events.jsonl"), "utf8").split("\n")
+        .filter((line) => line.includes("story.touches_widened"))
+        .map((line) => (JSON.parse(line) as { actor: string }).actor);
+      // the only widening on the ledger is the framework's own measurement
+      expect(widenedBy).toEqual(["framework"]);
+
+      const transport = healthy();
+      await ship(ws, transport);
+      const outside = section(bodyOf(transport), OUTSIDE_SCOPE_HEADING);
+      expect(outside).toContain("- S1: `app:platform/Auth.cs`");
+      expect(outside).not.toContain("no story's measured diff names these");
+    } finally {
+      delete process.env.FAKE_BUILD_WRITE;
+      delete process.env.FAKE_BUILD_STATE;
+    }
+  }, 90_000);
 
   test("a branch that stayed inside the surface leaves the section out", async () => {
     const ws = workspace();

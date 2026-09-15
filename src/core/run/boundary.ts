@@ -92,6 +92,99 @@ export const OUTSIDE_SURFACE =
 export const OUTSIDE_SURFACE_WARNING =
   "work outside the declared surface does not hold an auto gate — it is carried into the PR body for review";
 
+/**
+ * The sensitive path classes (gh #331, review): a path in one of these that lands OUTSIDE
+ * the declared surface still HOLDS an `auto` gate, where any other outside path only warns.
+ *
+ * The one list — nothing else decides what "sensitive" means. Each class is a change whose
+ * blast radius is not the product code a reviewer reads first: what CI runs and with which
+ * permissions, credentials, what gets deployed and where, and what code is pulled in from
+ * outside. Declaring the path in a story's `touches:` clears it exactly as it clears any
+ * other path — only paths already OUTSIDE the surface are classified — so a story that
+ * means to edit a workflow is not held.
+ *
+ * Matched against the repo-relative POSIX path; `except` wins over `match`. Deliberately
+ * generic, not tuned to any workspace: a false hold costs a person a `story widen`, which
+ * is what every outside path cost before this change.
+ */
+export const SENSITIVE_PATH_CLASSES: readonly {
+  readonly id: string;
+  readonly match: readonly RegExp[];
+  readonly except?: readonly RegExp[];
+}[] = [
+  {
+    // CI / workflow definitions.
+    id: "ci",
+    match: [
+      /(^|\/)\.github\/(workflows|actions)\//,
+      /(^|\/)\.gitlab-ci\.ya?ml$/,
+      /(^|\/)\.gitlab\/ci\//,
+      /(^|\/)\.circleci\//,
+      /(^|\/)\.buildkite\//,
+      /(^|\/)Jenkinsfile[^/]*$/,
+      /(^|\/)(azure-pipelines|bitbucket-pipelines|\.travis|cloudbuild|buildspec|appveyor)\.ya?ml$/,
+    ],
+  },
+  {
+    // Secrets and credentials.
+    id: "secrets",
+    match: [
+      /(^|\/)\.env(\.[^/]*)?$/,
+      /(^|\/)[^/]+\.env$/,
+      /(^|\/)secrets?\//,
+      /\.(pem|key|p12|pfx|crt|cer|der|jks|keystore|kdbx|gpg|asc)$/,
+      /(^|\/)id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$/,
+      /(^|\/)\.(npmrc|pypirc|netrc)$/,
+    ],
+    except: [/(^|\/)\.env\.(example|sample|template)$/],
+  },
+  {
+    // Infrastructure as code, container and deploy manifests.
+    id: "infra",
+    match: [
+      /(^|\/)([^/]*\.)?Dockerfile(\.[^/]*)?$/,
+      /(^|\/)\.dockerignore$/,
+      /(^|\/)(docker-)?compose[^/]*\.ya?ml$/,
+      /(^|\/)terraform\//,
+      /\.(tf|tfvars|hcl)$/,
+      /(^|\/)(k8s|kubernetes|helm|deploy|deployment|deployments|manifests)\//,
+      /(^|\/)(Pulumi|serverless|fly|render|vercel|netlify)\.(ya?ml|toml|json)$/,
+      /(^|\/)Procfile$/,
+    ],
+  },
+  {
+    // Dependency manifests and lockfiles.
+    id: "dependencies",
+    match: [
+      /(^|\/)(package|composer)\.json$/,
+      /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|deno\.lock)$/,
+      /(^|\/)(requirements[^/]*\.txt|Pipfile|Pipfile\.lock|poetry\.lock|pyproject\.toml|uv\.lock|setup\.py|setup\.cfg)$/,
+      /(^|\/)(go\.mod|go\.sum|Cargo\.toml|Cargo\.lock|Gemfile|Gemfile\.lock|composer\.lock|mix\.exs|mix\.lock)$/,
+      /(^|\/)(pom\.xml|build\.gradle(\.kts)?|settings\.gradle(\.kts)?|gradle\.lockfile|libs\.versions\.toml)$/,
+      /\.(csproj|fsproj|vbproj)$/,
+      /(^|\/)(packages\.config|packages\.lock\.json|Directory\.Packages\.props|Directory\.Build\.props|global\.json|nuget\.config)$/i,
+    ],
+  },
+];
+
+/** The sensitive class a repo-relative path falls in, or null. The ONE matcher over the list. */
+export function sensitiveClassOf(path: string): string | null {
+  const normal = normalisePath(path);
+  for (const entry of SENSITIVE_PATH_CLASSES) {
+    if (!entry.match.some((re) => re.test(normal))) continue;
+    if (entry.except?.some((re) => re.test(normal)) === true) continue;
+    return entry.id;
+  }
+  return null;
+}
+
+/**
+ * Why a boundary with a sensitive outside path holds an `auto` gate anyway — the clause
+ * after the named paths. Verbatim: it is what the operator reads and the tests assert.
+ */
+export const SENSITIVE_OUTSIDE_SURFACE =
+  "a sensitive path outside the declared surface holds even an auto gate — declare it in a story's `touches:` or approve over it";
+
 /** At most this many offending paths are named before the detail says "+N more". */
 export const NAMED_PATHS = 8;
 
@@ -509,6 +602,11 @@ export async function evaluateBoundary(input: BoundaryInput): Promise<BoundaryVe
 
   const audited = measured.reduce((sum, repo) => sum + (repo.changed?.length ?? 0), 0);
   const outside = measured.flatMap((repo) => repo.outside.map((path) => `${repo.target.repo}:${path}`));
+  // The carve-out (gh #331 review): outside paths in a sensitive class, `repo:path [class]`.
+  const sensitive = measured.flatMap((repo) => repo.outside.flatMap((path) => {
+    const cls = sensitiveClassOf(path);
+    return cls === null ? [] : [`${repo.target.repo}:${path} [${cls}]`];
+  }));
   const unread = repos.filter((repo) => repo.changed === null);
   const unreadPart = unread.length === 0
     ? ""
@@ -527,6 +625,18 @@ export async function evaluateBoundary(input: BoundaryInput): Promise<BoundaryVe
     `${String(audited)} changed path(s), ${String(outside.length)} outside the surface: `
     + `${named.join(", ")}${rest > 0 ? `, +${String(rest)} more` : ""}`
     + `${unreadPart}${excludedPart}`;
+  if (sensitive.length > 0) {
+    // No `warning`: without one, the condition HOLDS an auto gate (`autoGate.ts` `holds`).
+    const shown = sensitive.slice(0, NAMED_PATHS);
+    const more = sensitive.length - shown.length;
+    return {
+      ok: false,
+      detail:
+        `${measuredPart}; ${String(sensitive.length)} sensitive: ${shown.join(", ")}`
+        + `${more > 0 ? `, +${String(more)} more` : ""}; ${SENSITIVE_OUTSIDE_SURFACE}; ${OUTSIDE_SURFACE}`,
+      outside,
+    };
+  }
   return {
     ok: false,
     detail: `${measuredPart}; ${OUTSIDE_SURFACE}`,

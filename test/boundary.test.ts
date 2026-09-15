@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { approve } from "../src/core/run/gates.ts";
-import { evaluateBoundary, deriveSurface, epicTargets, inSurface, normalisePath, unqualifiedCitedPaths, OUTSIDE_SURFACE, OUTSIDE_SURFACE_WARNING } from "../src/core/run/boundary.ts";
+import { evaluateBoundary, deriveSurface, epicTargets, inSurface, normalisePath, unqualifiedCitedPaths, OUTSIDE_SURFACE, OUTSIDE_SURFACE_WARNING, SENSITIVE_OUTSIDE_SURFACE, sensitiveClassOf } from "../src/core/run/boundary.ts";
 import { warnedByNote } from "../src/core/run/autoGate.ts";
 import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
 import { loadWorkspace } from "../src/hooks/lib/workspace.ts";
@@ -213,6 +213,38 @@ describe("the surface a run declares", () => {
 // The honest n/a
 // ---------------------------------------------------------------------------
 
+describe("the sensitive path classes (gh #331 review)", () => {
+  test("each class names its paths, and ordinary product code is none of them", () => {
+    const table: readonly [string, string | null][] = [
+      [".github/workflows/ci.yml", "ci"],
+      ["services/api/.gitlab-ci.yml", "ci"],
+      [".circleci/config.yml", "ci"],
+      ["Jenkinsfile", "ci"],
+      [".env", "secrets"],
+      ["apps/web/.env.production", "secrets"],
+      ["config/prod.env", "secrets"],
+      [".env.example", null],
+      ["config/secrets/db.json", "secrets"],
+      ["certs/server.pem", "secrets"],
+      ["Dockerfile", "infra"],
+      ["api/Dockerfile.dev", "infra"],
+      ["docker-compose.override.yml", "infra"],
+      ["infra/terraform/main.tf", "infra"],
+      ["modules/vpc.tf", "infra"],
+      ["deploy/k8s/web.yaml", "infra"],
+      ["package.json", "dependencies"],
+      ["web/pnpm-lock.yaml", "dependencies"],
+      ["go.sum", "dependencies"],
+      ["src/Api/Api.csproj", "dependencies"],
+      ["src/in.ts", null],
+      ["docs/deployment.md", null],
+      ["src/environment.ts", null],
+      ["app.json", null],
+    ];
+    for (const [path, cls] of table) expect([path, sensitiveClassOf(path)]).toEqual([path, cls]);
+  });
+});
+
 describe("the boundary condition abstains rather than guessing", () => {
   test("outside Build there is no epic branch, so it is n/a", async () => {
     const ws = workspace(DECLARED);
@@ -272,6 +304,43 @@ describe("the boundary condition against a real epic branch", () => {
    * one approved or widened. The auto gate now signs, and the path is NAMED on the note
    * it signs with — so the fact is carried, never dropped.
    */
+  /**
+   * gh #331 review — the safety carve-out. A path in a SENSITIVE class (CI definitions,
+   * secrets, infra-as-code, dependency manifests and lockfiles) outside the surface is
+   * still a HOLD on an auto gate, and the reason names the path and its class.
+   */
+  test("a sensitive path nobody scoped still HOLDS an auto gate, naming the path and its class", async () => {
+    const ws = workspace(DECLARED);
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "src/in.ts": "export const after = 2;\n", ".github/workflows/deploy.yml": "on: push\n" },
+    });
+
+    const outcome = await next(ws);
+
+    const said = outcome.lines.join("\n");
+    expect(outcome.code).toBe(4);
+    expect(said).toContain("auto gate not taken");
+    expect(said).toContain("app:.github/workflows/deploy.yml [ci]");
+    expect(said).toContain(SENSITIVE_OUTSIDE_SURFACE);
+    expect(said).not.toContain(OUTSIDE_SURFACE_WARNING);
+    expect(RunStore.open(ws.runDir).run.phases.flatMap((p) => p.stages)[0]?.gate.status).toBe("pending");
+  }, 60_000);
+
+  test("a sensitive path a story DECLARES does not hold the auto gate", async () => {
+    const ws = workspace({
+      ...DECLARED,
+      stories: [{ id: "S1", epic: "E1", title: "S1", touches: ["src/in.ts", ".github/workflows/deploy.yml"] }],
+    });
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "src/in.ts": "export const after = 2;\n", ".github/workflows/deploy.yml": "on: push\n" },
+    });
+
+    const outcome = await next(ws);
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.lines.join("\n")).toContain("auto-approved");
+  }, 60_000);
+
   test("a path nobody scoped does not hold an auto gate — it is NAMED on the note as a warning", async () => {
     const ws = workspace(DECLARED);
     process.env.FAKE_BUILD_WRITE = JSON.stringify({

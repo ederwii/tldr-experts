@@ -85,6 +85,14 @@ el cuerpo del PR, por story:
 - no story's measured diff names these: `app:docs/inventory.md`
 ```
 
+**Salvo cuando es sensible.** Una ruta fuera de la superficie en una de cuatro clases sigue
+deteniendo una compuerta `auto`: definiciones de CI y workflows (`.github/workflows/`,
+`.gitlab-ci.yml`, …), secretos y credenciales (`.env*` salvo `.env.example`, `secrets/`, archivos
+de llaves y certificados), infraestructura como código (`Dockerfile*`, `docker-compose*`,
+`terraform/`, `*.tf`, manifiestos de `k8s/` y `deploy/`) y manifiestos de dependencias y
+lockfiles. La negativa nombra la ruta y su clase —`app:.github/workflows/deploy.yml [ci]`— y una
+story que declara la ruta en `touches:` la libera, como a cualquier otra.
+
 Una compuerta `agent` sigue cayéndole a una persona por esto, y una compuerta `human` la firmas
 tú de todos modos.
 

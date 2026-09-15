@@ -64,7 +64,14 @@
   every outside path, grouped under the story whose own measured `story.touches_widened` row names
   it, the rest under `no story's measured diff names these`. One derivation: the gate and the PR
   body both call `evaluateBoundary`, which now returns the uncapped list beside its detail. An
-  `agent` gate still falls to a person on a boundary, and a `human` gate is unchanged. No exit
+  `agent` gate still falls to a person on a boundary, and a `human` gate is unchanged. **One
+  carve-out keeps the hold where the blast radius is not product code:** an outside path in
+  `SENSITIVE_PATH_CLASSES` (one exported constant beside `evaluateBoundary` — `ci`, `secrets`,
+  `infra`, `dependencies`) still holds an auto gate, named with its class
+  (`app:.github/workflows/deploy.yml [ci]`); declaring it in a story's `touches:` clears it. The
+  per-story grouping needs nobody to widen: the executor writes its own measured
+  `story.touches_widened` row for each story as it settles, and a real unattended Build then
+  `ship` puts the path under the story that wrote it. No exit
   code changed; a check-only refusal with a boundary warning beside it is now eligible for
   `run auto`'s bounded re-run, since the boundary no longer holds it.
 

@@ -3099,6 +3099,20 @@ whose own measured `story.touches_widened` row names it, with the rest under
 `no story's measured diff names these`. An `agent` gate still falls through on `boundary` exactly as before (it reads
 the condition's `ok`, which stays false), and a `human` gate is never signed by the machine at all.
 
+**The safety carve-out.** One exported constant beside `evaluateBoundary`, `SENSITIVE_PATH_CLASSES`
+(`run/boundary.ts`), names four classes whose outside paths still HOLD an `auto` gate: `ci` (`.github/workflows/`,
+`.github/actions/`, `.gitlab-ci.yml`, `.circleci/`, `.buildkite/`, `Jenkinsfile`, and the Azure/Bitbucket/Travis/
+Cloud Build/CodeBuild/AppVeyor pipeline files), `secrets` (`.env` and `.env.*` and `*.env` except
+`.env.example`/`.sample`/`.template`, any `secret/` or `secrets/` directory, key and certificate files such as `.pem`,
+`.key`, `.p12`, `.pfx`, `.crt`, SSH keys, `.npmrc`/`.pypirc`/`.netrc`), `infra` (`Dockerfile*`, `.dockerignore`,
+`docker-compose*`/`compose*.yml`, `terraform/`, `.tf`/`.tfvars`/`.hcl`, `k8s/`, `kubernetes/`, `helm/`, `deploy/`,
+`deployment(s)/`, `manifests/`, `Procfile`, and Pulumi/Serverless/Fly/Render/Vercel/Netlify config) and
+`dependencies` (the npm, Python, Go, Rust, Ruby, PHP, Elixir, JVM and .NET manifests and lockfiles). Only paths already
+OUTSIDE the surface are classified, so a story that declares the workflow it edits is not held. A held verdict names
+each such path with its class — `app:.github/workflows/deploy.yml [ci]` — followed by
+`a sensitive path outside the declared surface holds even an auto gate — declare it in a story's \`touches:\` or approve over it`,
+and carries no warning, so `held_by` names `boundary`. The PR section lists every outside path either way.
+
 Two of the others were tightened on 2026-08-29, both because an auto gate could be closed by SILENCE:
 
 - **(2) "zero open" is only an answer when the file was readable — but silence with a readable file IS an answer.**
