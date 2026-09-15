@@ -117,8 +117,8 @@
   `buildStageDefaults` the `dod-gate` hook already calls on its PreToolUse path (it now takes
   the stage id; an unreadable preset still gives the shipped 2), and `run estimate` passes the
   stage spec it already loads. `reviewer_share`, `story_cap_multiplier` and
-  `story_cap_floor_usd` are still asked with their defaults by these three readers; this change
-  moves `attempts` only.
+  `story_cap_floor_usd` are still asked with their defaults by these three readers — the same
+  disagreement on three more knobs, measured and filed as #333; this change moves `attempts` only.
 
 - **The `budget-gate` hook no longer refuses the `run auto` launch that would fix the shortfall
   (closes #321).** It priced a `tldrx run auto` spawn against the cursor phase's own ceiling

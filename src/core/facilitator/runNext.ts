@@ -1356,10 +1356,15 @@ function stageRemainingWork(
     // brake is protecting (#22 (c)).
     attended: isAttendedByHost(store.run),
     // The stage's own calibration, so the brake and the executor divide the same
-    // price the same way. `budgetView.ts` and the `budget-gate` hook still ask
-    // with the defaults: they are read paths on a 50 ms budget with no stage spec
-    // in hand, and the difference can only make them QUOTE a larger number — the
-    // safe direction, and the one `remainingWork`'s clamp already guarantees.
+    // price the same way. Since gh #214 `budgetView.ts`, `estimateView.ts` and the
+    // `budget-gate` hook resolve `attempts` too — through the tolerant
+    // `buildStageDefaults`, which is what keeps them off `loadStageSpec` on a read
+    // path — because asked with the shipped 2 they refused an `attempts: 1` stage
+    // work this brake allows. `reviewer_share`, `story_cap_multiplier` and
+    // `story_cap_floor_usd` are still defaulted by those three readers, which is
+    // the same disagreement on three more knobs — a stage below a shipped default
+    // makes them quote MORE than this brake will spend — and is filed, not
+    // accepted: gh #333.
     attempts: spec.tuning.attempts,
     reviewerShare: spec.tuning.reviewerShare,
     storyCapMultiplier: spec.tuning.storyCapMultiplier,
