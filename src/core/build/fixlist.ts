@@ -230,6 +230,18 @@ export const CLAIMED_UNVERIFIED = "claimed-unverified";
  */
 export const FIXLIST_SETTLED_MARK = "every finding is routed away from `fix-now`, so the story is done without a fix round";
 
+/**
+ * The provenance words an AUTO-CLOSED `Resolved: yes <sha>` line carries after its
+ * sha (gh #327, owner decision 2026-09-14, "A: ronda + auto-cierre").
+ *
+ * Additive on the line and read tolerantly: `RESOLVED_RE` keeps everything after
+ * the sha as prose, so every reader of a fix list — `parseFixlistFile`,
+ * `verifyResolutions`, the dashboard, the handoff — reads an auto-closed line
+ * exactly as it reads one a person typed. A marker so a test asserts it, not a
+ * sentence retyped.
+ */
+export const AUTO_CLOSED_MARK = "auto-closed: the fix-round reviewer approved this commit with this finding in its prompt";
+
 // --- the envelope ----------------------------------------------------------
 
 export interface ParsedFixlist {
@@ -699,6 +711,49 @@ export function markUnverified(text: string, n: number, why: string): string {
 }
 
 /**
+ * Close, in the TEXT of a fix list, every finding a fix-round reviewer was SHOWN
+ * and then approved over (gh #327, owner decision "A: ronda + auto-cierre").
+ *
+ * Audited in the direction §7 cares about: a finding is closed only when it is
+ * STILL open in the file as it reads now AND it was rendered into that reviewer's
+ * prompt — same number, same heading. A finding written after the prompt, one a
+ * person re-numbered or re-worded, or one whose `Resolved:` line is missing, is
+ * left exactly as it is, so it still holds the story. The line written is the
+ * existing grammar, `Resolved: yes <sha>`, with the provenance after it as prose
+ * `RESOLVED_RE` already tolerates — and `verifyResolutions` reads it like any
+ * other claim, so a sha that does not check out is reopened as
+ * `claimed-unverified` on the very next read.
+ *
+ * Text in, text out, no I/O: the caller owns the file.
+ */
+export function autoCloseShown(
+  text: string,
+  shown: readonly FixFinding[],
+  sha: string,
+  provenance: string,
+): { text: string; closed: readonly number[] } {
+  const current = parseFixlistFile(text);
+  const closable = new Set(
+    current
+      .filter((f) => isOpen(f) && shown.some((s) => s.n === f.n && s.finding === f.finding))
+      .map((f) => f.n),
+  );
+  const closed = new Set<number>();
+  let at: number | null = null;
+  const body = text.split("\n").map((line) => {
+    const heading = HEADING_RE.exec(line);
+    if (heading !== null) {
+      at = Number(heading[1] ?? "0");
+      return line;
+    }
+    if (at === null || !closable.has(at) || closed.has(at) || !RESOLVED_RE.test(line)) return line;
+    closed.add(at);
+    return `Resolved: yes ${sha} — ${AUTO_CLOSED_MARK} (${provenance})`;
+  }).join("\n");
+  return { text: body, closed: [...closed].sort((a, b) => a - b) };
+}
+
+/**
  * Locates the sha token inside a `Resolved: yes …` line — accepting `A-F` because
  * it runs against the line's ORIGINAL casing, which is the only text whose spans
  * line up with the line being rewritten. Not a difference in strictness from
@@ -847,6 +902,21 @@ export function fixlistRounds(runDir: string, phaseDir: string, storyId: string)
 export function latestFixlist(runDir: string, phaseDir: string, storyId: string): FixlistOnDisk | null {
   const rounds = fixlistRounds(runDir, phaseDir, storyId);
   return rounds[rounds.length - 1] ?? null;
+}
+
+/**
+ * The latest round on disk while it still holds an OPEN `fix-now` finding, or
+ * null (gh #327).
+ *
+ * ONE derivation for the three readers that must agree: the developer handed the
+ * list, the reviewer shown its open findings, and the auto-close that may close
+ * only what that reviewer was shown. A fix list whose every finding is closed or
+ * routed away is finished, and re-rendering it would ask for work somebody
+ * already decided not to do.
+ */
+export function openFixlist(runDir: string, phaseDir: string, storyId: string): FixlistOnDisk | null {
+  const latest = latestFixlist(runDir, phaseDir, storyId);
+  return latest !== null && openFindings(latest.findings).length > 0 ? latest : null;
 }
 
 /** Read one fix-list file, wherever it is. Null when it is not one. */

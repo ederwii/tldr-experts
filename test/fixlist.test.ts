@@ -497,26 +497,38 @@ describe("a story cannot settle `done` over an open `fix-now`", () => {
 });
 
 describe("the spawned reviewer reaches the same verdict", () => {
-  test("a headless run writes the artifact, spends no attempt, and parks the story", async () => {
+  /**
+   * INVERTED by gh #327. This test used to pin the opposite: "a fix list does not
+   * requeue the developer inside the same process, because the routing it is owed
+   * needs a host and a headless invocation has none" — and it asserted exactly one
+   * developer and one reviewer, with the story parked at `review`. Measured live
+   * (#327), that park stranded the story and every story waiting on it. Owner
+   * decision (Slack q_mu23trkg8ae9c999, answered by Alan, authority owner-decision,
+   * choice "A: ronda + auto-cierre"): a headless run routes the fix round itself,
+   * and the fix-round reviewer's approve closes what it was shown. The fix list
+   * still spends no attempt — that half of the pin stands.
+   */
+  test("a headless run writes the artifact, spends no attempt, and routes its fix round in the same process", async () => {
     const ws = workspace();
     process.env.FAKE_BUILD_COST = "0";
-    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["fixlist"] });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["fixlist", "approve"] });
     process.env.FAKE_BUILD_FIXLIST = JSON.stringify({ S1: THREE_DEFECTS });
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({ "S1#2": { "s1.txt": "S1 fixed\n" } });
 
     await next(ws);
 
-    expect(story(ws, "S1")).toContain("status: review");
     const text = readFileSync(fixlistPath(ws, "S1", 1), "utf8");
     expect(text).toContain("## 1 · Concurrent double-confirm mints two sessions  [high]");
     expect(text).toContain("Disposition: **defer-with-log**");
     const ledger = readReviewLedger(ws.runDir, "S1");
-    expect(ledger.verdicts).toBe(0);
+    // The fix list spent no attempt; the fix round's approve is the one verdict counted.
+    expect(ledger.verdicts).toBe(1);
     expect(ledger.fixlistRounds).toBe(1);
-    // Exactly one developer and one reviewer: a fix list does not requeue the
-    // developer inside the same process, because the routing it is owed needs a
-    // host and a headless invocation has none.
     const spawned = events(ws).filter((e) => e.type === "agent.spawned");
-    expect(spawned.map((e) => e.payload.role)).toEqual(["developer", "reviewer"]);
+    expect(spawned.map((e) => e.payload.role)).toEqual(["developer", "reviewer", "developer", "reviewer"]);
+    const starts = events(ws).filter((e) => e.type === "task.started").map((e) => e.payload.attempt);
+    expect(starts).toEqual([1, 1]);
+    expect(story(ws, "S1")).toContain("status: done");
   }, 90_000);
 
   test("a `fixlist` verdict with no findings is `changes`, not a free round", async () => {
@@ -646,16 +658,21 @@ describe("a fix list with nothing to fix now settles the story done (#295)", () 
     expect(existsSync(fixlistPath(ws, "S1", 1))).toBe(true);
   }, 90_000);
 
-  test("one `fix-now` finding is enough to park the story at `review` — the control", async () => {
+  // Since gh #327 an open `fix-now` buys its fix round in the same process
+  // rather than parking at `review` — the control is that it is NOT settled on
+  // the spot the way a list with nothing to fix now is: a second developer runs.
+  test("one `fix-now` finding is enough to buy a fix round rather than settle on the spot — the control", async () => {
     const ws = workspace();
     process.env.FAKE_BUILD_COST = "0";
-    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["fixlist"] });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["fixlist", "changes"] });
     process.env.FAKE_BUILD_FIXLIST = JSON.stringify({ S1: [ALL_DEFERRED[0], THREE_DEFECTS[1]] });
 
     const first = await next(ws);
 
-    expect(story(ws, "S1")).toContain("status: review");
     expect(first.lines.join("\n")).not.toContain(FIXLIST_SETTLED_MARK);
+    expect(story(ws, "S1")).not.toContain("status: done");
+    const roles = events(ws).filter((e) => e.type === "agent.spawned").map((e) => e.payload.role);
+    expect(roles.slice(0, 3)).toEqual(["developer", "reviewer", "developer"]);
   }, 90_000);
 });
 

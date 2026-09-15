@@ -150,6 +150,22 @@ export interface ReviewLedger {
     readonly verdict: string;
   } | null;
   /**
+   * The LAST `task.done` for this story — the status and verdict it settled
+   * under, and the commit it named (null when it named none) — or null when the
+   * story never settled (gh #329).
+   *
+   * Survives `story.reopened` like `lastMerge`, and for a different reason: it is
+   * not a count, it is the story's last settlement, and a reopen after it writes a
+   * `todo` row the settle pre-pass never looks at. Read beside `lastMerge` so "the
+   * story is `blocked` on an approve" is asked of the settlement that blocked it,
+   * never of an older merge a later red DoD or refusal settled over.
+   */
+  readonly lastSettled: {
+    readonly status: string;
+    readonly verdict: string;
+    readonly commit: string | null;
+  } | null;
+  /**
    * The OPEN fix round on this story (issue #58), or null when there is none.
    *
    * A fix round is `tldrx story reopen <id> --for-fix --note "<defect>"`: a DONE
@@ -248,7 +264,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   const empty: ReviewLedger = {
     verdicts: 0, fixlistRounds: 0, erroredWith: null, commit: null, epicBase: null, dod: [],
     lastDodOutputPath: null,
-    developerErroredWith: null, blockedWithNothingRun: false, reopened: null, asIs: null, lastMerge: null, fixRound: null,
+    developerErroredWith: null, blockedWithNothingRun: false, reopened: null, asIs: null, lastMerge: null, lastSettled: null, fixRound: null,
     formatRetries: 0, formatRefusal: null, reviewer: null, redDodAttempts: 0,
     conflictTurns: 0, conflictTurnOwed: null,
   };
@@ -292,6 +308,8 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   let asIs: ReviewLedger["asIs"] = null;
   // Deliberately NOT reset at a reopen boundary — see the field.
   let lastMerge: ReviewLedger["lastMerge"] = null;
+  // Deliberately NOT reset at a reopen boundary either — see the field.
+  let lastSettled: ReviewLedger["lastSettled"] = null;
   let fixRound: ReviewLedger["fixRound"] = null;
   let formatRetries = 0;
   let formatRefusal: string | null = null;
@@ -419,6 +437,11 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
           verdict: typeof payload.verdict === "string" && payload.verdict !== "" ? payload.verdict : "n-a",
         };
       }
+      lastSettled = {
+        status: typeof payload.status === "string" ? payload.status : "",
+        verdict: typeof payload.verdict === "string" && payload.verdict !== "" ? payload.verdict : "n-a",
+        commit: typeof payload.commit === "string" && payload.commit !== "" ? payload.commit : null,
+      };
       // The story finished again: whatever fix round was open has landed, and the
       // next named defect may open one of its own (#58). This is the ONLY thing
       // that closes one — the same handshake that closed the story the first time.
@@ -544,6 +567,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     reopened,
     asIs,
     lastMerge,
+    lastSettled,
     fixRound,
     formatRetries,
     redDodAttempts,

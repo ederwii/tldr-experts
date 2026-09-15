@@ -3865,9 +3865,15 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    was faulted — and writes `04-build/fixlist/<story-id>-<round>.md` beside it; a fix list with **no `fix-now`
    finding** (every one routed `defer-with-log`, `refuted` or `out-of-scope`, #255's docs/style routing included)
    settles the story `done` on the spot instead — the artifact is still written and its deferred findings still reach
-   `retro.md`, but no developer round is bought for a list with nothing to fix (#295). Only a verdict that FAULTED
+   `retro.md`, but no developer round is bought for a list with nothing to fix (#295). With a `fix-now` finding open,
+   a headless run buys the **fix round in the same process** (#327, owner decision 2026-09-14): the story is requeued
+   without spending an attempt, the developer is handed the open findings under `## Fix list`, and the next reviewer
+   is shown each one verbatim — see "the fix list" below. Only a verdict that FAULTED
    the diff consumes the requeue. Headless re-runs it by spawning; `--prepare` writes the
-   reviewer bundle for the host and stops (see "the second delegable role" below).
+   reviewer bundle for the host and stops (see "the second delegable role" below). **A re-review earns the same
+   requeue as a fresh review (#327):** a `changes` (with an attempt left) or a `fixlist` with a `fix-now` open that
+   settles out of the review-only door enters the attempt loop — serial — or the wave's next fan-out round, bounded
+   by the same ledger count; until then it parked at `review` with its requeue unconsumed and every dependent waited.
 
    **A red DoD takes the same bound (#313).** A developer whose Definition of Done goes red — every non-green row RAN
    and exited non-zero or timed out — is requeued while `attempt < attempts`, instead of blocking on the first miss:
@@ -4418,7 +4424,31 @@ them does not parse, and the finding it belongs to is dropped rather than half-r
 - **A story cannot settle `done` while a `fix-now` finding is open.** It settles `blocked` instead, and the reason
   names the file, the finding's number and its heading — and, when a claim was refused, how many and why. The check is
   against the FILE and against GIT, not against the envelope that produced it: the file is the state, and a host closes
-  a finding there by writing `Resolved: yes <sha>` or re-routing its `Disposition:`.
+  a finding there by writing `Resolved: yes <sha>` or re-routing its `Disposition:`. The reason names the remedy that
+  re-reads the file — run the Build stage again (`tldrx reject --note "…"`, then `tldrx next`) — and no longer
+  `tldrx story reopen`, which hands a developer nothing to change (#308 refuses it) (#329).
+- **The headless fix round, and its AUDITED auto-close (#327, owner decision 2026-09-14, Slack
+  `q_mu23trkg8ae9c999`, "A: ronda + auto-cierre").** A headless `fixlist` with a `fix-now` open no longer parks at
+  `review`: the story is requeued in the same process, spending no attempt (the one-round bound above still holds — a
+  second `fixlist` is `changes`). The developer prompt carries the open findings exactly as `--prepare` renders them.
+  The next reviewer's prompt renders every finding still open in the latest round verbatim under
+  `## Fix-list findings this review must see fixed`, with the rule: `approve` only if EVERY one is fixed in the diff,
+  else `changes` citing it. When that SPAWNED reviewer returns `approve`, the executor rewrites each finding it was
+  shown — still open in the file, same number, same heading — as
+  `Resolved: yes <commit> — auto-closed: the fix-round reviewer approved this commit with this finding in its prompt
+  (reviewer session <id>, attempt <n>, run <run>)`, where `<commit>` is the commit that reviewer judged. The line is
+  the existing grammar with prose after the sha, so every reader parses it unchanged, and it is written BEFORE the
+  file is asked: `verifyResolutions` holds it to git like any typed claim and reopens it as `claimed-unverified` when
+  it does not check out. A finding that reached the file after the prompt was rendered, was re-worded, or is not
+  `fix-now` is never closed, and still holds the story. A HOST review (`--commit --review`) is shown the same section
+  — one renderer — and closes nothing: the host closes lines by hand, as before.
+- **A `blocked` story whose fix list was closed later settles `done` with no spawn (#329).** Before the frontier walk
+  — in `tldrx next` and in `--prepare` — a story whose last `task.done` was `blocked` over an `approve` naming the
+  merged commit, and whose latest fix list now has nothing open (verified against git as above), settles `done` with
+  that commit, `epic_base` and DoD from the ledger, and one line saying why. Measured live: a fix landed, the reviewer
+  approved, the story blocked on a `Resolved: no` nobody had rewritten, and after a person rewrote it no verb could
+  settle it — `story reopen` dispatched a developer with nothing to do and `--as-is` refused a branch already on its
+  epic.
 - **The router: `tldrx next --prepare --fixlist <path>`.** Re-prepares the AUTHOR's bundle with the open findings under
   `## Fix list` in the developer prompt — numbered, with their `Do NOT` lines verbatim — and carries the prior turn's
   `session_id` in `pending.json` as `resume_session` so the host can resume that sub-agent rather than pay to rebuild

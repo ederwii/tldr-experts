@@ -20,7 +20,7 @@ import { PROJECT_SKILLS_HEADING } from "../experts/stackPacks.ts";
 import { MAX_PAYLOAD_BYTES } from "../events/Event.ts";
 import { fenceFor, renderInputs, type PromptInput } from "../facilitator/prompt.ts";
 import { SRC_GRAMMAR_HEADING, renderSrcGrammarContract } from "../text/srcGrammarContract.ts";
-import { FINDING_KINDS } from "./fixlist.ts";
+import { FINDING_KINDS, type FixFinding } from "./fixlist.ts";
 import { reviewDiffCommand } from "./git.ts";
 import { dodRefused } from "./outcome.ts";
 import type { PlannedEpic, PlannedStory } from "./plan.ts";
@@ -216,6 +216,12 @@ export interface ReopenNote {
   readonly actor: string;
   readonly fix: boolean;
 }
+
+/**
+ * The fix-round reviewer's section heading (gh #327) — exported so tests assert
+ * the marker, not prose.
+ */
+export const FIX_ROUND_REVIEW_HEADING = "## Fix-list findings this review must see fixed";
 
 /** The section's heading — exported so tests assert the marker, not prose. */
 export const REOPEN_NOTE_HEADING = "## Why this story was reopened";
@@ -604,6 +610,54 @@ export interface ReviewerPromptParts {
    * nothing — byte-identical to a review of a story nobody reopened.
    */
   readonly reopenNote?: ReopenNote | null;
+  /**
+   * gh #327: the story's latest fix list and the `fix-now` findings in it that
+   * are still OPEN when this prompt is rendered. Absent, null or an empty list
+   * renders nothing — byte-identical to every review of a story with no open fix
+   * list. What is rendered here is exactly what an `approve` may auto-close.
+   */
+  readonly fixRound?: FixRoundPrompt | null;
+}
+
+/** The open findings a fix-round reviewer is shown (gh #327), and the file they live in. */
+export interface FixRoundPrompt {
+  readonly rel: string;
+  readonly findings: readonly FixFinding[];
+}
+
+/**
+ * Each open `fix-now` finding, verbatim, with the one rule that makes an
+ * `approve` over them auditable: every one must be fixed in the diff. An approve
+ * here CLOSES each finding shown (`Resolved: yes <commit>`, with provenance
+ * naming this turn), so the sentence says so — a reviewer that does not know its
+ * signature closes a record would sign more lightly than one that does.
+ */
+function fixRoundSection(fixRound: FixRoundPrompt | null | undefined): readonly string[] {
+  if (fixRound === undefined || fixRound === null || fixRound.findings.length === 0) return [];
+  const lines = [
+    FIX_ROUND_REVIEW_HEADING,
+    "",
+    `A previous reviewer signed this story with a fix list, \`${fixRound.rel}\`, and these findings in it are`,
+    "still `fix-now` and open. This attempt exists to fix them:",
+    "",
+  ];
+  for (const finding of fixRound.findings) {
+    lines.push(`${String(finding.n)}. **${finding.finding}** [${finding.severity}]`);
+    if (finding.where !== "") lines.push(`   Where: ${finding.where}`);
+    for (const detail of finding.detail.split("\n")) {
+      if (detail.trim() !== "") lines.push(`   ${detail.trim()}`);
+    }
+    for (const line of finding.doNot) lines.push(`   Do NOT: ${line}`);
+    lines.push("");
+  }
+  lines.push(
+    "Return `approve` only if EVERY finding above is fixed in the diff. If any one is not, return",
+    "`changes`, name it by its number, and cite it like any `changes`: the line ends with an `[src: …]`",
+    "token — the diff line still wrong, or the finding's own `Where:` citation. An `approve` here closes",
+    "each finding above in the fix list, naming the commit you reviewed and this review as the evidence.",
+    "",
+  );
+  return lines;
 }
 
 /**
@@ -741,6 +795,7 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
     "",
     // Directly under the criteria it is judged beside (gh #322).
     ...reviewerReopenSection(parts.reopenNote),
+    ...fixRoundSection(parts.fixRound),
     "## Definition of Done — already re-run by the facilitator",
     "",
     ...(parts.dodResults.length === 0

@@ -98,7 +98,7 @@ import {
 } from "../../build/outcome.ts";
 import {
   CLAIMED_UNVERIFIED, FIXLIST_SETTLED_MARK, canonicalizeResolutions, fixlistRel, fixlistRetroLines, latestFixlist, markUnverified,
-  openFindings, readFixlistAt, renderFixlistSection, writeFixlist,
+  openFindings, openFixlist, readFixlistAt, renderFixlistSection, writeFixlist, AUTO_CLOSED_MARK, autoCloseShown,
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
 import { renderBuildHandoff, type EpicSummaryRow, type NotStartedStory } from "../../build/handoff.ts";
@@ -115,6 +115,8 @@ const EVENTS_FILE = "events.jsonl";
 
 /** gh #286: the operator line for a story requeued with a merge to resolve — one spelling, two drivers. */
 const CONFLICT_REQUEUED_LINE = "bringing it up to its epic conflicted — requeued once with the merge to resolve";
+/** gh #327: the operator line for a story requeued for its fix round — one spelling, three doors. */
+const FIX_ROUND_REQUEUED_LINE = "the reviewer signed with a fix list — requeued for its fix round, which spends no attempt";
 import { carriedReportFor, type CarriedReport } from "../../build/carriedRows.ts";
 import {
   baseResultOf, PreflightCache, redBaseRefusal, runStoryDod, type BaseParts, type DodParts,
@@ -507,6 +509,12 @@ function runTitleOf(ctx: ExecutorContext): string {
   }
 }
 
+/**
+ * What asking a fix list needs of a story — no worktree, no attempt (gh #329):
+ * the settle pre-pass asks it of a `blocked` story before opening anything.
+ */
+type FixlistScope = Pick<StoryContext, "planned" | "repoDir" | "branch">;
+
 interface StoryContext {
   readonly planned: PlannedStory;
   readonly epic: PlannedEpic;
@@ -670,6 +678,18 @@ class BuildSession {
    * falls through to `developerCap`.
    */
   private readonly laneCaps = new Map<string, number>();
+  /**
+   * gh #327: what a SPAWNED reviewer that returned `approve` was shown of its
+   * story's open fix list — the file, the findings rendered into its prompt, and
+   * the session that judged them. Written only by `spawnReviewer`, spent only by
+   * `reviewAndSettle`; a host review never has an entry, so nothing a host signs
+   * is auto-closed by a set this process did not render.
+   */
+  private readonly shownFixRounds = new Map<string, {
+    readonly fixlist: FixlistOnDisk;
+    readonly shown: readonly FixFinding[];
+    readonly sessionId: string | null;
+  }>();
 
   constructor(
     private readonly ctx: ExecutorContext,
@@ -710,6 +730,9 @@ class BuildSession {
       ?? await this.refuseOnUnrunnableWorktree();
     if (refusal !== null) return refusal;
     this.recordGateFeedback();
+    // gh #329: BEFORE the frontier walk, so a dependent of a story settled here
+    // is asked against `done` rather than `blocked`.
+    await this.settleClosedFixlists();
 
     for (const wave of this.plan.waves) {
       const pending: PlannedStory[] = [];
@@ -808,7 +831,9 @@ class BuildSession {
    */
   async prepare(): Promise<ExecutorOutcome> {
     let planned = this.nextPending();
-    if (planned === null) return await this.finish();
+    // gh #329: a `blocked` story the pre-pass below may settle is not pending, so
+    // "nothing pending" is not yet "nothing to do" while one exists.
+    if (planned === null && this.closedFixlistCandidates().length === 0) return await this.finish();
     // ORDER IS LOAD-BEARING (#164, review round 1). Every refusal that can be
     // decided WITHOUT moving the operator's files is decided first; the stash is
     // the last step before anything is cut, and the one door that must come after
@@ -820,6 +845,9 @@ class BuildSession {
       ?? await this.refuseOnRedBase()
       ?? await this.refuseOnUnrunnableWorktree();
     if (refusal !== null) return refusal;
+    // gh #329: the headless loop's pre-pass, at the same place relative to the
+    // frontier — a story it settles is `done` before anything is offered.
+    await this.settleClosedFixlists();
 
     // THE SAME FRONTIER THE HEADLESS LOOP ASKS (#300). Until this line the door
     // took `nextPending()` as offered, and `pendingStories` skips only `done`
@@ -1286,11 +1314,23 @@ class BuildSession {
     // review. Re-running the developer would throw away work nobody faulted and
     // charge for it twice.
     const resume = this.resumableReview(planned);
+    let first = 0;
     if (resume !== null) {
       await this.rereview(planned, resume);
-      return;
+      // gh #327: the re-review's verdict is judged by the SAME rule as a fresh
+      // one. A `changes` with attempts left (or a fix list with a fix-now open)
+      // earned another developer attempt, and returning here left it unconsumed —
+      // the story parked at `review` and every dependent waited on it. The loop
+      // starts at the attempt the ledger now says is next (`attemptFor`, #313's
+      // count), so the bound is the one every other requeue is held to.
+      if (!this.owedAnotherPass(planned.story.id)) return;
+      this.lines.push(`  · ${planned.story.id}: ${this.requeueLine(planned.story.id)}`);
+      first = this.attemptFor(planned) - 1;
     }
-    for (let i = 0; i < this.attempts; i++) {
+    // `+ fixlistRounds`: a fix round spends no attempt, so it must not spend a
+    // pass of this loop either — the per-story bounds (`attempt < attempts` at
+    // every requeue, `narrowFixlist`'s round count) are what stop it.
+    for (let i = first; i < this.attempts + this.fixlistRounds; i++) {
       // Per ATTEMPT, not per story: a requeue is a second developer spawn, and a
       // cancel that landed during the first attempt's review must stop it too.
       if (this.cancelledUnder()) {
@@ -1329,12 +1369,37 @@ class BuildSession {
       // shapes are one question.
       if (reviewStillOwed(outcome)) return;
       // A fix list is a SIGNATURE with findings attached, not a fault: nothing
-      // about the diff was rejected, so a second developer attempt is not owed —
-      // and the routing it IS owed needs a host (`--prepare --fixlist`), which a
-      // headless invocation does not have. The story parks with its artifact.
-      if (outcome.verdict === "fixlist") return;
-      this.lines.push(`  · ${planned.story.id}: reviewer asked for changes — requeued once`);
+      // about the diff was rejected, so it spends no attempt. Until gh #327 it
+      // also parked the story, on the grounds that its routing needed a host.
+      // Owner decision (Slack q_mu23trkg8ae9c999, "A: ronda + auto-cierre"): the
+      // headless run routes it itself — the developer is handed the list, the
+      // next reviewer is shown its open findings, and that reviewer's approve
+      // closes them. `settle` left the story at `review` only because a fix-now
+      // is open, so the fix round is owed.
+      if (!this.owedAnotherPass(planned.story.id)) return;
+      this.lines.push(`  · ${planned.story.id}: ${this.requeueLine(planned.story.id)}`);
     }
+  }
+
+  /**
+   * Did the story's LAST settle earn it another developer pass inside this
+   * process (gh #327)? A `review` + `changes` (settled `review` only while an
+   * attempt is left), or a `review` + `fixlist` (settled `review` only while a
+   * `fix-now` is open — `open === 0` settles `done`). One predicate for the serial
+   * loop, the wave's round filter and the re-review door, so the three cannot
+   * disagree about which parked story is owed a turn.
+   */
+  private owedAnotherPass(storyId: string): boolean {
+    const outcome = this.outcomes.get(storyId);
+    if (outcome === undefined || outcome.status !== "review" || outcome.developerError !== null) return false;
+    return outcome.verdict === "changes" || outcome.verdict === "fixlist";
+  }
+
+  /** The operator line for a `review`-settled requeue — which of the two verdicts bought it. */
+  private requeueLine(storyId: string): string {
+    return this.outcomes.get(storyId)?.verdict === "fixlist"
+      ? FIX_ROUND_REQUEUED_LINE
+      : "reviewer asked for changes — requeued once";
   }
 
   /**
@@ -1352,8 +1417,17 @@ class BuildSession {
     const queue: PlannedStory[] = [];
     for (const planned of pending) {
       const resume = this.resumableReview(planned);
-      if (resume === null) queue.push(planned);
-      else await this.rereview(planned, resume);
+      if (resume === null) {
+        queue.push(planned);
+        continue;
+      }
+      await this.rereview(planned, resume);
+      // gh #327: a re-review that earned another pass joins the fan-out, exactly
+      // as `driveStory` enters its attempt loop — same predicate, same bounds.
+      if (this.owedAnotherPass(planned.story.id)) {
+        this.lines.push(`  · ${planned.story.id}: ${this.requeueLine(planned.story.id)}`);
+        queue.push(planned);
+      }
     }
     await this.driveWaveHalves(wave, queue);
   }
@@ -1361,7 +1435,8 @@ class BuildSession {
   /** The fan-out proper: half A concurrently, half B in the wave's listed order. */
   private async driveWaveHalves(wave: BuildWave, pending: readonly PlannedStory[]): Promise<void> {
     let queue = [...pending];
-    for (let round = 0; round < this.attempts && queue.length > 0; round++) {
+    // `+ fixlistRounds` for `driveStory`'s reason: a fix round spends no attempt.
+    for (let round = 0; round < this.attempts + this.fixlistRounds && queue.length > 0; round++) {
       const halves = await this.fanOut(queue);
       // The merge order is the file's, not the finish order. Two runs of the same
       // wave must produce the same epic branch, whatever the machine was doing.
@@ -1370,20 +1445,20 @@ class BuildSession {
         if (half === undefined) continue;
         await this.settleHalf(half);
       }
-      // `review` + `changes` is the only requeue. `review` + `error` means the
-      // reviewer never judged the diff, and a second developer attempt is the one
-      // thing that must NOT follow it.
+      // `review` + `changes` requeues, and since gh #327 so does `review` +
+      // `fixlist` (its fix round). `review` + `error` means the reviewer never
+      // judged the diff, and a second developer attempt is the one thing that
+      // must NOT follow it — `owedAnotherPass` says no to it.
       const requeued = wave.stories.filter((p) =>
-        halves.has(p.story.id) && (this.dodRequeued.has(p.story.id) || this.conflictRequeued.has(p.story.id) || (
-          this.outcomes.get(p.story.id)?.status === "review"
-          && this.outcomes.get(p.story.id)?.verdict === "changes")));
+        halves.has(p.story.id) && (this.dodRequeued.has(p.story.id) || this.conflictRequeued.has(p.story.id)
+          || this.owedAnotherPass(p.story.id)));
       for (const planned of requeued) {
         // gh #313: the red-DoD requeue rides the same round as `changes`.
         this.lines.push(this.dodRequeued.has(planned.story.id)
           ? `  · ${planned.story.id}: the DoD was red — requeued with its output`
           : this.conflictRequeued.has(planned.story.id)
             ? `  · ${planned.story.id}: ${CONFLICT_REQUEUED_LINE}`
-            : `  · ${planned.story.id}: reviewer asked for changes — requeued once`);
+            : `  · ${planned.story.id}: ${this.requeueLine(planned.story.id)}`);
       }
       queue = requeued;
     }
@@ -2340,6 +2415,12 @@ class BuildSession {
     // produced it, because the file is the state: a host closes a finding by
     // writing one word in it, and the whole point of the artifact is that the
     // decision outlives the turn that raised it.
+    // gh #327 (owner decision "A: ronda + auto-cierre"): a SPAWNED fix-round
+    // reviewer that was shown the open findings and approved has closed them —
+    // written into the file before the file is asked, so the one gate below
+    // (`openFixNow`, with its git verification) judges the closure like any other
+    // claim. A host review has no shown set and closes nothing here.
+    if (supplied === undefined) this.closeShownFixRound(story, commit);
     const open = await this.openFixNow(story);
     if (open !== null) {
       // Not `block()`: that one is for a story nothing judged, and it would
@@ -2357,6 +2438,102 @@ class BuildSession {
       dod, commit, merged: true, carried, epicBase, verdict: "approve", review, cost, reason: null,
     });
     return "settled";
+  }
+
+  /**
+   * `blocked` stories that MAY settle `done` on their fix list alone (gh #329) —
+   * the cheap half of the question, off files only: the last settlement was a
+   * `blocked` over an `approve` naming the merged commit, and the latest fix list
+   * no longer SAYS anything is open. `settleClosedFixlists` asks git the rest.
+   */
+  private closedFixlistCandidates(): readonly PlannedStory[] {
+    const rows: PlannedStory[] = [];
+    for (const wave of this.plan.waves) {
+      for (const planned of wave.stories) {
+        if (this.statusOf(planned) !== "blocked") continue;
+        const ledger = readReviewLedger(this.ctx.runDir, planned.story.id);
+        const settled = ledger.lastSettled;
+        const merge = ledger.lastMerge;
+        if (settled === null || merge === null) continue;
+        if (settled.status !== "blocked" || settled.verdict !== "approve" || merge.verdict !== "approve") continue;
+        if (settled.commit !== merge.commit) continue;
+        const fixlist = latestFixlist(this.ctx.runDir, BUILD_PHASE, planned.story.id);
+        if (fixlist === null || openFindings(fixlist.findings).length > 0) continue;
+        rows.push(planned);
+      }
+    }
+    return rows;
+  }
+
+  /**
+   * Settle `done`, with NO spawn, every `blocked` story whose last review approved
+   * and whose fix list now has nothing open (gh #329).
+   *
+   * Measured live: a fix landed, the reviewer approved it, the story blocked on a
+   * `Resolved: no` nobody had rewritten — and once a person rewrote it, no verb
+   * re-read the file: `story reopen` handed a developer nothing to do (#308
+   * refused it) and `--as-is` refused a branch already on its epic. The review
+   * that decides this already happened; what was missing was asking `openFixNow`
+   * again. It is asked exactly as `reviewAndSettle` asks it — `verifyResolutions`
+   * holds each `Resolved: yes` to git first, and a claim that does not check out
+   * is rewritten `claimed-unverified` and the story stays `blocked`.
+   */
+  private async settleClosedFixlists(): Promise<void> {
+    for (const planned of this.closedFixlistCandidates()) {
+      const id = planned.story.id;
+      const scope: FixlistScope = {
+        planned,
+        repoDir: repoDirOf(this.workspace, planned.story.repo),
+        branch: storyBranchOf(this.ctx.runId, id),
+      };
+      if (await this.openFixNow(scope) !== null) continue;
+      const ledger = readReviewLedger(this.ctx.runDir, id);
+      const merge = ledger.lastMerge;
+      if (merge === null) continue;
+      const rel = latestFixlist(this.ctx.runDir, BUILD_PHASE, id)?.rel ?? "its fix list";
+      const summary = `no reviewer ran for this settlement: the approve recorded over \`${merge.commit}\` stands, `
+        + `and every \`fix-now\` finding in ${rel} is now closed or routed away`;
+      this.lines.push(
+        `  · ${id} was \`blocked\` on its fix list only — its last review approved \`${merge.commit}\` and `
+        + `${rel} has nothing open now, so it settles \`done\` with no agent spawned`,
+      );
+      const story = await this.writes.run(() => this.openStory(planned));
+      await this.settle(story, "done", {
+        dod: ledger.dod, commit: merge.commit, merged: true, carried: null, epicBase: merge.epicBase,
+        verdict: "approve",
+        review: {
+          verdict: "approve", summary, findings: [], fixlist: [], fixlistProblems: [],
+          formatProblems: [], verdictProblem: null,
+        },
+        cost: 0, reason: null,
+      });
+    }
+  }
+
+  /**
+   * Auto-close what an approving fix-round reviewer was shown (gh #327).
+   *
+   * Only the file that reviewer was shown, and only while it is still the
+   * story's latest round: a newer round is a newer review's business. The
+   * provenance names the turn — its session, the attempt, the run — so the record
+   * says who closed each line and on what evidence, never just that it closed.
+   */
+  private closeShownFixRound(story: StoryContext, commit: string): void {
+    const id = story.planned.story.id;
+    const round = this.shownFixRounds.get(id);
+    this.shownFixRounds.delete(id);
+    if (round === undefined) return;
+    const latest = latestFixlist(this.ctx.runDir, BUILD_PHASE, id);
+    if (latest === null || latest.path !== round.fixlist.path) return;
+    const provenance = `reviewer session ${round.sessionId ?? "not recorded"}, attempt ${String(story.attempt)}, `
+      + `run ${this.ctx.runId}`;
+    const { text, closed } = autoCloseShown(readFileSync(latest.path, "utf8"), round.shown, commit, provenance);
+    if (closed.length === 0) return;
+    writeFileSync(latest.path, text, "utf8");
+    this.lines.push(
+      `  · ${id}: fix-list finding(s) ${closed.map((n) => `#${String(n)}`).join(", ")} in ${latest.rel} `
+      + `${AUTO_CLOSED_MARK} — \`Resolved: yes ${commit}\``,
+    );
   }
 
   /**
@@ -2423,7 +2600,7 @@ class BuildSession {
    * would have settled `done` over a live defect, silently, in the one direction
    * a mistake is not recoverable in.
    */
-  private async openFixNow(story: StoryContext): Promise<string | null> {
+  private async openFixNow(story: FixlistScope): Promise<string | null> {
     const storyId = story.planned.story.id;
     const fixlist = latestFixlist(this.ctx.runDir, BUILD_PHASE, storyId);
     if (fixlist === null) return null;
@@ -2439,7 +2616,11 @@ class BuildSession {
           + `recorded as \`${CLAIMED_UNVERIFIED}\`: ${refused.join("; ")}. `)
       + "Close each one there with `Resolved: yes <sha>` — the commit the fix landed as on "
       + `\`${story.branch}\` — or re-route its \`Disposition:\`, `
-      + `then \`tldrx story reopen ${storyId}\``;
+      // gh #329: NOT `tldrx story reopen`. A reopen hands the story to a developer
+      // with nothing left to change (#308 refuses it), and `--as-is` refuses a
+      // branch already on its epic. What re-reads this file is the stage itself.
+      + "then run the Build stage again (`tldrx reject --note \"…\"`, then `tldrx next`): a `blocked` story "
+      + "whose last review approved and whose fix list has nothing open settles `done` with no agent spawned";
   }
 
   /**
@@ -2456,7 +2637,7 @@ class BuildSession {
    * open; nothing here closes one, and a `no` is never touched.
    */
   private async verifyResolutions(
-    story: StoryContext,
+    story: FixlistScope,
     fixlist: FixlistOnDisk,
   ): Promise<{ findings: readonly FixFinding[]; refused: readonly string[] }> {
     const id = story.planned.story.id;
@@ -2500,7 +2681,7 @@ class BuildSession {
   }
 
   /** Why a `Resolved: yes` does not check out, or null when it does. */
-  private async unverifiedBecause(story: StoryContext, sha: string | null): Promise<string | null> {
+  private async unverifiedBecause(story: FixlistScope, sha: string | null): Promise<string | null> {
     if (sha === null) return "named no commit to point at";
     switch (await shaReachability(story.repoDir, sha, story.branch)) {
       case "reachable":
@@ -3122,7 +3303,10 @@ class BuildSession {
     }, 0, "developer");
 
     const agent = await spawnAgent({
-      prompt: (retry === null ? "" : separatorCurePrefix(retry.after)) + this.developerPrompt(story),
+      // gh #327: the headless developer is handed the open fix list exactly as a
+      // `--prepare` bundle is — the one derivation `fixlistFor` already owns.
+      prompt: (retry === null ? "" : separatorCurePrefix(retry.after))
+        + this.developerPrompt(story, this.fixlistFor(story.planned.story.id)),
       model: this.model(),
       effort: this.ctx.effort,
       maxBudgetUsd: cap,
@@ -3377,6 +3561,12 @@ class BuildSession {
     const id = story.planned.story.id;
     let refusal: string | null = null;
     let spent = 0;
+    // gh #327: the open fix-list findings this reviewer is SHOWN, read once, before
+    // the first envelope — the set an `approve` from this turn may auto-close, and
+    // nothing wider. A stale set from an earlier review of the story never survives
+    // into this one.
+    this.shownFixRounds.delete(id);
+    const fixRound = openFixlist(this.ctx.runDir, BUILD_PHASE, id);
     // Bounded by `MAX_FORMAT_RETRIES` and by nothing else — the loop can only
     // go round again on the one outcome `formatRetry` grants, and that grant is
     // counted on disk before this line is reached a second time (gh #78).
@@ -3398,7 +3588,7 @@ class BuildSession {
       }, 0, "reviewer");
 
       const agent = await spawnAgent({
-        prompt: this.reviewerPrompt(story, dod, refusal, epicBase),
+        prompt: this.reviewerPrompt(story, dod, refusal, epicBase, fixRound),
         model: reviewer.model,
         effort: reviewer.effort,
         maxBudgetUsd: cap,
@@ -3459,6 +3649,11 @@ class BuildSession {
         // few lines up, not a re-derivation of them.
         reviewer: { model: reviewer.model, effort: reviewer.effort, basis: "spawned" },
       });
+      if (fixRound !== null && review.verdict === "approve") {
+        this.shownFixRounds.set(id, {
+          fixlist: fixRound, shown: openFindings(fixRound.findings), sessionId: agent.sessionId,
+        });
+      }
       // The story's recorded cost is every turn this review took, not just the
       // last one: a free retry costs the story no ATTEMPT, never no money.
       return { review, cost: round2(spent + turn) };
@@ -3577,9 +3772,16 @@ class BuildSession {
      * is a typecheck failure instead.
      */
     diffBase: string | null,
+    /**
+     * gh #327: the open fix list this review is shown — REQUIRED for the reason
+     * `diffBase` is: the spawn records exactly what it rendered, and a call site
+     * that forgot the argument would render one set and close another.
+     */
+    fixRound: FixlistOnDisk | null,
   ): string {
     return reviewerPromptFor({
       diffBase,
+      fixRound: fixRound === null ? null : { rel: fixRound.rel, findings: openFindings(fixRound.findings) },
       // gh #322: the note the person signed — the same value #308's check reads.
       reopenNote: this.reopenFor(story.planned),
       runDir: this.ctx.runDir,
@@ -4658,10 +4860,7 @@ class BuildSession {
    */
   private fixlistFor(storyId: string): FixlistOnDisk | null {
     const named = this.ctx.fixlist;
-    if (named === undefined) {
-      const latest = latestFixlist(this.ctx.runDir, BUILD_PHASE, storyId);
-      return latest !== null && openFindings(latest.findings).length > 0 ? latest : null;
-    }
+    if (named === undefined) return openFixlist(this.ctx.runDir, BUILD_PHASE, storyId);
     for (const base of [this.ctx.root, this.ctx.runDir, process.cwd()]) {
       const path = isAbsolute(named) ? named : join(base, named);
       const read = readFixlistAt(path, relative(this.ctx.runDir, path));
@@ -4964,7 +5163,9 @@ class BuildSession {
       // The bundle's prompt and the bundle's recorded `diff` are derived from the
       // SAME base, which is what makes "byte-identical to what a spawn would have
       // sent" still true after #166.
-      prompt: this.reviewerPrompt(story, work.dod, refusal, work.epicBase ?? null),
+      prompt: this.reviewerPrompt(
+        story, work.dod, refusal, work.epicBase ?? null, openFixlist(this.ctx.runDir, BUILD_PHASE, story.planned.story.id),
+      ),
       lines: this.lines,
     });
   }

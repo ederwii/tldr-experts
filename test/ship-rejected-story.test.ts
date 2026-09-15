@@ -249,6 +249,10 @@ describe("tldrx ship refuses an epic carrying a story the reviewer rejected (#28
     const ws = workspace(GOLDEN_ROUNDS);
     process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S2: ["fixlist"] });
     process.env.FAKE_BUILD_FIXLIST = JSON.stringify({ S2: FIX_NOW_FINDING });
+    // gh #327: a headless fix list now buys its fix round in the same process, so
+    // the premise below — merged, SIGNED, parked — needs that round's developer to
+    // die without delivering, which parks the story where the signature left it.
+    process.env.FAKE_BUILD_FAIL = "developer:S2#2";
     await build(ws);
     readyToShip(ws);
 
