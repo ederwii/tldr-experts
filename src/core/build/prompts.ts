@@ -652,8 +652,9 @@ function fixRoundSection(fixRound: FixRoundPrompt | null | undefined): readonly 
   }
   lines.push(
     "Return `approve` only if EVERY finding above is fixed in the diff. If any one is not, return",
-    "`changes` and cite it by its number. An `approve` here closes each finding above in the fix list,",
-    "naming the commit you reviewed and this review as the evidence.",
+    "`changes`, name it by its number, and cite it like any `changes`: the line ends with an `[src: …]`",
+    "token — the diff line still wrong, or the finding's own `Where:` citation. An `approve` here closes",
+    "each finding above in the fix list, naming the commit you reviewed and this review as the evidence.",
     "",
   );
   return lines;

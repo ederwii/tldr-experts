@@ -198,7 +198,10 @@ describe("a headless fix list buys its fix round in the same process (gh #327, f
     expect(reviewer).toContain(FIX_ROUND_REVIEW_HEADING);
     expect(reviewer).toContain("Concurrent double-confirm mints two sessions");
     expect(reviewer).toContain("Non-atomic confirm");
-    expect(reviewer.split(FIX_ROUND_REVIEW_HEADING)[1]?.split("\n## ")[0]).not.toContain("No OTP attempt limiter");
+    const section = reviewer.split(FIX_ROUND_REVIEW_HEADING)[1]?.split("\n## ")[0] ?? "";
+    expect(section).not.toContain("No OTP attempt limiter");
+    // gh #326: a `changes` must cite, so the rule that sends one here says how.
+    expect(section).toContain("`[src: …]`");
     // The first reviewer had no fix list to be shown.
     expect(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8")).not.toContain(FIX_ROUND_REVIEW_HEADING);
 
