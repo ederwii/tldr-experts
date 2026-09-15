@@ -93,6 +93,18 @@
   never reported as merely waiting, and `waiting_reason` is `dependencyWaitReason` — the
   `## Unknowns` sentence, byte for byte. `story reopen`'s `depends_on` reader moved to
   `buildProgress.ts` so both ask one reader. No event version or dashboard model bump.
+- **`run auto --until-done` stops a `host-tokens` refusal in tokens, not in dollar words it
+  never measured (closes #270).** Every `budget.blocked` went through one dollar-shaped
+  sentence, reading `remaining_usd` / `estimate_usd` through a helper that defaults a missing
+  field to `0`. The two `host-tokens` writers carry neither field, so a token refusal stopped
+  the supervisor with `remaining_usd $0.00 < estimate_usd $0.00` — a confident figure nothing
+  measured — and sent the operator to `tldrx budget raise`, a dollar command for a ceiling that
+  is a token allowance (and for the headless refusal, a raise that changes nothing: the way out
+  is `--prepare` or re-pricing to `metered-usd`, as the row's own reason already says). The stop
+  line now switches on `economy`, as the dashboard model already did: a `host-tokens` row names
+  the `host_tokens` / `ceiling_tokens` it carries and quotes its `reason`, and a dollar row
+  missing its figures says they are not recorded rather than printing `$0.00`. The verdict is
+  unchanged — a `budget.blocked` was never relaunched and still is not.
 - **The `budget-gate` hook no longer refuses the `run auto` launch that would fix the shortfall
   (closes #321).** It priced a `tldrx run auto` spawn against the cursor phase's own ceiling
   alone. On a phase already short, it denied the launch and wrote `budget.blocked` before the

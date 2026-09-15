@@ -407,18 +407,55 @@ export function relaunchVerdict(input: {
  * The words for a `budget.blocked` this attempt appended, or null when it appended none.
  * Read off the event, never re-derived from budget.yml: the refusal is about the phase as
  * it was when the brake fired, and the figures it names are the figures a person raises by.
+ *
+ * It switches on `economy` (gh #270), because `budget.blocked` has two kinds of writer and
+ * only one of them is denominated in dollars. A `host-tokens` row (`hostTokensNote`, and the
+ * headless refusal since gh #266) carries no `remaining_usd` and no `estimate_usd` at all —
+ * rendered through the dollar branch it read `remaining_usd $0.00 < estimate_usd $0.00`, a
+ * confident figure nothing measured, and sent the operator to `tldrx budget raise`, a dollar
+ * command for a ceiling that is a token allowance (and, for the headless refusal, a raise
+ * that changes nothing: the way out is the row's own reason). So the token row names the
+ * token figures it DOES carry and quotes its `reason`, and the dollar row says
+ * "not recorded" rather than print a figure its event never wrote.
  */
-function budgetBlockedReason(fresh: readonly TldrxEvent[]): string | null {
+export function budgetBlockedReason(fresh: readonly TldrxEvent[]): string | null {
   for (let i = fresh.length - 1; i >= 0; i--) {
     const event = fresh[i];
     if (event === undefined || event.type !== "budget.blocked") continue;
-    const remaining = number(payload(event, "remaining_usd"));
-    const estimate = number(payload(event, "estimate_usd"));
-    return `budget.blocked on ${String(payload(event, "phase") ?? "")}: remaining_usd $${remaining.toFixed(2)} `
-      + `< estimate_usd $${estimate.toFixed(2)}${finishedClause(event)} — nothing in-process moves that ceiling; raise it `
-      + "(tldrx budget raise) and launch again";
+    const phase = String(payload(event, "phase") ?? "");
+    const reason = payload(event, "reason");
+    const said = typeof reason === "string" && reason !== "" ? ` — ${reason}` : "";
+    // The dollar refusal writes no `economy` at all; it is the default one (same read as
+    // the dashboard model, `src/core/dashboard/model.ts`).
+    if (payload(event, "economy") === "host-tokens") {
+      return `budget.blocked on ${phase} (host-tokens): ${tokenFigures(event)}${said}`
+        + " — nothing in-process moves that ceiling, and it is a TOKEN allowance in budget.yml, not dollars";
+    }
+    const remaining = payload(event, "remaining_usd");
+    const estimate = payload(event, "estimate_usd");
+    const figures = typeof remaining === "number" && typeof estimate === "number"
+      ? `remaining_usd $${remaining.toFixed(2)} < estimate_usd $${estimate.toFixed(2)}${finishedClause(event)}`
+      : "the figures are not recorded — the event carries neither remaining_usd nor estimate_usd";
+    return `budget.blocked on ${phase}: ${figures}${said} — nothing in-process moves that ceiling; `
+      + "raise it (tldrx budget raise) and launch again";
   }
   return null;
+}
+
+/**
+ * The token sides of a `host-tokens` block, named only where the event carries them — the
+ * rows differ (`hostTokensNote` writes the pair, the headless refusal writes the ceiling
+ * alone), and an absent side is said to be absent, never defaulted to a number.
+ */
+function tokenFigures(event: TldrxEvent): string {
+  const spent = payload(event, "host_tokens");
+  const ceiling = payload(event, "ceiling_tokens");
+  if (typeof spent === "number" && typeof ceiling === "number") {
+    return `host_tokens ${String(spent)} of ceiling_tokens ${String(ceiling)}`;
+  }
+  if (typeof ceiling === "number") return `ceiling_tokens ${String(ceiling)}`;
+  if (typeof spent === "number") return `host_tokens ${String(spent)}, against a ceiling the event does not carry`;
+  return "the event carries neither host_tokens nor ceiling_tokens";
 }
 
 /**
