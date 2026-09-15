@@ -71,7 +71,52 @@ export type AgentEvent =
    * `max_reads` (0 = uncapped). Published by `spawnAgent`, which is the only
    * place that knows the cap; the parser below never emits one.
    */
-  | { readonly kind: "reads"; readonly count: number; readonly cap: number };
+  | { readonly kind: "reads"; readonly count: number; readonly cap: number }
+  /**
+   * The provider's own quota frame, arriving WHILE the turn is still working
+   * (gh #298). Additive: it was parsed as noise until this event existed.
+   *
+   * MEASURED, `test/fixtures/agent/stream-json.jsonl:9` (`claude` 2.1.251), one
+   * `{"type":"rate_limit_event","rate_limit_info":{…}}` line per frame:
+   * `status` is the provider's own word — `allowed` there, and `allowed_warning`
+   * at `utilization: 0.92` on a live turn (gh #298's thread, the owner's
+   * measurement, cited as his) — `rateLimitType` names the window (`five_hour`,
+   * `seven_day`), `utilization` is 0..1 of it and `resetsAt` is EPOCH SECONDS, so
+   * a reader has a real deadline and never parses English.
+   *
+   * Every field but `status` is nullable because a frame may omit it: the
+   * measured `allowed` sample carries no top-level `utilization` at all. A
+   * missing number is null — never a zero, which would read as "none used".
+   */
+  | {
+      readonly kind: "rate-limit";
+      readonly status: string;
+      readonly window: string | null;
+      readonly utilization: number | null;
+      readonly resetsAt: number | null;
+    };
+
+/**
+ * The provider's own quota words for one frame, with nothing added (gh #298).
+ *
+ * ONE derivation of this sentence (AGENTS.md §7): the progress view and the
+ * executor that parks a run on it must not describe the same frame differently.
+ * Every figure is the provider's or it is left out entirely — a window it did
+ * not name, a utilization it did not state and a reset it did not give are
+ * absent, never a default. `resetsAt` is epoch SECONDS.
+ */
+export function rateLimitLine(frame: {
+  readonly status: string;
+  readonly window: string | null;
+  readonly utilization: number | null;
+  readonly resetsAt: number | null;
+}): string {
+  const parts = [frame.status];
+  if (frame.utilization !== null) parts.push(`${String(Math.round(frame.utilization * 100))}% of`);
+  parts.push(frame.window === null ? "the provider's window" : `the ${frame.window} window`);
+  if (frame.resetsAt !== null) parts.push(`· resets ${new Date(frame.resetsAt * 1000).toISOString()}`);
+  return parts.join(" ");
+}
 
 /**
  * The tool the model calls to satisfy `--json-schema`. It is an implementation
@@ -198,6 +243,7 @@ export class AgentStream {
       case "assistant": return this.assistant(doc);
       case "user": return this.user(doc);
       case "result": return this.result(doc);
+      case "rate_limit_event": return this.rateLimit(doc);
       default: return [];
     }
   }
@@ -261,6 +307,31 @@ export class AgentStream {
     // and the rest are machinery.
     if (doc.subtype !== "init") return [];
     return [{ kind: "start", model: str(doc.model), sessionId: str(doc.session_id) }];
+  }
+
+  /**
+   * One `rate_limit_event` line (gh #298).
+   *
+   * `utilization` and `resetsAt` are read from the frame's top level first and
+   * from `unifiedWindows[rateLimitType]` only as the fallback the measured
+   * samples require — the `allowed` frame states them per window and not at the
+   * top, the two `allowed_warning` frames state the same number in both places.
+   * A frame this cannot read a `status` off is DROPPED, like every other
+   * unrecognised shape here: a quota claim nobody can name is not a signal.
+   */
+  private rateLimit(doc: Record<string, unknown>): readonly AgentEvent[] {
+    const info = obj(doc.rate_limit_info);
+    const status = str(info?.status);
+    if (info === null || status === null) return [];
+    const window = str(info.rateLimitType);
+    const named = window === null ? null : obj(obj(info.unifiedWindows)?.[window]);
+    return [{
+      kind: "rate-limit",
+      status,
+      window,
+      utilization: maybeNum(info.utilization) ?? maybeNum(named?.utilization),
+      resetsAt: maybeNum(info.resetsAt) ?? maybeNum(named?.resetsAt),
+    }];
   }
 
   private assistant(doc: Record<string, unknown>): readonly AgentEvent[] {
@@ -562,6 +633,17 @@ function str(value: unknown): string | null {
 
 function num(value: unknown): number {
   return typeof value === "number" ? value : 0;
+}
+
+/**
+ * The same read as `num`, except that ABSENT stays absent (gh #298).
+ *
+ * A quota figure is the one place a defaulted `0` is a lie in the dangerous
+ * direction — "nothing of this window is used" — so a frame that did not state
+ * one says null and whoever records it says why (AGENTS.md §7).
+ */
+function maybeNum(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 /** An RFC3339 timestamp as epoch millis, or null when it is neither. */

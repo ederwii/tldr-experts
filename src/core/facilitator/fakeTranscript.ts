@@ -56,6 +56,24 @@ export interface FakeResult {
   readonly model?: string;
   /** Assistant prose, emitted as a `text` block before the tools. */
   readonly say?: string;
+  /**
+   * One `rate_limit_event` frame on this turn's stream (gh #298).
+   *
+   * OMITTED BY DEFAULT, which is what every existing fake emits and why no
+   * recorded golden moves for this field. The line's shape is copied from the
+   * two measured samples — `test/fixtures/agent/stream-json.jsonl:9`
+   * (`status: "allowed"`, `claude` 2.1.251) and the live `allowed_warning` at
+   * `utilization: 0.92` on #298 — including `unifiedWindows`, so a reader that
+   * falls back to the per-window figures is exercised by the same line.
+   */
+  readonly rateLimit?: {
+    readonly status: string;
+    readonly rateLimitType?: string;
+    /** Omitted ⇒ the frame states NO utilization, at the top level or per window. */
+    readonly utilization?: number;
+    /** `null` ⇒ the frame states no `resetsAt` at all — the absent-reset case. */
+    readonly resetsAt?: number | null;
+  };
   readonly tools?: readonly FakeTool[];
 }
 
@@ -200,6 +218,30 @@ export function claudeOutput(argv: readonly string[], spec: FakeResult): string 
     },
     { type: "system", subtype: "thinking_tokens", estimated_tokens: 64, session_id: spec.sessionId },
   ];
+
+  // The real CLI interleaves quota frames with the ordinary events; here it goes
+  // after `init` so a turn that is killed later still carried it (gh #298).
+  if (spec.rateLimit !== undefined) {
+    const window = spec.rateLimit.rateLimitType ?? "five_hour";
+    const resetsAt = spec.rateLimit.resetsAt === undefined ? 1789364400 : spec.rateLimit.resetsAt;
+    const used = spec.rateLimit.utilization;
+    const reset = resetsAt === null ? {} : { resetsAt };
+    lines.push({
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: spec.rateLimit.status,
+        ...reset,
+        rateLimitType: window,
+        ...(used === undefined ? {} : { utilization: used }),
+        isUsingOverage: false,
+        unifiedWindows: {
+          [window]: { ...(used === undefined ? {} : { utilization: used }), ...reset },
+          seven_day: { utilization: 0.21, resetsAt: 1789873200 },
+        },
+      },
+      session_id: spec.sessionId,
+    });
+  }
 
   if (spec.say !== undefined && spec.say !== "") {
     lines.push(assistant([{ type: "text", text: spec.say }], stamp(), spec));
