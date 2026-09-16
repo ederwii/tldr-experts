@@ -2135,11 +2135,16 @@ order names populating with a populate verb, `POPULATE_VERBS` (sets, populates, 
 against fixtures only a LATER story populates, because `validateWaveOrder` only checks the graph the planner wrote by
 hand, never what the two stories' text actually says. Two different stories sharing one wave still counts as "not
 later" — wave siblings run as parallel sub-agents in separate worktrees and never see each other's writes. A bare
-`camelCase`/`PascalCase` field token counts only with at least two internal capital transitions (`DeliveryAddressText`,
-not `toString` or `getId`) — a single-transition token is a generic identifier, not a domain field name, and matching
-on it false-positived two unrelated stories that happened to share a word like `toString` onto each other (#370);
-`snake_case` and backtick-quoted tokens are unaffected, since an underscore or explicit quoting is already a
-domain-specific signal. The refusal names both story ids, the field and both sentences; there is no override field, on purpose (owner decision,
+`camelCase`/`PascalCase` field token with at least two internal capital transitions
+(`DeliveryAddressText`) always counts; `snake_case` and backtick-quoted tokens are unaffected by any of this, since an
+underscore or explicit quoting is already a domain-specific signal. A bare token with exactly ONE transition
+(`toString`, `getId`, but also a genuine two-word field spelled bare PascalCase like `OrderTotal` or `UserId`) counts
+only when the SAME normalized field is ALSO spelled `snake_case` or backtick-quoted somewhere else in the plan — in
+any story, not only the enforcer/populator pair being compared (#370). Matching every one-transition token
+unconditionally false-positived two unrelated stories sharing a generic word like `toString`; dropping every
+one-transition token outright reopens the #365 false-negative family for a real field spelled bare PascalCase on one
+side and `snake_case` on the other (`order_total` vs `OrderTotal`) — the corroborating second spelling is the signal
+that distinguishes a real field name from an accidental generic identifier. The refusal names both story ids, the field and both sentences; there is no override field, on purpose (owner decision,
 the cheaper substitute for re-enabling the `how` stage) — a false positive is cheap to fix by rewording past the
 keyword set or moving the story, not by adding an escape hatch to the plan file format. It ADVISES, in the passed
 detail, when some stories of one epic in one repo carry a dod command a sibling does not (#319: an e2e story that
