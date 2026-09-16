@@ -291,9 +291,22 @@ history is the style guide — read a few recent closes before writing yours.
   with half the issue unshipped, re-filed as #337; merge efb4eee said `(see #232)` but the fix
   commit it carried, bd19763, said `(closes #232)`, and #232 auto-closed anyway, needing a
   reopen. Write `#N`, `see #N`, or `part of #N` on every commit, and open the remainder as its
-  own issue BEFORE the wave. Verify both ends: before the wave, `git log --format=%B
-  <base>..<branch> | grep -iE '(clos|fix|resolv)[a-z]* #'` over every commit; after the merge,
-  `gh issue view <N> --json state`.
+  own issue BEFORE the wave. **A NEGATED closing verb closes the issue too — GitHub's parser
+  does not read negation.** Measured 2026-09-16: commit `d8f90f9`'s body said `Out of scope,
+  reported not fixed: #359 (payload clamping for an oversized permission_refused) is a separate
+  issue per the brief; not touched here.` — the word "not" three tokens before `fixed` is
+  invisible to the parser, which matched `fixed: #359` and closed it anyway (confirmed via
+  `gh api repos/ederwii/tldr-experts/issues/359/timeline --jq '.[] | select(.event=="closed")'`:
+  a first `closed` event at the d8f90f9 commit, a second, legitimate one ~81 minutes later at
+  the real fix commit `24f1324`); #359 needed a reopen in between. Never write a closing-shaped
+  phrase (`fixed`, `closes`, `resolves`, any inflection, with or without a colon) near a `#N`
+  that is not actually closing — say `see #N` or `not #N`, or rephrase the sentence entirely.
+  Verify both ends: before the wave, `git log --format=%B
+  <base>..<branch> | grep -iE '(clos|fix|resolv)[a-z]*[[:punct:]]* #'` over every commit (widened
+  2026-09-16 to allow punctuation — e.g. a colon — between the verb and the number: the un-widened
+  pattern misses `fixed: #359` outright, measured exit 1 on that exact sentence where the widened
+  pattern exits 0; the grep is a tripwire, not the discipline — rephrasing near a `#N` that
+  should not close is); after the merge, `gh issue view <N> --json state`.
 
 ## 12. Known live traps (all cost real time once)
 

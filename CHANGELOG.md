@@ -39,6 +39,21 @@
   fields that actually vary (`dod`, `reason`, `askedNoDiff`) as data; both call sites are
   unchanged in behavior — `test/build-golden.test.ts` stays byte-identical.
 
+### Changed
+
+- **AGENTS.md §11 now names the negated-closing-verb trap and widens its own verification
+  grep to catch it.** Measured 2026-09-16: commit `d8f90f9`'s sentence `reported not fixed:
+  #359` auto-closed #359 anyway — GitHub's closing-keyword parser matches `fixed` (any
+  inflection) followed by an optional colon/punctuation and `#N`, and does not parse the
+  negation three tokens earlier; #359 needed a reopen before its real fix (`24f1324`) closed
+  it a second time, legitimately. §11's own documented verification command,
+  `grep -iE '(clos|fix|resolv)[a-z]* #'`, had the identical blind spot — it does not allow a
+  colon between the verb and the number, so it read `fixed: #359` as a non-match (measured
+  exit 1) and would have let this exact sentence through. The grep is widened to
+  `(clos|fix|resolv)[a-z]*[[:punct:]]* #` (measured exit 0 on the same sentence); the real
+  discipline stays "never write a closing-shaped phrase near a `#N` that should not close" —
+  the grep is a tripwire, not the fix (closes #372).
+
 ## 0.32.0 — 2026-09-16
 
 ### Fixed
