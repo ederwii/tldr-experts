@@ -200,23 +200,79 @@ function normalizeField(token: string): string {
 }
 
 /**
- * The field/column names a sentence mentions, keyed by their NORMALIZED form so differently
- * spelled mentions of the same field collide, valued by the spelling as it actually appears.
- * Three candidate shapes, none of which plain English prose accidentally produces: a
- * backtick-quoted identifier (any case, `_` or `-` allowed inside); a bare `snake_case` token;
- * and a bare `camelCase`/`PascalCase` token (an inner capital following a lowercase run — a
- * single Capitalized word, e.g. a sentence-initial one, has no SECOND capitalized segment and so
- * does not match). Heuristic, not a parser: it costs nothing to miss a field named some other
- * way, because the validator only ever REFUSES on a match — it never claims a plan is clean.
+ * ONE grammar for a field-shaped token (§7) — three candidate shapes, none of which plain
+ * English prose accidentally produces: a backtick-quoted identifier (any case, `_` or `-`
+ * allowed inside, alt 1); a bare `snake_case` token (alt 2); a bare `camelCase`/`PascalCase`
+ * token (alt 3, an inner capital following a lowercase run). Both `fieldsIn` and
+ * `corroboratedKeys` read this ONE pattern rather than keeping a second copy.
  */
-function fieldsIn(text: string): ReadonlyMap<string, string> {
-  const found = new Map<string, string>();
-  const pattern = /`([a-zA-Z_][\w-]*)`|\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b|\b([A-Za-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+)\b/g;
-  for (const match of text.matchAll(pattern)) {
+const FIELD_TOKEN_PATTERN = /`([a-zA-Z_][\w-]*)`|\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b|\b([A-Za-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+)\b/g;
+
+interface FieldToken { readonly raw: string; readonly key: string; readonly bareCamel: boolean }
+
+/** Every field-shaped token `FIELD_TOKEN_PATTERN` finds in `text`, normalized and tagged. */
+function matchFieldTokens(text: string): readonly FieldToken[] {
+  const found: FieldToken[] = [];
+  for (const match of text.matchAll(FIELD_TOKEN_PATTERN)) {
     const raw = match[1] ?? match[2] ?? match[3] ?? "";
     if (raw === "") continue;
     const key = normalizeField(raw);
-    if (key !== "" && !found.has(key)) found.set(key, raw);
+    if (key === "") continue;
+    found.push({ raw, key, bareCamel: match[3] !== undefined });
+  }
+  return found;
+}
+
+/**
+ * A bare (no backticks, no `_`/`-`) camelCase/PascalCase token has at least TWO internal capital
+ * transitions — a lowercase-or-digit immediately followed by an uppercase letter, e.g.
+ * `DeliveryAddressText` has two (`y`→`A`, `s`→`T`), matching its three sub-tokens — or exactly
+ * one. A single-transition token (`toString`, `isValid`, `getId`) is USUALLY a generic identifier
+ * shared by unrelated code, not a domain field name, and false-positived two unrelated stories
+ * onto each other by matching unconditionally (#370). But a genuine two-word field can also be
+ * spelled bare PascalCase with only one transition (`OrderTotal`, `UserId`) — dropping every
+ * one-transition token outright reopens the #365 false-NEGATIVE family for exactly that shape
+ * (review finding on #370's own fix: `order_total` in one story vs bare `OrderTotal` in another
+ * must still refuse). So a one-transition token counts only when the SAME normalized field is
+ * ALSO spelled `snake_case` or backtick-quoted somewhere else in the plan (`corroboratedKeys`) —
+ * a second, independently-typed spelling is the signal that it is a real field name, not an
+ * accident of English. Two-transition-plus tokens need no corroboration; they are unambiguous.
+ */
+function hasMultipleCapitalTransitions(raw: string): boolean {
+  const transitions = raw.match(/[a-z0-9][A-Z]/g);
+  return (transitions?.length ?? 0) >= 2;
+}
+
+/**
+ * Every normalized field key the WHOLE plan spells `snake_case` or backtick-quoted anywhere in
+ * any story's `acceptance`/`test_plan` sentence — the corroborating spelling a one-transition
+ * bare camelCase/PascalCase token needs before it counts as a field candidate (#370). Read across
+ * every story, not just the enforcer/populator pair being compared, because the corroborating
+ * spelling can sit in a THIRD story, or the same story under a different sentence.
+ */
+function corroboratedKeys(sentences: readonly string[]): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const text of sentences) {
+    for (const token of matchFieldTokens(text)) {
+      if (!token.bareCamel) keys.add(token.key);
+    }
+  }
+  return keys;
+}
+
+/**
+ * The field/column names a sentence mentions, keyed by their NORMALIZED form so differently
+ * spelled mentions of the same field collide, valued by the spelling as it actually appears.
+ * A bare camelCase/PascalCase match is dropped unless it clears `hasMultipleCapitalTransitions`
+ * on its own, or its key is in `corroborated` (#370). Heuristic, not a parser: it costs nothing
+ * to miss a field named some other way, because the validator only ever REFUSES on a match — it
+ * never claims a plan is clean.
+ */
+function fieldsIn(text: string, corroborated: ReadonlySet<string>): ReadonlyMap<string, string> {
+  const found = new Map<string, string>();
+  for (const token of matchFieldTokens(text)) {
+    if (token.bareCamel && !hasMultipleCapitalTransitions(token.raw) && !corroborated.has(token.key)) continue;
+    if (!found.has(token.key)) found.set(token.key, token.raw);
   }
   return found;
 }
@@ -267,12 +323,14 @@ function invariantSequencingIssues(
 ): readonly PlanIssue[] {
   const issues: PlanIssue[] = [];
   const reported = new Set<string>();
+  const allSentences = [...stories.values()].flatMap((s) => sentencesOf(s).map((sentence) => sentence.text));
+  const corroborated = corroboratedKeys(allSentences);
   for (const enforcer of stories.values()) {
     const enforcerAt = at.get(enforcer.id);
     if (enforcerAt === undefined) continue;
     for (const enforceSentence of sentencesOf(enforcer)) {
       if (firstMatch(enforceSentence.text, ENFORCEMENT_KEYWORDS) === null) continue;
-      const enforceFields = fieldsIn(enforceSentence.text);
+      const enforceFields = fieldsIn(enforceSentence.text, corroborated);
       if (enforceFields.size === 0) continue;
       for (const populator of stories.values()) {
         if (populator.id === enforcer.id) continue;
@@ -280,7 +338,7 @@ function invariantSequencingIssues(
         if (populatorAt === undefined || enforcerAt > populatorAt) continue; // genuinely after: fine
         for (const populateSentence of sentencesOf(populator)) {
           if (firstMatch(populateSentence.text, POPULATE_VERBS) === null) continue;
-          const populateFields = fieldsIn(populateSentence.text);
+          const populateFields = fieldsIn(populateSentence.text, corroborated);
           const sharedKey = [...enforceFields.keys()].find((k) => populateFields.has(k));
           if (sharedKey === undefined) continue;
           const key = `${enforcer.id}>${populator.id}>${sharedKey}`;

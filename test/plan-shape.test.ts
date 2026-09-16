@@ -321,6 +321,21 @@ describe("an invariant enforced before the story that populates it (#365)", () =
     expect(issues[0]?.message).toContain("`DeliveryAddressText`");
   });
 
+  test("a BARE (no backticks) snake_case field in one story and a bare one-transition PascalCase spelling in the other still refuses — corroborated by the snake_case sibling elsewhere in the plan (review finding on #370's own fix)", () => {
+    const s1 = "Add a check constraint on order_total NOT NULL when the order is finalized";
+    const s4 = "The pricing engine sets OrderTotal for every finalized order";
+    const dir = writePlan(planFiles(
+      [{ id: "S1", acceptance: [s1] }, { id: "S4", deps: ["S1"], acceptance: [s4] }],
+      [["S1"], ["S4"]],
+    ));
+    const issues = validatePlanShape(dir).issues;
+    expect(issues).toEqual([{
+      file: "stories/S1.md",
+      path: "acceptance",
+      message: invariantSequencingMessage("S1", "S4", "order_total", "OrderTotal", s1, s4),
+    }]);
+  });
+
   test("a genuinely different field is not flagged even across snake_case/PascalCase spellings", () => {
     const s1 = "Add a check constraint requiring `delivery_zone_id` NOT NULL";
     const s4 = "The placement handler sets `DeliveryAddressText` for every Delivery order";
@@ -336,6 +351,26 @@ describe("an invariant enforced before the story that populates it (#365)", () =
     expect(ENFORCEMENT_KEYWORDS.length).toBeLessThanOrEqual(10);
     expect(POPULATE_VERBS.length).toBeGreaterThan(0);
     expect(POPULATE_VERBS.length).toBeLessThanOrEqual(10);
+  });
+
+  test("two unrelated stories sharing a generic camelCase token with one capital transition (`toString`) do not collide (#370)", () => {
+    const s1 = "The response payload is required to have a non-empty toString() representation";
+    const s2 = "The debug panel populates the toString output for logging";
+    const dir = writePlan(planFiles(
+      [{ id: "S1", acceptance: [s1] }, { id: "S2", acceptance: [s2] }],
+      [["S1", "S2"]],
+    ));
+    expect(messagesOf(dir)).toEqual([]);
+  });
+
+  test("two unrelated stories sharing a bare `Id`-bearing token with one capital transition (`getId`) do not collide (#370)", () => {
+    const s1 = "Every request must be present with a valid getId check before proceeding";
+    const s2 = "This job assigns a fresh getId per batch, unrelated to request validation";
+    const dir = writePlan(planFiles(
+      [{ id: "S1", acceptance: [s1] }, { id: "S2", acceptance: [s2] }],
+      [["S1", "S2"]],
+    ));
+    expect(messagesOf(dir)).toEqual([]);
   });
 });
 

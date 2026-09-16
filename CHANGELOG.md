@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.33.0 — unreleased
+
+### Fixed
+
+- **The plan sequencing rule (#365) could false-positive two unrelated stories that happened to
+  share a generic single-transition camelCase token (#370).** `fieldsIn`
+  (`src/core/plan/planShape.ts`) captured ANY bare camelCase/PascalCase token with one inner
+  capital as a field candidate, so a story enforcing an invariant near a word like `toString` or
+  `getId` collided with an unrelated story populating a same-named `toString` or `getId`
+  elsewhere, refusing an honest plan for sharing nothing but an incidental identifier. A bare
+  camelCase/PascalCase token with at least two internal capital transitions
+  (`DeliveryAddressText`) still always counts; a one-transition token (`toString`, `getId`) now
+  counts only when the SAME normalized field is ALSO spelled `snake_case` or backtick-quoted
+  somewhere else in the plan — dropping one-transition tokens outright, the first cut at this
+  fix, reopened #365 for a genuine two-word field spelled bare PascalCase on one side and
+  `snake_case` on the other (`order_total` enforced in one story, bare `OrderTotal` populated in
+  another still refuses; `toString` shared by two unrelated stories, with no `snake_case` or
+  backtick sibling anywhere in the plan, still does not). `snake_case` and backtick-quoted
+  identifiers are unaffected either way, and the originating #365 case still refuses.
+
 ## 0.32.0 — 2026-09-16
 
 ### Fixed
