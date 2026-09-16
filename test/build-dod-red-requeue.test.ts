@@ -303,9 +303,17 @@ describe("#360 · dodRedRequeue (unit): a compound or undeclared refusal does no
 });
 
 describe("#313 · every other half-A failure still blocks on the first attempt", () => {
-  test("a developer REFUSED at the permission layer, with work and a red DoD, blocks after ONE attempt", async () => {
+  /**
+   * gh #360 narrowed this: `rm -rf build` used to prove ANY refusal blocks —
+   * now that `settleRedDod`'s call site passes `declared`, that exact line
+   * classifies `undeclared` and requeues instead (see the "#360 ·" describes
+   * above). An ungranted git VERB is the refusal kind #360 left alone — the
+   * SAME line, verbatim, would be refused again — so it is what still proves
+   * this describe's title.
+   */
+  test("a developer REFUSED on an ungranted git VERB, with work and a red DoD, blocks after ONE attempt", async () => {
     const ws = workspace(one({ testScript: RED_ONLY_AFTER_DEVELOPER }));
-    process.env.FAKE_BUILD_DENIED = JSON.stringify({ S1: "rm -rf build" });
+    process.env.FAKE_BUILD_DENIED = JSON.stringify({ S1: "git checkout -- src/x.ts" });
     process.env.FAKE_BUILD_DENIED_WORK = JSON.stringify({ S1: "committed" });
 
     await next(ws);
@@ -373,6 +381,36 @@ describe("#360 · a compound-line refusal requeues a red DoD instead of blocking
       // where this is read; the event stream is.
       const done1 = events(ws).find((e) => e.type === "task.done" && e.payload.story === "S1" && e.payload.attempt === 1);
       expect(done1?.payload.permission_refused).toBe("docker info >/dev/null 2>&1 && echo DOCKER_OK");
+    },
+  );
+
+  /**
+   * gh #360: the `undeclared` refusal kind is only decidable with the
+   * workspace's `commands:` beside it — `settleRedDod`'s call site
+   * (`executors/build.ts`) now passes `declared: this.repoCommands(repo)`.
+   * `rm -rf build` has no shell separator and is not git, so — unlike the
+   * compound-line test above — this one is a PROOF of that one-line wiring:
+   * without it, `classifyRefusal("rm -rf build", undefined)` reads `unknown`
+   * (declared absent, per its own docstring) and the story still blocks after
+   * one attempt.
+   */
+  test(
+    "attempt 1 refused on an UNDECLARED (non-git, non-compound) ad hoc command + a red DoD, attempt 2 clean: "
+      + "DONE with no human reopen",
+    async () => {
+      const ws = workspace(one({ testScript: RED_UNTIL_FIXED_AFTER_DENIAL }));
+      process.env.FAKE_BUILD_DENIED = JSON.stringify({ "S1#1": "rm -rf build" });
+      process.env.FAKE_BUILD_DENIED_WORK = JSON.stringify({ S1: "committed" });
+      process.env.FAKE_BUILD_WRITE = JSON.stringify({ "S1#2": { "fixed.txt": "regenerated\n" } });
+
+      await next(ws);
+
+      expect(startedAttempts(ws, "S1")).toEqual([1, 2]);
+      expect(developerSpawns(ws, "S1")).toBe(2);
+      expect(story(ws, "S1")).toContain("status: done");
+      expect(events(ws).some((e) => e.type === "story.reopened")).toBe(false);
+      const done1 = events(ws).find((e) => e.type === "task.done" && e.payload.story === "S1" && e.payload.attempt === 1);
+      expect(done1?.payload.permission_refused).toBe("rm -rf build");
     },
   );
 });
