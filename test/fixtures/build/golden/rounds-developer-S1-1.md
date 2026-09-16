@@ -121,10 +121,11 @@ yours to do.
 - Stay inside the $1.60 ceiling for this story.
 - Done means proven: the Definition of Done is re-run after you stop, and every
   command in it must exit 0. Your own "it works" is not evidence.
-- Run each Definition of Done command verbatim and alone: no redirection, pipes or chaining.
-  Shell separators (`>`, `>>`, `2>&1`, `<`, `|`, `;`, `&&`, `||`, `&`, `$()`) split a line into
-  subcommands, and each subcommand must match its own grant, so a compound line is refused
-  even when the script itself is allowed.
+- One command per Bash call, run verbatim and alone — every Bash call you make, not only a
+  Definition of Done command: no redirection, pipes, chaining or heredocs. Shell separators
+  (`>`, `>>`, `2>&1`, `<`, `|`, `;`, `&&`, `||`, `&`, `$()`, a heredoc's newline) split a line into
+  subcommands, and each subcommand must match its own grant, so a compound line is refused unread
+  even when every command in it is allowed on its own.
 - Do not append `; echo $?` or redirect a command's output to a file to capture its outcome.
   The exit code is not lost by dropping it: the facilitator re-runs the Definition of Done after you and records each command's exit code, so the number the `echo` would print is measured and written down whether you capture it or not.
 

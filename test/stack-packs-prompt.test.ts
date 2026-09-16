@@ -603,12 +603,23 @@ describe("`tldrx next --prepare` puts the project's skills in the stage prompt",
  * plumbing is refused. Measured on a field run: a committed story stopped at
  * `cmd > log 2>&1; echo …`, a line the permission layer splits at every
  * separator and refuses because the fragments do not each match a grant.
+ *
+ * gh #360 widened the rule from the Definition of Done alone to every Bash call:
+ * measured on a field run, 4 of 4 refusals in one unattended run were an ad hoc
+ * verification line the developer chose on its own — `#271`'s sentence, read
+ * literally, never covered those, and 2 stories blocked on a DoD the developer
+ * never got the chance to run.
  */
-describe("the developer prompt says to run each DoD command verbatim and alone (gh #271)", () => {
+describe("the developer prompt says to run each Bash call verbatim and alone (gh #271, widened by #360)", () => {
   test("the sentence names the mechanism and the facilitator's own re-run, once, beside the DoD rule", () => {
     const text = devPrompt([]);
     expect(text).toContain("verbatim and alone");
-    expect(text).toContain("no redirection, pipes or chaining");
+    // gh #360: stated for EVERY Bash call, not only a Definition of Done command.
+    expect(text).toContain("One command per Bash call");
+    expect(text).toContain("every Bash call you make, not only a");
+    expect(text).toContain("Definition of Done command: no redirection, pipes, chaining or heredocs");
+    expect(text).toContain("heredoc's newline");
+    expect(text).toContain("refused unread");
     expect(text).toContain("split a line into");
     expect(text).toContain("`2>&1`");
     expect(text).toContain("`$()`");

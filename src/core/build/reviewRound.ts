@@ -26,6 +26,7 @@ import { buildReviewerPrompt, type FixRoundPrompt, type RecurringClass, type Reo
 import {
   isFormatRejection, MAX_FORMAT_RETRIES, renderFormatRefusal, type Review,
 } from "./review.ts";
+import { classifyRefusal } from "./refusalKind.ts";
 import { readReviewLedger } from "./reviewLedger.ts";
 import {
   DEVELOPER_FAILED, dodRequeueRed, MAX_CONFLICT_TURN_FILES, type DodResult, type StoryOutcome,
@@ -238,18 +239,47 @@ export function conflictTurnRefusal(parts: {
  * killed on its cap — both are causes the same allowance and the same ceiling
  * would reproduce on the next attempt, so they block on the first one as before.
  * An empty `dod` is a plan that proves nothing and never requeues.
+ *
+ * gh #360 narrows the refusal half of that rule. Measured on a field run: 4 of 4
+ * refusals in one unattended run were the developer's own ad hoc verification
+ * line — a compound shell line (`cmd > log 2>&1; echo …`, `a && b || c`, a pipe)
+ * — never the DoD command itself, and 2 stories blocked on a DoD that had gone
+ * on to run and decide. "The same allowance would refuse the same command
+ * again" is true of a VERBATIM re-ask, but a compound line is refused by its
+ * SHAPE, not by what it names — a second attempt is not obliged to chain
+ * commands the same way twice, and the prompt (`prompts.ts`) now tells every
+ * Bash call, not only the DoD's, to run one command alone. So a `refused` line
+ * `classifyRefusal` (`refusalKind.ts`) reads as `separator` (chained) or
+ * `undeclared` (a command no `commands:` slot grants, only decidable when the
+ * caller passes `declared`) no longer blocks by itself — it requeues like any
+ * other red DoD, and the refusal stays on the record either way (`build.ts`'s
+ * `permissionRefused` field is unconditional). A `verb` (an ungranted git verb)
+ * or an `elsewhere` (`git -C`) refusal is unchanged: the SAME line, verbatim,
+ * would be refused again, so those still block on the first attempt.
  */
 export function dodRedRequeue(parts: {
   readonly dod: readonly DodResult[];
   readonly refused: string | null;
+  /** `.tldrx/workspace.yml`'s `commands:` as the refused developer held them — see `classifyRefusal`. */
+  readonly declared?: Iterable<string>;
   readonly budgetDeath: string | null;
   readonly attempt: number;
   readonly attempts: number;
 }): boolean {
-  if (parts.refused !== null || parts.budgetDeath !== null) return false;
+  if (parts.budgetDeath !== null) return false;
+  if (parts.refused !== null && !isRequeuableRefusal(parts.refused, parts.declared)) return false;
   if (parts.attempt >= parts.attempts) return false;
   // The row predicate lives in ONE place (§7) — the ledger counts spent attempts with it.
   return dodRequeueRed(parts.dod);
+}
+
+/**
+ * gh #360: the two refusal KINDS a second attempt is not obliged to repeat —
+ * see `dodRedRequeue`'s docstring for why `verb` and `elsewhere` stay excluded.
+ */
+function isRequeuableRefusal(refused: string, declared: Iterable<string> | undefined): boolean {
+  const kind = classifyRefusal(refused, declared).kind;
+  return kind === "separator" || kind === "undeclared";
 }
 
 /**

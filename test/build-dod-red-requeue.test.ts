@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dodOutputRel } from "../src/core/build/dodOutput.ts";
 import { readReviewLedger } from "../src/core/build/reviewLedger.ts";
+import { dodRedRequeue } from "../src/core/build/reviewRound.ts";
 import { runNext } from "../src/core/facilitator/runNext.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { reject } from "../src/core/run/gates.ts";
@@ -245,6 +246,62 @@ describe("#313 · the attempts bound holds across processes", () => {
   });
 });
 
+/**
+ * gh #360 — a refusal whose command is a COMPOUND line (or, when the caller
+ * names the workspace's declared commands, one none of them grants) is not the
+ * same case #313's docstring reasoned about: "the same allowance would refuse
+ * the same command again" holds for a verbatim re-ask, but a compound line is
+ * refused for its SHAPE, and a second attempt is not obliged to chain commands
+ * the same way twice. `dodRedRequeue` is a pure function — these are unit
+ * tests directly against it, the fast twin of the full-executor test below.
+ */
+describe("#360 · dodRedRequeue (unit): a compound or undeclared refusal does not itself block", () => {
+  const RED_ROW = [{ command: "npm run test", exitCode: 1, timedOut: false, tail: "FAIL" }];
+  const parts = (refused: string | null, extra: Record<string, unknown> = {}) => ({
+    dod: RED_ROW, refused, budgetDeath: null, attempt: 1, attempts: 2, ...extra,
+  });
+
+  test("today's rule, unchanged: no separator, no `declared` passed (`unknown`) still blocks", () => {
+    expect(dodRedRequeue(parts("rm -rf build"))).toBe(false);
+  });
+
+  for (const compound of [
+    ["a `;` chain", "npm run test; echo EXIT:$?"],
+    ["a `&&`/`||` chain", "docker info >/dev/null 2>&1 && echo DOCKER_OK || echo NO_DOCKER"],
+    ["a pipe", "find . -iname '*.ts' | grep -v node_modules | xargs cat"],
+    ["a redirect", "npm run test > /tmp/out.log 2>&1"],
+    ["a heredoc", "cat <<EOF\nhello\nEOF"],
+  ] as const) {
+    test(`requeues on ${compound[0]}`, () => {
+      expect(dodRedRequeue(parts(compound[1]))).toBe(true);
+    });
+  }
+
+  test("an undeclared command requeues once the caller passes `declared`", () => {
+    expect(dodRedRequeue(parts("rm -rf build", { declared: ["npm run test"] }))).toBe(true);
+  });
+
+  test("an ungranted git VERB still blocks — the verbatim line would be refused again", () => {
+    expect(dodRedRequeue(parts("git checkout -- src/x.ts"))).toBe(false);
+  });
+
+  test("`git -C <dir>` (elsewhere) still blocks", () => {
+    expect(dodRedRequeue(parts("git -C ../other log"))).toBe(false);
+  });
+
+  test("a compound refusal still respects the attempt cap", () => {
+    expect(dodRedRequeue(parts("npm run test && echo ok", { attempt: 2, attempts: 2 }))).toBe(false);
+  });
+
+  test("a compound refusal never overrides a cap death", () => {
+    expect(dodRedRequeue(parts("npm run test && echo ok", { budgetDeath: "Reached maximum budget" }))).toBe(false);
+  });
+
+  test("no refusal at all still requeues exactly as before", () => {
+    expect(dodRedRequeue(parts(null))).toBe(true);
+  });
+});
+
 describe("#313 · every other half-A failure still blocks on the first attempt", () => {
   test("a developer REFUSED at the permission layer, with work and a red DoD, blocks after ONE attempt", async () => {
     const ws = workspace(one({ testScript: RED_ONLY_AFTER_DEVELOPER }));
@@ -279,6 +336,45 @@ describe("#313 · every other half-A failure still blocks on the first attempt",
     expect(log).toContain("exited 1");
     expect(log).not.toContain("the DoD was red on attempt");
   });
+});
+
+describe("#360 · a compound-line refusal requeues a red DoD instead of blocking it (full executor)", () => {
+  // The denied branch of `fakeClaude.ts` writes the story's own default file
+  // (`s1.txt`), not `FAKE_BUILD_WRITE`'s content (gh #261's shape) — so RED
+  // reads on THAT file, and clears once the un-denied attempt 2 writes `fixed.txt`.
+  const RED_UNTIL_FIXED_AFTER_DENIAL =
+    'node -e "var fs=require(\'fs\');console.log(\'FAIL — the denied attempt left s1.txt unresolved\');'
+    + 'process.exit(fs.existsSync(\'s1.txt\')&&!fs.existsSync(\'fixed.txt\')?1:0)"';
+
+  test(
+    "attempt 1 refused on a COMPOUND ad hoc line + a red DoD, attempt 2 clean: DONE with no human reopen, "
+      + "and the refusal is still on record",
+    async () => {
+      const ws = workspace(one({ testScript: RED_UNTIL_FIXED_AFTER_DENIAL }));
+      // Scoped to attempt 1 only (`S1#1`) — a genuine second attempt, not the
+      // same denied line re-asked, which is exactly #360's point.
+      process.env.FAKE_BUILD_DENIED = JSON.stringify({ "S1#1": "docker info >/dev/null 2>&1 && echo DOCKER_OK" });
+      process.env.FAKE_BUILD_DENIED_WORK = JSON.stringify({ S1: "committed" });
+      process.env.FAKE_BUILD_WRITE = JSON.stringify({ "S1#2": { "fixed.txt": "regenerated\n" } });
+
+      await next(ws);
+
+      // Requeued like any other red DoD — no human reopen needed.
+      expect(startedAttempts(ws, "S1")).toEqual([1, 2]);
+      expect(developerSpawns(ws, "S1")).toBe(2);
+      expect(story(ws, "S1")).toContain("status: done");
+      expect(events(ws).some((e) => e.type === "story.reopened")).toBe(false);
+      // The refusal is still recorded on attempt 1's own row — narrowing the
+      // block must never narrow the record (§7, "absent-with-reason, never
+      // invented" cuts both ways: nothing here may go quiet either). Attempt
+      // 2's own settle is a fresh attempt with no refusal of its own (gh #271's
+      // "a refusal is attributed to its own story only" rule extends to its own
+      // ATTEMPT too), so the log file — overwritten by the LAST settle — is not
+      // where this is read; the event stream is.
+      const done1 = events(ws).find((e) => e.type === "task.done" && e.payload.story === "S1" && e.payload.attempt === 1);
+      expect(done1?.payload.permission_refused).toBe("docker info >/dev/null 2>&1 && echo DOCKER_OK");
+    },
+  );
 });
 
 describe("#313 · the ledger counts only the attempts a red DoD could have requeued", () => {
