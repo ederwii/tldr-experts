@@ -2581,6 +2581,36 @@ class BuildSession {
   }
 
   /**
+   * gh #369: the shared shape of a "requeue this attempt, attempts remain"
+   * settle. `settleAskedNoDiff` and `settleRedDod` below each built this
+   * literal by hand — the eight-field n-a-review object and
+   * `keepWorktree: true` copied verbatim in two places — which is exactly the
+   * duplication AGENTS.md §12 calls out once it is this literal. Extracted so
+   * there is exactly one implementation, taking the varying fields as DATA
+   * (`dod`, `reason`, `askedNoDiff`) — never `ctx`, never the session.
+   *
+   * No behavior change: same keys, same values, same order of operations as
+   * both call sites had before this helper existed.
+   */
+  private async settleRequeue(
+    story: StoryContext,
+    before: PlanStatus,
+    parts: { dod: readonly DodResult[]; cost: number; reason: string; askedNoDiff?: boolean },
+  ): Promise<void> {
+    await this.settle(story, before, {
+      dod: parts.dod, commit: null, merged: false, carried: null, conflicts: [], verdict: "n-a",
+      review: {
+        verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [],
+        formatProblems: [], verdictProblem: null,
+      },
+      keepWorktree: true,
+      cost: parts.cost,
+      reason: parts.reason,
+      askedNoDiff: parts.askedNoDiff,
+    });
+  }
+
+  /**
    * gh #364: the requeue twin of `settleRedDod` below, for a developer that
    * asked instead of acting in a run where nobody answers.
    *
@@ -2599,17 +2629,7 @@ class BuildSession {
       const spent = this.counters.askedNoDiffSpent(this.ctx.runDir, id);
       this.counters.countAskedNoDiff(id, spent);
       this.askedNoDiffRequeued.add(id);
-      await this.settle(story, before, {
-        dod: [], commit: null, merged: false, carried: null, conflicts: [], verdict: "n-a",
-        review: {
-          verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [],
-          formatProblems: [], verdictProblem: null,
-        },
-        keepWorktree: true,
-        cost,
-        reason: failure,
-        askedNoDiff: true,
-      });
+      await this.settleRequeue(story, before, { dod: [], cost, reason: failure, askedNoDiff: true });
       return;
     }
     await this.block(story, failure, cost, []);
@@ -2657,14 +2677,8 @@ class BuildSession {
       // a terminal state for a story about to be dispatched again. A process that
       // dies here leaves the story offerable, and the ledger's `redDodAttempts`
       // (not this process's memory) is what holds its next attempt to the bound.
-      await this.settle(story, before, {
-        dod, commit: null, merged: false, carried: null, conflicts: [], verdict: "n-a",
-        review: {
-          verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [],
-          formatProblems: [], verdictProblem: null,
-        },
-        keepWorktree: true,
-        cost,
+      await this.settleRequeue(story, before, {
+        dod, cost,
         reason: `the DoD was red on attempt ${String(story.attempt)} of ${String(this.attempts)}, `
           + `so the next attempt is handed its output: ${failure}`,
       });

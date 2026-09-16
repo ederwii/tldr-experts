@@ -189,6 +189,67 @@ describe("the executor registry", () => {
   });
 
   /**
+   * gh #369 — a shape test in the #80 family / `dod-allowlist.test.ts`'s "M5 ·
+   * --yolo never reaches the reviewer" style: measured on the SOURCE, not on
+   * behavior, because the whole point is that `settleAskedNoDiff` and
+   * `settleRedDod` build the SAME shape by hand in two places today — a golden
+   * run cannot distinguish "one implementation" from "two copies that happen to
+   * still agree", only the source can.
+   *
+   * The n-a-review object literal this issue names
+   * (`verdict/summary/findings/fixlist/fixlistProblems/formatProblems/verdictProblem`,
+   * all `"n-a"`/empty/null) appears FIVE times in `build.ts` before the fix:
+   * `block()`, the conflict-turn settle, `settleAskedNoDiff`, `settleRedDod`, and
+   * one more site #369 does not scope. The fix collapses the two requeue copies
+   * (`settleAskedNoDiff`, `settleRedDod`) into one shared helper, so the count
+   * drops to FOUR and both methods call it by name.
+   */
+  describe("gh #369 · settleAskedNoDiff and settleRedDod share one requeue-settle helper", () => {
+    const source = readFileSync(
+      join(FRAMEWORK_ROOT, "src", "core", "facilitator", "executors", "build.ts"), "utf8",
+    );
+    const N_A_REVIEW_LITERAL =
+      'verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [],';
+
+    test("the n-a-review literal appears four times, not five: the two requeue copies "
+      + "collapsed into one", () => {
+      expect(source.split(N_A_REVIEW_LITERAL).length - 1).toBe(4);
+    });
+
+    test("settleAskedNoDiff calls the shared helper rather than building `this.settle` by hand", () => {
+      const at = source.indexOf("private async settleAskedNoDiff(");
+      expect(at).toBeGreaterThan(-1);
+      const next = source.indexOf("private async settleRedDod(", at);
+      const body = source.slice(at, next === -1 ? at + 1500 : next);
+      expect(body).toContain("this.settleRequeue(");
+      expect(body).not.toContain(N_A_REVIEW_LITERAL);
+    });
+
+    test("settleRedDod calls the shared helper rather than building `this.settle` by hand", () => {
+      const at = source.indexOf("private async settleRedDod(");
+      expect(at).toBeGreaterThan(-1);
+      // Bounded to this method's own body — the next `private async` method.
+      const next = source.indexOf("\n  private async ", at + 10);
+      const body = source.slice(at, next === -1 ? at + 2000 : next);
+      expect(body).toContain("this.settleRequeue(");
+      expect(body).not.toContain(N_A_REVIEW_LITERAL);
+    });
+
+    test("exactly one `settleRequeue` implementation exists, taking data — never `ctx`, "
+      + "never the session (AGENTS.md §12)", () => {
+      expect(source.split("private async settleRequeue(").length - 1).toBe(1);
+      const at = source.indexOf("private async settleRequeue(");
+      expect(at).toBeGreaterThan(-1);
+      // The signature (up to the closing paren before the return type) never
+      // names `ctx` or a session as a parameter — only `story`, `before` and a
+      // plain data bag.
+      const signature = source.slice(at, source.indexOf("): Promise<void> {", at));
+      expect(signature).not.toContain("ctx:");
+      expect(signature).not.toContain("session");
+    });
+  });
+
+  /**
    * gh #261. The file-lifecycle verbs are git verbs and ONLY git verbs: a story
    * that says "delete an unused file" could not be done at all, because nothing
    * in the list removes a path and a headless developer has nobody at the prompt

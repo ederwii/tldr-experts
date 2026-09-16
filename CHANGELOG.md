@@ -20,6 +20,16 @@
   backtick sibling anywhere in the plan, still does not). `snake_case` and backtick-quoted
   identifiers are unaffected either way, and the originating #365 case still refuses.
 
+### Changed
+
+- **`settleAskedNoDiff` and `settleRedDod` now share one requeue-settle helper instead of each
+  hand-building the same shape (#369).** Both settled a "requeue this attempt, attempts remain"
+  turn by constructing an identical eight-field n-a-review object and `keepWorktree: true` by
+  hand — copied verbatim in two places, the AGENTS.md §12 duplication the file's own
+  decomposition precedent exists to avoid. `settleRequeue` now holds that shape once, taking the
+  fields that actually vary (`dod`, `reason`, `askedNoDiff`) as data; both call sites are
+  unchanged in behavior — `test/build-golden.test.ts` stays byte-identical.
+
 ## 0.32.0 — 2026-09-16
 
 ### Fixed
