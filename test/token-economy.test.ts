@@ -557,11 +557,16 @@ describe("max_reads (N5)", () => {
     const task = store.run.phases[0]?.stages[0]?.tasks[0];
     expect(task?.status).toBe("failed");
     expect(task?.stopped_by).toBe(STOPPED_BY_MAX_READS);
+    // gh #348, pre-merge review: a read-cap kill already names itself in full
+    // via `stopped_by` — `failure_kind` must stay absent rather than carry a
+    // second, redundant account of the same one event.
+    expect(task?.failure_kind ?? null).toBeNull();
 
     const result = EventLog.forRun(ws.runDir).read().find((e) => e.type === "agent.result");
     expect(result?.payload.stopped_by).toBe(STOPPED_BY_MAX_READS);
     expect(result?.payload.max_reads).toBe(3);
     expect(result?.payload.reads).toBe(3);
+    expect(result?.payload.failure_kind).toBeUndefined();
   }, 40_000);
 
   test("under the cap, nothing changes and stopped_by stays null", async () => {

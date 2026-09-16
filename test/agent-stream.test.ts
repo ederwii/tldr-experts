@@ -422,6 +422,44 @@ describe("failureKind (gh #348) — a named cause beside the free-text error", (
     expect(interpret(1, errorSubtype, "", false).failureKind).toBe("non_zero_exit");
   });
 
+  /**
+   * Pre-merge review, 2026-09-15 (gh #348): a Claude turn whose result envelope
+   * itself reports `is_error: true` with a named reason, but whose PROCESS
+   * exited `0`, used to read `failureKind: "non_zero_exit"` and
+   * `error: "claude exited 0 with is_error=true: …"` — a label contradicting
+   * its own exit code (AGENTS.md §7). `"result_error"` names this exact shape:
+   * the envelope is the evidence, not the exit code.
+   */
+  test("exit 0 with an envelope that reports its own failure is a RESULT error, never non-zero-exit", () => {
+    const withError = JSON.stringify({
+      type: "result", subtype: "success", is_error: true, session_id: "s1",
+      errors: ["Reached maximum budget ($0.26)"],
+    });
+    const outcome = interpret(0, withError, "", false);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.failureKind).toBe("result_error");
+    expect(outcome.error).toBe("claude exited 0 with is_error=true: Reached maximum budget ($0.26)");
+
+    const errorSubtype = JSON.stringify({
+      type: "result", subtype: "error_during_execution", is_error: true, session_id: "s2", errors: [],
+    });
+    expect(interpret(0, errorSubtype, "", false).failureKind).toBe("result_error");
+  });
+
+  /** The guard: the SAME two shapes at exit 1 still read `"non_zero_exit"`, unmoved. */
+  test("the same two shapes at exit 1 are still non_zero_exit — the split is on exitCode alone", () => {
+    const withError = JSON.stringify({
+      type: "result", subtype: "success", is_error: true, session_id: "s1",
+      errors: ["Reached maximum budget ($0.26)"],
+    });
+    expect(interpret(1, withError, "", false).failureKind).toBe("non_zero_exit");
+
+    const errorSubtype = JSON.stringify({
+      type: "result", subtype: "error_during_execution", is_error: true, session_id: "s2", errors: [],
+    });
+    expect(interpret(1, errorSubtype, "", false).failureKind).toBe("non_zero_exit");
+  });
+
   test("no reason named at all — including the #296 contradiction — is UNCLASSIFIED", () => {
     const noReason = JSON.stringify({ type: "result", is_error: false, session_id: "s3", errors: [] });
     expect(interpret(1, noReason, "", false).failureKind).toBe("unclassified");

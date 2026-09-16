@@ -182,13 +182,24 @@ export type AgentRateLimit = Omit<Extract<AgentEvent, { kind: "rate-limit" }>, "
  *    itself via `stoppedBy` — see `AgentOutcome.stoppedBy`'s doc).
  *  - `"empty_result"` — the process exited `0` and produced nothing this file
  *    can parse as a result event at all.
- *  - `"non_zero_exit"` — a non-zero exit, with or without a document: either
+ *  - `"non_zero_exit"` — exitCode !== 0, with or without a document: either
  *    nothing parsed, or a document parsed and named its own reason (an
  *    `errors[]` entry or a disagreeing `subtype`) — the common, ordinary case.
+ *    STRICTLY exitCode !== 0 — see `"result_error"` for the exitCode === 0
+ *    sibling, so the name never contradicts the exit code it describes.
+ *  - `"result_error"` — the process exited `0`, but the result document
+ *    itself reports the failure (`is_error: true` with a named `errors[]`
+ *    entry, or a disagreeing `subtype`): the envelope is the evidence, the
+ *    exit code is not. Named separately from `"non_zero_exit"` (gh #348
+ *    pre-merge review, 2026-09-15) because a turn shaped this way once read
+ *    `"claude exited 0 with is_error=true: …"` under the kind
+ *    `"non_zero_exit"` — an audit-record label contradicting its own exit
+ *    code (AGENTS.md §7).
  *  - `"malformed_result"` — a document parsed, but not into a real result
  *    event: Codex's own "envelope was unreadable" sentinel, or (Claude)
  *    `resolveResultDoc`'s whole-buffer fallback accepted JSON whose `type` was
- *    never `"result"`.
+ *    never `"result"`. Takes priority over the `non_zero_exit`/`result_error`
+ *    split above: a malformed document's exit code is not what is wrong with it.
  *  - `"unclassified"` — a document parsed, named nothing, and none of the
  *    shapes above applies. `AgentOutcome.error` still carries the raw signal
  *    seen (the exit code, `is_error`, and any subtype), so nothing is lost —
@@ -203,6 +214,7 @@ export type AgentFailureKind =
   | "process_killed"
   | "empty_result"
   | "non_zero_exit"
+  | "result_error"
   | "malformed_result"
   | "unclassified";
 
@@ -731,13 +743,19 @@ function describeFailure(
   // whitespace instead of taking the first line, because the first line of that block is `{`
   // and the WHY is two lines down (#148). Claude's text is passed through untouched.
   const flatten = (text: string): string => (provider === "codex" ? text.replace(/\s+/g, " ").trim() : text);
+  // The envelope reporting its own failure at exitCode 0 is `"result_error"`,
+  // never `"non_zero_exit"` (gh #348 pre-merge review, 2026-09-15): a document
+  // reaches this function only when `ok` is false, and with `doc !== null` and
+  // `!timedOut` that means `isError` was true regardless of the exit code — so
+  // exitCode 0 here is the envelope disagreeing with the process, not a crash.
+  const nonZeroKind: AgentFailureKind = exitCode === 0 ? "result_error" : "non_zero_exit";
   const named = flatten(typeof errors[0] === "string" ? (errors[0] as string) : "");
   if (named !== "") {
-    return { error: `${verdict}: ${named}`, kind: malformed ? "malformed_result" : "non_zero_exit" };
+    return { error: `${verdict}: ${named}`, kind: malformed ? "malformed_result" : nonZeroKind };
   }
   const subtype = typeof doc.subtype === "string" ? doc.subtype : "";
   if (subtype !== "" && !SUCCESS_SUBTYPES.has(subtype)) {
-    return { error: `${verdict}: ${subtype}`, kind: malformed ? "malformed_result" : "non_zero_exit" };
+    return { error: `${verdict}: ${subtype}`, kind: malformed ? "malformed_result" : nonZeroKind };
   }
   // Nothing here can name WHY. Say that, and — when the provider's own subtype is
   // the thing that disagrees — say that too, rather than dropping either half.
