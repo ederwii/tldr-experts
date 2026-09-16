@@ -337,6 +337,26 @@ describe("an invariant enforced before the story that populates it (#365)", () =
     expect(POPULATE_VERBS.length).toBeGreaterThan(0);
     expect(POPULATE_VERBS.length).toBeLessThanOrEqual(10);
   });
+
+  test("two unrelated stories sharing a generic camelCase token with one capital transition (`toString`) do not collide (#370)", () => {
+    const s1 = "The response payload is required to have a non-empty toString() representation";
+    const s2 = "The debug panel populates the toString output for logging";
+    const dir = writePlan(planFiles(
+      [{ id: "S1", acceptance: [s1] }, { id: "S2", acceptance: [s2] }],
+      [["S1", "S2"]],
+    ));
+    expect(messagesOf(dir)).toEqual([]);
+  });
+
+  test("two unrelated stories sharing a bare `Id`-bearing token with one capital transition (`getId`) do not collide (#370)", () => {
+    const s1 = "Every request must be present with a valid getId check before proceeding";
+    const s2 = "This job assigns a fresh getId per batch, unrelated to request validation";
+    const dir = writePlan(planFiles(
+      [{ id: "S1", acceptance: [s1] }, { id: "S2", acceptance: [s2] }],
+      [["S1", "S2"]],
+    ));
+    expect(messagesOf(dir)).toEqual([]);
+  });
 });
 
 describe("the `plan` gate carries the shape", () => {

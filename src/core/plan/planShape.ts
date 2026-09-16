@@ -200,14 +200,32 @@ function normalizeField(token: string): string {
 }
 
 /**
+ * A bare (no backticks, no `_`/`-`) camelCase/PascalCase token counts as a field candidate only
+ * with at least TWO internal capital transitions — a lowercase-or-digit immediately followed by
+ * an uppercase letter, e.g. `DeliveryAddressText` has two (`y`→`A`, `s`→`T`), matching its three
+ * sub-tokens. A single-transition token (`toString`, `isValid`, `getId`) is a generic identifier
+ * shared by unrelated code, not a domain field name, and false-positived two unrelated stories
+ * onto each other (#370): the original regex accepted ANY one-transition token, so a sentence
+ * enforcing an invariant near `toString` collided with an unrelated sentence populating a
+ * same-named `toString` elsewhere. Bare `snake_case` already requires at least one `_` (so at
+ * least two parts) and is unaffected; a backtick-quoted identifier is an explicit, deliberate
+ * reference and is unaffected too — this bound applies only to the bare-camelCase shape, which
+ * is the one the issue measured as too permissive.
+ */
+function hasMultipleCapitalTransitions(raw: string): boolean {
+  const transitions = raw.match(/[a-z0-9][A-Z]/g);
+  return (transitions?.length ?? 0) >= 2;
+}
+
+/**
  * The field/column names a sentence mentions, keyed by their NORMALIZED form so differently
  * spelled mentions of the same field collide, valued by the spelling as it actually appears.
  * Three candidate shapes, none of which plain English prose accidentally produces: a
  * backtick-quoted identifier (any case, `_` or `-` allowed inside); a bare `snake_case` token;
- * and a bare `camelCase`/`PascalCase` token (an inner capital following a lowercase run — a
- * single Capitalized word, e.g. a sentence-initial one, has no SECOND capitalized segment and so
- * does not match). Heuristic, not a parser: it costs nothing to miss a field named some other
- * way, because the validator only ever REFUSES on a match — it never claims a plan is clean.
+ * and a bare `camelCase`/`PascalCase` token with at least two internal capital transitions (see
+ * `hasMultipleCapitalTransitions` — #370). Heuristic, not a parser: it costs nothing to miss a
+ * field named some other way, because the validator only ever REFUSES on a match — it never
+ * claims a plan is clean.
  */
 function fieldsIn(text: string): ReadonlyMap<string, string> {
   const found = new Map<string, string>();
@@ -215,6 +233,7 @@ function fieldsIn(text: string): ReadonlyMap<string, string> {
   for (const match of text.matchAll(pattern)) {
     const raw = match[1] ?? match[2] ?? match[3] ?? "";
     if (raw === "") continue;
+    if (match[3] !== undefined && !hasMultipleCapitalTransitions(raw)) continue;
     const key = normalizeField(raw);
     if (key !== "" && !found.has(key)) found.set(key, raw);
   }

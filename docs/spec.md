@@ -2134,8 +2134,12 @@ order names populating with a populate verb, `POPULATE_VERBS` (sets, populates, 
 (#365): the `depends_on` graph can be entirely valid and still leave an EARLIER story's own dod structurally red
 against fixtures only a LATER story populates, because `validateWaveOrder` only checks the graph the planner wrote by
 hand, never what the two stories' text actually says. Two different stories sharing one wave still counts as "not
-later" — wave siblings run as parallel sub-agents in separate worktrees and never see each other's writes. The
-refusal names both story ids, the field and both sentences; there is no override field, on purpose (owner decision,
+later" — wave siblings run as parallel sub-agents in separate worktrees and never see each other's writes. A bare
+`camelCase`/`PascalCase` field token counts only with at least two internal capital transitions (`DeliveryAddressText`,
+not `toString` or `getId`) — a single-transition token is a generic identifier, not a domain field name, and matching
+on it false-positived two unrelated stories that happened to share a word like `toString` onto each other (#370);
+`snake_case` and backtick-quoted tokens are unaffected, since an underscore or explicit quoting is already a
+domain-specific signal. The refusal names both story ids, the field and both sentences; there is no override field, on purpose (owner decision,
 the cheaper substitute for re-enabling the `how` stage) — a false positive is cheap to fix by rewording past the
 keyword set or moving the story, not by adding an escape hatch to the plan file format. It ADVISES, in the passed
 detail, when some stories of one epic in one repo carry a dod command a sibling does not (#319: an e2e story that
