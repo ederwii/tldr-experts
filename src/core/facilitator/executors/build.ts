@@ -816,6 +816,20 @@ class BuildSession {
             `  · ${planned.story.id} was \`blocked\` for dependency ${released}, which is now \`done\` — `
             + "that was never an attempt, so it is offered again",
           );
+          // #361: written HERE, not left for `driveStory` to settle later. A
+          // release only pushed onto `pending` was decided but not yet DONE —
+          // and `driveStory`'s very first act is the gh #298 rate-limit park,
+          // which returns before any write when the wall is already up from an
+          // earlier story's turn. Measured live: a story released by this exact
+          // branch, then parked before its own turn, stayed `blocked` on disk
+          // across a whole further invocation — `gate.requested` kept reporting
+          // it `blocked` with the generic `settled by an earlier \`tldrx next\``
+          // reason `fromDisk` writes for a row this process never touched, and a
+          // person had to `story reopen` it by hand. The release is a fact about
+          // the DEPENDENCY the instant it is decided, not about whether THIS
+          // pass also finds time to attempt the story — so it is persisted now,
+          // and `driveStory` still owns whatever verdict the attempt itself earns.
+          this.setStoryStatus(planned, "todo");
           pending.push(planned);
           continue;
         }
