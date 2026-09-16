@@ -347,6 +347,133 @@ describe("the base-tree pre-flight", () => {
   }, 60_000);
 });
 
+/**
+ * gh #363 — measured live (tldrx 0.31.1): the base pre-flight ran `dotnet test`
+ * against the repo ROOT and it passed; the SAME command, on the SAME sha, ran
+ * again inside a story's own worktree and failed on a contract test asserting a
+ * build-time commit id that SourceLink could not resolve there. The base
+ * pre-flight's checkout has real git history and a normal `.git` directory; a
+ * story's worktree has a `.git` FILE (git's own worktree convention) and no
+ * other branch's history — an environment difference the base pre-flight's own
+ * tree shape cannot see, by construction.
+ *
+ * Decision (documented at `dodRunner.ts`, "Where it runs"): the base pre-flight
+ * stays in the checkout — moving it into a throwaway worktree would pay for the
+ * declared command TWICE on every run that needs a fresh measurement (once for
+ * attribution, once it already costs via the checkout) and reintroduce the
+ * `node_modules`-less outage that citation already warns against, for a
+ * likelihood (a worktree-only environment difference) most workspaces never
+ * hit. Absent-with-reason instead (§7): every measured row says WHICH tree
+ * produced it, so a reader cannot mistake "green on the base" for "green in the
+ * tree shape a story's own DoD actually runs in".
+ */
+describe("gh #363 — the base pre-flight names the tree it measured in", () => {
+  // `.git` is a directory in a normal checkout and a FILE in a `git worktree` —
+  // git's own convention, not tldrx's. Green here, red only in a story's worktree.
+  const TREE_SHAPE_SCRIPT = 'node -e "process.exit(require(\'fs\').statSync(\'.git\').isFile() ? 1 : 0)"';
+
+  test("a command green in the checkout and red only in a story's worktree is recorded WITH the tree it was measured in", async () => {
+    const ws = workspace({ ...ONE, testScript: TREE_SHAPE_SCRIPT });
+
+    const outcome = await next(ws);
+
+    // The base pre-flight measured `.git` as a directory (the checkout) and
+    // never refused Build over it.
+    expect(outcome.lines.join("\n")).not.toContain("already fail on the untouched base tree");
+    const cached = readFileSync(join(ws.runDir, PREFLIGHT_REL), "utf8");
+    expect(cached).toContain("exit_code: 0");
+    // Absent-with-reason: the row says WHERE that green was measured.
+    expect(cached).toContain("tree: checkout");
+
+    // The story's own DoD ran the SAME command inside its worktree — `.git`
+    // there is a FILE — and failed for an environment reason the checkout
+    // reading could not see. Blocked, not a base-gate halt: the base row for
+    // this exact command is `ok`, so #41's attribution correctly leaves this to
+    // the story, and the caveat above is what tells a reader the two trees
+    // were never the same tree.
+    expect(outcome.code).toBe(4);
+    expect(story(ws, "S1")).toContain("status: blocked");
+  }, 60_000);
+});
+
+/**
+ * gh #363 — measured live: a workspace declared `tool_restore: dotnet tool
+ * restore` (no `install:` at all) and NOTHING ran it automatically anywhere —
+ * only `install:` was ever auto-run, and only inside a fresh story worktree
+ * (`worktreeDeps.ts`), never in the checkout the base pre-flight itself reads.
+ * The base pre-flight's own first probed command refused with the local tool
+ * missing (`Run "dotnet tool restore" to make the "dotnet-ef" command
+ * available.`), which #343 could only ever NAME after the fact, not prevent.
+ *
+ * The fix: a repo's declared `tool_restore:` runs once in the checkout, before
+ * the base pre-flight asks it a single question. `install:` is deliberately
+ * NOT run here too — it already has its own auto-run doors, and adding a third
+ * one in the checkout would refuse an install failure a second time, through a
+ * different sentence (see `toolRestoreCommandFor` in `worktreeDeps.ts`).
+ */
+describe("gh #363 — a repo's declared prep commands run in the checkout before its first base probe", () => {
+  const passThrough: SerialWrite = async (work) => await work();
+
+  function baseParts(ws: BuildWorkspace): BaseParts {
+    return {
+      workspace: loadWorkspace(ws.root),
+      cache: new PreflightCache(ws.runDir),
+      at: "2026-08-29T09:00:00Z",
+      preparing: false,
+      relaunching: false,
+      timeoutMs: 60_000,
+      runDir: ws.runDir,
+      write: passThrough,
+      advisories: [],
+    };
+  }
+
+  const declaring = (commands: readonly string[]): readonly PlannedStory[] =>
+    [{ story: { repo: "app" }, dod: { commands } } as unknown as PlannedStory];
+
+  test("a declared tool_restore: runs before the base pre-flight asks its first question", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-tool-restore-"));
+    const marker = join(dir, "restored");
+    const ws = workspace({
+      ...ONE,
+      commands: {
+        build: null, test: "npm run test", lint: null, typecheck: null,
+        tool_restore: `node -e 'require("fs").writeFileSync(${JSON.stringify(marker)}, "x")'`,
+      },
+      testScript: `node -e 'process.exit(require("fs").existsSync(${JSON.stringify(marker)}) ? 0 : 1)'`,
+    });
+
+    const refusal = await redBaseRefusal(baseParts(ws), declaring(["npm run test"]));
+
+    expect(refusal).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
+  test("a declared tool_restore: that fails refuses Build by NAME, before the command it protects is even asked", async () => {
+    const ws = workspace({
+      ...ONE,
+      commands: {
+        build: null, test: "npm run test", lint: null, typecheck: null,
+        tool_restore: 'node -e "process.exit(1)"',
+      },
+    });
+
+    const refusal = await redBaseRefusal(baseParts(ws), declaring(["npm run test"]));
+
+    expect(refusal).not.toBeNull();
+    expect(refusal?.error).toContain("tool_restore");
+    expect(refusal?.lines.join("\n")).toContain("tool_restore");
+  }, 60_000);
+
+  test("a repo declaring neither slot is unaffected — the base pre-flight runs exactly as before", async () => {
+    const ws = workspace(ONE);
+
+    const refusal = await redBaseRefusal(baseParts(ws), declaring(["npm run test"]));
+
+    expect(refusal).toBeNull();
+  }, 60_000);
+});
+
 // ---------------------------------------------------------------------------
 
 /** One measured row, with a tail nasty enough to be worth escaping. */

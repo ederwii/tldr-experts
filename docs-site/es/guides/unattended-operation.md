@@ -792,6 +792,23 @@ que el aviso te devuelve:
    un repo genuinamente roto, y el rechazo ahora nombra tu propio `install:` declarado como lo
    primero para probar (gh #343) — pero nombrarlo no cuesta nada si ya sabes correrlo tú
    primero.
+
+   **Si tu repo necesita ESTADO DE HERRAMIENTAS LOCAL más allá de `install:`** — un manifiesto
+   de herramientas locales de .NET restaurado con `dotnet tool restore`, que es un comando
+   distinto de `dotnet restore` y que un `install:` que sólo corre este último no cubre —
+   decláralo bajo `tool_restore:` (gh #363):
+
+   ```yaml
+       commands:
+         install: "dotnet restore"
+         tool_restore: "dotnet tool restore"
+   ```
+
+   A diferencia de `install:`, tldrx corre `tool_restore:` en TU PROPIO checkout
+   automáticamente, una sola vez, antes del primer comando que el pre-vuelo base comprueba —
+   no necesitas correrlo ahí tú primero. Una falla rechaza Build nombrándolo. Deliberadamente
+   no se corre también en el worktree de la historia ni en el del sondeo de entrada a Build;
+   `install:` ya cubre esos dos.
 2. **Declara `test_fast`** en `.tldrx/workspace.yml`: el subconjunto rápido sobre el que
    itera el developer de Build. No es un comando de Definition of Done; el DoD vuelve a
    correr `test:`. Junto a él, `test_scoped: "<cmd> {{paths}}"` acota el check de DoD de
@@ -818,10 +835,14 @@ worktree de la historia no tenía el binario. Declara `install:` (punto 1 de arr
 instala ahí las dependencias antes del developer. El check que falló trae `tree: "worktree"`,
 así que se distingue del pre-vuelo de entrada a Build, que corre el mismo comando en tu propio
 checkout — donde las dependencias ya están SÓLO SI corriste `install:` ahí tú primero (gh
-#343; tldrx nunca lo corre contra tu propio checkout sin que se lo pidas). Desde el sondeo en
-worktree al entrar a Build esto debería ser raro: la misma ausencia normalmente se rechaza una
-sola vez, en la entrada, antes de pagar ningún turno — y si el que está rojo es tu PROPIO
-checkout, el rechazo nombra el `install:` declarado como la solución.
+#343; tldrx nunca corre `install:` contra tu propio checkout sin que se lo pidas — la única
+excepción es un `tool_restore:` declarado, que sí se corre ahí automáticamente, gh #363).
+Desde el sondeo en worktree al entrar a Build esto debería ser raro: la misma ausencia
+normalmente se rechaza una sola vez, en la entrada, antes de pagar ningún turno — y si el que
+está rojo es tu PROPIO checkout, el rechazo nombra el `install:` declarado como la solución.
+Cada fila del árbol base también trae `tree: "checkout"` en `04-build/preflight.yml` (gh
+#363) — un recordatorio de que una lectura verde ahí es un hecho sobre tu checkout, no una
+promesa sobre el worktree en el que realmente corre el DoD de una historia.
 
 **El developer dice "This command requires approval to run".** Arreglado en gh #209: cada
 comando declarado ahora se concede tanto exacto como con argumentos al final, así que un

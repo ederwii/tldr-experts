@@ -124,6 +124,19 @@ export interface BaseCommandResult {
    * with neither the row is never invalidated by age.
    */
   readonly checkedAt?: string;
+  /**
+   * Which tree this row is a fact ABOUT — `BASE_TREE` (`worktreeDeps.ts`) today,
+   * always, because every base measurement runs in the repo's checkout
+   * (`dodRunner.ts`'s "Where it runs"). Absent-with-reason (§7), gh #363: a
+   * reader must not mistake a green row here for a green in the WORKTREE shape
+   * a story's own DoD actually runs in — the two can differ for an environment
+   * reason (a `.git` file vs. a `.git` directory, a tool restored in one tree
+   * and not the other) this row alone cannot rule out.
+   *
+   * ADDITIVE and optional. Absent on every `preflight.yml` written before it
+   * existed and on an `unmeasured` row, where nothing ran in any tree.
+   */
+  readonly tree?: string;
 }
 
 /**
@@ -221,6 +234,7 @@ export function emitPreflightYaml(preflight: BasePreflight): string {
       if (row.outputLine !== undefined) lines.push(`    output_line: ${String(row.outputLine)}`);
       if (row.commandHash !== undefined) lines.push(`    command_hash: ${yamlScalar(row.commandHash)}`);
       if (row.checkedAt !== undefined) lines.push(`    checked_at: ${yamlScalar(row.checkedAt)}`);
+      if (row.tree !== undefined) lines.push(`    tree: ${yamlScalar(row.tree)}`);
     }
   }
   // #254, emitted LAST and only when there is one, so a file that has no
@@ -298,6 +312,7 @@ export function parsePreflight(text: string): BasePreflight | null {
     const excerpt = asText(row.excerpt);
     const outputPath = asText(row.output_path);
     const rowCheckedAt = asText(row.checked_at);
+    const tree = asText(row.tree);
     results.push({
       repo,
       command,
@@ -314,6 +329,7 @@ export function parsePreflight(text: string): BasePreflight | null {
       ...(Number.isInteger(row.output_bytes) ? { outputBytes: row.output_bytes as number } : {}),
       ...(Number.isInteger(row.output_line) ? { outputLine: row.output_line as number } : {}),
       ...(rowCheckedAt === "" ? {} : { checkedAt: rowCheckedAt }),
+      ...(tree === "" ? {} : { tree }),
     });
   }
   const worktree = parseWorktreeRows((doc as { worktree?: unknown }).worktree);

@@ -74,6 +74,36 @@
   one `stories` id, so a park on one story is not evidence about another). `run status`'s
   "held by: stories" line now says "parked by a rate-limit warning" and when it resumes,
   under the same predicate, instead of reading as a decision waiting on a human.
+- **A declared `tool_restore:` command never ran anywhere automatically, so the base pre-flight's
+  own first probed command could refuse over a missing local tool before an operator had any
+  evidence beyond that refusal (#363).** Measured on a live unattended run (0.31.1, .NET
+  workspace): the workspace declared `tool_restore: dotnet tool restore` and no `install:` at
+  all — only `install:` was ever auto-run, and only inside a story's own fresh worktree
+  (`worktreeDeps.ts`) or the Build-entry probe's throwaway worktree (`entryProbe.ts`, #254),
+  never in the checkout the base pre-flight itself reads — so `dotnet-ef` stayed missing there
+  until an operator ran `dotnet tool restore` by hand. `redBaseRefusal`
+  (`src/core/build/dodRunner.ts`) now runs a repo's declared `tool_restore:` once in the checkout,
+  before its first probed command, and refuses Build by name — nothing dispatched, nothing
+  charged — when that restore itself fails. `install:` is deliberately NOT added to this same
+  door: it already has two (a story's worktree, the entry probe's worktree), and running it a
+  third time, automatically, in the human's own checkout regressed an existing one during this
+  fix (`test/story-worktree-deps.test.ts` case (d) started reporting the wrong sentence) — see
+  `toolRestoreCommandFor` in `src/core/build/worktreeDeps.ts` for why that door stays closed.
+- **The base pre-flight's own checkout and a story's worktree are different trees, and a green
+  reading from the first said nothing about it (#363).** Measured on the same live run: the base
+  pre-flight ran a command clean in the checkout; the identical command, on the identical base
+  sha, then failed inside a story's own worktree — a contract test asserting a build-time commit
+  id that SourceLink could not resolve there, an environment difference (a `.git` FILE, git's own
+  worktree convention, vs. the checkout's `.git` directory) the checkout reading cannot see by
+  construction. Moving the probe itself into a throwaway worktree was considered and rejected
+  with evidence: `dodRunner.ts`'s own "Where it runs" already documents why the checkout is
+  deliberate (a pristine worktree "would fail half the world's repos for want of `node_modules`
+  — turning this safety net into an outage"), and paying for every declared command a second time
+  on every run that needs a fresh measurement is a real, ongoing cost for a narrower class of gap
+  than that outage. Instead, absent-with-reason (AGENTS.md §7): every base-tree row in
+  `04-build/preflight.yml` now carries `tree: checkout`, so a reader — human or the loop itself —
+  cannot mistake "green on the base" for "green in the tree shape a story's own DoD actually runs
+  in".
 
 ## 0.31.1 — 2026-09-16
 

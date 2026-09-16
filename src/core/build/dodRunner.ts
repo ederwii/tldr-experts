@@ -27,11 +27,13 @@ import type { BuildRefusal, DodRecheck, DodResult, SerialWrite } from "./outcome
 import type { PlannedStory } from "./plan.ts";
 import {
   BaseGateFailure, baseRefusalLines, baseResultFor, cachedProvenance, commandHash, EMPTY_PREFLIGHT, loadPreflight,
-  measuredProvenance, PREFLIGHT_REL, refusalFreshness, savePreflight, withResult, withWorktreeRow,
+  measuredProvenance, PREFLIGHT_REL, refusalFreshness, savePreflight, withResult, withWorktreeRow, WORKSPACE_FILE,
   type BaseCommandResult,
   type BasePreflight, type BaseServed, type WorktreeProbeRow,
 } from "./preflight.ts";
-import { absentBinaryOf, WORKTREE_TREE } from "./worktreeDeps.ts";
+import {
+  absentBinaryOf, BASE_TREE, TOOL_RESTORE_SLOT, toolRestoreCommandFor, WORKTREE_TREE,
+} from "./worktreeDeps.ts";
 
 /**
  * The run's base-tree measurements, loaded LAZILY and ONCE per process.
@@ -267,6 +269,12 @@ export async function serveBaseResult(
         outputLine: kept.line,
       }),
       status: exitCode === 0 && !outcome.timedOut ? "ok" : "failed", commandHash: hash,
+      // gh #363, absent-with-reason: WHICH tree this row is a fact about. Every
+      // base measurement runs in the checkout today (`redBaseRefusal`'s own
+      // "Where it runs"), so this is a constant now — but a constant a reader
+      // can cite is worth more than one they have to assume, and it is the seam
+      // a future per-row tree, if ever added, would use without a second field.
+      tree: BASE_TREE,
     };
   } catch (error) {
     if (!(error instanceof DodCommandRefused)) throw error;
@@ -286,6 +294,72 @@ export async function serveBaseResult(
     if (advisory !== null) parts.advisories.push(advisory);
   });
   return { result: measured, provenance: measuredProvenance(parts.at) };
+}
+
+/**
+ * gh #363: a repo's declared `tool_restore:` runs ONCE in the checkout, before
+ * the base pre-flight asks that checkout a single question.
+ *
+ * Measured live: a workspace declared `tool_restore: dotnet tool restore` (no
+ * `install:` at all) and nothing ran it anywhere automatically — the base
+ * pre-flight's own FIRST probed command refused with the local tool missing,
+ * naming a fix (#343's `installAdviceLine`-style advice) only after the fact.
+ * This runs the fix instead of only naming it.
+ *
+ * `install:` is deliberately NOT run here — see `toolRestoreCommandFor`'s own
+ * comment for why a third automatic install door, in the checkout, is the wrong
+ * fix and was measured to regress an existing one (`story-worktree-deps.test.ts`
+ * case (d)) while this was being built.
+ *
+ * A failure here refuses Build exactly the way a red base command does —
+ * nothing dispatched, nothing charged — because a checkout whose declared
+ * restore did not succeed cannot prove anything about a base command's redness
+ * OR its greenness: the very thing #41 exists to keep a story from being
+ * blamed for.
+ *
+ * Deduplicated by repo, not by story or command: `tool_restore:` prepares a
+ * TREE, not a command, so two stories in the same repo pay for it once, the
+ * same way `PreflightCache` already keeps a `dotnet test` from being re-paid.
+ */
+async function prepBaseTree(parts: BaseParts, repos: Iterable<string>): Promise<BuildRefusal | null> {
+  for (const repo of new Set(repos)) {
+    let repoDir: string;
+    try {
+      repoDir = repoDirOf(parts.workspace, repo);
+    } catch {
+      continue;   // a repo the workspace does not declare: no evidence, not a verdict
+    }
+    const command = toolRestoreCommandFor(parts.workspace, repo);
+    if (command === null) continue;
+    let outcome: CommandResult;
+    try {
+      outcome = await runDodCommand(command, repoDir, parts.timeoutMs, parts.workspace.commands);
+    } catch (error) {
+      if (!(error instanceof DodCommandRefused)) throw error;
+      return prepRefusal(repo, command, `was refused and never ran — ${error.message}`);
+    }
+    const exitCode = outcome.timedOut ? 124 : outcome.exitCode;
+    if (exitCode !== 0 || outcome.timedOut) {
+      return prepRefusal(
+        repo, command,
+        `exited ${String(exitCode)}${outcome.timedOut ? " (timed out)" : ""} in the base checkout — `
+          + failureSummaryLine(outcome.output ?? ""),
+      );
+    }
+  }
+  return null;
+}
+
+/** One `prepBaseTree` refusal, the same shape a red base command's refusal has. */
+function prepRefusal(repo: string, command: string, detail: string): BuildRefusal {
+  return {
+    lines: [
+      `[tldrx] build: the \`${TOOL_RESTORE_SLOT}:\` command for repo ${repo} (\`${command}\`) ${detail}`,
+      `Fix ${WORKSPACE_FILE} (or what \`${command}\` runs), then run \`tldrx next\` again. `
+        + "Nothing was dispatched and nothing was charged.",
+    ],
+    error: `\`${command}\` (the \`${TOOL_RESTORE_SLOT}:\` command for repo ${repo}) ${detail}`,
+  };
 }
 
 /**
@@ -310,6 +384,20 @@ export async function serveBaseResult(
  * a repo shaped like that was already broken for Build, whose commit step
  * would have swept the same files into a story's diff.
  *
+ * gh #363, decided with the same trade in mind: a live run's base pre-flight was
+ * green in the checkout on a command that then failed inside a story's own
+ * worktree, for an environment reason (a `.git` FILE vs. a `.git` directory —
+ * git's own worktree convention, unrelated to anything this repo declares) the
+ * checkout reading could not see. Moving the probe itself into a throwaway
+ * worktree would catch that ONE shape of gap, but pays for the declared command
+ * a second time on every run that needs a fresh measurement and reopens the
+ * exact `node_modules`-less outage two paragraphs up — for a class of gap
+ * (worktree-vs-checkout git metadata) far narrower than "no worktree has
+ * dependencies at all". So this stays in the checkout, and `serveBaseResult`
+ * below records WHICH tree it measured (`BASE_TREE`, absent-with-reason, §7)
+ * instead: a green row here is evidence about the checkout, never a promise
+ * about the tree a story's own DoD actually runs in.
+ *
  * **What it costs.** Once per run: every result is written to
  * `04-build/preflight.yml` and read back by the next invocation.
  *
@@ -321,6 +409,9 @@ export async function serveBaseResult(
 export async function redBaseRefusal(
   parts: BaseParts, stories: readonly PlannedStory[],
 ): Promise<BuildRefusal | null> {
+  const prepFailure = await prepBaseTree(parts, stories.map((planned) => planned.story.repo));
+  if (prepFailure !== null) return prepFailure;
+
   const failures: BaseServed[] = [];
   const seen = new Set<string>();
   for (const planned of stories) {
