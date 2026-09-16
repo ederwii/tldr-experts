@@ -24,7 +24,7 @@ import { RunStore } from "../../run/RunStore.ts";
 import { applyCheckContracts } from "../checkContracts.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../../hooks/lib/workspace.ts";
-import type { SrcContext } from "../../text/srcToken.ts";
+import { repairSrcSyntax, type SrcContext, type SrcRepair } from "../../text/srcToken.ts";
 import { collectFeatures, PLAN_PHASE, type Feature } from "../../watch/features.ts";
 import { epicDiff, readRepoBases, WORKSPACE_YML, type RepoDiff } from "../../watch/epicDiff.ts";
 import { recordedEpicBranch, type RecordedBuild } from "../../watch/recordedBranch.ts";
@@ -258,22 +258,45 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
   }
 
   // --- validate every card off disk, then stamp its status ------------------
+  //
+  // gh #345 ("mechanical validators before spending"): a `[src:]` PUNCTUATION
+  // slip — the marker missing its space, a token sitting mid-sentence, an ASCII
+  // `->` inside a `cmd` source — is repaired locally, for $0.00, before the card
+  // is judged. `repairSrcSyntax` never touches a citation it cannot VERIFY parses
+  // clean afterwards (`srcToken.ts`), so this can only turn a malformed-but-true
+  // citation into a well-formed one — it never invents a source nobody wrote.
+  //
+  // The repair is written to disk EVERY time it fires, whether or not the card
+  // ends up valid: a partially-repaired card that still fails leaves the fixed
+  // half on disk, so `previousCard` (`watchPrompt.ts`) — which re-validates FROM
+  // DISK on a retry, not from the recorded error — shows a writer only the
+  // defect a script could not fix. Nothing here is silent: a repair is always
+  // named, on the stage's own report when it clears the card and in the failure
+  // reason when it does not (owner decision 2026-09-15).
   const written: WrittenCard[] = [];
+  const repairNotes: string[] = [];
   for (const feature of features) {
     const rel = watcherRelPath(feature.id);
     const abs = join(ctx.runDir, rel);
     if (!existsSync(abs)) {
       return failed(ctx, `\`${feature.id}\`: ${rel} was never written`, tasks);
     }
-    const text = readFileSync(abs, "utf8");
+    const original = readFileSync(abs, "utf8");
+    const repair = repairSrcSyntax(original);
+    const text = repair.repairs.length === 0 ? original : repair.text;
+    if (repair.repairs.length > 0) writeFileSync(abs, text, "utf8");
+    const repairSummary = describeRepairs(repair.repairs);
+
     const card = parseWatcherCard(text, srcCtx, feature.id);
     if (!card.ok) {
+      const prefix = repairSummary === null ? "" : `${repairSummary} — `;
       return failed(
         ctx,
-        `\`${feature.id}\`: ${rel} does not validate — ${describeWatcherIssues(card.issues, 3).join(" ").trim()}`,
+        `\`${feature.id}\`: ${prefix}${rel} does not validate — ${describeWatcherIssues(card.issues, 3).join(" ").trim()}`,
         tasks,
       );
     }
+    if (repairSummary !== null) repairNotes.push(`\`${feature.id}\`: ${repairSummary}`);
     const stamped = setWatcherStatus(text, card.decidedStatus);
     if (stamped !== text) writeFileSync(abs, stamped, "utf8");
     written.push({ feature, path: rel, card });
@@ -308,6 +331,10 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
           `  ${String(keptIds.length)} card(s) already validated on disk and were kept — no writer was `
             + `spawned for them: ${keptIds.join(", ")}`,
         ]),
+      // gh #345: an auto-repair is reported here too, not only in a future
+      // retry's prompt — "visible" means this run's own operator-facing report
+      // as much as the next turn's.
+      ...repairNotes.map((note) => `  ${note}`),
       `wrote ${HANDOFF_REL}`,
     ],
     error: null,
@@ -665,6 +692,13 @@ function keptCard(ctx: ExecutorContext, feature: Feature, srcCtx: SrcContext): b
   } catch {
     return false;
   }
+}
+
+/** `null` when `repairs` is empty — a caller then adds no note at all (gh #345). */
+function describeRepairs(repairs: readonly SrcRepair[]): string | null {
+  if (repairs.length === 0) return null;
+  const detail = repairs.map((r) => `L${String(r.line)} ${r.rule}`).join(", ");
+  return `auto-repaired ${String(repairs.length)} \`[src:]\` punctuation issue(s) before validating (${detail})`;
 }
 
 function failed(ctx: ExecutorContext, error: string, tasks: readonly ExecutorTask[]): ExecutorOutcome {
