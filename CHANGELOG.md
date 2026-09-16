@@ -75,6 +75,14 @@
   "held by: stories" line now says "parked by a rate-limit warning" and when it resumes,
   under the same predicate, instead of reading as a decision waiting on a human.
 
+### Changed
+
+- **`docs/ROADMAP.md` states the project's north star and how we measure toward it (owner
+  decision, 2026-09-16).** One sentence, three metrics tracked on every run (human
+  interventions per run, predicted-vs-actual cost and time, defects the reviewer catches
+  before merge versus after), a measured "where we are" for 2026-09-16, and how the shipped
+  pieces and the still-unbuilt ones map to it.
+
 ## 0.31.1 — 2026-09-16
 
 ### Fixed
