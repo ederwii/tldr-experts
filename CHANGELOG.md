@@ -59,6 +59,20 @@
   `budget show` does; omitted, it falls back to the shipped default, so a caller that does not pass
   it behaves exactly as before.
 
+- **A fix list dispositioned away from `fix-now` by hand, after the story already parked `review`
+  behind it, now settles `done` with no agent spawned instead of buying a fresh developer round and
+  a full DoD re-run for nothing (#218).** Measured live: a reviewer signed `fixlist` with an open
+  finding, parking the story at `review`; the finding was later re-routed away from `fix-now`
+  outside the audited auto-close (which only ever closes what a spawned reviewer's approve was
+  shown); nothing else re-read the file, so the next `--prepare`/headless pass read `fixlistFor`'s
+  unnamed door returning `null` (0 open — correctly, it is not to be re-rendered) as "no fix list
+  ever happened" and dispatched a plain developer bundle for a story nothing faulted — one
+  developer task and one full DoD re-run over an unchanged tree. `closedFixlistCandidates` /
+  `settleClosedFixlists` (gh #329's pre-pass) now also recognizes a `review` story parked on a spent
+  `fixlist` verdict, alongside the `blocked`/`approve` shape it already settled, and asks
+  `openFixNow` before either. `--fixlist <path>` naming a file with 0 open findings is now a refusal
+  that names the file and the count, not a silent downgrade to a bundle.
+
 ## 0.30.0 — 2026-09-15
 
 ### Fixed

@@ -554,6 +554,14 @@ function runTitleOf(ctx: ExecutorContext): string {
  */
 type FixlistScope = Pick<StoryContext, "planned" | "repoDir" | "branch">;
 
+/**
+ * Which shape `closedFixlistCandidates` found a story in — the two doors a
+ * fix list may leave nothing open behind: a `blocked` story whose last review
+ * `approve`d (gh #329), or a `review` story a `fixlist` verdict parked (gh
+ * #218). Both settle `done` with no spawn; only the wording differs.
+ */
+type ClosedFixlistKind = "blocked-approve" | "review-fixlist";
+
 interface StoryContext {
   readonly planned: PlannedStory;
   readonly epic: PlannedEpic;
@@ -2605,45 +2613,68 @@ class BuildSession {
   }
 
   /**
-   * `blocked` stories that MAY settle `done` on their fix list alone (gh #329) —
-   * the cheap half of the question, off files only: the last settlement was a
-   * `blocked` over an `approve` naming the merged commit, and the latest fix list
-   * no longer SAYS anything is open. `settleClosedFixlists` asks git the rest.
+   * Stories that MAY settle `done` on their fix list alone, off files only:
+   * either a `blocked` story whose last settlement was a `blocked` over an
+   * `approve` naming the merged commit (gh #329), or a `review` story parked
+   * there by a `fixlist` verdict (gh #218) — and in both cases the latest fix
+   * list no longer SAYS anything is open. `settleClosedFixlists` asks git the
+   * rest.
+   *
+   * The `review`/`fixlist` shape is #218's own measurement: a reviewer signs
+   * `fixlist` with an open `fix-now` finding, the story parks `review` owing a
+   * developer round, and the finding is later re-routed away from `fix-now` by
+   * hand — not through the audited auto-close (`closeShownFixRound`), which
+   * only ever closes what a SPAWNED reviewer that approved was shown. Nothing
+   * else re-reads the file, so without this the next `--prepare` or headless
+   * pass reads `fixlistFor`'s unnamed door returning `null` (0 open — correct,
+   * it is not to be re-rendered) as "no fix list ever happened" and hands out
+   * a fresh plain developer bundle for a story nothing faults, which then buys
+   * a whole DoD re-run over an unchanged tree.
    */
-  private closedFixlistCandidates(): readonly PlannedStory[] {
-    const rows: PlannedStory[] = [];
+  private closedFixlistCandidates(): readonly { readonly planned: PlannedStory; readonly kind: ClosedFixlistKind }[] {
+    const rows: { planned: PlannedStory; kind: ClosedFixlistKind }[] = [];
     for (const wave of this.plan.waves) {
       for (const planned of wave.stories) {
-        if (this.statusOf(planned) !== "blocked") continue;
+        const status = this.statusOf(planned);
+        const kind: ClosedFixlistKind | null = status === "blocked"
+          ? "blocked-approve"
+          : status === "review" ? "review-fixlist" : null;
+        if (kind === null) continue;
         const ledger = readReviewLedger(this.ctx.runDir, planned.story.id);
         const settled = ledger.lastSettled;
         const merge = ledger.lastMerge;
         if (settled === null || merge === null) continue;
-        if (settled.status !== "blocked" || settled.verdict !== "approve" || merge.verdict !== "approve") continue;
+        const matches = kind === "blocked-approve"
+          ? settled.status === "blocked" && settled.verdict === "approve" && merge.verdict === "approve"
+          : settled.status === "review" && settled.verdict === "fixlist" && merge.verdict === "fixlist";
+        if (!matches) continue;
         if (settled.commit !== merge.commit) continue;
         const fixlist = latestFixlist(this.ctx.runDir, BUILD_PHASE, planned.story.id);
         if (fixlist === null || openFindings(fixlist.findings).length > 0) continue;
-        rows.push(planned);
+        rows.push({ planned, kind });
       }
     }
     return rows;
   }
 
   /**
-   * Settle `done`, with NO spawn, every `blocked` story whose last review approved
-   * and whose fix list now has nothing open (gh #329).
+   * Settle `done`, with NO spawn, every candidate `closedFixlistCandidates`
+   * names: a `blocked` story whose last review approved (gh #329), or a
+   * `review` story parked on a spent `fixlist` round (gh #218) — in both
+   * cases the fix list now has nothing open.
    *
-   * Measured live: a fix landed, the reviewer approved it, the story blocked on a
-   * `Resolved: no` nobody had rewritten — and once a person rewrote it, no verb
-   * re-read the file: `story reopen` handed a developer nothing to do (#308
-   * refused it) and `--as-is` refused a branch already on its epic. The review
-   * that decides this already happened; what was missing was asking `openFixNow`
-   * again. It is asked exactly as `reviewAndSettle` asks it — `verifyResolutions`
-   * holds each `Resolved: yes` to git first, and a claim that does not check out
-   * is rewritten `claimed-unverified` and the story stays `blocked`.
+   * Measured live (gh #329): a fix landed, the reviewer approved it, the story
+   * blocked on a `Resolved: no` nobody had rewritten — and once a person
+   * rewrote it, no verb re-read the file: `story reopen` handed a developer
+   * nothing to do (#308 refused it) and `--as-is` refused a branch already on
+   * its epic. The review that decides this already happened; what was missing
+   * was asking `openFixNow` again. It is asked exactly as `reviewAndSettle`
+   * asks it — `verifyResolutions` holds each `Resolved: yes` to git first, and
+   * a claim that does not check out is rewritten `claimed-unverified` and the
+   * story stays put.
    */
   private async settleClosedFixlists(): Promise<void> {
-    for (const planned of this.closedFixlistCandidates()) {
+    for (const { planned, kind } of this.closedFixlistCandidates()) {
       const id = planned.story.id;
       const scope: FixlistScope = {
         planned,
@@ -2655,18 +2686,25 @@ class BuildSession {
       const merge = ledger.lastMerge;
       if (merge === null) continue;
       const rel = latestFixlist(this.ctx.runDir, BUILD_PHASE, id)?.rel ?? "its fix list";
-      const summary = `no reviewer ran for this settlement: the approve recorded over \`${merge.commit}\` stands, `
-        + `and every \`fix-now\` finding in ${rel} is now closed or routed away`;
+      const verdict = kind === "blocked-approve" ? "approve" : "fixlist";
+      const summary = kind === "blocked-approve"
+        ? `no reviewer ran for this settlement: the approve recorded over \`${merge.commit}\` stands, `
+          + `and every \`fix-now\` finding in ${rel} is now closed or routed away`
+        : `no developer round ran for this settlement: the reviewer's fix-list signature over `
+          + `\`${merge.commit}\` stands, and every \`fix-now\` finding in ${rel} is now closed or routed away`;
       this.lines.push(
-        `  · ${id} was \`blocked\` on its fix list only — its last review approved \`${merge.commit}\` and `
-        + `${rel} has nothing open now, so it settles \`done\` with no agent spawned`,
+        kind === "blocked-approve"
+          ? `  · ${id} was \`blocked\` on its fix list only — its last review approved \`${merge.commit}\` and `
+            + `${rel} has nothing open now, so it settles \`done\` with no agent spawned`
+          : `  · ${id} was parked \`review\` on its fix list only — its last review signed \`${merge.commit}\` `
+            + `with a fix list, and ${rel} has nothing open now, so it settles \`done\` with no agent spawned`,
       );
       const story = await this.writes.run(() => this.openStory(planned));
       await this.settle(story, "done", {
         dod: ledger.dod, commit: merge.commit, merged: true, carried: null, epicBase: merge.epicBase,
-        verdict: "approve",
+        verdict,
         review: {
-          verdict: "approve", summary, findings: [], fixlist: [], fixlistProblems: [],
+          verdict, summary, findings: [], fixlist: [], fixlistProblems: [],
           formatProblems: [], verdictProblem: null,
         },
         cost: 0, reason: null,
@@ -5194,6 +5232,19 @@ class BuildSession {
       throw new Error(
         `--fixlist ${named} is not ${storyId}'s fix list (it is \`${base}\`) — `
         + `the story at the cursor is ${storyId}`,
+      );
+    }
+    // gh #218: naming a file explicitly is a stronger claim than the unnamed
+    // door's courtesy carry-forward, so it gets a REFUSAL, not a silent
+    // downgrade to a plain bundle — a fixlist with nothing open dispatched a
+    // developer for a story nothing faults, and the flag would make an
+    // operator believe findings were being carried when none were.
+    const open = openFindings(read.findings).length;
+    if (open === 0) {
+      throw new Error(
+        `--fixlist ${named} names ${read.rel}, which has 0 \`fix-now\` finding(s) — there is nothing here `
+        + "to dispatch a developer over. `tldrx next` (headless) settles the story once its last review "
+        + "and the fix list agree nothing is open; run it without `--fixlist` to let that happen",
       );
     }
     return read;
