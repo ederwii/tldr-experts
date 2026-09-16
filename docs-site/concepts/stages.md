@@ -20,7 +20,7 @@ outputs are files on disk, and the next stage reads them.
 | Stage | It answers | It writes |
 |---|---|---|
 | **What** | What are we doing, and what are we deliberately not doing? | `intent.md`, `scope.md`, `success-metrics.md`, `open-questions.md`, `handoff.md`, `questions.md` |
-| **How** | How does it fit this codebase — components, contracts, risks, tests? | `design.md`, `contracts.md`, `risks.md`, `test-strategy.md`, `handoff.md`, `questions.md` |
+| **How** | How does it fit this codebase — components, contracts, risks, tests? | `design.md`, `contracts.md`, `test-strategy.md`, `handoff.md`, `questions.md` |
 | **Plan** | What are the pieces, in what order? | `epics/`, `stories/`, `waves.yml`, `budget.yml`, `handoff.md`, `questions.md` |
 | **Build** | The code. | a branch and a commit per story, plus `04-build/handoff.md` |
 | **Watch** | What could go wrong in production, and how would we know? | one watcher card per shipped thing |

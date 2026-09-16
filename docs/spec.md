@@ -38,7 +38,7 @@ TypeScript on Bun; host Claude Code. Covers the v0 skeleton and the schema shape
 │  ├─ .lock [g] · .agent/ [g]        # single-writer guard; raw `claude -p` json + transcripts
 │  ├─ <phase>/  gate-evidence/<stage>.md [c]   # the §2.17 note an `agent` gate was closed over
 │  ├─ 01-what/  handoff.md questions.md intent.md scope.md success-metrics.md [c]
-│  ├─ 02-how/   handoff.md questions.md design.md contracts.md risks.md test-strategy.md [c]
+│  ├─ 02-how/   handoff.md questions.md design.md contracts.md test-strategy.md [c]
 │  ├─ 03-plan/  handoff.md waves.yml §2.15 · epics/<id>.md §2.14 · stories/<id>.md §2.13 [c]
 │  ├─ 04-build/ handoff.md log/<story-id>.md fixlist/<story-id>-<round>.md [c]
 │  └─ 05-watch/ handoff.md watchers/<feature>.md [c]

@@ -234,6 +234,29 @@ describe("`how` is optional per seed (gh #346)", () => {
   });
 });
 
+describe("`how` stops generating outputs the plan bundle never reads (gh #350)", () => {
+  /**
+   * Owner decision 2026-09-16: "stop generating", not "generate and drop from the
+   * bundle" — a shorter stage contract, fewer tokens. `risks.md` was declared
+   * unconditionally but `stages/plan/stage.yml`'s own `inputs:` never names it
+   * (only `design.md`, `contracts.md`, `test-strategy.md`), and grepping the repo
+   * turns up no other reader — not `src/core/learn/chapters.ts`, not any
+   * `workflows/*.yml`, not the dashboard. `handoff.md` and `questions.md` are kept:
+   * they are not bundle content either, but they are load-bearing elsewhere (the
+   * auto gate's `questions` condition, `claim-sources`, `boundary`'s
+   * `SURFACE_HANDOFFS`, the dashboard's phase artefacts) — removing them would be
+   * a different, unmeasured change.
+   */
+  test("the shipped how/stage.yml no longer declares risks.md as an output", () => {
+    const spec = loadStageSpec(process.cwd(), "feature", "how");
+    expect(spec.planned.outputs).not.toContain("02-how/risks.md");
+    expect([...spec.planned.outputs].sort()).toEqual([
+      "02-how/contracts.md", "02-how/design.md", "02-how/handoff.md",
+      "02-how/questions.md", "02-how/test-strategy.md",
+    ]);
+  });
+});
+
 describe("the calibration keys", () => {
   test("a value in range is read; the same key out of range is REFUSED by name", () => {
     for (const [field, range] of Object.entries(STAGE_TUNING_RANGES)) {

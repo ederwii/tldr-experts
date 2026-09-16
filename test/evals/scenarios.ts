@@ -114,11 +114,12 @@ export const WHAT_EVAL: StageEval = {
 // ---------------------------------------------------------------------------
 
 /**
- * How's contract is What's, one phase along — six outputs and the same
- * `claim-sources` rule — with one difference worth an eval of its own: issue #34
- * widened the check from `handoff.md` to EVERY declared `.md`
- * (`run/checks.ts:80-96`). So `design.md` here carries a citation that resolves,
- * and the sabotage recipe in README.md breaks exactly that one.
+ * How's contract is What's, one phase along — five outputs (gh #350 trimmed
+ * `risks.md`, which nothing downstream read) and the same `claim-sources` rule
+ * — with one difference worth an eval of its own: issue #34 widened the check
+ * from `handoff.md` to EVERY declared `.md` (`run/checks.ts:80-96`). So
+ * `design.md` here carries a citation that resolves, and the sabotage recipe
+ * in README.md breaks exactly that one.
  */
 export const HOW_EVAL: StageEval = {
   stage: "how",
@@ -153,13 +154,6 @@ export const HOW_EVAL: StageEval = {
         "",
         "## priceOf",
         "- `priceOf(sku: string): number` keeps its signature, and its cents [src: src/pricing.ts:2]",
-        "",
-      ].join("\n"),
-      "{runDir}/02-how/risks.md": [
-        "# Risks",
-        "",
-        "## Risks",
-        "- A SKU the table does not name has no price — it has none today either [src: src/pricing.ts:3]",
         "",
       ].join("\n"),
       "{runDir}/02-how/test-strategy.md": [

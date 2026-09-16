@@ -67,6 +67,17 @@
   overrides it exactly as before — `.tldrx/stages/how/stage.yml` with `model: opus`, or
   `tldrx next --model opus` / `tldrx run auto --model opus` for one invocation.
 
+- **`how` stops generating `risks.md`** (#350). Owner decision 2026-09-16 — "stop generating,"
+  not "generate and drop from the bundle" — because nothing downstream ever read it: measured
+  on a real run, `risks.md` (8,025 bytes) was excluded by `stages/plan/stage.yml`'s own
+  `inputs:` (only `design.md`, `contracts.md`, `test-strategy.md`) and a repo-wide grep found no
+  other reader. `handoff.md` and `questions.md` are unchanged — they carry no bundle content
+  either, but they are load-bearing elsewhere (the auto gate, `claim-sources`, `boundary`'s
+  `SURFACE_HANDOFFS`, the dashboard). `validateOutputs` only ever checks the DECLARED output
+  list, so a run directory written before this change that still has `02-how/risks.md` on disk
+  is unaffected — the file is simply not asked for anymore, never flagged as missing or
+  re-demanded on resume.
+
 ### Fixed
 
 - **A headless turn whose parent `tldrx` process is SIGKILL-class killed mid-spawn now banks its

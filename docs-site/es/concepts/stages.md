@@ -20,7 +20,7 @@ etapa son archivos en disco, y la etapa siguiente los lee.
 | Etapa | Qué responde | Qué escribe |
 |---|---|---|
 | **What** | ¿Qué vamos a hacer, y qué estamos dejando fuera a propósito? | `intent.md`, `scope.md`, `success-metrics.md`, `open-questions.md`, `handoff.md`, `questions.md` |
-| **How** | ¿Cómo encaja en este código — componentes, contratos, riesgos, pruebas? | `design.md`, `contracts.md`, `risks.md`, `test-strategy.md`, `handoff.md`, `questions.md` |
+| **How** | ¿Cómo encaja en este código — componentes, contratos, riesgos, pruebas? | `design.md`, `contracts.md`, `test-strategy.md`, `handoff.md`, `questions.md` |
 | **Plan** | ¿Cuáles son las piezas, y en qué orden? | `epics/`, `stories/`, `waves.yml`, `budget.yml`, `handoff.md`, `questions.md` |
 | **Build** | El código. | una rama y un commit por story, más `04-build/handoff.md` |
 | **Watch** | ¿Qué se puede romper en producción, y cómo nos enteraríamos? | una tarjeta de vigilancia por cada cosa entregada |

@@ -167,6 +167,35 @@ describe("validateOutputs: nothing changes for a plain path", () => {
   });
 });
 
+describe("validateOutputs: an old run's undeclared extra file (gh #350)", () => {
+  /**
+   * gh #350 trims `risks.md` out of `stages/how/stage.yml`'s `outputs:`. A run
+   * directory written before that trim still has `02-how/risks.md` sitting on
+   * disk — `version: 1` formats only grow, so an old run must not read as
+   * incomplete and a resume must not re-demand a file nobody asks for anymore.
+   * `validateOutputs` only ever iterates the DECLARED list (never scans the
+   * directory), so an on-disk file that is not declared is invisible to it —
+   * this pins that behaviour against the exact shape #350 produces, rather than
+   * trusting the general claim.
+   */
+  test("a file left over from a wider output list is not required and not reported", () => {
+    const b = bed();
+    b.write("02-how/design.md", "# Design\n");
+    b.write("02-how/contracts.md", "# Contracts\n");
+    b.write("02-how/test-strategy.md", "# Test strategy\n");
+    b.write("02-how/handoff.md", "# How — handoff\n");
+    b.write("02-how/questions.md", "# Questions\n");
+    // The leftover the old run carries but the trimmed contract no longer declares.
+    b.write("02-how/risks.md", "# Risks\n\n## Risks\n- old content\n");
+
+    const trimmedOutputs = [
+      "02-how/design.md", "02-how/contracts.md", "02-how/test-strategy.md",
+      "02-how/handoff.md", "02-how/questions.md",
+    ];
+    expect(validateOutputs(trimmedOutputs, new Map(), b.ctx)).toEqual([]);
+  });
+});
+
 describe("matchPattern reads the directory, and only the directory", () => {
   test("matches by fixed prefix and suffix, in a stable sorted order", () => {
     const b = bed();

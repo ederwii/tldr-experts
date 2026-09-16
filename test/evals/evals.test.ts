@@ -190,7 +190,7 @@ describe("evals — the How stage's output contract", () => {
     const declared = (eventsOfType(run.events, "gate.requested")[0]?.payload?.outputs ?? []) as string[];
     expect([...declared].sort()).toEqual([
       "02-how/contracts.md", "02-how/design.md", "02-how/handoff.md",
-      "02-how/questions.md", "02-how/risks.md", "02-how/test-strategy.md",
+      "02-how/questions.md", "02-how/test-strategy.md",
     ]);
 
     expectHandoffShape(run.read("02-how/handoff.md"), "02-how/handoff.md");
