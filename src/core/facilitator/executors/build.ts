@@ -888,7 +888,11 @@ class BuildSession {
             `  · ${planned.story.id} was \`blocked\` by a developer that FAILED (${rescued}) — `
             + "that was never an attempt, so it is offered again",
           );
-          pending.push(planned);
+          // gh #366: the same gap #361 fixed one branch below — see that
+          // comment for the mechanism. This release is a fact about the
+          // developer's SPAWN the instant it is recognised, not about whether
+          // this pass also finds time to attempt the story.
+          this.releaseBlockedStory(pending, planned);
           continue;
         }
         // A row THIS loop blocked for a dependency that has since landed is not a
@@ -914,8 +918,7 @@ class BuildSession {
           // the DEPENDENCY the instant it is decided, not about whether THIS
           // pass also finds time to attempt the story — so it is persisted now,
           // and `driveStory` still owns whatever verdict the attempt itself earns.
-          this.setStoryStatus(planned, "todo");
-          pending.push(planned);
+          this.releaseBlockedStory(pending, planned);
           continue;
         }
         if (status === "done" || status === "blocked") {
@@ -5431,6 +5434,24 @@ class BuildSession {
       ? updateImplicitPlan(text, { status, evidence })
       : updateStoryFront(text, { status, evidence });
     writeFileSync(planned.path, patched, "utf8");
+  }
+
+  /**
+   * The one shared step both `blocked` releases in the wave loop end with
+   * (gh #361, gh #366): write the release to the story file the INSTANT it is
+   * decided, then offer the story its turn. Both `blockedByFailedDeveloper`
+   * (a developer that never ran) and `staleDependencyHold` (a dependency now
+   * `done`) only ever decided this on the wave loop's own read, and the write
+   * used to be left for `driveStory` to make later — which never happens when
+   * `driveStory`'s very first act, the gh #298 rate-limit park, returns before
+   * any write because the wall is already up from an earlier story's turn in
+   * the same pass. A release decided but never written left the story exactly
+   * where it started, `blocked`, forever — this is the one place either kind
+   * of release becomes durable, so a park right after can never undo it.
+   */
+  private releaseBlockedStory(pending: PlannedStory[], planned: PlannedStory): void {
+    this.setStoryStatus(planned, "todo");
+    pending.push(planned);
   }
 
   /**

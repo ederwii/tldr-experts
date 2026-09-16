@@ -4783,6 +4783,85 @@ describe("a story whose dependency is at `review` waits instead of blocking (gh 
     expect(story(ws, "S2")).toContain("status: todo");
   }, 90_000);
 
+  /**
+   * gh #366 — the RESCUE release has the identical gap #361 fixed, one branch
+   * above it in the wave loop (build.ts:~800, just above `staleDependencyHold`):
+   * deciding `blockedByFailedDeveloper(planned) !== null` only pushed the story
+   * onto `pending` and logged a line — nothing wrote `todo` to the story file
+   * until `driveStory` itself settled an attempt, and `driveStory`'s very first
+   * check is the same gh #298 rate-limit park #361 fixed for the dependency
+   * release. A story rescued from a dead-developer block, then parked by the
+   * wall before its own turn, is left exactly where it started: `blocked` on
+   * disk, with no record it was ever offered again.
+   */
+  function rewriteAsOldCode(ws: BuildWorkspace, storyId: string): void {
+    const path = join(ws.runDir, "events.jsonl");
+    const kept: string[] = [];
+    for (const line of readFileSync(path, "utf8").split("\n")) {
+      if (line.trim() === "") continue;
+      const event = JSON.parse(line) as { type?: string; payload?: Record<string, unknown> };
+      const payload = event.payload ?? {};
+      if (event.type === "check.failed" && payload.check === "developer" && payload.story === storyId) continue;
+      if (event.type === "task.done" && payload.story === storyId) payload.status = "blocked";
+      kept.push(JSON.stringify(event));
+    }
+    writeFileSync(path, `${kept.join("\n")}\n`, "utf8");
+    const storyPath = join(ws.planDir, "stories", `${storyId}.md`);
+    writeFileSync(storyPath, readFileSync(storyPath, "utf8").replace(/^status: .*$/m, "status: blocked"), "utf8");
+  }
+
+  test("a story rescued from a dead developer the rate-limit wall parks before its own turn still lands `todo`, not left `blocked` (gh #366)", async () => {
+    const ws = workspace({
+      stories: [
+        { id: "S1", epic: "E1", title: "First" },
+        // No `dependsOn`: S2 must be attempted in the SAME invocation as S1 so
+        // its developer failure is a REAL recorded event, not a hand-written
+        // one — a dependency on S1 (still `review` after `parkS1AtReview`)
+        // would hold S2 back before it ever got a turn.
+        { id: "S2", epic: "E1", title: "Second, in the next wave" },
+      ],
+      epics: [{ id: "E1", stories: ["S1", "S2"], branch: "epic/e1" }],
+      waves: [["S1"], ["S2"]],
+    });
+    parkS1AtReview();
+    process.env.FAKE_BUILD_FAIL = "reviewer:S1#1,developer:S2#1";
+
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: review");
+    // The park itself is unchanged: a developer that never ran leaves S2 where
+    // it started.
+    expect(story(ws, "S2")).toContain("status: todo");
+
+    // The shape a run recorded by the OLD code (pre-2026-08-30) left on disk,
+    // and the one `blockedByFailedDeveloper`'s COMPAT read still recognises.
+    rewriteAsOldCode(ws, "S2");
+    expect(story(ws, "S2")).toContain("status: blocked");
+
+    // S2's ONE real attempt (invocation 1's spawn error) is on the record
+    // already — `started()` alone can't tell that apart from a second one, so
+    // the count is what proves invocation 2 spawned nothing more.
+    const attemptsSoFar = events(ws).filter((e) => e.type === "task.started" && e.payload.story === "S2").length;
+    expect(attemptsSoFar).toBe(1);
+
+    reenter(ws, "the reviewer died");
+    // gh #298: S1's re-review carries the provider's quota warning — the wall
+    // arrives on S1's own turn, in wave 1, before S2 (about to be rescued in
+    // wave 2) gets its own turn in the same pass.
+    process.env.FAKE_BUILD_RATE_LIMIT = JSON.stringify({ S1: "allowed_warning@0.94" });
+    const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: done");
+    // The park, not a verdict: S2 was never attempted this pass either — its
+    // `task.started` count stays exactly where invocation 1 left it.
+    expect(events(ws).filter((e) => e.type === "task.started" && e.payload.story === "S2").length).toBe(1);
+    const said = again.lines.join("\n");
+    expect(said).toContain("S2 was `blocked` by a developer that FAILED");
+    expect(said).toContain("the provider warned its rate limit was close");
+    // THE DEFECT: the rescue was decided and reported, but nothing on disk
+    // says so — S2 must not still read `blocked` once this invocation exits.
+    expect(story(ws, "S2")).toContain("status: todo");
+  }, 90_000);
+
   test("the recorded sentence is read back by the one function that writes it — and nothing else is", () => {
     // Both shapes `blockOnDependency` writes round-trip.
     expect(dependencyNamedByHold(dependencyHoldReason({ id: "S7", status: "blocked" }))).toBe("S7");
