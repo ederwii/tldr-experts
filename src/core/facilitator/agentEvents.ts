@@ -167,6 +167,14 @@ export function resolveResultDoc(stdout: string): Record<string, unknown> | null
   return null;
 }
 
+/**
+ * What `resolveCodexResultDoc` says when a turn COMPLETED but its structured
+ * envelope did not parse. Exported (gh #348) so `spawnAgent.ts`'s failure
+ * classifier can name this exact shape `malformed_result` by matching the one
+ * string this function writes, rather than a second copy of the sentence.
+ */
+export const CODEX_ENVELOPE_UNREADABLE = "the Codex structured output envelope was unreadable";
+
 /** Normalize a completed Codex JSONL turn into the result shape the facilitator consumes. */
 export function resolveCodexResultDoc(stdout: string): Record<string, unknown> | null {
   let threadId: string | null = null;
@@ -195,7 +203,7 @@ export function resolveCodexResultDoc(stdout: string): Record<string, unknown> |
     if (parsed !== null) structured = parsed;
   }
   if (completed && structured === null && failure === null) {
-    failure = "the Codex structured output envelope was unreadable";
+    failure = CODEX_ENVELOPE_UNREADABLE;
   }
   if (!completed && failure === null) return null;
   return {

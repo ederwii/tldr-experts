@@ -841,6 +841,8 @@ async function runStage(
     // unless a cap actually bit. "It ran out of reads" and "it crashed" are
     // different stories and the file has to be able to tell them apart.
     stopped_by: agent.stoppedBy,
+    // A named cause for a failed turn (gh #348), same absence rule as `stopped_by`.
+    failure_kind: agent.failureKind,
     ...tokenSplit(agent.usage.input_tokens, agent.usage.output_tokens),
     // The other two counters the same `usage` reported (#222). Separately gated:
     // see `cacheSplit` for why a cache read is not half of anything.
@@ -862,6 +864,7 @@ async function runStage(
     reads: agent.reads,
     max_reads: maxReads,
     stopped_by: agent.stoppedBy,
+    ...(agent.failureKind === null ? {} : { failure_kind: agent.failureKind }),
     tldrx_version: version,
     duration_ms: agent.durationMs,
     duration_basis: "spawned",
@@ -3332,6 +3335,8 @@ async function planFixRound(
     ended_at: nowish(options),
     outputs: agent.envelope?.outputs ?? [],
     stopped_by: agent.stoppedBy,
+    // A named cause for a failed turn (gh #348), same absence rule as `stopped_by`.
+    failure_kind: agent.failureKind,
     ...tokenSplit(agent.usage.input_tokens, agent.usage.output_tokens),
     ...cacheSplit(agent.usage.cache_creation_input_tokens, agent.usage.cache_read_input_tokens),
     duration_ms: agent.durationMs,
@@ -3353,6 +3358,7 @@ async function planFixRound(
     ...(agent.metered ? {} : { metered: false }),
     usage: usagePayload(agent.usage),
     ...(agent.error === null ? {} : { error: agent.error }),
+    ...(agent.failureKind === null ? {} : { failure_kind: agent.failureKind }),
   }, agent.metered ? round2(agent.costUsd) : 0, PLAN_FIX_ROLE);
   // WHY that turn happened, beside the rows that hold what it cost. `cost_usd: 0`
   // on this envelope is not a claim that the round was free — `task` names the row
@@ -3491,6 +3497,8 @@ async function signGate(
     ended_at: nowish(options),
     outputs: agent.envelope?.outputs ?? [],
     stopped_by: agent.stoppedBy,
+    // A named cause for a failed turn (gh #348), same absence rule as `stopped_by`.
+    failure_kind: agent.failureKind,
     ...tokenSplit(agent.usage.input_tokens, agent.usage.output_tokens),
     // The other two counters the same `usage` reported (#222). Separately gated:
     // see `cacheSplit` for why a cache read is not half of anything.
@@ -3521,6 +3529,7 @@ async function signGate(
     ...(agent.metered ? {} : { metered: false }),
     usage: usagePayload(agent.usage),
     ...(agent.error === null ? {} : { error: agent.error }),
+    ...(agent.failureKind === null ? {} : { failure_kind: agent.failureKind }),
   }, agent.metered ? round2(agent.costUsd) : 0, GATE_SIGNER_ROLE);
   store.save();
   return after;

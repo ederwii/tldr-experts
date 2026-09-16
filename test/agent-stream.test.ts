@@ -14,7 +14,7 @@ import {
   AgentStream, detectStreamFormat, permissionRefusal, resolveCodexResultDoc, resolveResultDoc, toolTarget,
   type AgentEvent,
 } from "../src/core/facilitator/agentEvents.ts";
-import { interpret } from "../src/core/facilitator/spawnAgent.ts";
+import { classifyRateLimit, interpret } from "../src/core/facilitator/spawnAgent.ts";
 import { codexOutput } from "../src/core/facilitator/fakeTranscript.ts";
 import { readCapError } from "../src/core/facilitator/readCap.ts";
 import { LineSplitter } from "../src/core/runtime/lineSplitter.ts";
@@ -355,6 +355,169 @@ describe("interpret, over either format", () => {
     const line = JSON.stringify({ type: "result", is_error: false, session_id: "s3", errors: [] });
     expect(interpret(1, line, "", false).error)
       .toBe("claude exited 1 with is_error=false: no reason named");
+  });
+});
+
+/**
+ * `failureKind` (gh #348) — the family of #341/#298. A named cause on the SAME
+ * failure `describeFailure` already renders text for, from the same branches
+ * (one derivation, AGENTS.md §7), null on every ok outcome and every outcome
+ * this repo cannot mechanically distinguish further (`unclassified`, which
+ * still carries the raw signal in `error`).
+ */
+describe("failureKind (gh #348) — a named cause beside the free-text error", () => {
+  test("ok outcomes carry no failure kind", () => {
+    expect(interpret(0, TRANSCRIPT, "", false).failureKind).toBeNull();
+  });
+
+  test("a timeout is classified before anything else, even a signal exit code", () => {
+    const outcome = interpret(143, "", "", true);
+    expect(outcome.failureKind).toBe("timeout");
+  });
+
+  test("a Codex timeout is classified the same way", () => {
+    expect(interpret(143, "", "", true, "codex").failureKind).toBe("timeout");
+  });
+
+  test("exit 137/143 with no result document is a killed process, not a bare non-zero exit", () => {
+    const killed = interpret(137, "", "some tail of stderr", false);
+    expect(killed.ok).toBe(false);
+    expect(killed.failureKind).toBe("process_killed");
+    expect(killed.error).toContain("SIGKILL");
+    expect(killed.error).toContain("some tail of stderr");
+
+    const termed = interpret(143, "", "", false);
+    expect(termed.failureKind).toBe("process_killed");
+    expect(termed.error).toContain("SIGTERM");
+  });
+
+  test("a clean exit with no parseable result is an EMPTY result, not a crash", () => {
+    const outcome = interpret(0, "", "", false);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.failureKind).toBe("empty_result");
+  });
+
+  test("a non-zero exit with no parseable result at all is a NON-ZERO EXIT, not empty", () => {
+    const outcome = interpret(1, "", "claude: command not found", false);
+    expect(outcome.failureKind).toBe("non_zero_exit");
+  });
+
+  test("a Codex stream with no completed turn and a non-zero exit is a non-zero exit", () => {
+    const stdout = '{"type":"thread.started","thread_id":"session-only"}\n';
+    expect(interpret(1, stdout, "", false, "codex").failureKind).toBe("non_zero_exit");
+  });
+
+  test("a named provider error is a non-zero exit, never merely 'unclassified'", () => {
+    const withError = JSON.stringify({
+      type: "result", subtype: "success", is_error: true, session_id: "s1",
+      errors: ["Reached maximum budget ($0.26)"],
+    });
+    expect(interpret(1, withError, "", false).failureKind).toBe("non_zero_exit");
+  });
+
+  test("a disagreeing subtype with no named error is a non-zero exit", () => {
+    const errorSubtype = JSON.stringify({
+      type: "result", subtype: "error_during_execution", is_error: true, session_id: "s2", errors: [],
+    });
+    expect(interpret(1, errorSubtype, "", false).failureKind).toBe("non_zero_exit");
+  });
+
+  test("no reason named at all — including the #296 contradiction — is UNCLASSIFIED", () => {
+    const noReason = JSON.stringify({ type: "result", is_error: false, session_id: "s3", errors: [] });
+    expect(interpret(1, noReason, "", false).failureKind).toBe("unclassified");
+
+    const contradicts = JSON.stringify({
+      type: "result", subtype: "success", is_error: true,
+      result: "", session_id: "sess-limit", total_cost_usd: 0.8,
+      usage: { input_tokens: 5, output_tokens: 1 }, errors: [],
+    });
+    expect(interpret(1, contradicts, "", false).failureKind).toBe("unclassified");
+  });
+
+  /**
+   * `resolveResultDoc`'s whole-buffer branch (`agentEvents.ts`) accepts ANY
+   * parseable JSON object, not only one whose `type` is `"result"` — real
+   * `stream-json` output never produces the other shape, but a caller that
+   * fed `interpret` a whole buffer with no `type` field at all is exactly the
+   * case #348 asks to be named MALFORMED rather than folded into
+   * `unclassified` beside an honest empty verdict.
+   */
+  test("a whole-buffer doc that never carried type:\"result\" is a MALFORMED result", () => {
+    const bareObject = JSON.stringify({ is_error: false, session_id: "s4" });
+    const outcome = interpret(1, bareObject, "", false);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.failureKind).toBe("malformed_result");
+  });
+
+  test("Codex's own 'envelope was unreadable' sentinel is a MALFORMED result, not a generic non-zero exit", () => {
+    const stdout = [
+      '{"type":"thread.started","thread_id":"bad-envelope"}',
+      '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"```json\\n{\\\"outputs\\\":[]}\\n```"}}',
+      '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}',
+    ].join("\n");
+    const outcome = interpret(0, stdout, "", false, "codex");
+    expect(outcome.ok).toBe(false);
+    expect(outcome.failureKind).toBe("malformed_result");
+  });
+});
+
+/**
+ * `classifyRateLimit` (gh #348) — the override only `spawnAgent` can apply,
+ * because only it has watched the stream for `rate_limit_event` frames
+ * (`AgentOutcome.rateLimit`, gh #298). `interpret()` alone can never produce
+ * `"rate_limit"`, which is exactly why this is tested against the pure
+ * function rather than against a second, redundant detector inside `describeFailure`.
+ */
+describe("classifyRateLimit (gh #348) — reuses gh #298's own frame, invents no new detector", () => {
+  function failedOutcome(): ReturnType<typeof interpret> {
+    return interpret(1, JSON.stringify({ type: "result", is_error: true, session_id: "s1", errors: [] }), "", false);
+  }
+
+  test("a non-allowed last frame beside an ordinary failure becomes rate_limit", () => {
+    const outcome = failedOutcome();
+    expect(outcome.failureKind).toBe("unclassified");
+    const classified = classifyRateLimit({
+      ...outcome, rateLimit: { status: "allowed_warning", window: "five_hour", utilization: 0.94, resetsAt: 1789364400 },
+    });
+    expect(classified.failureKind).toBe("rate_limit");
+  });
+
+  test("an 'allowed' last frame is not evidence of anything — the failure keeps its own kind", () => {
+    const outcome = failedOutcome();
+    const classified = classifyRateLimit({
+      ...outcome, rateLimit: { status: "allowed", window: "five_hour", utilization: 0.03, resetsAt: 1788065400 },
+    });
+    expect(classified.failureKind).toBe("unclassified");
+  });
+
+  test("no frame at all leaves the outcome exactly as interpret produced it", () => {
+    const outcome = failedOutcome();
+    expect(classifyRateLimit(outcome)).toEqual(outcome);
+  });
+
+  test("a successful outcome is never reclassified, even beside a non-allowed frame", () => {
+    const ok = interpret(0, TRANSCRIPT, "", false);
+    const classified = classifyRateLimit({
+      ...ok, rateLimit: { status: "allowed_warning", window: "five_hour", utilization: 0.94, resetsAt: null },
+    });
+    expect(classified.failureKind).toBeNull();
+  });
+
+  test("a timed-out turn keeps failureKind:\"timeout\" even beside a non-allowed frame", () => {
+    const timedOut = interpret(143, "", "", true);
+    const classified = classifyRateLimit({
+      ...timedOut, rateLimit: { status: "allowed_warning", window: "five_hour", utilization: 0.94, resetsAt: null },
+    });
+    expect(classified.failureKind).toBe("timeout");
+  });
+
+  test("a read-cap kill (stoppedBy set) is never reclassified — it already names itself", () => {
+    const outcome = failedOutcome();
+    const capped = { ...outcome, stoppedBy: "max_reads", failureKind: null };
+    const classified = classifyRateLimit({
+      ...capped, rateLimit: { status: "allowed_warning", window: "five_hour", utilization: 0.94, resetsAt: null },
+    });
+    expect(classified.failureKind).toBeNull();
   });
 });
 

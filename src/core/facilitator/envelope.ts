@@ -71,6 +71,14 @@ export interface ClaudeResultJson {
   readonly is_error?: unknown;
   readonly subtype?: unknown;
   readonly errors?: unknown;
+  /**
+   * The JSONL event tag (`"result"` on every doc `resolveResultDoc`'s stream
+   * branch returns). ADDITIVE (gh #348): only `resolveResultDoc`'s whole-buffer
+   * fallback can hand `interpret` a parsed object that lacks this or carries some
+   * other value — real `stream-json` output never does — and that shape is
+   * exactly what `spawnAgent.ts`'s `describeFailure` calls `malformed_result`.
+   */
+  readonly type?: unknown;
 }
 
 export interface AgentUsage {

@@ -31,7 +31,8 @@ import { codexSchema } from "./codexSchema.ts";
 import { emitAgentEvent } from "../ui/bus.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import {
-  AgentStream, permissionRefusal, resolveCodexResultDoc, resolveResultDoc, type AgentEvent,
+  AgentStream, CODEX_ENVELOPE_UNREADABLE, permissionRefusal, resolveCodexResultDoc, resolveResultDoc,
+  type AgentEvent,
 } from "./agentEvents.ts";
 import { isReadTool, readCapError, STOPPED_BY_MAX_READS } from "./readCap.ts";
 import { subagentEnv } from "./subagent.ts";
@@ -159,6 +160,52 @@ export interface AgentRequest {
  */
 export type AgentRateLimit = Omit<Extract<AgentEvent, { kind: "rate-limit" }>, "kind">;
 
+/**
+ * Why a turn failed, named — the family of gh #341/#298 (gh #348).
+ *
+ * MEASURED (the field audit notes, workspace B, 2026-09-15): 24 of 54 failed
+ * tasks in one sample were "turno de agente con timeout / error genérico" —
+ * the largest single bucket in the data, 2.4x the next cause, and entirely
+ * unnamed. Every value here is derived from a shape `describeFailure` (or, for
+ * `rate_limit`, `spawnAgent` itself) can already tell apart mechanically —
+ * nothing here is a new detector, and nothing here decides a retry.
+ *
+ *  - `"timeout"` — the stage's `timeout_s` killed the process (`AgentOutcome.timedOut`).
+ *  - `"rate_limit"` — reuses gh #298's own detection: the LAST `rate_limit_event`
+ *    frame the stream carried (`AgentOutcome.rateLimit`) named a `status` other
+ *    than `"allowed"`. What that status reads when the wall is actually HIT is
+ *    still unattested (gh #341) — this never invents that string, it only
+ *    trusts the one the provider already sent and this repo already parses.
+ *  - `"process_killed"` — the exit code is the `128 + signal` shape
+ *    `nodeRuntime.ts`'s `exitCodeOf` writes for SIGKILL/SIGTERM, and the death
+ *    was not the stage's own timeout and not the read cap (which already names
+ *    itself via `stoppedBy` — see `AgentOutcome.stoppedBy`'s doc).
+ *  - `"empty_result"` — the process exited `0` and produced nothing this file
+ *    can parse as a result event at all.
+ *  - `"non_zero_exit"` — a non-zero exit, with or without a document: either
+ *    nothing parsed, or a document parsed and named its own reason (an
+ *    `errors[]` entry or a disagreeing `subtype`) — the common, ordinary case.
+ *  - `"malformed_result"` — a document parsed, but not into a real result
+ *    event: Codex's own "envelope was unreadable" sentinel, or (Claude)
+ *    `resolveResultDoc`'s whole-buffer fallback accepted JSON whose `type` was
+ *    never `"result"`.
+ *  - `"unclassified"` — a document parsed, named nothing, and none of the
+ *    shapes above applies. `AgentOutcome.error` still carries the raw signal
+ *    seen (the exit code, `is_error`, and any subtype), so nothing is lost —
+ *    this is the value gh #348 exists to shrink, not a place to guess.
+ *
+ * `null` on every outcome where `ok` is `true` and on a read-cap kill (see
+ * `stoppedBy`, which already names that death in full).
+ */
+export type AgentFailureKind =
+  | "timeout"
+  | "rate_limit"
+  | "process_killed"
+  | "empty_result"
+  | "non_zero_exit"
+  | "malformed_result"
+  | "unclassified";
+
 export interface AgentOutcome {
   readonly ok: boolean;
   readonly exitCode: number;
@@ -232,6 +279,13 @@ export interface AgentOutcome {
   readonly rateLimit: AgentRateLimit | null;
   /** `"max_reads"` when the read cap stopped this run, else null. */
   readonly stoppedBy: string | null;
+  /**
+   * A named cause for a failed turn (gh #348), or null on success and on a
+   * read-cap kill — `stoppedBy` already names that one in full, and a second
+   * account of the same event would be redundant rather than additive. See
+   * `AgentFailureKind` for what each value means and how it was derived.
+   */
+  readonly failureKind: AgentFailureKind | null;
   /**
    * The sub-agent's turn, in milliseconds: the clock wraps `runtime.spawn` plus
    * its immediate setup and teardown — the schema temp dir, the argv, and the
@@ -487,14 +541,18 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
       stoppedBy: STOPPED_BY_MAX_READS,
       // The cap is the reason, whatever the dying process said on its way out.
       error: readCapError(reads, cap, provider),
+      // `stoppedBy` already names this in full (gh #348): a deliberate cap-kill
+      // is not one more entry in the failure taxonomy, and a `failureKind` here
+      // would be a second, redundant account of the same one event.
+      failureKind: null,
     }
     : { ...interpreted, reads, stoppedBy: null };
-  const timed: AgentOutcome = {
+  const timed: AgentOutcome = classifyRateLimit({
     ...outcome,
     ...partialUsage(outcome, streamedUsage),
     rateLimit: lastRateLimit,
     durationMs: Math.max(0, Date.now() - startedMs),
-  };
+  });
   // A process that died before its `result` event never emitted `done`. Say so,
   // so the view stops on a failure rather than on a frozen last frame.
   if (!outcome.ok && outcome.error !== null && !capped) {
@@ -530,6 +588,32 @@ function partialUsage(
 }
 
 /**
+ * Reuses gh #298's OWN detection — the last `rate_limit_event` frame the stream
+ * carried — to name a failed turn's cause `"rate_limit"` (gh #348), rather than
+ * whatever `describeFailure` guessed from the exit code and result document
+ * alone. No second detector: this reads the exact field `spawnAgent` already
+ * populates from the stream, and only from it.
+ *
+ * Silent on a turn that timed out or hit the read cap: both already have a
+ * more specific, already-true account of their own death (`timedOut`,
+ * `stoppedBy`), and a rate-limit frame arriving beside either is not evidence
+ * that the QUOTA is what ended the turn — only that the quota was ALSO being
+ * reported, the same way it is on a turn that finishes normally (`stream-json.jsonl:9`,
+ * status `"allowed"`, utilization 0.03).
+ *
+ * `status !== "allowed"` is the only comparison made, on purpose: what the
+ * provider's `status` reads at the moment the wall is actually HIT is
+ * unattested anywhere in this repo (gh #341) — `"allowed_warning"` is the one
+ * non-`"allowed"` value ever measured, and inventing a second string to
+ * compare against would be exactly the guess AGENTS.md §7 forbids.
+ */
+export function classifyRateLimit(outcome: AgentOutcome): AgentOutcome {
+  if (outcome.ok || outcome.timedOut || outcome.stoppedBy !== null) return outcome;
+  if (outcome.rateLimit === null || outcome.rateLimit.status === "allowed") return outcome;
+  return { ...outcome, failureKind: "rate_limit" };
+}
+
+/**
  * Turn a finished process into a result. Exported so a test can exercise every
  * failure shape — a broken JSON body, a non-zero exit, `is_error: true` — without
  * a process to break.
@@ -561,6 +645,7 @@ export function interpret(
   const envelope = toEnvelope(doc?.structured_output);
   const result = typeof doc?.result === "string" ? doc.result : "";
   const ok = exitCode === 0 && !isError && !timedOut && doc !== null;
+  const failure = ok ? null : describeFailure(exitCode, doc, stderr, timedOut, stdout, provider);
 
   return {
     ok, exitCode, timedOut, isError, sessionId, costUsd, metered, usage,
@@ -571,7 +656,7 @@ export function interpret(
     unmeteredReason: null,
     envelope,
     structured: doc?.structured_output ?? null, result,
-    error: ok ? null : describe(exitCode, doc, stderr, timedOut, stdout, provider),
+    error: failure?.error ?? null,
     raw: stdout,
     permissionRefusal: permissionRefusal(stdout, provider),
     reads: 0,
@@ -580,6 +665,7 @@ export function interpret(
     // past, can fill this in — and it does, below.
     rateLimit: null,
     stoppedBy: null,
+    failureKind: failure?.kind ?? null,
     // Not measurable from here — see `AgentOutcome.durationMs`. `spawnAgent`
     // overwrites it with the span it timed; a direct caller of `interpret` (only
     // the tests) gets a `0` that nothing writes to a ledger.
@@ -587,20 +673,56 @@ export function interpret(
   };
 }
 
-function describe(
+/** The signal a `runtime.spawn` exit code names, per `nodeRuntime.ts`'s `exitCodeOf`: Node reports a signalled
+ *  death as `code: null` (translated upstream to `1` there for anything but these two), Bun as `128 + signal`. */
+function killSignal(exitCode: number): "SIGKILL" | "SIGTERM" | null {
+  return exitCode === 137 ? "SIGKILL" : exitCode === 143 ? "SIGTERM" : null;
+}
+
+/**
+ * `AgentOutcome.error`'s text and `AgentOutcome.failureKind`'s value (gh #348),
+ * from the SAME branches — one derivation, not two accounts that could drift
+ * apart (AGENTS.md §7). Called only when `ok` is false.
+ */
+function describeFailure(
   exitCode: number,
   doc: ClaudeResultJson | null,
   stderr: string,
   timedOut: boolean,
   stdout: string,
   provider: AgentProvider,
-): string {
+): { readonly error: string; readonly kind: AgentFailureKind } {
   const name = provider === "codex" ? "codex" : "claude";
-  if (timedOut) return `${name} timed out (killed after the stage's timeout_s)`;
+  if (timedOut) {
+    return { error: `${name} timed out (killed after the stage's timeout_s)`, kind: "timeout" };
+  }
+  const signal = killSignal(exitCode);
+  if (signal !== null) {
+    const tail = firstLine(stderr) || firstLine(stdout) || "(no output)";
+    return {
+      error: `${name} was killed (${signal}, exit ${exitCode}) before it produced a result: ${tail}`,
+      kind: "process_killed",
+    };
+  }
   if (doc === null) {
     const tail = firstLine(stderr) || firstLine(stdout) || "(no output)";
-    return `${name} exited ${exitCode} without a parseable result event: ${tail}`;
+    return {
+      error: `${name} exited ${exitCode} without a parseable result event: ${tail}`,
+      // exitCode 0 with nothing parseable is a clean process that wrote
+      // nothing this file can read as a result — an EMPTY result, not a
+      // crash. Anything else is an ordinary non-zero death with no document
+      // to say more.
+      kind: exitCode === 0 ? "empty_result" : "non_zero_exit",
+    };
   }
+  // A document parsed, but not into a real result event: Codex's own sentinel
+  // for an unreadable envelope, or (Claude) `resolveResultDoc`'s whole-buffer
+  // fallback accepting JSON whose `type` was never `"result"` — the JSONL
+  // branch it prefers already filters on that tag, so only that fallback path
+  // can hand this function a document shaped like this.
+  const malformed = provider === "codex"
+    ? Array.isArray(doc.errors) && doc.errors[0] === CODEX_ENVELOPE_UNREADABLE
+    : doc.type !== "result";
   const errors = Array.isArray(doc.errors) ? (doc.errors as unknown[]).filter((e) => typeof e === "string") : [];
   const verdict = `${name} exited ${exitCode} with is_error=${String(doc.is_error === true)}`;
   // Codex names its refusal in a pretty-printed block — `{\n  code: invalid_json_schema,\n
@@ -610,19 +732,26 @@ function describe(
   // and the WHY is two lines down (#148). Claude's text is passed through untouched.
   const flatten = (text: string): string => (provider === "codex" ? text.replace(/\s+/g, " ").trim() : text);
   const named = flatten(typeof errors[0] === "string" ? (errors[0] as string) : "");
-  if (named !== "") return `${verdict}: ${named}`;
+  if (named !== "") {
+    return { error: `${verdict}: ${named}`, kind: malformed ? "malformed_result" : "non_zero_exit" };
+  }
   const subtype = typeof doc.subtype === "string" ? doc.subtype : "";
-  if (subtype !== "" && !SUCCESS_SUBTYPES.has(subtype)) return `${verdict}: ${subtype}`;
+  if (subtype !== "" && !SUCCESS_SUBTYPES.has(subtype)) {
+    return { error: `${verdict}: ${subtype}`, kind: malformed ? "malformed_result" : "non_zero_exit" };
+  }
   // Nothing here can name WHY. Say that, and — when the provider's own subtype is
   // the thing that disagrees — say that too, rather than dropping either half.
   const contradiction = subtype === "" ? "" : ` (the provider's own subtype said "${subtype}")`;
-  return `${verdict}: no reason named${contradiction}`;
+  return {
+    error: `${verdict}: no reason named${contradiction}`,
+    kind: malformed ? "malformed_result" : "unclassified",
+  };
 }
 
 /**
  * Provider subtypes that assert the turn SUCCEEDED.
  *
- * `describe()` is reached only when `ok` is false (`interpret`, `:529`/`:540`), so
+ * `describeFailure()` is reached only when `ok` is false (`interpret`), so
  * one of these on the result document is not this failure's reason — it is a
  * SECOND, contradicting verdict. MEASURED (gh #296, two live unattended runs,
  * 2026-09-13): a turn that died against the account's usage limit parsed with

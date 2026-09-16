@@ -222,6 +222,19 @@ export interface RunTask {
    * apart.
    */
   readonly stopped_by?: string | null;
+  /**
+   * A named cause for a FAILED turn (gh #348, the family of #341/#298):
+   * `"timeout"`, `"rate_limit"`, `"process_killed"`, `"empty_result"`,
+   * `"non_zero_exit"`, `"malformed_result"`, or `"unclassified"` — see
+   * `AgentFailureKind` (`spawnAgent.ts`) for what each one means and how it
+   * is derived. ADDITIVE and optional: absent on every row written before
+   * this key existed, on every row that finished `ok`, and on a read-cap
+   * kill (`stopped_by` already names that death in full — a second account
+   * of the same event would not be additive information). Classification
+   * only, never a retry decision: this key does not change whether or how
+   * often a stage is retried.
+   */
+  readonly failure_kind?: string | null;
   /** Tokens the host declared with `--tokens`, when it knew them. */
   readonly tokens?: number;
   /**

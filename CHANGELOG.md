@@ -78,6 +78,15 @@
   is unaffected — the file is simply not asked for anymore, never flagged as missing or
   re-demanded on resume.
 
+- **A failed sub-agent turn now carries a named `failure_kind`** — `timeout`, `rate_limit`
+  (reusing #298's own quota-frame detection), `process_killed`, `empty_result`, `non_zero_exit`,
+  `malformed_result`, or `unclassified` (with the raw signal still in `error`) — on the task row
+  and the `agent.result` event, additive and absent on every ordinary/successful turn and on a
+  read-cap kill (`stopped_by` already names that one). Measured, one field audit (workspace B,
+  2026-09-15): 24 of 54 failed tasks in that sample were an undifferentiated "timeout / generic
+  error" — the largest single bucket, unnamed until now. Classification only: no new retry
+  budgets, and nothing decides a retry off this field (#348, the family of #341/#298).
+
 ### Fixed
 
 - **A headless turn whose parent `tldrx` process is SIGKILL-class killed mid-spawn now banks its
