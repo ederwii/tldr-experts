@@ -174,6 +174,19 @@ export interface Workspace {
   readonly seed_triage?: SeedTriageSettings;
   readonly stack_packs?: StackPacksSettings;
   readonly notify?: NotifySettings;
+  /**
+   * `probe_in_worktree:` — gh #371, workspace-wide, additive, absent means off (the
+   * default: the base pre-flight measures the checkout only, exactly as before this
+   * key existed). When `true`, the base pre-flight's declared DoD commands are ALSO
+   * measured a second time, once per repo, inside a fresh detached worktree of the
+   * base sha — in addition to the checkout reading, never instead of it — so an
+   * environmental red that only shows up in a story's own worktree shape (#363's own
+   * declined scope: a `.git` FILE vs. a `.git` directory is the measured case) is
+   * caught before the first story opens rather than after one pays for it. Both
+   * readings are kept, distinguished by the existing `tree:` field on a
+   * `04-build/preflight.yml` row (`checkout` vs. `worktree`).
+   */
+  readonly probe_in_worktree?: boolean;
 }
 
 export function validateWorkspace(input: unknown): ValidationResult {
@@ -225,6 +238,9 @@ export function validateWorkspace(input: unknown): ValidationResult {
     }
   }
   if (doc.notify !== undefined) issues.push(...notifyIssues(doc.notify, "notify"));
+  if (doc.probe_in_worktree !== undefined && typeof doc.probe_in_worktree !== "boolean") {
+    issues.push({ path: "probe_in_worktree", message: "expected a boolean" });
+  }
   return result(issues, deprecations);
 }
 

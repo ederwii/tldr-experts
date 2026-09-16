@@ -136,6 +136,15 @@ export interface WorkspaceContext {
    * workspace.yml answers every question about it.
    */
   readonly seedTriageThresholdTokens: number | null;
+  /**
+   * `probe_in_worktree: true` — gh #371, workspace-wide. Off (`false`) for every
+   * `workspace.yml` written before this key existed, which is the behavior this
+   * flag must never change when absent: the base pre-flight measures the checkout
+   * only. On, the base pre-flight ALSO measures its declared commands in a fresh
+   * worktree of the base sha, once per repo, kept beside the checkout row under
+   * the same `tree:` field rather than replacing it — see `dodRunner.ts`.
+   */
+  readonly probeInWorktree: boolean;
 }
 
 interface RawRepo {
@@ -220,9 +229,10 @@ export function loadWorkspace(root: string): WorkspaceContext {
   const scopedTemplates = new Set<string>();
   const defaultBranches = new Map<string, string>();
   let seedTriageThresholdTokens: number | null = null;
+  let probeInWorktree = false;
   const empty = (): WorkspaceContext => ({
     root, repos, commands, repoCommands, commandRoles, commandProbes, iterationCommands,
-    scopedCommands, scopedTemplates, defaultBranches, seedTriageThresholdTokens,
+    scopedCommands, scopedTemplates, defaultBranches, seedTriageThresholdTokens, probeInWorktree,
   });
   const path = join(root, PROJECT_FRAMEWORK_DIR, "workspace.yml");
   if (!existsSync(path)) return empty();
@@ -239,6 +249,8 @@ export function loadWorkspace(root: string): WorkspaceContext {
       seedTriageThresholdTokens = tokens;
     }
   }
+  // gh #371: workspace-wide, additive, absent (or anything but a literal `true`) means off.
+  if ((doc as { probe_in_worktree?: unknown } | null)?.probe_in_worktree === true) probeInWorktree = true;
   const list = (doc as { repos?: unknown } | null)?.repos;
   if (!Array.isArray(list)) return empty();
   const declared = commandRolesOf(doc);

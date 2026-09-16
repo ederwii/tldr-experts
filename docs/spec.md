@@ -116,13 +116,15 @@ notify:                      # optional: the ONE command a run may tell a person
 | `repos[].skills[].{name,description,path,tracked}` | str / str / rel path / bool | n | The repo's own `.claude/skills/*/SKILL.md`, named to the developer and never loaded by tldrx. `name`/`description` come from the skill's own front matter; `path` is repo-relative; `tracked: false` (nothing in `git ls-files`) ⇒ absent from story worktrees, which carry tracked files only. Always written, independent of the switch |
 | `notify.{command,events,timeout_s}` | str / kind[] / int | n | **Additive, and never detected.** The owner's own command, run at every moment `tldrx run auto` needs a person, with one `version: 1` JSON payload on stdin. Held to §2.1's command rule exactly — split to argv, no shell opened, a bare metacharacter refused — because it is run as the user like every other declared command. `events` omitted means every kind; an unknown kind is a validation error. `timeout_s` bounds one invocation. It permits nothing and gates nothing: a notifier's exit code is written as a `notify.sent` / `notify.failed` event (§2.9) and never changes the run's outcome. `tldrx init` writes it COMMENTED, never guessed. Whole schema and payload: §2.18 |
 | `stack_packs.{enabled,enabled_at}` | bool / RFC3339\|null | n | The stack packs switch (`tldrx expert packs`). Absent means off — the default. Read from the file being regenerated and carried forward across `init`, so a re-init never silently turns the packs off. `disable` writes `enabled: false` with `enabled_at: null` |
+| `probe_in_worktree` | bool | n | **Additive (2026-09-16, gh #371).** Workspace-wide (not per-repo). Absent or `false` — the default, and every `workspace.yml` written before this key existed — leaves the base pre-flight (§2.4) measuring the checkout only, exactly as before. `true` makes it ALSO measure its declared commands a second time, once per repo, inside a fresh detached worktree of the base sha — never instead of the checkout reading, kept beside it under the existing `tree:` field (`checkout` vs. `worktree`) rather than a third tree constant. Closes the gap #363 named and declined to close by default: an environmental red that shows up only in a story's own worktree shape (a `.git` FILE vs. a `.git` directory is the measured case) is caught before the first story opens rather than after a story pays for it. `tldrx init` never writes it |
 | `contracts[].{id,title,when,then}` | `^C\d+$` / str / {repo,paths[]} / [{repo,command}] | y | Cross-repo obligation: source repo + globs ⇒ dependent commands auto-spawned at Plan time |
 | `mcp_servers[].{name,transport,status,checked_at}` | str / str / `connected\|auth_required\|failed` / RFC3339 | n | Cached parse of `claude mcp list` (slow: runs health checks) — used only to *suggest* `process.yml ticket_tool`, never to act |
 
 **Validation.** `name` unique; `path` exists, relative, inside root; enums as above; commands non-empty when non-null
 and free of `&& ; | > \`` (single argv, auditable); contract repos resolve; ≤64 repos, ≤128 contracts.
 `repos[].overlays`, `repos[].skills`, `repos[].command_probes`, `repos[].commands.test_fast`,
-`repos[].commands.<slot>_scoped`, `repos[].commands.tool_restore`, `stack_packs` and `notify` are
+`repos[].commands.<slot>_scoped`, `repos[].commands.tool_restore`, `stack_packs`, `notify` and
+`probe_in_worktree` are
 **additive**: a file written
 before they existed loads unchanged (absent ⇒ empty lists, no probes, switch off), and `version:` stays `1` — a format
 that only grows does not bump it. A `command_probes` that is present is checked: a mapping of slot to
@@ -3939,9 +3941,18 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    and a story's own DoD run in different tree SHAPES (checkout vs. a fresh `git worktree`), and the two can differ
    for an environment reason (a `.git` FILE vs. a `.git` directory, local tool state one has and the other does not)
    a green checkout row cannot see. Moving the probe into a throwaway worktree instead was measured against and
-   rejected: it would pay for the declared command a second time on every run that needs a fresh measurement and
-   reopen the exact `node_modules`-less outage the paragraph above already exists to avoid, for a narrower class of
-   gap. The row says which tree it is a fact about instead.
+   rejected AS THE DEFAULT: it would pay for the declared command a second time on every run that needs a fresh
+   measurement and reopen the exact `node_modules`-less outage the paragraph above already exists to avoid, for a
+   narrower class of gap. The row says which tree it is a fact about instead.
+
+   **`probe_in_worktree: true` opts a workspace INTO that second reading (2026-09-16, gh #371).** Workspace-wide,
+   additive, off by default — every workspace before this key existed keeps the checkout-only behavior above,
+   unchanged. When set, every declared command above is measured a SECOND time, once per repo, in a fresh detached
+   worktree of the base sha — kept BESIDE the checkout row under the same `tree:` field (`checkout` vs. `worktree`),
+   never replacing it, and a red in either tree refuses Build the same way. This is the gap #363 named and declined
+   to close by default (the paragraph above): a command green in the checkout and red only in a story's own worktree
+   shape went unnoticed until a story paid for it. A workspace that opts in pays the cost #363 declined to pay
+   automatically, in exchange for catching that class of gap before the first story opens rather than after.
 
    **A repo's declared `tool_restore:` runs once in the checkout, before the base pre-flight's first probed command
    (2026-09-16, gh #363).** Measured live: a workspace declared `tool_restore: dotnet tool restore` and no

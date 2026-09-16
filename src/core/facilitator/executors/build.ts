@@ -5224,6 +5224,8 @@ class BuildSession {
       runDir: this.ctx.runDir,
       write: (work) => this.writes.run(work),
       advisories: this.advisories,
+      root: this.ctx.root,
+      runId: this.ctx.runId,
     };
   }
 

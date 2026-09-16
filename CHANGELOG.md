@@ -2,6 +2,26 @@
 
 ## 0.33.0 — unreleased
 
+### Added
+
+- **A workspace can opt its base pre-flight probe into a story-shaped worktree, so an
+  environmental red that only appears there is caught before the first story (#371).** #363
+  shipped `tree:` provenance on every base-pre-flight row and declined, by measured decision, to
+  move the probe itself into a worktree by default — doing so on every run would pay for the
+  declared command a second time and reopen the `node_modules`-less outage the checkout-only
+  design exists to avoid. `probe_in_worktree: true`, workspace-wide and additive, is the opt-in
+  for a workspace that has actually seen the gap #363 named: a command green in the checkout and
+  red only in a story's own worktree shape (a `.git` FILE vs. a `.git` directory is the measured
+  case). On, every declared base command is ALSO measured, once per repo, in a fresh detached
+  worktree of the base sha — kept beside the checkout row, never instead of it, under the same
+  `tree:` field (`checkout` vs. `worktree`) rather than a third tree constant. Off (the default,
+  and every workspace before this key existed) leaves the base pre-flight measuring the checkout
+  only, exactly as before. Pre-merge review measurement: a session that calls the base pre-flight
+  more than once (a `prepare()` followed by the real call) paid for a `git worktree add`/`remove`
+  on EVERY call, even when every declared command already had a fresh `tree: worktree` reading and
+  nothing was spawned there — fixed by checking every command's cache hit before touching git at
+  all, so a worktree is opened only when at least one command still needs a fresh measurement.
+
 ### Fixed
 
 - **The plan sequencing rule (#365) could false-positive two unrelated stories that happened to
