@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.31.1 — unreleased
+
+### Fixed
+
+- **A seed placed at the documented `.tldrx/seeds/<slug>.md` location was invisible to the #346
+  `seed_solution` skip, so `how` ran at full price even when the seed already declared its own
+  `## Solution` (#358).** `seedDocumentPaths` (`src/core/facilitator/seedSolution.ts`) filtered
+  out every first-stage input starting with `.tldrx/` — meant to drop the `what` stage's own
+  template inputs (`.tldrx/memory/facts.yml`, `.tldrx/map/{repo}/domains.md`), it also swallowed
+  `.tldrx/seeds/…`, the exact path `run new --seed` records and the docs tell writers to use. Now
+  only those two template-input families are excluded, so a seed document is recognised wherever
+  `run new --seed` accepted it from.
+
 ## 0.31.0 — 2026-09-16
 
 ### Added
