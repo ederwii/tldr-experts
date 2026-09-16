@@ -20,6 +20,30 @@
   only the part a script could not repair (owner decision 2026-09-15: auto-repair is visible, never
   silent).
 
+### Changed
+
+- **`watch` now follows `build`'s gate policy in every shipped scope where `build` is already
+  `auto` — `feature`, `bugfix`, `integration`, `refactor` and `performance` (#349, owner decision
+  2026-09-16).** Every one of these scopes shipped `build: auto` with `watch: human` regardless,
+  so a run that trusted Build's own auto-gate still stopped a person at the very next stage over
+  a transcription job with a validator behind it. The reasoning is field evidence, not a guess:
+  auto-gating `what`/`how`/`plan` in a real workspace since 2026-09-12 produced zero measured
+  auto-gate incidents across 26 runs (77 `gate.rejected`, 100% human, 0 auto-rejections). The
+  mechanism is unchanged — `evaluateAutoGate` (`src/core/run/autoGate.ts`) already closes any
+  stage's gate the same way once its policy is `auto`, and a self-signed `watch` gate is
+  announced through the exact same `gate.requested`/`gate.approved`/`stage.done` events an
+  auto-signed `what`/`how`/`plan` gate already is — this does not widen the notify-window gap
+  tracked separately in #250, it only extends the existing behavior to one more stage. `upgrade`
+  is the one shipped scope excluded: `what`/`plan`/`build` are already all `auto` there, and
+  following `build` would leave it with no human gate at all, which spec.md's "no all-auto
+  preset" guarantee forbids — its `watch` stays `human`. `hotfix`/`security-patch`/`migration`
+  are unaffected: their `build` gate is `human`, so the "build already signed" condition never
+  applies. The tutorial's attended chapter (`tldrx learn`, chapter 7) ran its `next --commit` on
+  a `feature`-scope run expecting the Watch gate to still stop it (`expectExit: [4]`) — now that
+  `watch` self-signs there, the chapter sets it back to `human` explicitly first
+  (`run gates set watch:human --note …`), because the lesson is the attended human handoff, not
+  the shipped default.
+
 ### Fixed
 
 - **`run auto` now names `--wait-gates` as the fix, at the moment an all-`auto` gate's only

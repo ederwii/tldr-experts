@@ -116,12 +116,22 @@ const BOTH_OUTPUTS = JSON.stringify({
 // --- G1: the policy is data -------------------------------------------------
 
 describe("gate policy per shipped scope", () => {
+  // #349, owner decision 2026-09-16: a scope whose `build` gate is already `auto`
+  // trusts `watch` the same way — the field evidence for `what`/`how`/`plan` (zero
+  // measured auto-gate incidents) is the reasoning, and `watch` is the lower-stakes,
+  // transcription-shaped stage (its own `stage.yml` comment). `upgrade` is the one
+  // exception: its `watch` stays `human` on purpose, because `what`/`plan`/`build`
+  // are already all `auto` there and flipping `watch` too would leave it with NO
+  // human gate at all — the one shipped-default invariant this file also pins below
+  // ("every shipped scope keeps at least one human gate", spec.md "no all-auto
+  // preset"). `hotfix`/`security-patch`/`migration` keep `build: human`, so the
+  // "build already signed" condition never applies to their `watch` either.
   const expected: Readonly<Record<string, GatesPolicy>> = {
-    feature: { what: "human", how: "auto", plan: "human", build: "auto", watch: "human" },
-    bugfix: { what: "human", how: "auto", plan: "human", build: "auto", watch: "human" },
-    integration: { what: "human", how: "auto", plan: "human", build: "auto", watch: "human" },
-    refactor: { what: "human", how: "auto", plan: "human", build: "auto", watch: "human" },
-    performance: { what: "human", how: "auto", build: "auto", watch: "human" },
+    feature: { what: "human", how: "auto", plan: "human", build: "auto", watch: "auto" },
+    bugfix: { what: "human", how: "auto", plan: "human", build: "auto", watch: "auto" },
+    integration: { what: "human", how: "auto", plan: "human", build: "auto", watch: "auto" },
+    refactor: { what: "human", how: "auto", plan: "human", build: "auto", watch: "auto" },
+    performance: { what: "human", how: "auto", build: "auto", watch: "auto" },
     docs: { what: "auto", build: "human" },
     spike: { what: "auto", how: "human" },
     prototype: { what: "auto", how: "auto", build: "human" },

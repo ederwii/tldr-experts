@@ -564,12 +564,16 @@ stages:
 this workflow lists and every value is `human\|auto`; ≤40 stages.
 
 **Shipped defaults.** Every scope keeps at least one human gate — the framework has no all-auto preset, and
-`--gates none` is the only way to get one.
+`--gates none` is the only way to get one. Since gh #349 (owner decision 2026-09-16), `watch` follows `build`:
+wherever a scope's `build` gate is already `auto`, `watch` is too — the field evidence behind auto-gating
+`what`/`how`/`plan` (zero measured incidents) extends to `watch`, the lower-stakes, transcription-shaped stage.
+`upgrade` is the one exception: `what`/`plan`/`build` are already all `auto` there, and following `build` would
+leave the scope with no human gate at all, so its `watch` stays `human` on purpose.
 
 | Scope | what | how | plan | build | watch |
 |---|---|---|---|---|---|
-| `feature` `bugfix` `integration` `refactor` | human | auto | human | auto | human |
-| `performance` | human | auto | — | auto | human |
+| `feature` `bugfix` `integration` `refactor` | human | auto | human | auto | auto |
+| `performance` | human | auto | — | auto | auto |
 | `docs` | auto | — | — | human | — |
 | `spike` | auto | human | — | — | — |
 | `prototype` | auto | auto | — | human | — |

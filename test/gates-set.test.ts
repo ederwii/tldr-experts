@@ -86,7 +86,7 @@ const WHY = "this run predates the agent policy and the pilot signs its plan gat
 describe("tldrx run gates set", () => {
   test("upgrades one stage's policy and records the change with its note", async () => {
     const { root, runDir, runId } = await oneRun();
-    // `feature` freezes {what: human, how: auto, plan: human, build: auto, watch: human}.
+    // `feature` freezes {what: human, how: auto, plan: human, build: auto, watch: auto} (#349).
     expect(run(runDir).gates_policy?.plan).toBe("human");
 
     const out = await tldrx(root, "run", "gates", "set", "plan:agent", "--note", WHY, "--run", runId);
@@ -102,7 +102,7 @@ describe("tldrx run gates set", () => {
     expect(after.gates_policy?.what).toBe("human");
     expect(after.gates_policy?.how).toBe("auto");
     expect(after.gates_policy?.build).toBe("auto");
-    expect(after.gates_policy?.watch).toBe("human");
+    expect(after.gates_policy?.watch).toBe("auto");
 
     const recorded = policyEvents(runDir);
     expect(recorded.length).toBe(1);

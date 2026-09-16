@@ -1273,6 +1273,16 @@ const CHAPTER_7: Chapter = {
     },
     {
       narrate: [
+        "The shipped `feature` preset now signs Watch itself once Build has (gh #349) — this lesson",
+        "is about the human handoff, so put a person back on this one gate on purpose.",
+      ],
+      command: [
+        "run", "gates", "set", "watch:human", "--run", "{run}",
+        "--note", "learn ch.7: showing the attended handoff, not the shipped auto default",
+      ],
+    },
+    {
+      narrate: [
         "The host wrote the card the bundle asked for, and a `result.json` beside it. `--commit`",
         "picks the SAME pipeline up from there: it re-reads every declared output off disk, validates",
         "it, runs the stage's checks and stops at the gate. `0 verified, 1 draft` is the validation",

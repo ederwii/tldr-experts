@@ -276,12 +276,17 @@ Measured 2026-09-09: two `human` Build gates announced themselves as a dollar fi
 green check while every story was `blocked` or `todo`, and were approved from a phone. The
 counting existed the whole time — it ran for `policy: auto` alone.
 
-The shipped defaults — every scope keeps at least one human gate:
+The shipped defaults — every scope keeps at least one human gate. Since gh #349 (owner decision
+2026-09-16), `watch` follows `build`: wherever `build` is already `auto`, `watch` is too — the
+zero-incident field evidence behind auto-gating `what`/`how`/`plan` extends to `watch`, the
+lower-stakes, transcription-shaped stage. `upgrade` is the one exception: `what`/`plan`/`build`
+are already all `auto` there, and following `build` would leave the scope with no human gate at
+all, so its `watch` stays `human`:
 
 | Scope | what | how | plan | build | watch |
 |---|---|---|---|---|---|
-| `feature` `bugfix` `integration` `refactor` | human | auto | human | auto | human |
-| `performance` | human | auto | — | auto | human |
+| `feature` `bugfix` `integration` `refactor` | human | auto | human | auto | auto |
+| `performance` | human | auto | — | auto | auto |
 | `docs` | auto | — | — | human | — |
 | `spike` | auto | human | — | — | — |
 | `prototype` | auto | auto | — | human | — |

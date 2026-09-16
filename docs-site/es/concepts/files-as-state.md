@@ -45,7 +45,7 @@ created_with: "<tldrx version at run new>"
 last_written_by: "<tldrx version at the last save>"
 cursor: {phase: "01-what", stage: what, task: null}
 budget: {ceiling_usd: 5.00, spent_usd: 0.00, per_agent_max_usd: 1.80}
-gates_policy: {what: human, how: auto, plan: human, build: auto, watch: human}
+gates_policy: {what: human, how: auto, plan: human, build: auto, watch: auto}
 ```
 
 Ese bloque `budget:` es un **espejo**, y lo único vivo ahí es `spent_usd`. `ceiling_usd` y
