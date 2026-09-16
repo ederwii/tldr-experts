@@ -19,6 +19,15 @@
   another still refuses; `toString` shared by two unrelated stories, with no `snake_case` or
   backtick sibling anywhere in the plan, still does not). `snake_case` and backtick-quoted
   identifiers are unaffected either way, and the originating #365 case still refuses.
+- **`task.done`'s `as_is_note` had no size bound, unlike its two siblings on the same event
+  (#368).** `permission_refused` and `budget_death` were clamped by #359 after a ~110-line
+  refused heredoc alone pushed `task.done` past the §2.9 4096-byte payload cap and failed the
+  whole build STAGE, not just the story. `as_is_note` — the operator-typed `--note` on `tldrx
+  story reopen <id> --as-is` — was never given the same treatment, even though nothing stops a
+  long, scripted or pasted note from reaching the exact same shape. It is now passed through the
+  same `clampAgentText` call, the same `TASK_DONE_FIELD_MAX_BYTES` constant and the same
+  `[clamped: N bytes exceeds the M byte cap]` marker convention #359 already set, so an
+  oversized as-is note can no longer fail the build stage.
 
 ### Changed
 

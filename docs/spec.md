@@ -3864,7 +3864,10 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    of the text, verbatim, plus a trailing marker naming the original byte count and where the full text lives:
    `04-build/log/<story>.md`, written by `writeLog` earlier in the same `settle` call, so the pointer is true by
    construction. The review log, the handoff and the blocked-story reason are UNCHANGED — none of them carry the
-   4 KB event-payload constraint, so all three keep the field in full.
+   4 KB event-payload constraint, so all three keep the field in full. **`as_is_note` gets the same clamp (gh
+   #368):** it is operator-typed via `tldrx story reopen <id> --as-is --note "…"` rather than copied from an
+   agent, but it is free text of unbounded length all the same, and nothing distinguished it from the two fields
+   above until this fix — the same `clampAgentText`, the same 1024-byte budget, the same marker.
 
    **A refusal with NO work names its cure, and a chained line is retried once with the cure in front (gh #278).**
    Measured on two real runs in one day, six refusals across sonnet and opus developers with #271's rule in every

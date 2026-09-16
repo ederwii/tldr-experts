@@ -4633,9 +4633,13 @@ class BuildSession {
       // ADDITIVE (gh #279): the branch was taken AS IT STANDS and no developer
       // was spawned for it — with the person who signed that, and their note.
       // Omitted on every ordinary turn, where absent means what it always meant.
+      // Clamped (gh #368): the note is operator-typed via `--as-is --note`, free
+      // text like `permission_refused`/`budget_death` (gh #359) and just as
+      // unbounded — nothing stops a long, scripted or pasted note from putting
+      // `task.done` over the §2.9 cap the same way.
       ...(outcome.asIs == null
         ? {}
-        : { as_is: true, as_is_by: outcome.asIs.actor, as_is_note: outcome.asIs.note }),
+        : { as_is: true, as_is_by: outcome.asIs.actor, as_is_note: clampAgentText(outcome.asIs.note, reviewRel) }),
       // ADDITIVE (gh #295): WHICH as-is case this was. Omitted on the case #279
       // shipped, so a record written before this key reads as it always did.
       ...(outcome.asIs?.reason === undefined ? {} : { as_is_reason: outcome.asIs.reason }),

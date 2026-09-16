@@ -61,6 +61,8 @@ import {
   storyMarkdown,
 } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+import { reopenStory } from "../src/core/run/reopenStory.ts";
+import { DOD_DETAIL_MAX_BYTES } from "../src/core/build/dodOutput.ts";
 
 // Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
 // property of the machine, not of the code, so bun's fixed 5000 ms default measures the box:
@@ -4214,6 +4216,107 @@ describe("an oversized permission refusal does not fail the stage (gh #359)", ()
       // story's own build log, written before `task.done` (true by construction).
       const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
       expect(log).toContain(LONG_REFUSAL);
+    },
+    60_000,
+  );
+});
+
+/**
+ * gh #368 — `task.done`'s `as_is_note` has no size bound, unlike
+ * `permission_refused`/`budget_death` (gh #359, tested just above).
+ *
+ * `outcome.asIs.note` is operator-typed via `tldrx story reopen <id> --as-is
+ * --note "…"`, and it is emitted onto `task.done` verbatim
+ * (`build.ts:4624`) — not passed through `clampAgentText`, the way the two
+ * sibling free-text fields on the same event are. Nothing stops a long,
+ * scripted or pasted note from reaching the exact same shape #359 already had
+ * to fix once: a field that grows unclamped inside a payload the §2.9 cap
+ * bounds.
+ *
+ * The fixture: S1 is built once and blocked on two `changes` verdicts.
+ * Measured: with merge-before-review, S1's one commit is ALREADY on `epic/e1`
+ * by the time it blocks (a `changes` verdict still merges — it is the FIX that
+ * is owed, not the bytes), so a same-branch `--as-is` reopen with no new
+ * commit finds nothing left to take and settles the turn as a refusal
+ * (`asIsNotAheadReason`) rather than a merge. That refusal is STILL a real
+ * `task.done` for S1 — `asIsSettlements` is recorded before the "is there
+ * anything to take" check runs, and `as_is`/`as_is_by`/`as_is_note` are built
+ * unconditionally off it (`build.ts:4622-4624`) — so it is the one place
+ * #368 is about, independent of which status or verdict this turn settles as.
+ *
+ * The note here is sized ABOVE `DOD_DETAIL_MAX_BYTES` (the field bound) but
+ * comfortably BELOW the §2.9 4096-byte whole-payload cap — deliberately
+ * smaller than the "5000 chars" a `tldrx story reopen` note would need to
+ * demonstrate the field-level defect without ALSO tripping the payload cap on
+ * `story.reopened` itself (measured: `test/story-reopen.test.ts`'s own "a
+ * note too long for the event payload" case refuses a 5000-byte reopen note
+ * outright, before it could ever reach a `task.done`). A note between the two
+ * bounds is the one shape that reaches `build.ts:4624` unclamped today.
+ */
+describe("an oversized as-is note does not go unclamped onto task.done (gh #368)", () => {
+  const ONE: BuildWorkspaceOptions = {
+    stories: [{ id: "S1", epic: "E1", title: "Write a file" }],
+    epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+    waves: [["S1"]],
+  };
+  // Above DOD_DETAIL_MAX_BYTES (1024), comfortably below the §2.9 4096-byte
+  // whole-payload cap once the rest of task.done's short fields are added in.
+  const LONG_NOTE = "as-is, finished by hand: ".repeat(100);
+
+  test(
+    "an as-is settle with a 2500-byte note carries it CLAMPED and MARKED on task.done, "
+      + "not verbatim",
+    async () => {
+      const ws = workspace(ONE);
+      process.env.FAKE_BUILD_COST = "0";
+      process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes"] });
+      process.env.FAKE_BUILD_WRITE = JSON.stringify({ "S1#1": { "s1.txt": "first pass\n" } });
+
+      await next(ws);
+      expect(story(ws, "S1")).toContain("status: blocked");
+
+      const reopened = reopenStory({
+        root: ws.root, storyId: "S1", note: LONG_NOTE, actor: "alan",
+        at: "2026-08-29T10:00:00Z", asIs: true,
+      });
+      expect(reopened.code).toBe(0);
+
+      delete process.env.FAKE_BUILD_WRITE;
+      process.env.FAKE_BUILD_VERDICTS = "{}"; // unset story queue ⇒ reviewer defaults to "approve"
+      reject(RunStore.open(ws.runDir), {
+        root: ws.root, actor: "alan", at: "2026-08-29T10:00:00Z", note: "S1 was reopened as-is",
+      });
+      const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
+      expect(again.code).toBe(4);
+
+      // The as-is settle attempt — whatever it decides (merge-before-review has
+      // already put S1's only commit on `epic/e1`, so this one refuses "nothing
+      // to take" rather than merging again; the point is the FIELD, not the
+      // verdict) — is a real `task.done` carrying `as_is`/`as_is_by`/`as_is_note`,
+      // the one place #368 is about.
+      const dones = events(ws).filter((e) => e.type === "task.done" && e.payload.story === "S1");
+      const settled = dones[dones.length - 1];
+      expect(settled).toBeDefined();
+      expect(settled?.payload.as_is).toBe(true);
+      expect(settled?.payload.as_is_by).toBe("alan");
+
+      const originalBytes = Buffer.byteLength(LONG_NOTE, "utf8");
+      const note = String(settled?.payload.as_is_note ?? "");
+      // The defect (pre-fix): this note is emitted VERBATIM, so `note` equals
+      // `LONG_NOTE` byte for byte and never mentions its own size. The fix
+      // bounds it the same way `permission_refused`/`budget_death` are bounded
+      // (gh #359): shorter than the original, a verbatim prefix, and marked
+      // with how big the original was.
+      expect(note.length).toBeLessThan(LONG_NOTE.length);
+      expect(note).toContain("[clamped:");
+      expect(note).toContain(String(originalBytes));
+      expect(note).toContain(`${String(DOD_DETAIL_MAX_BYTES)}-byte`);
+      const head = (note.split(" [clamped:")[0] ?? "\0").replace(/…$/, "");
+      expect(LONG_NOTE.startsWith(head)).toBe(true);
+      // Every event this invocation wrote stays inside the §2.9 cap.
+      for (const event of events(ws)) {
+        expect(Buffer.byteLength(JSON.stringify(event.payload), "utf8")).toBeLessThanOrEqual(4096);
+      }
     },
     60_000,
   );
