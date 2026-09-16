@@ -57,6 +57,7 @@ import { LOG_DIR } from "../build/plan.ts";
 import { setProgressCeiling, setProgressReadCap, setProgressTitle } from "../ui/bus.ts";
 import { acquireLock, releaseLock } from "./Lock.ts";
 import { onInterrupt, stopInFlightRun } from "./interrupt.ts";
+import { startedHeadless } from "../run/lastStart.ts";
 import { loadStageSpec, type StageSpec } from "./stageSpec.ts";
 import { blockingQuestionIds, countSkipInputs, evaluateSkipIf, SkipIfError } from "./skipIf.ts";
 import {
@@ -288,7 +289,7 @@ export async function runNext(options: NextOptions): Promise<NextOutcome> {
   const forget = onInterrupt((context) => stopInFlightRun(store.runDir, context));
   const notes: string[] = [];
   try {
-    if (lock.stale) notes.push(...demoteStaleRunning(store, lock.holder?.pid ?? 0));
+    if (lock.stale) notes.push(...demoteStaleRunning(store, options, lock.holder?.pid ?? 0));
     const orphaned = preparedRefusal(store, options, notes);
     if (orphaned !== null) return orphaned;
     // Armed for the whole of `advance`, disarmed however it leaves. The refusals
@@ -394,11 +395,33 @@ function preparedRefusal(store: RunStore, options: NextOptions, notes: string[])
 
 /**
  * Spec §5 resume path: "a `running` left by a crash is demoted to `ready` when
- * `.lock` holds a dead pid". Nothing else about a stale lock is interesting — the
- * files are the state, and they are all still there.
+ * `.lock` holds a dead pid".
+ *
+ * That used to be the whole story, and for a `--prepare` bundle or a Build
+ * executor's own bookkeeping it still is — nothing was spawned for either of
+ * those, so nothing was spent. But a HEADLESS spawn holds this exact lock for
+ * the whole of its `await spawnAgent(...)` (`runNext`'s main body, below), so a
+ * dead pid here can mean a sub-agent turn a provider actually charged for, and
+ * the pre-#337 code demoted the stage and said nothing else — no task row, no
+ * event, not even an unmetered one. `spent_usd` read a confident `0.00` for
+ * money that may have been spent, which is the one answer AGENTS.md §7 rules
+ * out. This is the remaining half of #246 (its first half, the `interrupted`
+ * waiting kind and `lastStart.ts`, already shipped).
+ *
+ * `startedHeadless` (`run/lastStart.ts`) is the one derivation of "which mode
+ * opened this stage's last turn" — the same one `interrupt.ts`'s Ctrl-C path
+ * reads — so a `--prepare` bundle and a Build executor phase (which re-prepares
+ * its own `stage.started` between stories; `preparedRefusal` above carves out
+ * the same exception) are left exactly as before: demoted, nothing invented.
  */
-function demoteStaleRunning(store: RunStore, deadPid: number): readonly string[] {
+function demoteStaleRunning(store: RunStore, options: NextOptions, deadPid: number): readonly string[] {
   const stuck: string[] = [];
+  // Read off the STAGE being demoted, before its `expert`/`model`/`started_at`
+  // are the only trace of the turn this row has to describe.
+  const orphaned: {
+    phase: string; stage: string;
+    expert: string | null; model: string | null; started_at: string | null;
+  }[] = [];
   store.mutate((run) => ({
     ...run,
     phases: run.phases.map((phase) => ({
@@ -406,15 +429,46 @@ function demoteStaleRunning(store: RunStore, deadPid: number): readonly string[]
       stages: phase.stages.map((stage) => {
         if (stage.status !== "running") return stage;
         stuck.push(`${phase.id}/${stage.id}`);
+        if (executorFor(phase.id) === null && startedHeadless(store.runDir, stage.id)) {
+          orphaned.push({
+            phase: phase.id, stage: stage.id,
+            expert: stage.expert, model: stage.model, started_at: stage.started_at,
+          });
+        }
         return { ...stage, status: "ready" as const };
       }),
     })),
   }));
+  for (const turn of orphaned) {
+    recordTask(store, turn.phase, turn.stage, {
+      id: nextTaskId(store, turn.phase, turn.stage),
+      status: "failed",
+      expert: turn.expert,
+      model: turn.model,
+      // Unknown, never zero: the sub-agent may have run to completion and cost
+      // real money — the only thing that died is the process that would have
+      // read its result line. `metered: false` alongside `cost_usd: null` is
+      // what makes `spendBasis`/`tallyOf` (`budget/spendBasis.ts`,
+      // `budget/spentFigure.ts` — the one derivation, not a second copy) treat
+      // this as a LOWER BOUND rather than a measured `$0.00`.
+      cost_usd: null,
+      metered: false,
+      error: "turn outlived its parent; no result line was read",
+      session_id: null,
+      started_at: turn.started_at,
+      ended_at: options.at,
+      outputs: [],
+    });
+  }
   if (stuck.length === 0) return [`cleared a stale .lock (pid ${String(deadPid)} is not running)`];
   store.save();
+  const orphanNote = orphaned.length === 0
+    ? ""
+    : `; recorded ${String(orphaned.length)} orphaned ${orphaned.length === 1 ? "turn" : "turns"} as unmetered `
+      + "(cost unknown — the process died before a result line could be read)";
   return [
     `cleared a stale .lock (pid ${String(deadPid)} is not running); ` +
-      `demoted ${stuck.join(", ")} from running to ready`,
+      `demoted ${stuck.join(", ")} from running to ready${orphanNote}`,
   ];
 }
 

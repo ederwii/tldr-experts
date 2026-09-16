@@ -560,6 +560,73 @@ describe("the lock", () => {
     expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.status).toBe("done");
     expect(existsSync(join(ws.runDir, ".lock"))).toBe(false);
   });
+
+  /**
+   * #337 (the remaining half of #246): a headless spawn that dies mid-turn while
+   * still holding `.lock` is not the same as one merely stuck `running` in a
+   * test fixture — the real one leaves a `stage.started` with `mode: "headless"`
+   * on the ledger, which is what `startedHeadless` (`lastStart.ts`) reads to
+   * tell a killed headless turn apart from a `--prepare` bundle waiting for a
+   * human. Before this fix that turn's cost was recorded nowhere at all — not
+   * even as an unmetered row — so `spent_usd` read a confident `0.00` for money
+   * a provider may really have charged.
+   */
+  test("a dead pid on a genuinely orphaned HEADLESS turn banks its cost as absent, never a confident 0.00", async () => {
+    const ws = workspace(TWO_STAGE);
+    const deadPid = 4194301;
+    expect(isAlive(deadPid)).toBe(false);
+    stall(ws, "running");
+    EventLog.forRun(ws.runDir).append({
+      ts: "2026-08-28T08:59:00Z", run: ws.runId, stage: "alpha", type: "stage.started",
+      actor: "alan", cost_usd: 0, payload: { phase: "01-what", mode: "headless" },
+    });
+    writeFileSync(join(ws.runDir, ".lock"), JSON.stringify({ pid: deadPid, at: "2026-08-28T08:59:05Z" }), "utf8");
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS });
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(0);
+    expect(outcome.lines.join("\n")).toContain("demoted 01-what/alpha from running to ready");
+    expect(outcome.lines.join("\n")).toContain("recorded 1 orphaned turn as unmetered");
+
+    const store = RunStore.open(ws.runDir);
+    const alpha = store.run.phases[0]?.stages[0];
+    // t1: the orphaned attempt, banked as unmetered rather than dropped.
+    expect(alpha?.tasks).toHaveLength(2);
+    const orphan = alpha?.tasks[0];
+    expect(orphan?.id).toBe("t1");
+    expect(orphan?.status).toBe("failed");
+    expect(orphan?.cost_usd).toBeNull();
+    expect(orphan?.metered).toBe(false);
+    expect(orphan?.error).toBe("turn outlived its parent; no result line was read");
+    // t2: the re-spawn `next` made after demoting, priced for real by the fake.
+    expect(alpha?.tasks[1]?.status).toBe("done");
+    expect(alpha?.status).toBe("done");
+    // The ledger says the total is a LOWER BOUND, not a silent `0.00`.
+    const budgetText = readFileSync(join(ws.runDir, "budget.yml"), "utf8");
+    expect(budgetText).toContain("unmetered_tasks: 1");
+    expect(budgetText).toContain("spent_basis: lower-bound");
+  });
+
+  test("a dead pid on a stage that only got as far as `--prepare` records nothing extra", async () => {
+    // Same stuck-`running` shape, but the ledger says `mode: "prepare"` — a
+    // bundle waiting for a human, not a spawn the framework made. No cost was
+    // ever at stake here, so nothing is banked for it.
+    const ws = workspace(TWO_STAGE);
+    const deadPid = 4194300;
+    stall(ws, "running");
+    EventLog.forRun(ws.runDir).append({
+      ts: "2026-08-28T08:59:00Z", run: ws.runId, stage: "alpha", type: "stage.started",
+      actor: "alan", cost_usd: 0, payload: { phase: "01-what", mode: "prepare" },
+    });
+    writeFileSync(join(ws.runDir, ".lock"), JSON.stringify({ pid: deadPid, at: "2026-08-28T08:59:05Z" }), "utf8");
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS });
+
+    const outcome = await next(ws);
+    expect(outcome.lines.join("\n")).not.toContain("orphaned turn");
+    const alpha = RunStore.open(ws.runDir).run.phases[0]?.stages[0];
+    expect(alpha?.tasks).toHaveLength(1);
+    expect(alpha?.tasks[0]?.status).toBe("done");
+  });
 });
 
 describe("skip_if", () => {
