@@ -726,7 +726,7 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
           let text: string;
           try {
               const store = RunStore.open(runDir);
-              text = renderStatus(buildStatus(store.run, store.budget, store.runDir));
+              text = renderStatus(buildStatus(store.run, store.budget, store.runDir, options.root));
             } catch {
               return;
             }

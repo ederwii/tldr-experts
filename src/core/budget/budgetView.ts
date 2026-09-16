@@ -292,9 +292,40 @@ export function stageRaiseCommand(
  */
 export { shortBy };
 
-/** The first stage in the phase that has not finished — what `next` would run. */
-function nextStageOf(stages: readonly RunStage[]): RunStage | null {
+/**
+ * The first stage in the phase that has not finished — what `next` would run.
+ *
+ * Exported (part of #232) so `run status` can size the SAME phase's retry
+ * verdict without a second copy of "which stage is next" — the house rule is
+ * one implementation per derivation, and this one already existed here.
+ */
+export function nextStageOf(stages: readonly RunStage[]): RunStage | null {
   return stages.find((stage) => !isTerminal(stage.status)) ?? null;
+}
+
+/**
+ * The NO-RETRY warning, one block, for one phase — shared between `budget show`
+ * (`renderBudget`, above) and `run status` (`runStatus.ts`, part of #232) so the
+ * two screens print the identical sentence for the identical measured shortfall
+ * instead of two hand-written copies drifting apart.
+ */
+export function noRetryBlock(runId: string, phase: {
+  readonly id: string;
+  readonly next_stage: string | null;
+  readonly next_estimate_static_usd: number;
+  readonly retry_attempts: number;
+  readonly retry_holds_usd: number;
+  readonly retry_short_by_usd: number;
+}): readonly string[] {
+  return [
+    "",
+    `NO-RETRY: phase ${phase.id} holds one attempt of \`${phase.next_stage ?? "?"}\` `
+      + `(${usd(phase.next_estimate_static_usd)}) and that stage declares `
+      + `attempts: ${String(phase.retry_attempts)}, so it must hold ${usd(phase.retry_holds_usd)}. `
+      + "The first failed attempt spends money the retry cannot then find, and a run that "
+      + "cannot retry stops where nothing unattended can restart it. Size it now:",
+    `  ${raiseCommand(runId, phase.id, phase.retry_short_by_usd)}`,
+  ];
 }
 
 export function renderBudget(view: BudgetView): string {
@@ -364,15 +395,7 @@ export function renderBudget(view: BudgetView): string {
   // makes it permanent. One block per phase, each with the raise that sizes it —
   // the same subcommand the BLOCKED case prints, aimed at the same phase.
   for (const phase of noRetry) {
-    lines.push(
-      "",
-      `NO-RETRY: phase ${phase.id} holds one attempt of \`${phase.next_stage ?? "?"}\` `
-        + `(${usd(phase.next_estimate_static_usd)}) and that stage declares `
-        + `attempts: ${String(phase.retry_attempts)}, so it must hold ${usd(phase.retry_holds_usd)}. `
-        + "The first failed attempt spends money the retry cannot then find, and a run that "
-        + "cannot retry stops where nothing unattended can restart it. Size it now:",
-      `  ${raiseCommand(view.run, phase.id, phase.retry_short_by_usd)}`,
-    );
+    lines.push(...noRetryBlock(view.run, phase));
   }
   if (view.given_away.length > 0) lines.push("", ...view.given_away);
   return lines.join("\n");

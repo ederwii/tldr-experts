@@ -46,6 +46,19 @@
   first-run guide (EN/ES) now says explicitly to run the declared `install:` in the checkout
   itself before the first `run auto`, not only in a story's worktree.
 
+- **`run status` now warns NO-RETRY on a phase that cannot afford a second attempt of its own
+  stage, not only `budget show` (#232).** The narrowed #232 asked for this at both screens;
+  `budget show` shipped it in `bd19763`/`efb4eee` and this closes the other half. `run status`
+  computed no retry verdict at all, so a pre-#170 run (sized for exactly one attempt) read every
+  phase as an ordinary progress bar right up to the refusal — the exact "operator discovers it at
+  the retry" failure the issue is about, just on the screen that gets opened more often. Shares
+  the one `retrySizing` derivation and the one `NO-RETRY` sentence (`noRetryBlock`, now exported
+  from `budgetView.ts`) that `budget show` already used, so the two screens cannot disagree about
+  the same measured shortfall. `buildStatus` takes an optional `root` (both CLI and `run auto`'s
+  heartbeat now pass it) to resolve the next stage's own `attempts:` the same tolerant way
+  `budget show` does; omitted, it falls back to the shipped default, so a caller that does not pass
+  it behaves exactly as before.
+
 ## 0.30.0 — 2026-09-15
 
 ### Fixed

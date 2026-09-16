@@ -2783,7 +2783,12 @@ version does not move). It reads the DECLARED figure and never the derived estim
 unmetered run the estimate is too small and `ceiling / est.` then reports headroom that is not there — the less a run is
 metered, the safer that ratio claims it is. `attempts: 1` declares no retry, so one attempt's worth is the RIGHT size and
 reads `ok`; a phase with no stage left to run, or one whose stage declares no budget, reads **`n/e`** — absent-with-reason
-(§7), never a pass.
+(§7), never a pass. `tldrx run status` prints the identical `NO-RETRY` block for the same phases — the owner's
+narrowing comment on #232 asked for both screens, and until then `run status` computed no retry verdict at all and
+read a starved phase as an ordinary progress bar. `RunStatusView`'s `phases[]` carries the same additive
+`retry_sizing` / `retry_next_stage` / `retry_next_estimate_usd` / `retry_attempts` / `retry_holds_usd` /
+`retry_short_by_usd` keys, and both screens render the warning through the one shared `noRetryBlock`
+(`budget/budgetView.ts`) so they cannot print two different sentences for the same measured shortfall.
 
 **And the same fact at the other end: the stage-failure advice (gh #232).** Every `EXIT_AGENT_FAILED` report ends with a
 line about the money, and that line used to be a literal — *"cost is recorded, not refunded — retry with `tldrx next`"* —

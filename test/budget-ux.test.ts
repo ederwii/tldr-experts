@@ -9,6 +9,7 @@ import { buildBudgetView, raiseCommand, renderBudget, shortBy } from "../src/cor
 import { retrySizing, wouldExceed } from "../src/core/budget/wouldExceed.ts";
 import { describeRaise, raiseBudget, BudgetRaiseError } from "../src/core/budget/raiseBudget.ts";
 import { renderAttempts, stageAttempts } from "../src/core/run/attempts.ts";
+import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
 import { asRunFile, type RunFile } from "../src/core/run/RunFile.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { makeRunWorkspace, type TempRunWorkspace } from "./fixtures/tempRunWorkspace.ts";
@@ -504,5 +505,21 @@ describe("a phase that cannot hold a retry of its own stage (#232)", () => {
     expect(retrySizing(8, 4, 2).sizing).toBe("holds");
     // No declared one-attempt figure is not a pass — it is a refusal to judge.
     expect(retrySizing(4, 0, 2).sizing).toBe("not-evaluable");
+  });
+
+  // Remainder of #232: the owner's narrowing comment asked for this warning at
+  // BOTH `run status` and `budget show` time. Only `budget show` got it
+  // (above) — `run status` still says nothing about a phase that cannot afford
+  // its own retry, which is the exact "operator discovers it at the refusal"
+  // failure the issue is about, just on the other screen.
+  test("`run status` also says so before the money is spent, and does not call it ok", () => {
+    const view = buildStatus(LEGACY, ONE_ATTEMPT, "/nonexistent-run-dir-232");
+    expect(view.phases.map((p) => [p.id, p.retry_sizing, p.retry_short_by_usd])).toEqual([
+      ["01-what", "one-attempt-only", 2],
+      ["05-watch", "one-attempt-only", 4],
+    ]);
+    const text = renderStatus(view);
+    expect(text).toContain("holds one attempt");
+    expect(text).toContain("tldrx budget raise 05-watch 4.00 --run 260901-legacy");
   });
 });
