@@ -168,6 +168,18 @@ tldrx run cancel <id> --note "superseded — the fix landed by hand"
 vez de cerrarlo por debajo del bucle; un run cancelado es terminal, sus archivos se quedan
 en disco, y la rama epic que cortó se libera para el siguiente run de la misma feature.
 
+Si el proceso muere solo — una sesión matada, un OOM, un corte de luz — y nunca lo cancelas,
+volver a correr `tldrx run auto <id>` lo retoma en vez de empezar la historia desde cero. La
+rama epic que ese intento ya cortó y reclamó es de este mismo run (`build.epic_branch` la
+nombra), así que el relanzamiento la adopta automáticamente — no hay nadie presente para
+teclear `--reuse-epic` — pero nunca a ciegas: la cabeza de la rama tiene que seguir
+resolviendo y, cuando el repo declara un comando `typecheck`, ese comando tiene que pasar
+primero en un worktree desechable. De cualquier modo lo dice — una línea "resumed" que nombra
+el sha y el veredicto del typecheck (`ok`, o `absent` cuando el repo no declara comando
+`typecheck`); uno que FALLA rechaza la etapa nombrándolo, en vez de construir sobre ella. Una
+rama que reclama OTRO run se rechaza exactamente igual que siempre — esto solo adopta el
+intento muerto de este mismo run.
+
 ### El límite honesto
 
 Lo que esta receta demuestra es que el *motor* puede llevar un cambio pequeño y bien

@@ -102,6 +102,12 @@ export interface BuildWorkspaceOptions {
   readonly gates?: string;
   /** The `test` script the fixture repo's package.json gets. Default: passes. */
   readonly testScript?: string;
+  /**
+   * The `typecheck` script the fixture repo's package.json gets (gh #347's cheap
+   * gate). Default: no script at all, matching every fixture before this option
+   * existed — a repo only gets one when a test declares `commands.typecheck`.
+   */
+  readonly typecheckScript?: string;
   /** Extra files inside the repo, keyed by path relative to the repo. */
   readonly repoFiles?: Readonly<Record<string, string>>;
   /** Extra files in the workspace, keyed by path relative to the root. */
@@ -155,7 +161,10 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
     name: repoName,
     version: "0.0.0",
     private: true,
-    scripts: { test: options.testScript ?? 'node -e "process.exit(0)"' },
+    scripts: {
+      test: options.testScript ?? 'node -e "process.exit(0)"',
+      ...(options.typecheckScript === undefined ? {} : { typecheck: options.typecheckScript }),
+    },
   }, null, 2)}\n`);
   write(repoDir, "README.md", `# ${repoName}\n`);
   for (const [rel, content] of Object.entries(options.repoFiles ?? {})) write(repoDir, rel, content);
