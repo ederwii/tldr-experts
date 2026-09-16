@@ -52,9 +52,12 @@ import { ambiguousRunLines } from "../run/openRuns.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import {
-  AUTO_GATE_ACTOR, AUTO_GATE_CHECK_RETRIES, AUTO_GATE_RETRY_ACTOR, AUTO_GATE_RETRY_NOTE_PREFIX, checkRetryVerdict,
-  reevaluateAutoGate, type AutoGateVerdict,
+  AUTO_GATE_ACTOR, AUTO_GATE_CHECK_RETRIES, AUTO_GATE_RETRY_ACTOR, AUTO_GATE_RETRY_NOTE_PREFIX,
+  RATE_LIMIT_RESUME_ACTOR, RATE_LIMIT_RESUME_NOTE_PREFIX, checkRetryVerdict, heldBy, reevaluateAutoGate,
+  type AutoGateVerdict,
 } from "../run/autoGate.ts";
+import { currentRateLimitPark, type RateLimitPark } from "../run/rateLimitPark.ts";
+import { rateLimitLine } from "./agentEvents.ts";
 import { withWorkspaceLock, workspaceRootOfRunDir } from "../lock/workspaceLock.ts";
 import { flatten, isAttendedByHost, isFinished, type RunFile } from "../run/RunFile.ts";
 import { gateStories, outcomeLine } from "../run/runOutcome.ts";
@@ -1226,6 +1229,34 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
                 }
                 continue;
               }
+              if (waited.resolution === "rate-limited") {
+                // gh #367: the gate is held by `stories` alone, because a rate-limit
+                // warning parked the stage, and the provider's own clock has since
+                // cleared it (or, absent a reset instant, the backoff has). Resumed
+                // the same door #231's checks-retry uses — `reject --and-continue`,
+                // signed by the loop — but under a DIFFERENT actor
+                // (`RATE_LIMIT_RESUME_ACTOR`), so this never spends #231's bound.
+                const recorded = rejectForRetry(runDir, gate.stageId, {
+                  root: options.root,
+                  at: at(),
+                  note: `${RATE_LIMIT_RESUME_NOTE_PREFIX} ${rateLimitLine(waited.park)}`,
+                  actor: RATE_LIMIT_RESUME_ACTOR,
+                });
+                if (recorded) {
+                  say(`waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — the auto gate on `
+                    + `${gate.stage} was held by a rate-limit park`
+                    + (waited.park.resetsAt === null
+                      ? " with no stated reset instant"
+                      : ` that cleared at ${new Date(waited.park.resetsAt * 1000).toISOString()}`)
+                    + `; resuming the stage automatically (signed "${RATE_LIMIT_RESUME_ACTOR}")`);
+                } else {
+                  // The gate moved between the measurement and the write — a person signed it,
+                  // either way. Their decision stands; the next iteration reads it.
+                  say(`not resuming ${gate.stage} — its gate changed before the automatic resume `
+                    + "could be recorded, and whatever changed it stands");
+                }
+                continue;
+              }
               if (waited.resolution === "approved") {
                 say(`waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — `
                   + `the gate on ${gate.stage} is approved, resuming`);
@@ -1470,7 +1501,60 @@ type GateWaited =
     readonly findings: string;
     /** Which automatic re-run of this stage this would be, 1-based. */
     readonly attempt: number;
+  }
+  | {
+    /**
+     * gh #367: an `auto` gate held by `stories` alone, because a rate-limit
+     * warning parked the stage — a TIMED wait, resumed on the provider's own
+     * clock rather than a person's decision. Never bounded like `retry`: the
+     * provider's clock, not a guess, is what makes each resume different.
+     */
+    readonly resolution: "rate-limited";
+    readonly ms: number;
+    readonly park: RateLimitPark;
   };
+
+/**
+ * gh #367: a floor under an automatic resume, past the provider's own `resetsAt`.
+ *
+ * Small on purpose — a courtesy margin against clock skew between this machine
+ * and the provider's, not a second guess at the reset instant the provider
+ * itself stated.
+ */
+const RATE_LIMIT_RESUME_FLOOR_MS = 30_000;
+
+/**
+ * gh #367: the backoff applied when a park's frame stated NO reset instant at
+ * all — `waitForGate` then has nothing to time a resume off, and the provider's
+ * own clock (the thing #298 and #367 both insist this repo never second-guesses)
+ * is silent. A fixed, generous wait from the moment this poll started, after
+ * which one automatic resume is attempted anyway: an unattended run stuck behind
+ * a human gate for the FULL `--wait-gates` budget over a park that might have
+ * cleared in five minutes is the exact failure #367 measured, and a frame with
+ * no reset instant is rare enough (the provider states one in every recorded
+ * transcript this repo has) that a generous fixed wait costs little next to it.
+ */
+const RATE_LIMIT_UNKNOWN_RESET_BACKOFF_MS = 15 * 60_000;
+
+/** Is `park`'s window far enough along its own clock — or its backoff — to resume now (gh #367)? */
+function rateLimitReadyToResume(park: RateLimitPark, waitStartedAtMs: number): boolean {
+  if (park.resetsAt !== null) return Date.now() >= park.resetsAt * 1000 + RATE_LIMIT_RESUME_FLOOR_MS;
+  return Date.now() >= waitStartedAtMs + RATE_LIMIT_UNKNOWN_RESET_BACKOFF_MS;
+}
+
+/**
+ * The rate-limit park behind THIS refusal, or null when the refusal is not one
+ * (gh #367) — `stories` and only `stories` holding the gate, with a recorded
+ * park to explain why they are unfinished. Any other shape (a second condition
+ * also refusing, or `stories` unfinished for a reason nothing parked) is not
+ * this repo's to auto-resume; it falls through to the existing checks-retry path
+ * and, beyond that, to a person.
+ */
+function rateLimitParkFor(verdict: AutoGateVerdict, runDir: string, stageId: string): RateLimitPark | null {
+  const held = heldBy(verdict);
+  if (held.length !== 1 || held[0] !== "stories") return null;
+  return currentRateLimitPark(runDir, stageId);
+}
 
 async function waitForGate(
   runDir: string,
@@ -1506,10 +1590,24 @@ async function waitForGate(
     if (measured !== null && measured.closed) {
       return { resolution: "approved", ms: Date.now() - started, note: null, andContinue: false };
     }
+    // gh #367 — a refusal held by `stories` alone, because a rate-limit warning
+    // parked the stage, is a TIMED wait, not a human gate. Checked BEFORE #231's
+    // checks-retry path: `stories` is not one of its retryable conditions, so
+    // that path would only ever report it as withheld, never act on it.
+    const park = measured !== null && measured.verdict !== null && !measured.verdict.ok
+      ? rateLimitParkFor(measured.verdict, runDir, stageId)
+      : null;
+    // The write itself (`rejectForRetry`) is the caller's, exactly as `retry`'s is —
+    // this function only decides WHEN to act, never acts (see the docstring above).
+    if (park !== null && rateLimitReadyToResume(park, started)) {
+      return { resolution: "rate-limited", ms: Date.now() - started, park };
+    }
     // gh #231 — the refusal is measured already; ask whether a re-run may answer it. Only
     // an `auto` policy ever has a verdict here (`autoGateVerdict` is null for `human` and
-    // `agent`), so a person's gate never reaches this line.
-    if (measured !== null && measured.verdict !== null && !measured.verdict.ok) {
+    // `agent`), so a person's gate never reaches this line. A rate-limit park (above) is
+    // never routed here: `stories` is not a retryable condition, so this would only ever
+    // report it as withheld and never act on it.
+    if (park === null && measured !== null && measured.verdict !== null && !measured.verdict.ok) {
       const decision = checkRetryVerdict(measured.verdict);
       let withheld: string | null = null;
       if (decision.retry) {
@@ -1654,7 +1752,13 @@ function loopRetriesOf(runDir: string, stageId: string): number {
 function rejectForRetry(
   runDir: string,
   stageId: string,
-  input: { readonly root: string; readonly at: string; readonly note: string },
+  input: {
+    readonly root: string;
+    readonly at: string;
+    readonly note: string;
+    /** gh #367: `RATE_LIMIT_RESUME_ACTOR` for a rate-limit resume; default `AUTO_GATE_RETRY_ACTOR`. */
+    readonly actor?: string;
+  },
 ): boolean {
   try {
     return withWorkspaceLock(workspaceRootOfRunDir(runDir), () => {
@@ -1662,7 +1766,10 @@ function rejectForRetry(
       const found = flatten(store.run).find((entry) => entry.stage.id === stageId);
       if (found === undefined || store.run.cursor.stage !== stageId) return false;
       if (found.stage.status !== "awaiting_gate" || found.stage.gate.status !== "pending") return false;
-      reject(store, { root: input.root, actor: AUTO_GATE_RETRY_ACTOR, at: input.at, note: input.note, andContinue: true });
+      reject(store, {
+        root: input.root, actor: input.actor ?? AUTO_GATE_RETRY_ACTOR, at: input.at, note: input.note,
+        andContinue: true,
+      });
       return true;
     });
   } catch {

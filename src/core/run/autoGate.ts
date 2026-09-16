@@ -164,6 +164,19 @@ function warnedTail(ids: readonly string[]): string {
 export const AUTO_GATE_RETRY_ACTOR = "run auto";
 
 /**
+ * Who signs the resume a rate-limit park's timed wait writes (gh #367) — a
+ * DIFFERENT actor from `AUTO_GATE_RETRY_ACTOR` on purpose.
+ *
+ * `loopRetriesOf` (`runAuto.ts`) counts `gate.rejected` events by
+ * `AUTO_GATE_RETRY_ACTOR` to bound gh #231's checks-only retry at
+ * `AUTO_GATE_CHECK_RETRIES`. A rate-limit resume is gated by the provider's own
+ * clock (`resetsAt`), never by a count, and must never spend that unrelated
+ * bound — the run that filed #367 needed seven of them in one stage. Sharing
+ * the actor would have silently capped the seventh at the checks bound.
+ */
+export const RATE_LIMIT_RESUME_ACTOR = "run auto (rate-limit)";
+
+/**
  * How many times `run auto --wait-gates` re-runs ONE stage on its own because its `auto`
  * gate was refused only by failed checks (gh #231). Counted per stage over the run's whole
  * event log, so a relaunched loop cannot reset it.
@@ -177,6 +190,14 @@ export const AUTO_GATE_CHECK_RETRIES = 1;
 
 /** The head of every note a bounded re-run writes — what the next prompt and a reader see first. */
 export const AUTO_GATE_RETRY_NOTE_PREFIX = "run auto re-ran this stage: its auto gate was refused only by failed checks.";
+
+/**
+ * The head of the note a rate-limit timed resume writes (gh #367) — the sibling
+ * of `AUTO_GATE_RETRY_NOTE_PREFIX` for a resume that was never a fix to apply,
+ * only a clock to wait out.
+ */
+export const RATE_LIMIT_RESUME_NOTE_PREFIX = "run auto resumed this stage: its auto gate was held by an unfinished "
+  + "story a rate-limit warning parked, and the provider's own clock has since cleared it.";
 
 /** The conditions a re-run with the findings in its prompt can plausibly fix. */
 const RETRYABLE_CONDITIONS: ReadonlySet<string> = new Set(["checks", "claim-sources"]);

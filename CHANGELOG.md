@@ -54,6 +54,26 @@
   in full (written by `writeLog` before this event, so the pointer is true by construction). The
   review log, the handoff and the blocked-story reason are unaffected — none of them carry the
   event-payload cap.
+- **A rate-limit `allowed_warning` parked a Build stage's whole dispatch at ANY utilization,
+  turning an unattended run into a human gate seven times over 53–60% of the seven-day window
+  (#367).** `noteRateLimit` (`src/core/facilitator/executors/build.ts`) now parks an
+  `allowed_warning` only at or above 90% utilization of the window that carries it (owner
+  decision, Slack, 2026-09-16); below the line the warning is recorded on the same
+  `agent.rate_limited` event (`parked_absent: "below the 90% park threshold…"`) and dispatch
+  continues. Any other status — a real wall, or one this repo has no reading for — still parks
+  unconditionally, as #298 always has. Second half: `run auto --wait-gates` (`runAuto.ts`) no
+  longer waits on a rate-limit-parked gate as if a person had to decide it — it reads the
+  park's own `resets_at` off the ledger (`src/core/run/rateLimitPark.ts`) and resumes the
+  stage itself once the provider's own clock has passed it (signed `run auto (rate-limit)`,
+  a separate actor from #231's checks-retry so the two bounds can never collide), backing off
+  a fixed interval when the frame stated no reset at all — but ONLY when that park explains
+  EVERY story the stage still has unfinished (every one a plain, never-attempted `todo`,
+  scoped to the CURRENT attempt's own `stage.started`): a gate also held by an independently
+  `blocked` story, or one whose only park is stale history from an earlier attempt, is never
+  auto-resumed (caught on review — `storiesCondition` collapses every unfinished story into
+  one `stories` id, so a park on one story is not evidence about another). `run status`'s
+  "held by: stories" line now says "parked by a rate-limit warning" and when it resumes,
+  under the same predicate, instead of reading as a decision waiting on a human.
 
 ## 0.31.1 — 2026-09-16
 

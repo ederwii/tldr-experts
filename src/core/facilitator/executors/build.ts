@@ -177,6 +177,25 @@ const CANCELLED_UNDER_STAGE = "the run was cancelled (tldrx run cancel) while th
  * one spelling, two doors (the serial loop and a wave's lanes).
  */
 const RATE_LIMIT_PARK_LINE = "the provider warned its rate limit was close, so the run parked before it bit";
+/**
+ * gh #367: an `allowed_warning` parks only at or above this utilization of the
+ * window that carries it (owner decision, Slack, 2026-09-16) — below it, the
+ * warning is recorded and dispatch continues. Measured on the run that filed
+ * the issue: 10 warnings at 53-60% utilization, 7 of them parking the stage and
+ * costing an unattended run 3 operator interventions and ~3h40m of waiting for
+ * a human who had nothing to decide — the provider was nowhere near its wall.
+ *
+ * ONLY `allowed_warning` reads this. Any OTHER non-`allowed` status — or an
+ * `allowed_warning` whose frame states no utilization at all — still parks
+ * unconditionally, exactly as #298 always has: an unknown magnitude, or a
+ * status this repo has no reading for, is not evidence the wall is far away.
+ */
+const RATE_LIMIT_WARNING_PARK_UTILIZATION = 0.9;
+/**
+ * gh #367: the operator line for a warning that stayed below the park
+ * threshold — recorded, not acted on.
+ */
+const RATE_LIMIT_WARNING_LINE = "the provider warned its rate limit, but stayed below the park threshold — dispatch continues";
 /** gh #327: the operator line for a story requeued for its fix round — one spelling, three doors. */
 const FIX_ROUND_REQUEUED_LINE = "the reviewer signed with a fix list — requeued for its fix round, which spends no attempt";
 import { carriedReportFor, type CarriedReport } from "../../build/carriedRows.ts";
@@ -794,6 +813,12 @@ class BuildSession {
   private rateLimitPark: AgentRateLimit | null = null;
   /** The `agent.rate_limited` event is written once per stage, not once per story. */
   private rateLimitParked = false;
+  /**
+   * gh #367: a below-threshold warning is also written once per stage, not once
+   * per story — its own flag, so it can never suppress the PARK event's own
+   * once-per-stage write (or the reverse) when both arrive in one invocation.
+   */
+  private rateLimitWarnedBelow = false;
 
   constructor(
     private readonly ctx: ExecutorContext,
@@ -1697,8 +1722,50 @@ class BuildSession {
    */
   private noteRateLimit(frame: AgentRateLimit | null): void {
     if (frame === null || frame.status === "allowed" || this.rateLimitPark !== null) return;
+    // gh #367: a WARNING below the threshold is not the wall — record it and let
+    // dispatch continue. Only `allowed_warning` with a STATED utilization below
+    // the line qualifies; a warning with no utilization figure, or any other
+    // non-`allowed` status, falls through to the unconditional park below.
+    if (frame.status === "allowed_warning"
+      && frame.utilization !== null && frame.utilization < RATE_LIMIT_WARNING_PARK_UTILIZATION) {
+      this.recordRateLimitWarning(frame);
+      this.lines.push(`  · ${RATE_LIMIT_WARNING_LINE}: ${rateLimitLine(frame)}`);
+      return;
+    }
     this.rateLimitPark = frame;
     this.lines.push(`  · the provider's rate limit is close: ${rateLimitLine(frame)}`);
+  }
+
+  /**
+   * The below-threshold warning, on the ledger, once per stage (gh #367) — the
+   * SAME event type a park writes (`recordRateLimited`), so a reader does not
+   * need a second shape to learn the provider warned. `parked_absent` is reused
+   * rather than invented (AGENTS.md §7, one derivation): it already means "this
+   * frame withheld nothing", and "below threshold" is one more true reason for
+   * that same absence.
+   */
+  private recordRateLimitWarning(frame: AgentRateLimit): void {
+    if (this.rateLimitWarnedBelow) return;
+    this.rateLimitWarnedBelow = true;
+    this.ctx.emit("agent.rate_limited", {
+      phase: this.ctx.phaseId,
+      status: frame.status,
+      ...(frame.window === null
+        ? { window_absent: "not recorded — the provider's frame named no window" }
+        : { window: frame.window }),
+      // In practice always present — `noteRateLimit` only reaches this branch on
+      // a STATED utilization below the line — but the absent-with-reason shape
+      // is written the same way `recordRateLimited` writes it (AGENTS.md §7, one
+      // derivation) rather than assuming the caller's guarantee holds forever.
+      ...(frame.utilization === null
+        ? { utilization_absent: "not recorded — the provider's frame stated no utilization" }
+        : { utilization: frame.utilization }),
+      ...(frame.resetsAt === null
+        ? { resets_at_absent: "not recorded — the provider's frame stated no resetsAt" }
+        : { resets_at: frame.resetsAt }),
+      parked_absent: `below the ${String(Math.round(RATE_LIMIT_WARNING_PARK_UTILIZATION * 100))}% park `
+        + "threshold — dispatch continued",
+    }, 0, "build");
   }
 
   /**
