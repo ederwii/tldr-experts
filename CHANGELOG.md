@@ -127,6 +127,18 @@
   `human` policy. This changes the golden developer prompt's bytes on purpose —
   `test/build-golden.test.ts`'s fixtures are updated for exactly the `## Inputs` preamble and
   `## Investigate` steps 1–2.
+- **A story rescued from a dead-developer block had the same gap #361 fixed for a stale
+  dependency release, one branch above it in the wave loop (#366).** Deciding
+  `blockedByFailedDeveloper(planned) !== null` — a `blocked` row whose developer never actually
+  ran — only added the story to this pass's `pending` list and logged a line; the story file
+  itself stayed `blocked` until `driveStory` settled an attempt, and `driveStory`'s very first
+  act is the same gh #298 rate-limit park #361 fixed for the dependency case, which returns
+  before any write when the wall is already up from an earlier story's turn in the same pass. A
+  story rescued and then parked before its own turn was left exactly where it started, `blocked`
+  on disk, forever. Both releases now go through one shared step, `releaseBlockedStory`
+  (`src/core/facilitator/executors/build.ts`), that writes `blocked` → `todo` the instant either
+  kind of release is decided, before the story is even offered a turn — one implementation, so a
+  park right after either can never undo it.
 
 ### Changed
 
