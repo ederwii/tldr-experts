@@ -397,6 +397,63 @@ describe("the watch executor writes one card per shipped feature", () => {
     expect(read(ws, watcherRelPath("leaderboard"))).toContain("status: draft");
   });
 
+  /**
+   * gh #345 — "mechanical validators before spending": a `[src:]` punctuation
+   * slip (here, `marker-spelling` — the missing space in `[src:x]`) is fixed
+   * LOCALLY, for $0.00, before the card is judged — instead of failing the stage
+   * over formatting `repairSrcSyntax` already knows how to fix.
+   */
+  test("a card with a fixable [src:] punctuation slip is auto-repaired instead of failing the stage", async () => {
+    const { ws, ctx } = fixture();
+    const clean = card("leaderboard", ["S1", "S2"], LIVE_SIGNAL);
+    const goodToken = "[src: api:src/Leaderboard.cs:3]";
+    const broken = clean.replace(
+      `- Application Insights \`traces\` ${goodToken}`,
+      "- Application Insights `traces` [src:api:src/Leaderboard.cs:3]",
+    );
+    expect(broken).not.toBe(clean); // sanity: the replace actually introduced the defect
+    fakeClaude(ws, { [watcherRelPath("leaderboard")]: broken });
+
+    const outcome = await watchExecutor(ctx);
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.error).toBeNull();
+    const written = read(ws, watcherRelPath("leaderboard"));
+    expect(written).toContain(goodToken);
+    expect(written).not.toContain("[src:api:src/Leaderboard.cs:3]");
+    // Owner decision 2026-09-15: auto-repair is VISIBLE, never silent.
+    expect(outcome.lines.join("\n")).toContain("auto-repaired");
+    expect(outcome.lines.join("\n")).toContain("marker-spelling");
+  });
+
+  /**
+   * A card that is REPAIRED but still refused for something a script cannot
+   * invent (here, a Signal line with no citation at all) still fails the
+   * stage — but the fixable half is not re-asked for on the retry: the file on
+   * disk already carries the repair, and `previousCard` re-validates FROM DISK
+   * (`watchPrompt.ts`), so only the genuine remaining issue reaches the writer.
+   */
+  test("a partially-repaired card still fails on its real defect, with the repair already on disk", async () => {
+    const { ws, ctx } = fixture();
+    const clean = card("leaderboard", ["S1", "S2"], "no source on this line at all");
+    const broken = clean.replace(
+      "- Application Insights `traces` [src: api:src/Leaderboard.cs:3]",
+      "- Application Insights `traces` [src:api:src/Leaderboard.cs:3]",
+    );
+    fakeClaude(ws, { [watcherRelPath("leaderboard")]: broken });
+
+    const outcome = await watchExecutor(ctx);
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error ?? "").toContain("does not validate");
+    expect(outcome.error ?? "").toContain("auto-repaired");
+    const written = read(ws, watcherRelPath("leaderboard"));
+    // The punctuation fix landed on disk even though the stage still failed —
+    // a retry re-validates this file, not the original broken one.
+    expect(written).toContain("[src: api:src/Leaderboard.cs:3]");
+    expect(written).not.toContain("[src:api:src/Leaderboard.cs:3]");
+  });
+
   test("a card the sub-agent never wrote fails the stage", async () => {
     const { ws, ctx } = fixture();
     fakeClaude(ws, {});

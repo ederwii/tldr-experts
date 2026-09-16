@@ -4687,7 +4687,13 @@ them does not parse, and the finding it belongs to is dropped rather than half-r
    nothing and writes nothing, so the fault costs it a measurement rather than producing a false one, and it stays
    `n/a` with a reason that now names the record.
 3. **Validation and the status stamp**, done by the framework off disk: sections, tokens and citations via the shared
-   handoff parser, then `status: verified` written only when no `absent:` source remains under `## Signal`.
+   handoff parser, then `status: verified` written only when no `absent:` source remains under `## Signal`. Before that
+   read, a `[src:]` PUNCTUATION slip — the marker missing its space, a token sitting mid-sentence, an ASCII `->` in a
+   `cmd` source — is repaired locally, for $0.00, by `repairSrcSyntax` (gh #345): the only rules it touches are the
+   three that are pure syntax, and it accepts a fix only when it re-parses clean, never when repairing it would mean
+   inventing a line number, a path or a fact id nobody wrote. The repair lands on disk whether or not the card ends up
+   valid, and it is always named — in the stage's own report when it clears the card, in the failure reason when a
+   real defect remains.
 4. **`05-watch/handoff.md`, written deterministically** — Findings are one line per card with its status, each sourced
    `[src: 05-watch/watchers/<f>.md:1]`. The cards are the model's work; the handoff is arithmetic over them, because a
    model asked to summarise its own cards is free to describe a `draft` one as coverage.

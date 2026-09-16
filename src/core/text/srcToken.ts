@@ -488,6 +488,118 @@ export function describeSrcFailure(failure: SrcFailure): string {
   ].join("\n");
 }
 
+// --- mechanical repair (gh #345) --------------------------------------------
+//
+// Three of `SRC_RULE_IDS` are pure PUNCTUATION rules: the claim is fine and the
+// evidence it names is real, only the characters around the token are wrong —
+// `marker-spelling` (`[src:x]`), `trailing-position` (the token sits mid-line
+// instead of ending it) and `cmd-arrow` (ASCII `->` instead of the real arrow).
+// Every one of `SRC_RULES`' worked pairs for those three ids IS the transform:
+// `good` is `bad` with exactly that punctuation fixed, nothing else. Applying
+// that transform locally, for $0.00, before a paid turn is asked to rewrite a
+// card that already cited the right thing, is the whole of this section.
+//
+// Every other rule (`file-shape`, `absent-path`, `id-shape`, `line-number`, …)
+// needs a fact nobody wrote down here — a line number, a path, a fact id — and
+// "repairing" one would be inventing evidence (AGENTS.md §7: no invented value
+// in the dangerous direction). `repairSrcTokenLine` refuses those outright.
+
+/** The three rules a mechanical repair may attempt. Everything else is refused. */
+const MECHANICALLY_REPAIRABLE: ReadonlySet<SrcRuleId> = new Set(["marker-spelling", "trailing-position", "cmd-arrow"]);
+
+/**
+ * One line, repaired if (and only if) the fix can be VERIFIED — the candidate is
+ * re-run through `diagnoseSrcToken`/`parseSrcToken` and only trusted if it now
+ * parses clean. Mirrors `parseYamlRepairing` (`src/core/yaml.ts`): a repair that
+ * cannot be proven is not offered, and the original line comes back untouched.
+ */
+export function repairSrcTokenLine(
+  line: string,
+  repos?: ReadonlySet<string>,
+): { readonly text: string; readonly rule: SrcRuleId } | null {
+  const failure = diagnoseSrcToken(line, repos);
+  if (failure === null || !MECHANICALLY_REPAIRABLE.has(failure.rule.id)) return null;
+
+  let candidate: string | null = null;
+  if (failure.rule.id === "marker-spelling") {
+    candidate = insertMarkerSpace(line);
+  } else if (failure.rule.id === "trailing-position") {
+    candidate = relocateTrailingToken(line);
+  } else {
+    // cmd-arrow is a PIECE error inside a token that otherwise parsed as
+    // trailing — `diagnoseSrcToken` only reaches this id via `token.errors[0]`
+    // (line 463 above), so `parseSrcToken` is guaranteed non-null here.
+    const token = parseSrcToken(line, repos);
+    if (token !== null) candidate = straightenCmdArrow(line, token.raw);
+  }
+  if (candidate === null || candidate === line) return null;
+
+  // Verify — never trust an unverified repair.
+  if (diagnoseSrcToken(candidate, repos) !== null) return null;
+  const reparsed = parseSrcToken(candidate, repos);
+  if (reparsed === null || reparsed.errors.length > 0) return null;
+  return { text: candidate, rule: failure.rule.id };
+}
+
+/** `[src:x]` -> `[src: x]` — insert the ONE space the grammar requires. */
+function insertMarkerSpace(line: string): string | null {
+  const at = line.lastIndexOf(SRC_MARKER);
+  if (at === -1) return null;
+  const after = line.slice(at + SRC_MARKER.length);
+  if (after.startsWith(" ")) return null; // already spaced — not this rule's fix
+  return `${line.slice(0, at + SRC_MARKER.length)} ${after}`;
+}
+
+/**
+ * A well-formed `[src: …]` sitting mid-sentence is moved to the true end of the
+ * line, exactly as `SRC_RULES`'s own `trailing-position` pair does it by hand.
+ */
+function relocateTrailingToken(line: string): string | null {
+  const match = /\s?\[src: [^\]]*\]\s?/.exec(line);
+  if (match === null) return null;
+  // The matched span (token plus whatever whitespace hugs it on either side) is
+  // collapsed to ONE space rather than dropped outright — dropping both sides
+  // would fuse the words either side of the token into one.
+  const withoutToken = (
+    line.slice(0, match.index) + " " + line.slice(match.index + match[0].length)
+  ).replace(/\s+/g, " ").trim();
+  return `${withoutToken} ${match[0].trim()}`;
+}
+
+/** ASCII `->` inside a `cmd` source becomes the real arrow, U+2192 — nowhere else on the line. */
+function straightenCmdArrow(line: string, tokenRaw: string): string | null {
+  if (!tokenRaw.includes("->")) return null;
+  return line.replace(tokenRaw, tokenRaw.replace(/->/g, "→"));
+}
+
+export interface SrcRepair {
+  /** 1-based, so it lines up with what an editor and a refusal both show. */
+  readonly line: number;
+  readonly rule: SrcRuleId;
+  readonly before: string;
+  readonly after: string;
+}
+
+/**
+ * `repairSrcTokenLine` over every line of a file. Byte-identical output (and an
+ * empty `repairs` list) when nothing was fixable — a caller writes back to disk
+ * only when `repairs.length > 0`, so a clean file is never touched.
+ */
+export function repairSrcSyntax(
+  text: string,
+  repos?: ReadonlySet<string>,
+): { readonly text: string; readonly repairs: readonly SrcRepair[] } {
+  const lines = text.split("\n");
+  const repairs: SrcRepair[] = [];
+  const fixed = lines.map((line, i) => {
+    const attempt = repairSrcTokenLine(line, repos);
+    if (attempt === null) return line;
+    repairs.push({ line: i + 1, rule: attempt.rule, before: line, after: attempt.text });
+    return attempt.text;
+  });
+  return repairs.length === 0 ? { text, repairs } : { text: fixed.join("\n"), repairs };
+}
+
 /**
  * The `[src: …]` token a line ends with, or null when there is none.
  * Trailing whitespace is ignored; anything after the `]` means "no token".
