@@ -105,6 +105,14 @@
   cannot mistake "green on the base" for "green in the tree shape a story's own DoD actually runs
   in".
 
+### Changed
+
+- **`docs/ROADMAP.md` states the project's north star and how we measure toward it (owner
+  decision, 2026-09-16).** One sentence, three metrics tracked on every run (human
+  interventions per run, predicted-vs-actual cost and time, defects the reviewer catches
+  before merge versus after), a measured "where we are" for 2026-09-16, and how the shipped
+  pieces and the still-unbuilt ones map to it.
+
 ## 0.31.1 — 2026-09-16
 
 ### Fixed

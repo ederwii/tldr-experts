@@ -3,6 +3,42 @@
 Source of truth for *what is next*. Facts about *what shipped* live in `CHANGELOG.md`;
 design rationale lives in `docs/concept.md`; open design questions in `docs/spec.md` §7.
 
+## North star (owner decision, 2026-09-16)
+
+**A feature described in a GitHub issue ships as a merged pull request with no human
+intervention, with cost and time predicted before the run and audited after it.**
+
+Three metrics, measured on every run:
+
+1. **Human interventions per run** — measured 9 on the latest 5-story unattended run
+   (2026-09-16); target 0.
+2. **Deviation between predicted and actual cost and time** — not predicted today; target
+   within ±30% once prediction exists.
+3. **Share of defects the independent reviewer catches before merge, versus found after
+   merge** — measured 2026-09-16: 2 of 4 branches came back from review with a real fix
+   before merge; target tracked per release.
+
+### Where we are (2026-09-16)
+
+- Two unattended runs have shipped seed → stories → merged PR with no human writing code.
+- A 2-story run on 2026-09-15 cost $22.91 and took 53 min.
+- A 5-story run on 2026-09-16 cost $40.61 and took 6h55m, with 9 operator interventions —
+  all framework defects, none design.
+- The ten efficiency adjustments released on 2026-09-16 (see the CHANGELOG) cut pre-build
+  spend from $12.77 to $3.44 (−73%).
+- The reliability fixes for unattended runs are the current unreleased work: #359, #360,
+  #361 and #367 are shipped; #363, #364, #365 and #366 are still open.
+- Next: a clean autonomous re-run measured against the three metrics above.
+
+### How the pieces map to the north star
+
+Shipped, and load-bearing for it: the mechanical gates and the review record, the executed
+Definition of Done, per-stage cost accounting, `run auto` with auto gates, and the evidence
+discipline this document and `CHANGELOG.md` hold each other to. The means still to
+build, in this order: zero stops by design (unreleased); a one-minute start with no
+hand-written seed or workspace file; predicted-vs-actual cost and time; self-diagnosis (a
+stall files its own issue with the event and file:line); and a visible evidence view.
+
 ## v0 — the loop (tagged: v0.0.1 → v0.2.0, all 2026-08-29; install name `tldr-experts`, commands `tldrx` / `tldr-experts`)
 
 `init` (detect → code map → handoff → interview → experts → conventions → process), `run new`
