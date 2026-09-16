@@ -104,6 +104,29 @@
   `04-build/preflight.yml` now carries `tree: checkout`, so a reader — human or the loop itself —
   cannot mistake "green on the base" for "green in the tree shape a story's own DoD actually runs
   in".
+- **The Build developer's own brief told it "these files are the ONLY ones you may read" —
+  literally, for every story whose declared `touches` were fully inlined — and a headless
+  developer that believed it asked a question instead of opening a file it needed and left no
+  diff (#364).** Measured live: story S5's `touches` had 2 files, both inlined; `## Inputs`'
+  preamble (`src/core/facilitator/prompt.ts`) and `## Investigate` step 1 (`src/core/build/
+  prompts.ts`, "They are the whole brief") both read as a hard READ ceiling rather than the
+  WRITE allowlist `touches` is meant to be, so the developer could not see how to reach the
+  port interface, command fields and sibling-test conventions its acceptance criteria needed —
+  $0.50, no diff, and the story sat `blocked` until an operator ran `story reopen` +
+  `reject --and-continue`. `preamble()` is now role-aware (`PreambleRole`, default `"reader"`
+  byte-identical to before): the Build developer's `## Inputs` and `## Investigate` now say
+  plainly that `touches` limits what it may CHANGE, never what it may READ — every other
+  caller (Watch, the `What` stage) is unchanged. Second half of the same defect: when the
+  run's `questions_policy` (§2.2) resolves the Build stage to anything but `human`, the
+  developer brief now carries an explicit rule — "This run is unattended: nobody answers
+  questions. Decide, state the assumption in your handoff, and proceed" — and a turn that
+  asks anyway (`questions_asked` non-empty) and leaves no diff is recorded `failure_kind:
+  "asked_no_diff"` (reusing #348's vocabulary) and requeued while attempts remain, the same
+  shape a red DoD gets, instead of a terminal `blocked` only a human could lift. Attended runs
+  are unchanged: the new checks are gated on `unattended` and never fire under the default
+  `human` policy. This changes the golden developer prompt's bytes on purpose —
+  `test/build-golden.test.ts`'s fixtures are updated for exactly the `## Inputs` preamble and
+  `## Investigate` steps 1–2.
 
 ### Changed
 

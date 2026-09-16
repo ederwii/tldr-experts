@@ -240,6 +240,16 @@ export interface ReviewLedger {
    */
   readonly conflictTurns: number;
   /**
+   * Developer attempts spent ASKING instead of acting, in an unattended run
+   * (gh #364) — counted from the log for the reason `redDodAttempts` is: the
+   * bound is `attempt < attempts`, and a count only the process remembered
+   * hands a story a fresh run of attempts every time an invocation ends
+   * between two. An attempt counts at its `task.done` carrying the ADDITIVE
+   * `asked_no_diff: true` key. Cleared by `story.reopened` with every other
+   * count here. A log written before the key existed counts 0.
+   */
+  readonly askedNoDiffAttempts: number;
+  /**
    * The conflict turn granted and not yet TAKEN, or null (gh #286): the last
    * `story.conflict_turn`, until a `task.done` from an attempt whose developer
    * actually ran — or a `story.reopened` — follows it. A developer that FAILED
@@ -266,12 +276,13 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     lastDodOutputPath: null,
     developerErroredWith: null, blockedWithNothingRun: false, reopened: null, asIs: null, lastMerge: null, lastSettled: null, fixRound: null,
     formatRetries: 0, formatRefusal: null, reviewer: null, redDodAttempts: 0,
-    conflictTurns: 0, conflictTurnOwed: null,
+    conflictTurns: 0, conflictTurnOwed: null, askedNoDiffAttempts: 0,
   };
   if (!existsSync(path)) return empty;
 
   let verdicts = 0;
   let redDodAttempts = 0;
+  let askedNoDiffAttempts = 0;
   let conflictTurns = 0;
   let conflictTurnOwed: ConflictTurnRecord | null = null;
   let fixlistRounds = 0;
@@ -342,6 +353,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     if (event.type === "story.reopened") {
       verdicts = 0;
       redDodAttempts = 0;
+      askedNoDiffAttempts = 0;
       conflictTurns = 0;
       conflictTurnOwed = null;
       fixlistRounds = 0;
@@ -461,6 +473,12 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
         && (payload.commit === null || payload.commit === undefined || payload.commit === "")
         && dodRequeueRed(currentRequeue)
       ) redDodAttempts++;
+      // gh #364: the attempt an unattended developer spent asking instead of
+      // acting — the ADDITIVE key `settle` writes rather than a re-derivation,
+      // because unlike a red DoD this leaves no `check` rows to judge: `dod`
+      // is empty by construction (nothing ran), so there is no predicate over
+      // rows to reuse the way `dodRequeueRed` is.
+      if (payload.asked_no_diff === true) askedNoDiffAttempts++;
       blockedWithNothingRun = payload.status === "blocked"
         && payload.verdict === "n-a"
         && (payload.commit === null || payload.commit === undefined || payload.commit === "")
@@ -590,6 +608,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     fixRound,
     formatRetries,
     redDodAttempts,
+    askedNoDiffAttempts,
     conflictTurns,
     conflictTurnOwed,
     formatRefusal,

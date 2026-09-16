@@ -204,7 +204,29 @@ export interface DeveloperPromptParts {
    * reopened, which renders nothing: byte-identical to every prompt before it.
    */
   readonly reopenNote?: ReopenNote | null;
+  /**
+   * gh #364: this run's `questions_policy` resolved to anything but `human`
+   * for the Build stage — nobody is going to answer a question this turn
+   * raises. `true` renders the unattended rule below `## Investigate`; absent
+   * or `false` is every prompt before this existed, byte-identical, because
+   * the default policy everywhere is `human`.
+   */
+  readonly unattended?: boolean;
 }
+
+/**
+ * gh #364: the one rule an unattended developer brief was missing. Measured
+ * live: a headless `--questions none` run's developer read a hard read/write
+ * restriction (fixed above) AND had nowhere in its brief telling it that
+ * asking was pointless — nobody would ever answer — so it narrated a
+ * question in its result text, committed nothing, and the story sat
+ * `blocked` until an operator noticed and reopened it. Exported so the RED
+ * test and this file share one sentence.
+ */
+export const UNATTENDED_RULE: readonly string[] = [
+  "This run is unattended: nobody answers questions. Decide, state the assumption in your",
+  "handoff, and proceed.",
+];
 
 /**
  * The note a person put a story back with (gh #322) — the same value `reopenFor`
@@ -401,7 +423,7 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     "",
     "## Inputs",
     "",
-    renderInputs(inputs),
+    renderInputs(inputs, undefined, undefined, "developer"),
     "",
     ...dispatchNotesSection(parts.dispatchNotes),
     ...projectSkillsSection(parts.projectSkills),
@@ -411,12 +433,15 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     ...conflictTurnSection(parts),
     "## Investigate",
     "",
-    "1. Read the story and the inlined files above. They are the whole brief.",
-    "2. Change only what the story's `touches` list names. A change outside it is a plan",
-    "   deviation, and the reviewer will read it as one.",
+    "1. Read the story and the inlined files above; they state the task. Read anything else in",
+    "   this repo you need to do it correctly — an interface, a sibling test, a command's real",
+    "   fields — nothing here limits what you may READ.",
+    "2. Change only what the story's `touches` list names — that list is a WRITE allowlist. A",
+    "   change outside it is a plan deviation, and the reviewer will read it as one.",
     `3. ${VALIDATE_CRITERION_RULE.join("\n   ")}`,
     "4. Write the tests the test plan promised, then the code that makes them pass.",
     `5. ${MUTATION_PROOF_RULE.join("\n   ")}`,
+    ...(parts.unattended === true ? [`6. ${UNATTENDED_RULE.join("\n   ")}`] : []),
     "",
     "## Produce",
     "",

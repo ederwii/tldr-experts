@@ -95,6 +95,22 @@ const deniedCommand = perStory("FAKE_BUILD_DENIED", devAttempt);
 const gitRmPath = perStory("FAKE_BUILD_GIT_RM");
 
 /**
+ * gh #364 — `FAKE_BUILD_QUESTIONS` = `{"S1": ["…"]}` (or `{"S1#2": […]}` for one
+ * attempt): the developer's envelope reports these as `questions_asked`, on top
+ * of whatever it wrote. The live shape this reproduces: a developer that reads
+ * a brief it believes forbids reading anything else, narrates a question, and
+ * touches nothing — so most tests pair this with `FAKE_BUILD_WRITE` naming an
+ * empty file map for the same story.
+ */
+const questionsRaw = process.env.FAKE_BUILD_QUESTIONS;
+const questionsMap = questionsRaw === undefined || questionsRaw === ""
+  ? {}
+  : (JSON.parse(questionsRaw) as Record<string, readonly string[]>);
+const questionsAsked = role === "developer" && !failing
+  ? (questionsMap[`${storyId}#${String(devAttempt)}`] ?? questionsMap[storyId] ?? [])
+  : [];
+
+/**
  * gh #271 — what the tree holds WHEN the refusal comes. `FAKE_BUILD_DENIED_WORK`
  * = `{"S1": "committed" | "uncommitted" | "empty-commit"}`, read only beside
  * `FAKE_BUILD_DENIED`; absent means the #261 shape, a developer that touched
@@ -220,7 +236,7 @@ const structured = failing
         findings: verdictFindings(storyId),
         ...fixlistFor(storyId),
       }
-    : { outputs: written, questions_asked: [], notes: `fake developer for ${storyId}` };
+    : { outputs: written, questions_asked: questionsAsked, notes: `fake developer for ${storyId}` };
 
 if (liveMarker !== null && liveDir !== undefined) {
   note(liveDir, { story: storyId, role, event: "end", live: liveCount(liveDir) });

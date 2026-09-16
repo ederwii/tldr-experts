@@ -100,6 +100,12 @@ export interface BuildWorkspaceOptions {
    * own conditions end to end.
    */
   readonly gates?: string;
+  /**
+   * `--questions <stages|all|none>` — which stages a PERSON answers (gh #364).
+   * Absent ⇒ no `questions_policy` key at all, `run.yml`'s default, matching
+   * every fixture before this option existed.
+   */
+  readonly questions?: string;
   /** The `test` script the fixture repo's package.json gets. Default: passes. */
   readonly testScript?: string;
   /**
@@ -208,6 +214,7 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
     budgetUsd: (options.budgetUsd ?? 8) * (options.attempts ?? STAGE_TUNING_DEFAULTS.attempts),
     repos: [repoName],
     gates: options.gates,
+    ...(options.questions === undefined ? {} : { questions: options.questions }),
     ...(options.seed === undefined ? {} : { seed: options.seed }),
     actor: "alan",
     now: new Date("2026-08-29T09:00:00Z"),

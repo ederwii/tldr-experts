@@ -21,8 +21,11 @@ The test plan the Plan phase committed to:
 
 ## Inputs
 
-These files are the ONLY ones you may read. Their full content is inlined below,
-so there is nothing to open and nothing else to find.
+Every declared input is inlined below — there is nothing on disk you need to open for
+these paths specifically.
+These declared inputs are a WRITE allowlist, not a read allowlist. Read any other file in
+this repo you need — an interface it implements, a sibling test, a command's real fields —
+never guess when you can open it.
 
 ### `03-plan/stories/S1.md`
 
@@ -82,9 +85,11 @@ S1 was here
 
 ## Investigate
 
-1. Read the story and the inlined files above. They are the whole brief.
-2. Change only what the story's `touches` list names. A change outside it is a plan
-   deviation, and the reviewer will read it as one.
+1. Read the story and the inlined files above; they state the task. Read anything else in
+   this repo you need to do it correctly — an interface, a sibling test, a command's real
+   fields — nothing here limits what you may READ.
+2. Change only what the story's `touches` list names — that list is a WRITE allowlist. A
+   change outside it is a plan deviation, and the reviewer will read it as one.
 3. An acceptance criterion that embeds a literal command or pattern must be validated BEFORE
    you edit: run it against the current tree first; if it reports zero while the goal says the
    work exists, the criterion is broken — measure the real inventory, use that as your

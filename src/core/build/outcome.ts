@@ -366,6 +366,16 @@ export interface StoryOutcome {
    * who asked for that; without it, the log reads exactly as it always has.
    */
   readonly asIs?: AsIsSettlement | null;
+  /**
+   * gh #364: this attempt settled because the developer ASKED instead of
+   * acting and left the tree unchanged, in an unattended run — the attempt
+   * `askedNoDiffReason` above is about. Optional and absent on every record
+   * written before this existed and on every ordinary turn; `true` only on
+   * the settle `settleAskedNoDiff` writes, so `task.done`'s ADDITIVE
+   * `asked_no_diff` field and `reviewLedger.ts`'s count of it agree with the
+   * one place that decides.
+   */
+  readonly askedNoDiff?: boolean;
   readonly cost_usd: number;
 }
 
@@ -437,6 +447,36 @@ export const AS_IS_REVIEW_ONLY_MARK = "the review was run AS IT STANDS — nothi
  * the story's `reason:` cannot drift apart.
  */
 export const NO_DIFF_MARK = "the developer produced no diff";
+
+/**
+ * The marker for gh #364's shape: a developer that ASKED instead of acting,
+ * in a run where nobody answers. Its own constant for the same reason every
+ * marker here is one — a test asserts THIS, not a word of English innocent
+ * prose could carry.
+ */
+export const ASKED_NO_DIFF_MARK = "the developer asked instead of acting, and left no diff";
+
+/**
+ * Why a developer's turn earns `failure_kind: "asked_no_diff"` (gh #364,
+ * `AgentFailureKind` in `facilitator/spawnAgent.ts` — reused, not a second
+ * vocabulary).
+ *
+ * Measured live, 2026-09-16: a headless `--questions none` developer read a
+ * hard read/write restriction in its own brief (fixed alongside this), could
+ * not see how to satisfy the acceptance criteria inside it, and narrated a
+ * question in its result text instead of opening the file it needed — no
+ * diff, $0.50, and the story sat `blocked` until an operator noticed and
+ * reopened it. Unlike `noDiffAfterReopenReason`, no person's note is quoted:
+ * this is the FIRST time the story has stalled this way, and the "note" is
+ * the developer's own `questions_asked`.
+ */
+export function askedNoDiffReason(questions: readonly string[]): string {
+  const first = questions[0] ?? "(no question text recorded)";
+  const count = questions.length;
+  return `${ASKED_NO_DIFF_MARK}: \`questions_asked\` named ${String(count)} thing${count === 1 ? "" : "s"} `
+    + `it did not resolve on its own — "${firstLine(first)}". Nobody in this run answers a developer's `
+    + "question, so the attempt is requeued rather than left for a person to notice.";
+}
 
 /**
  * Why a reopened story's attempt was refused before its DoD ran: the developer

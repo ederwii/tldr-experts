@@ -53,7 +53,7 @@ import {
   describeDispatchNotes, loadDispatchNotes, type DispatchNotes,
 } from "../dispatchNotes.ts";
 import { preparedBundles, reviewBundles } from "../../run/prepared.ts";
-import { spawnAgent, BASE_TOOLS, bashGrantsFor, type AgentRateLimit } from "../spawnAgent.ts";
+import { spawnAgent, ASKED_NO_DIFF_FAILURE_KIND, BASE_TOOLS, bashGrantsFor, type AgentRateLimit } from "../spawnAgent.ts";
 import { rateLimitLine } from "../agentEvents.ts";
 import { DEVELOPER_RESULT_SCHEMA, type AgentUsage } from "../envelope.ts";
 import {
@@ -138,8 +138,8 @@ import {
   type Review,
 } from "../../build/review.ts";
 import {
-  AS_IS_MARK, AS_IS_REVIEW_ONLY_MARK, asIsNotAheadReason, DEVELOPER_FAILED, dodFailure, dodFailureReason, dodGreen, dodRefused,
-  leftoverMergeReason, noDiffAfterReopenReason, reviewNeverCompleted, reviewStillOwed,
+  AS_IS_MARK, AS_IS_REVIEW_ONLY_MARK, askedNoDiffReason, asIsNotAheadReason, DEVELOPER_FAILED, dodFailure, dodFailureReason,
+  dodGreen, dodRefused, leftoverMergeReason, noDiffAfterReopenReason, reviewNeverCompleted, reviewStillOwed,
   type AsIsSettlement, type DodResult, type RescuedWork, type StoryOutcome,
 } from "../../build/outcome.ts";
 import {
@@ -318,6 +318,13 @@ interface StoryHalf {
    * and the second was signed as "no developer".
    */
   readonly mayConflictTurn?: true;
+  /**
+   * gh #364: `failure` is a developer that asked a question and left the tree
+   * unchanged, in an unattended run. Half B requeues it while attempts remain
+   * (the same bound `redDod` uses), instead of a terminal block only a
+   * human's `story reopen` can lift. Absent on every other half.
+   */
+  readonly askedNoDiff?: true;
 }
 
 /**
@@ -684,6 +691,14 @@ class BuildSession {
   private readonly dodRequeued = new Set<string>();
   /** gh #286: stories `settleHalf` requeued as a conflict turn in THIS process — `dodRequeued`'s twin. */
   private readonly conflictRequeued = new Set<string>();
+  /**
+   * gh #364: stories `settleAskedNoDiff` requeued because their developer asked
+   * instead of acting, in an unattended run — `dodRequeued`'s twin. Set by
+   * `settleAskedNoDiff`, read by `driveStory` and `driveWaveHalves` to decide
+   * whether another developer attempt follows. Cleared at the top of every
+   * attempt, like the two maps above.
+   */
+  private readonly askedNoDiffRequeued = new Set<string>();
   /**
    * Per story, WHY no reviewer was spawned for it (gh #289) — the stage had less
    * left than a review costs. Same shape and same lifetime as the two maps above,
@@ -1514,6 +1529,12 @@ class BuildSession {
         this.lines.push(`  · ${planned.story.id}: the DoD was red — requeued with its output`);
         continue;
       }
+      // gh #364: the developer asked instead of acting, in an unattended run —
+      // requeued the same way a red DoD is.
+      if (this.askedNoDiffRequeued.has(planned.story.id)) {
+        this.lines.push(`  · ${planned.story.id}: the developer asked instead of acting — requeued`);
+        continue;
+      }
       // gh #286: a conflict an agent can own — requeued with the merge.
       if (this.conflictRequeued.has(planned.story.id)) {
         this.lines.push(`  · ${planned.story.id}: ${CONFLICT_REQUEUED_LINE}`);
@@ -1612,14 +1633,17 @@ class BuildSession {
       // must NOT follow it — `owedAnotherPass` says no to it.
       const requeued = wave.stories.filter((p) =>
         halves.has(p.story.id) && (this.dodRequeued.has(p.story.id) || this.conflictRequeued.has(p.story.id)
-          || this.owedAnotherPass(p.story.id)));
+          || this.askedNoDiffRequeued.has(p.story.id) || this.owedAnotherPass(p.story.id)));
       for (const planned of requeued) {
         // gh #313: the red-DoD requeue rides the same round as `changes`.
         this.lines.push(this.dodRequeued.has(planned.story.id)
           ? `  · ${planned.story.id}: the DoD was red — requeued with its output`
           : this.conflictRequeued.has(planned.story.id)
             ? `  · ${planned.story.id}: ${CONFLICT_REQUEUED_LINE}`
-            : `  · ${planned.story.id}: ${this.requeueLine(planned.story.id)}`);
+            // gh #364: the developer asked instead of acting, in an unattended run.
+            : this.askedNoDiffRequeued.has(planned.story.id)
+              ? `  · ${planned.story.id}: the developer asked instead of acting — requeued`
+              : `  · ${planned.story.id}: ${this.requeueLine(planned.story.id)}`);
       }
       queue = requeued;
     }
@@ -2046,6 +2070,7 @@ class BuildSession {
     this.unfundedReviews.delete(planned.story.id);
     this.dodRequeued.delete(planned.story.id);
     this.conflictRequeued.delete(planned.story.id);
+    this.askedNoDiffRequeued.delete(planned.story.id);
     // gh #286: a conflict turn granted and not yet taken — read off the ledger,
     // so a turn granted by an invocation that ended is still handed out. Read
     // BEFORE the opening: a story owed a turn is not fast-forwarded, because the
@@ -2206,6 +2231,32 @@ class BuildSession {
       };
     }
 
+    // (d⅞0) gh #364: an unattended run has nobody to answer a question, and a
+    // developer that asked one and left the tree exactly as `handed` found it
+    // is not a story a DoD can judge — nothing changed for it to test.
+    // Measured live: before this check, that shape ran the DoD over an
+    // untouched tree, committed nothing, and landed on `blocked` — terminal
+    // until a person's `story reopen`. Give it the shape a red DoD already
+    // gets: a spent, requeueable attempt (`settleAskedNoDiff`, `this.attempts`
+    // bound), with the cause named as `failure_kind` on its task row so a
+    // ledger can tell "the model declined to guess" from every other reason a
+    // story stalls. Attended runs (a human DOES answer) are unchanged: this
+    // branch never fires for them, so a question there still runs the DoD
+    // and blocks exactly as it always did.
+    if (this.ctx.unattended === true && developer.questionsAsked.length > 0) {
+      const proven = await workSince({
+        workspaceRoot: this.workspace.root, repoDir: story.repoDir, worktree: story.worktree, since: handed,
+      });
+      if (!proven) {
+        this.markAskedNoDiff(developer.taskIndex, developer.questionsAsked);
+        return {
+          story, cost: spent, dod: [], commit: null,
+          failure: askedNoDiffReason(developer.questionsAsked),
+          developerError: null, before, askedNoDiff: true,
+        };
+      }
+    }
+
     // (d⅞) gh #286: the MARKER GUARD, before the DoD and before any commit the
     // framework makes. A conflict turn that left a marker anywhere — committed
     // or not — or never closed the merge BLOCKS: a requeue would hand the same
@@ -2333,6 +2384,10 @@ class BuildSession {
     // attempt unspent — see `parkDeveloperFailure`.
     if (half.developerError !== null) {
       await this.parkDeveloperFailure(story, half.developerError, half.cost, half.before);
+      return "settled";
+    }
+    if (half.failure !== null && half.askedNoDiff === true) {
+      await this.settleAskedNoDiff(story, half.failure, half.cost, half.before);
       return "settled";
     }
     if (half.failure !== null && half.redDod !== undefined) {
@@ -2520,6 +2575,41 @@ class BuildSession {
       epic_sha: epicSha,
       story_sha: storySha,
     });
+  }
+
+  /**
+   * gh #364: the requeue twin of `settleRedDod` below, for a developer that
+   * asked instead of acting in a run where nobody answers.
+   *
+   * Same bound — `story.attempt < this.attempts` — and the same reason: a
+   * turn that read the brief and chose not to act is an ATTEMPT, the same
+   * way a red DoD is, so it is never a free retry the way
+   * `parkDeveloperFailure` gives a transport failure. Requeued while
+   * attempts remain, blocked (today's terminal sentence, via `this.block`)
+   * on the last one.
+   */
+  private async settleAskedNoDiff(
+    story: StoryContext, failure: string, cost: number, before: PlanStatus,
+  ): Promise<void> {
+    const id = story.planned.story.id;
+    if (story.attempt < this.attempts) {
+      const spent = this.counters.askedNoDiffSpent(this.ctx.runDir, id);
+      this.counters.countAskedNoDiff(id, spent);
+      this.askedNoDiffRequeued.add(id);
+      await this.settle(story, before, {
+        dod: [], commit: null, merged: false, carried: null, conflicts: [], verdict: "n-a",
+        review: {
+          verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [],
+          formatProblems: [], verdictProblem: null,
+        },
+        keepWorktree: true,
+        cost,
+        reason: failure,
+        askedNoDiff: true,
+      });
+      return;
+    }
+    await this.block(story, failure, cost, []);
   }
 
   /**
@@ -3582,7 +3672,9 @@ class BuildSession {
       // DoD (gh #313) — both spend one, and only the first is a review.
       this.reviewAttempts(planned.story.id) + this.counters.dodRequeuesSpent(this.ctx.runDir, planned.story.id)
         // gh #286: and a conflict turn spends one too.
-        + this.counters.conflictTurnsSpent(this.ctx.runDir, planned.story.id) + 1,
+        + this.counters.conflictTurnsSpent(this.ctx.runDir, planned.story.id)
+        // gh #364: and an unattended developer that asked instead of acting.
+        + this.counters.askedNoDiffSpent(this.ctx.runDir, planned.story.id) + 1,
       this.attempts,
     );
   }
@@ -3691,7 +3783,13 @@ class BuildSession {
     // goes in front of the same prompt, and the spawn event says which refused
     // line it is the retry for. Additive on `agent.spawned`; absent otherwise.
     retry: { readonly after: string } | null = null,
-  ): Promise<{ cost: number; error: string | null; refused: string | null }> {
+  ): Promise<{
+    cost: number; error: string | null; refused: string | null;
+    /** gh #364: `questions_asked`, verbatim, off this turn's envelope. Empty on every turn that asked nothing. */
+    questionsAsked: readonly string[];
+    /** gh #364: where this turn's row landed in `this.tasks`, so a later diff comparison can amend it in place. */
+    taskIndex: number;
+  }> {
     const cap = this.developerCapFor(story);
     const commands = this.repoCommands(story.planned.story.repo);
     this.ctx.emit("agent.spawned", {
@@ -3730,6 +3828,11 @@ class BuildSession {
     this.noteRateLimit(agent.rateLimit);
     if (agent.raw !== "") writeRaw(this.ctx.runDir, this.bundleKey(story.planned.story.id), agent.raw);
 
+    // gh #364: captured before the push so a later diff comparison can find and
+    // amend THIS row — the one written at spawn time, before "did it leave a
+    // diff" is knowable — rather than writing a second row for the same turn.
+    const taskIndex = this.tasks.length;
+    const questionsAsked = agent.envelope?.questions_asked ?? [];
     this.tasks.push({
       key: story.planned.story.id,
       model: this.model(),
@@ -3751,7 +3854,9 @@ class BuildSession {
     // that owns attempts can stop, rather than reading an empty diff as a
     // developer that simply chose to change nothing.
     if (agent.ok) {
-      return { cost: round2(agent.costUsd), error: null, refused: agent.permissionRefusal };
+      return {
+        cost: round2(agent.costUsd), error: null, refused: agent.permissionRefusal, questionsAsked, taskIndex,
+      };
     }
 
     // The developer IS a check, and this is the one outcome it can have that
@@ -3769,7 +3874,26 @@ class BuildSession {
       attempt: story.attempt,
       detail: error,
     });
-    return { cost: round2(agent.costUsd), error, refused: null };
+    return { cost: round2(agent.costUsd), error, refused: null, questionsAsked, taskIndex };
+  }
+
+  /**
+   * gh #364: attach the `failure_kind` this attempt earned AFTER the fact.
+   *
+   * The task row for a developer's turn is written at spawn time, in
+   * `spawnDeveloper` above — money is recorded whether the story settles or
+   * not — which is BEFORE the tree comparison this kind depends on has run.
+   * One row, amended once, rather than a second write path for the same turn
+   * that could disagree with the first about it.
+   */
+  private markAskedNoDiff(taskIndex: number, questions: readonly string[]): void {
+    const task = this.tasks[taskIndex];
+    if (task === undefined) return;
+    this.tasks[taskIndex] = {
+      ...task,
+      error: askedNoDiffReason(questions),
+      failureKind: ASKED_NO_DIFF_FAILURE_KIND,
+    };
   }
 
   /** (e) the story's ```dod block, in the worktree, via the gate's own runner. */
@@ -4367,6 +4491,8 @@ class BuildSession {
       keepWorktree?: boolean;
       cost: number;
       reason: string | null;
+      /** gh #364: this settle is `settleAskedNoDiff`'s — see `StoryOutcome.askedNoDiff`. */
+      askedNoDiff?: boolean;
     },
   ): Promise<void> {
     const id = story.planned.story.id;
@@ -4417,6 +4543,9 @@ class BuildSession {
       asIs: this.asIsSettlements.get(id) ?? null,
       rescued,
       cost_usd: parts.cost,
+      // gh #364: absent (`undefined`) rather than `false` on every ordinary
+      // settle — `StoryOutcome.askedNoDiff`'s own contract.
+      ...(parts.askedNoDiff === true ? { askedNoDiff: true } : {}),
     };
     this.outcomes.set(id, outcome);
     this.writeLog(outcome);
@@ -4493,6 +4622,10 @@ class BuildSession {
       // ADDITIVE (gh #295): WHICH as-is case this was. Omitted on the case #279
       // shipped, so a record written before this key reads as it always did.
       ...(outcome.asIs?.reason === undefined ? {} : { as_is_reason: outcome.asIs.reason }),
+      // ADDITIVE (gh #364): this attempt settled because the developer asked
+      // instead of acting, in an unattended run. Omitted on every ordinary
+      // turn — `reviewLedger.ts` counts it from this key alone.
+      ...(outcome.askedNoDiff === true ? { asked_no_diff: true } : {}),
     });
     // Worktrees survive a `review` on purpose: the second attempt continues in
     // the same tree rather than re-cutting the branch it just wrote. A parked
@@ -5361,6 +5494,8 @@ class BuildSession {
       reopenNote: this.reopenFor(story.planned),
       notInWorktree: story.notInWorktree,
       ...(story.conflictTurn === undefined ? {} : { conflictTurn: story.conflictTurn }),
+      // gh #364: nobody answers a question this turn raises — say so.
+      unattended: this.ctx.unattended === true,
       dispatchNotes: this.dispatchNotesFor(story.planned.story.id).body,
       // This repo's skills only: the worktree carries one repo's `.claude/skills`.
       projectSkills: renderProjectSkills(skillsFor(readStackPacks(this.ctx.root), [repo])),
