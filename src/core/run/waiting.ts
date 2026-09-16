@@ -30,7 +30,7 @@ import { rateLimitLine } from "../facilitator/agentEvents.ts";
 import { hasPreparedBundle } from "./prepared.ts";
 import { startedHeadless } from "./lastStart.ts";
 import { heldByNote } from "./autoGate.ts";
-import { lastRateLimitPark } from "./rateLimitPark.ts";
+import { currentRateLimitPark } from "./rateLimitPark.ts";
 
 /**
  * Every kind, as a VALUE — so a reader can enumerate them.
@@ -242,7 +242,7 @@ export function waitingFor(run: WaitingRun, runDir: string): Waiting {
       // the provider named a reset instant, say when — the same fact `run auto`
       // is waiting on, off the same event, so the two cannot disagree.
       if (held.length === 1 && held[0] === "stories") {
-        const park = lastRateLimitPark(runDir, entry.stage.id);
+        const park = currentRateLimitPark(runDir, entry.stage.id);
         if (park !== null) {
           return {
             kind: "gate",

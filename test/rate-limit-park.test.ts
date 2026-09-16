@@ -30,6 +30,7 @@ import { runAuto } from "../src/core/facilitator/runAuto.ts";
 import { RATE_LIMIT_RESUME_ACTOR, refusalNote, type AutoGateVerdict } from "../src/core/run/autoGate.ts";
 import { waitingFor } from "../src/core/run/waiting.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
+import { currentRateLimitPark } from "../src/core/run/rateLimitPark.ts";
 import { summarize } from "../src/core/ui/summary.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
@@ -474,6 +475,15 @@ describe("gh #367 — run auto treats a rate-limit-parked gate as a timed wait",
     }));
     store.save();
     EventLog.forRun(ws.runDir).append({
+      ts: "2026-09-16T08:55:00.000Z",
+      run: store.runId,
+      stage: "build",
+      type: "stage.started",
+      actor: "tldrx",
+      cost_usd: 0,
+      payload: { phase: "04-build", mode: "headless" },
+    });
+    EventLog.forRun(ws.runDir).append({
       ts: "2026-09-16T09:00:00.000Z",
       run: store.runId,
       stage: "build",
@@ -493,5 +503,76 @@ describe("gh #367 — run auto treats a rate-limit-parked gate as a timed wait",
     expect(waiting.message).toContain("parked by a rate-limit warning");
     expect(waiting.message).toContain(`resumes automatically at ${new Date(resetsAtSec * 1000).toISOString()}`);
     expect(waiting.message).not.toContain("held by stories");
+  });
+});
+
+// --- gh #367 review: a park never explains a story it did not cause --------
+
+describe("gh #367 review — a park counts only when it explains EVERY unfinished story", () => {
+  test("a park on S1 plus an INDEPENDENTLY blocked S3: run auto does not resume, status still says held by stories", async () => {
+    const ws = workspace({
+      stories: [
+        { id: "S1", epic: "E1", title: "First story" },
+        { id: "S2", epic: "E1", title: "Second story" },
+        // Pre-seeded `blocked`, with no rescue condition (`blockedByFailedDeveloper`
+        // / `staleDependencyHold` both find nothing) — `pendingStories()` leaves it
+        // alone, untouched by this run, for a reason a rate-limit frame cannot be.
+        { id: "S3", epic: "E1", title: "Third story", status: "blocked" },
+      ],
+      epics: [{ id: "E1", stories: ["S1", "S2", "S3"], branch: "epic/e1" }],
+      waves: [["S1", "S2", "S3"]],
+      gates: "none",
+    });
+    // resets_at already past: if the (buggy) predicate read the park alone, this
+    // would resume on the very first poll — the coverage check is what must stop it.
+    const resetsAtSec = Math.floor((Date.now() - 90_000) / 1000);
+    process.env.FAKE_BUILD_RATE_LIMIT = JSON.stringify({ S1: `allowed_warning@0.94@${String(resetsAtSec)}` });
+
+    const outcome = await runAuto({
+      root: ws.root, yolo: false, actor: "alan", at: "2026-09-16T09:00:00Z",
+      waitGatesMs: 1500,
+    });
+
+    expect(outcome.code).toBe(4); // no human signed it, and none was ever asked
+    expect(developerSpawns(ws, "S2")).toBe(0);
+    expect(events(ws).filter((e) => e.type === "gate.rejected" && e.actor === RATE_LIMIT_RESUME_ACTOR))
+      .toHaveLength(0);
+
+    const store = RunStore.open(ws.runDir);
+    expect(currentRateLimitPark(store.runDir, "build")).toBeNull();
+    const waiting = waitingFor(store.run, store.runDir);
+    expect(waiting.message).toContain("held by stories");
+    expect(waiting.message).not.toContain("parked by a rate-limit warning");
+  });
+
+  test("a STALE park from a previous attempt, with none on this one, is not read as live", () => {
+    const ws = workspace(twoStories());
+    const runId = ws.runId;
+    // Attempt 1: a real park withheld S2, and the invocation ended.
+    EventLog.forRun(ws.runDir).append({
+      ts: "2026-09-16T08:00:00.000Z", run: runId, stage: "build", type: "stage.started",
+      actor: "tldrx", cost_usd: 0, payload: { phase: "04-build", mode: "headless" },
+    });
+    EventLog.forRun(ws.runDir).append({
+      ts: "2026-09-16T08:05:00.000Z", run: runId, stage: "build", type: "agent.rate_limited",
+      actor: "developer", cost_usd: 0,
+      payload: {
+        phase: "04-build", status: "allowed_warning", window: "five_hour", utilization: 0.94,
+        resets_at: Math.floor(Date.now() / 1000) - 3600, parked: "S2",
+      },
+    });
+    // Attempt 2 (a relaunch, or an operator's manual retry): started fresh, and
+    // this turn reported NO rate-limit frame at all — the window may have cleared,
+    // or the developer simply never warned. Either way nothing NEW parked S2; it
+    // is still `todo` for whatever this attempt's own reason is.
+    EventLog.forRun(ws.runDir).append({
+      ts: "2026-09-16T09:00:00.000Z", run: runId, stage: "build", type: "stage.started",
+      actor: "tldrx", cost_usd: 0, payload: { phase: "04-build", mode: "headless" },
+    });
+
+    // S2's story file is still `todo` on disk from `workspace()`'s own seeding —
+    // storiesView would happily call this "every unfinished story is todo" if the
+    // temporal scope did not already refuse the stale event first.
+    expect(currentRateLimitPark(ws.runDir, "build")).toBeNull();
   });
 });

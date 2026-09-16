@@ -56,7 +56,7 @@ import {
   RATE_LIMIT_RESUME_ACTOR, RATE_LIMIT_RESUME_NOTE_PREFIX, checkRetryVerdict, heldBy, reevaluateAutoGate,
   type AutoGateVerdict,
 } from "../run/autoGate.ts";
-import { lastRateLimitPark, type RateLimitPark } from "../run/rateLimitPark.ts";
+import { currentRateLimitPark, type RateLimitPark } from "../run/rateLimitPark.ts";
 import { rateLimitLine } from "./agentEvents.ts";
 import { withWorkspaceLock, workspaceRootOfRunDir } from "../lock/workspaceLock.ts";
 import { flatten, isAttendedByHost, isFinished, type RunFile } from "../run/RunFile.ts";
@@ -1553,7 +1553,7 @@ function rateLimitReadyToResume(park: RateLimitPark, waitStartedAtMs: number): b
 function rateLimitParkFor(verdict: AutoGateVerdict, runDir: string, stageId: string): RateLimitPark | null {
   const held = heldBy(verdict);
   if (held.length !== 1 || held[0] !== "stories") return null;
-  return lastRateLimitPark(runDir, stageId);
+  return currentRateLimitPark(runDir, stageId);
 }
 
 async function waitForGate(

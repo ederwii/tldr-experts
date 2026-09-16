@@ -66,9 +66,14 @@
   park's own `resets_at` off the ledger (`src/core/run/rateLimitPark.ts`) and resumes the
   stage itself once the provider's own clock has passed it (signed `run auto (rate-limit)`,
   a separate actor from #231's checks-retry so the two bounds can never collide), backing off
-  a fixed interval when the frame stated no reset at all. `run status`'s "held by: stories"
-  line now says "parked by a rate-limit warning" and when it resumes, instead of reading as a
-  decision waiting on a human.
+  a fixed interval when the frame stated no reset at all — but ONLY when that park explains
+  EVERY story the stage still has unfinished (every one a plain, never-attempted `todo`,
+  scoped to the CURRENT attempt's own `stage.started`): a gate also held by an independently
+  `blocked` story, or one whose only park is stale history from an earlier attempt, is never
+  auto-resumed (caught on review — `storiesCondition` collapses every unfinished story into
+  one `stories` id, so a park on one story is not evidence about another). `run status`'s
+  "held by: stories" line now says "parked by a rate-limit warning" and when it resumes,
+  under the same predicate, instead of reading as a decision waiting on a human.
 
 ## 0.31.1 — 2026-09-16
 

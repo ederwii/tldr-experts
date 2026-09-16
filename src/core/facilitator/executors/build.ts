@@ -1753,7 +1753,13 @@ class BuildSession {
       ...(frame.window === null
         ? { window_absent: "not recorded — the provider's frame named no window" }
         : { window: frame.window }),
-      utilization: frame.utilization,
+      // In practice always present — `noteRateLimit` only reaches this branch on
+      // a STATED utilization below the line — but the absent-with-reason shape
+      // is written the same way `recordRateLimited` writes it (AGENTS.md §7, one
+      // derivation) rather than assuming the caller's guarantee holds forever.
+      ...(frame.utilization === null
+        ? { utilization_absent: "not recorded — the provider's frame stated no utilization" }
+        : { utilization: frame.utilization }),
       ...(frame.resetsAt === null
         ? { resets_at_absent: "not recorded — the provider's frame stated no resetsAt" }
         : { resets_at: frame.resetsAt }),
