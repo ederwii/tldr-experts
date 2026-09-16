@@ -179,6 +179,61 @@ describe("the shipped defaults", () => {
   });
 });
 
+describe("`how` is optional per seed (gh #346)", () => {
+  /**
+   * Owner decision 2026-09-16: the mid-tier model by default, on the shipped
+   * file itself — not a constant this test could drift from independently.
+   */
+  test("the shipped how/stage.yml defaults to sonnet, not opus", () => {
+    const preset = loadWorkflowPreset(process.cwd(), "feature");
+    const how = preset.stages.find((s) => s.id === "how");
+    expect(how?.model).toBe("sonnet");
+  });
+
+  /**
+   * The override mechanism is not new: `--model` already overrides every
+   * stage's `model:` for the invocation (`src/cli/helpText.ts`'s `model()` flag,
+   * "Everywhere [but --commit --review] the two flags override the stage's
+   * model:/effort:"), and a workspace's own `.tldrx/stages/how/stage.yml` wins
+   * over the shipped one (`stagePath`). Nothing here needed to change for that
+   * half of the decision to already work.
+   */
+  test("a later `model:` line in a stage's own stage.yml overrides the earlier default (YAML: last key wins)", () => {
+    const ws = workspace(TWO_STAGE);
+    // Simulates a workspace's own `.tldrx/stages/how/stage.yml` pinning the
+    // strong model back — the same mechanism `stagePath` already prefers a
+    // workspace copy through (spec §2.4's "a workspace's own copy wins").
+    writeStageKey(ws, "alpha", "model: opus");
+    const preset = loadWorkflowPreset(ws.root, "demo");
+    const alpha = preset.stages.find((s) => s.id === "alpha");
+    expect(alpha?.model).toBe("opus");
+  });
+
+  test("the shipped how/stage.yml skips itself when the seed declares its own solution", () => {
+    const spec = loadStageSpec(process.cwd(), "feature", "how");
+    expect(spec.skipIf).toBe("seed_solution==1");
+  });
+
+  test("a workflow's own skip_if for a stage wins over that stage's built-in default", () => {
+    const ws = workspace([
+      { ...(TWO_STAGE[0] as StageOptions), skipIf: "repos<=9" },
+      TWO_STAGE[1] as StageOptions,
+    ]);
+    // The workflow already declares `skip_if: repos<=9` for `alpha` (above); a
+    // stage-level default of its own must not be read once the workflow spoke.
+    writeStageKey(ws, "alpha", 'skip_if: "seed_solution==1"');
+    const spec = loadStageSpec(ws.root, "demo", "alpha");
+    expect(spec.skipIf).toBe("repos<=9");
+  });
+
+  test("a stage with no workflow-level skip_if falls back to its OWN stage.yml default", () => {
+    const ws = workspace(TWO_STAGE);
+    writeStageKey(ws, "beta", 'skip_if: "seed_solution==1"');
+    const spec = loadStageSpec(ws.root, "demo", "beta");
+    expect(spec.skipIf).toBe("seed_solution==1");
+  });
+});
+
 describe("the calibration keys", () => {
   test("a value in range is read; the same key out of range is REFUSED by name", () => {
     for (const [field, range] of Object.entries(STAGE_TUNING_RANGES)) {

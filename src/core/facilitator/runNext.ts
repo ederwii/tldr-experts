@@ -60,6 +60,7 @@ import { onInterrupt, stopInFlightRun } from "./interrupt.ts";
 import { startedHeadless } from "../run/lastStart.ts";
 import { loadStageSpec, type StageSpec } from "./stageSpec.ts";
 import { blockingQuestionIds, countSkipInputs, evaluateSkipIf, SkipIfError } from "./skipIf.ts";
+import { materializeSeedSolution } from "./seedSolution.ts";
 import {
   agentDir, evidencePath, expandAll, expandPatterns, missing, present, resolveDeclared, resolveMany,
   type PathContext,
@@ -555,6 +556,15 @@ async function advance(store: RunStore, options: NextOptions, notes: string[]): 
       }
       if (holds) {
         skipStage(store, options, phaseId, stageId, `skip_if: ${spec.skipIf}`);
+        // gh #346: `seed_solution==1` is the one skip_if that leaves a
+        // DOWNSTREAM stage an input nothing else can produce — `how`'s own
+        // `design.md`. Every other skip_if leaves downstream reading the
+        // already-honest `absent:` citation (`prompt.ts`'s `absentBlocks`);
+        // this one additionally materialises the seed's declared solution so
+        // Plan is not asked to work from a file that silently reads as empty.
+        if (spec.skipIf.startsWith("seed_solution")) {
+          materializeSeedSolution(store.runDir, store.run, phaseId, spec.planned.outputs);
+        }
         const moved = advanceCursor(store);
         store.save();
         notes.push(`skipped ${phaseId}/${stageId} (skip_if: ${spec.skipIf})`);

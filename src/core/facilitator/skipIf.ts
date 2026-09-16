@@ -1,17 +1,23 @@
 /**
- * `workflows/<scope>.yml` `stages[].skip_if` (spec §2.4).
+ * `workflows/<scope>.yml` `stages[].skip_if` (spec §2.4), plus a stage's own
+ * built-in default (see `stageSpec.ts`'s `overlay`, gh #346).
  *
- * The grammar is deliberately tiny — `^(stories|repos|questions)(<=|>=|==|<|>)\d{1,4}$` —
- * because a scope preset is data, and data that can express arbitrary conditions
- * is a scripting language nobody agreed to ship. Anything outside the grammar is
- * a schema error, not a "false".
+ * The grammar is deliberately tiny —
+ * `^(stories|repos|questions|seed_solution)(<=|>=|==|<|>)\d{1,4}$` — because a
+ * scope preset is data, and data that can express arbitrary conditions is a
+ * scripting language nobody agreed to ship. Anything outside the grammar is a
+ * schema error, not a "false". `seed_solution` (gh #346) is a boolean dressed as
+ * a count, exactly like `repos`: 1 when the run's seed explicitly declared its
+ * own technical solution (`seedSolution.ts`'s one recognised heading), 0
+ * otherwise — including every unseeded run.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isAdvisory, openBlocks, parseQuestions } from "../text/questions.ts";
+import { hasDeclaredSeedSolution } from "./seedSolution.ts";
 import type { RunFile } from "../run/RunFile.ts";
 
-export const SKIP_IF_RE = /^(stories|repos|questions)(<=|>=|==|<|>)(\d{1,4})$/;
+export const SKIP_IF_RE = /^(stories|repos|questions|seed_solution)(<=|>=|==|<|>)(\d{1,4})$/;
 
 export class SkipIfError extends Error {}
 
@@ -19,16 +25,23 @@ export interface SkipCounts {
   readonly stories: number;
   readonly repos: number;
   readonly questions: number;
+  /**
+   * 1 when the run's seed explicitly declared its own technical solution, 0
+   * otherwise (gh #346). Optional so every caller's pre-existing literal —
+   * `{stories, repos, questions}`, no fourth key — keeps type-checking;
+   * `evaluateSkipIf` reads an absent one as 0, the same as a real unseeded run.
+   */
+  readonly seed_solution?: number;
 }
 
 export function evaluateSkipIf(expression: string, counts: SkipCounts): boolean {
   const match = SKIP_IF_RE.exec(expression.trim());
   if (match === null) {
     throw new SkipIfError(
-      `skip_if '${expression}' does not match ^(stories|repos|questions)(<=|>=|==|<|>)\\d{1,4}$`,
+      `skip_if '${expression}' does not match ^(stories|repos|questions|seed_solution)(<=|>=|==|<|>)\\d{1,4}$`,
     );
   }
-  const left = counts[match[1] as keyof SkipCounts];
+  const left = counts[match[1] as keyof SkipCounts] ?? 0;
   const right = Number(match[3]);
   switch (match[2]) {
     case "<=": return left <= right;
@@ -43,16 +56,20 @@ export function evaluateSkipIf(expression: string, counts: SkipCounts): boolean 
 /**
  * `[assumption]` — the spec names the three variables but not where they are
  * counted from. Taken, in each case, the only place the number actually exists:
- *   stories   = `*.md` under `<run>/03-plan/stories/`
- *   repos     = `run.repos.length`
- *   questions = BLOCKING open question blocks across every phase folder of the
- *               run — `advisory: true` ones do not count (#169, fix round 2)
+ *   stories       = `*.md` under `<run>/03-plan/stories/`
+ *   repos         = `run.repos.length`
+ *   questions     = BLOCKING open question blocks across every phase folder of
+ *                   the run — `advisory: true` ones do not count (#169, fix
+ *                   round 2)
+ *   seed_solution = 1 if any seed document declares its own technical solution
+ *                   (`seedSolution.ts`), else 0 (gh #346)
  */
 export function countSkipInputs(runDir: string, run: RunFile): SkipCounts {
   return {
     stories: countStories(runDir),
     repos: run.repos.length,
     questions: countOpenQuestions(runDir),
+    seed_solution: hasDeclaredSeedSolution(runDir, run) ? 1 : 0,
   };
 }
 

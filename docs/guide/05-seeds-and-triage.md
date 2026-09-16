@@ -50,6 +50,14 @@ measured in both:
 - **Several sources in one token are joined with `"; "`**: `[src: src/a.ts:12; src/b.ts:40]`.
 - **Use the four What headings** — `# Intent`, `# Scope`, `# Success metrics`,
   `# Open questions` — so every output is covered and none is reported as an Unknown.
+- **A `## Solution` (or `## Technical approach`) H2 skips `how` (gh #346).** When the seed
+  already declares its own technical solution under one of these two exact headings, `run
+  next` skips `how` entirely and `plan` reads that section instead of a `how`-written
+  `design.md` — `how`'s own `design.md` is materialised from it verbatim, cited back to this
+  file and heading. This is never inferred from prose: a paragraph that merely SOUNDS like a
+  solution does not trigger it, only the heading, exactly spelled, at H2 (a nested `###
+  Solution` under something else does not count either). Skip the heading if you want `how`
+  to think it through instead — most seeds should.
 - **Give every open question a `Recommended:` line.** Under `run new --questions none` the
   loop answers a question only when its block names one of its own options on a
   `Recommended: <letter>` line — optionally `<letter>)`, then `— <why>`, then a trailing

@@ -52,8 +52,12 @@ The keys a stage may set, and what they do:
 | `preconditions` | none (≤10) | `{id, repo, command, expect_exit, timeout_s}` — an operational fact checked **before** the stage is dispatched. Same allowlist rule as a `cmd` check; `expect_exit` defaults to `0` and `timeout_s` to **60 s**, never the stage's. A red one is exit `2` before anything is spent ([10 — Unattended mode](10-unattended-mode.md)) |
 
 `expert_knowledge_bytes:` is the retired spelling of `knowledge_max_bytes` and is still
-read, as the same **total**. `skip_if` and `questions.max` come from the workflow entry
-(`workflows/<scope>.yml`), not from `stage.yml`.
+read, as the same **total**. `questions.max` comes from the workflow entry
+(`workflows/<scope>.yml`), not from `stage.yml`. `skip_if` does too, EXCEPT: when the
+workflow declares none for a stage, the stage's own top-level `skip_if:` in `stage.yml` is
+the default (gh #346) — shipped `how` sets `skip_if: "seed_solution==1"` this way, since no
+shipped `workflows/*.yml` uses the record shape a workflow-level `skip_if` needs yet. A
+workflow that DOES declare one for that stage id always wins.
 
 ## Two execution modes, one code path
 

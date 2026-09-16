@@ -69,6 +69,13 @@ export interface WorkspaceOptions {
   /** Extra files, keyed by path relative to the workspace root. */
   readonly files?: Readonly<Record<string, string>>;
   /**
+   * `run new --seed <file|dir>`, exercised through `createRun` exactly as the
+   * CLI does (gh #346). Workspace-relative, resolved against `root` the same
+   * way `--seed` always has been; declare the file through `files` first so it
+   * exists before `createRun` reads it.
+   */
+  readonly seed?: string | readonly string[];
+  /**
    * Who ran `run new`. Defaults to `alan`, which is what every test that does not
    * care has always got. It matters to the tests that read the run's `run.created`
    * event back — the authorizer of a run-new-frozen gate policy is that actor.
@@ -156,6 +163,7 @@ export function makeFacilitatorWorkspace(options: WorkspaceOptions): Facilitator
     gates: options.gatesFlag,
     ship: options.shipFlag,
     questions: options.questionsFlag,
+    seed: options.seed,
     actor: options.actor ?? "alan",
     now: new Date("2026-08-28T09:00:00Z"),
   });

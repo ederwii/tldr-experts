@@ -20,6 +20,23 @@
   only the part a script could not repair (owner decision 2026-09-15: auto-repair is visible, never
   silent).
 
+- **`how` is skipped when the seed already declares its own technical solution, and `plan` reads
+  that section instead (#346).** Owner decision, measured against three samples where `how`
+  reworked a seed that already carried the answer: 11.4-45% of a run's spend and 43-53% of its
+  own bytes went unread downstream. The trigger is one exact, documented marker — an H2 `##
+  Solution` or `## Technical approach` in a seed document — never inferred from prose:
+  `src/core/facilitator/seedSolution.ts` reuses `seed/seedClaims.ts`'s fence-aware heading reader
+  rather than a second regex, and exposes it to the existing `skip_if` grammar as a new
+  `seed_solution` predicate (`skipIf.ts`, `(stories|repos|questions|seed_solution)<op>N`). Since no
+  shipped `workflows/*.yml` uses the §2.4 record shape a workflow-level `skip_if` needs, a stage's
+  own top-level `skip_if:` in `stage.yml` is now read as its built-in default when the workflow
+  names none (`stageSpec.ts`'s `overlay`, a workflow's own `skip_if` for that stage id still wins);
+  the shipped `stages/how/stage.yml` sets `skip_if: "seed_solution==1"` this way. The skip is
+  recorded exactly like any other `skip_if` (`stage.skipped`, named on the run), and — because this
+  is the one skip that would otherwise leave `plan` reading a `02-how/design.md` that silently
+  looks empty — `tldrx next` additionally materialises that file from the seed's declared section
+  verbatim, cited back to the seed, the moment the skip fires.
+
 ### Changed
 
 - **`watch` now follows `build`'s gate policy in every shipped scope where `build` is already
@@ -43,6 +60,12 @@
   `watch` self-signs there, the chapter sets it back to `human` explicitly first
   (`run gates set watch:human --note …`), because the lesson is the attended human handoff, not
   the shipped default.
+
+- **`how`'s default model is `sonnet`, not `opus`** (#346). Owner decision, measured across a
+  single-run analysis and two workspace audits: `how` cost $10.40-$269.90 per sample, 11.4-45% of
+  the run's total spend. A workspace or a single invocation that wants the strong model back
+  overrides it exactly as before — `.tldrx/stages/how/stage.yml` with `model: opus`, or
+  `tldrx next --model opus` / `tldrx run auto --model opus` for one invocation.
 
 ### Fixed
 

@@ -555,7 +555,7 @@ stages:
 | `questions.suppress_areas` / `dod.add` / `dod.remove` | slug[] / str[] / str[] | n | Areas this scope must not ask about; deltas over the default DoD |
 | `stages[].id` / `.phase` | slug / `^0[1-5]-` | y | Stage folder; file order = execution order |
 | `stages[].budget_usd` | number >0 | n | Overrides `stage.yml` |
-| `stages[].skip_if` | str | n | `^(stories\|repos\|questions)(<=\|>=\|==\|<\|>)\d{1,4}$` `[assumption]` |
+| `stages[].skip_if` | str | n | `^(stories\|repos\|questions\|seed_solution)(<=\|>=\|==\|<\|>)\d{1,4}$` `[assumption]`. `seed_solution` (gh #346) is 1 when the run's seed explicitly declares its own technical solution (`src/core/facilitator/seedSolution.ts`'s one recognised H2: `## Solution` or `## Technical approach`, never inferred from prose), else 0. When the WORKFLOW says nothing for a stage, the stage's own top-level `skip_if:` in `stage.yml` is the default (`stageSpec.ts`'s `overlay`) — the shipped `stages/how/stage.yml` sets `skip_if: "seed_solution==1"` this way, since none of the shipped `workflows/*.yml` use this record shape yet |
 | `skips` | slug[] | n | Stages this scope deliberately does NOT run, so the omission is on record. **Read, not decorative:** Build asks it (below) |
 | `<stage>.parallel` | int ≥1 | n | How many units of that stage may run at once — for `build`, stories per wave (§5). `--parallel` overrides it; absent ⇒ `stage.yml`'s `parallel:` (the shipped Build stage says 2), then 1 |
 
@@ -2901,7 +2901,12 @@ next(run, dry_run):
   if st.status == awaiting_gate: exit 4 "gate pending: tldrx approve"
   if st.status == awaiting_answer: exit 4 if unanswered_blocking(questions.md) else st.status = ready   # `advisory:` blocks do not hold it (§2.7)
   sy = load_validate(.tldrx/stages/<st.id>/stage.yml)
-  if sy.skip_if holds: append(stage.skipped); advance_cursor(); return next(run, dry_run)
+  if sy.skip_if holds: append(stage.skipped)
+                       if sy.skip_if starts with "seed_solution": materialize_design_md_from_seed(run)  # gh #346 — the ONLY
+                                                   # skip_if that leaves a downstream stage an input
+                                                   # nothing else can produce; a no-op if design.md is
+                                                   # already there or the skipped stage names no such output
+                       advance_cursor(); return next(run, dry_run)
   if r.attended_by == host and mode == headless: exit 4   # §2.2; FIRST, before every line below
   if b.economy(st.phase) == host-tokens and mode == headless: append(budget.blocked); exit 2   # §2.11: that ceiling is not dollars; the row is what `run auto --until-done` reads (gh #266)
   for p in sy.preconditions:                       # §2.3; skipped entirely on --commit
