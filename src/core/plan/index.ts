@@ -7,8 +7,9 @@ export {
 } from "./schemaContract.ts";
 export type { PlanContractExamples } from "./schemaContract.ts";
 export {
-  MAX_STORIES_PER_RUN, MAX_WAVES_PER_RUN, PLAN_SHAPE_HEADING, PLAN_SHAPE_RULES, WAVE_CAP_REASON_KEY,
-  validatePlanShape,
+  ENFORCEMENT_KEYWORDS, MAX_STORIES_PER_RUN, MAX_WAVES_PER_RUN, PLAN_SHAPE_HEADING, PLAN_SHAPE_RULES,
+  POPULATE_VERBS, WAVE_CAP_REASON_KEY,
+  invariantSequencingMessage, validatePlanShape,
 } from "./planShape.ts";
 export type { PlanShapeReport, PlanShapeRule } from "./planShape.ts";
 export type { PlanReport, PlanIssue } from "./validatePlan.ts";

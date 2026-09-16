@@ -19,8 +19,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validatePlan } from "../src/core/plan/validatePlan.ts";
 import {
-  MAX_STORIES_PER_RUN, MAX_WAVES_PER_RUN, PLAN_SHAPE_HEADING, PLAN_SHAPE_RULES, WAVE_CAP_REASON_KEY,
-  lateStoryMessage, unevenDodAdvisory, validatePlanShape, waveCapAdvisory, waveCapMessage,
+  ENFORCEMENT_KEYWORDS, MAX_STORIES_PER_RUN, MAX_WAVES_PER_RUN, PLAN_SHAPE_HEADING, PLAN_SHAPE_RULES,
+  POPULATE_VERBS, WAVE_CAP_REASON_KEY,
+  invariantSequencingMessage, lateStoryMessage, unevenDodAdvisory, validatePlanShape, waveCapAdvisory, waveCapMessage,
 } from "../src/core/plan/planShape.ts";
 import { renderPlanSchemaContract } from "../src/core/plan/schemaContract.ts";
 import { MAX_STORIES_PER_SEED, MAX_WAVES_PER_SEED } from "../src/core/seed/checkSeed.ts";
@@ -37,6 +38,8 @@ interface StorySpec {
   readonly repo?: string;
   readonly deps?: readonly string[];
   readonly dod?: readonly string[];
+  readonly acceptance?: readonly string[];
+  readonly testPlan?: readonly string[];
 }
 
 function story(spec: StorySpec): string {
@@ -50,8 +53,8 @@ function story(spec: StorySpec): string {
     "status: todo",
     `depends_on: [${(spec.deps ?? []).join(", ")}]`,
     `touches: ["src/${spec.id.toLowerCase()}/"]`,
-    'acceptance: ["it works"]',
-    'test_plan: ["a test"]',
+    `acceptance: [${(spec.acceptance ?? ["it works"]).map((s) => JSON.stringify(s)).join(", ")}]`,
+    `test_plan: [${(spec.testPlan ?? ["a test"]).map((s) => JSON.stringify(s)).join(", ")}]`,
     "evidence: []",
     "---",
     "",
@@ -221,6 +224,121 @@ describe("uneven dod across one epic's stories in one repo (#319) — an advisor
   });
 });
 
+describe("an invariant enforced before the story that populates it (#365)", () => {
+  test("S1 (wave 1) enforcing a NOT NULL column S4 (wave 2, depends_on S1) populates is refused, naming both stories, the field and the two sentences", () => {
+    const s1Acceptance = "Add a check constraint on delivery_address_text NOT NULL when fulfillment mode is Delivery";
+    const s4Acceptance = "The order placement handler populates delivery_address_text for every Delivery order";
+    const dir = writePlan(planFiles(
+      [
+        { id: "S1", acceptance: [s1Acceptance] },
+        { id: "S4", deps: ["S1"], acceptance: [s4Acceptance] },
+      ],
+      [["S1"], ["S4"]],
+    ));
+    // The depends_on graph is VALID (S4 depends on S1, W2 after W1) — only the semantic ordering is wrong (#365).
+    expect(validatePlan(dir, ALLOWED).issues).toEqual([]);
+    const issues = validatePlanShape(dir).issues;
+    expect(issues).toEqual([{
+      file: "stories/S1.md",
+      path: "acceptance",
+      message: invariantSequencingMessage(
+        "S1", "S4", "delivery_address_text", "delivery_address_text", s1Acceptance, s4Acceptance,
+      ),
+    }]);
+    expect(issues[0]?.message).toContain("S1");
+    expect(issues[0]?.message).toContain("S4");
+    expect(issues[0]?.message).toContain("delivery_address_text");
+  });
+
+  test("the same plan with S1's constraint worded non-enforcing (nullable/consistency-only) passes", () => {
+    const dir = writePlan(planFiles(
+      [
+        { id: "S1", acceptance: ["Add a nullable delivery_address_text column, consistent when present"] },
+        { id: "S4", deps: ["S1"], acceptance: ["The order placement handler populates delivery_address_text for every Delivery order"] },
+      ],
+      [["S1"], ["S4"]],
+    ));
+    expect(validatePlan(dir, ALLOWED).issues).toEqual([]);
+    expect(messagesOf(dir)).toEqual([]);
+  });
+
+  test("the enforcing story landing in the SAME wave as the populating story is still refused — parallel worktrees never see each other's writes", () => {
+    const s1 = "This field is required and validated with a check constraint on order_note";
+    const s2 = "This story sets order_note when the order is created";
+    const dir = writePlan(planFiles(
+      [{ id: "S1", acceptance: [s1] }, { id: "S2", acceptance: [s2] }],
+      [["S1", "S2"]],
+    ));
+    expect(validatePlanShape(dir).issues.map((i) => i.message)).toEqual([
+      invariantSequencingMessage("S1", "S2", "order_note", "order_note", s1, s2),
+    ]);
+  });
+
+  test("the enforcing story landing AFTER the populating story passes", () => {
+    const s2 = "This story is required to add a check constraint on order_note"; // enforce
+    const s1 = "This story populates order_note when the order is created"; // populate
+    const dir = writePlan(planFiles(
+      [{ id: "S1", acceptance: [s1] }, { id: "S2", deps: ["S1"], acceptance: [s2] }],
+      [["S1"], ["S2"]],
+    ));
+    expect(messagesOf(dir)).toEqual([]);
+  });
+
+  test("the SAME story both populating and enforcing a field is not a violation", () => {
+    const dir = writePlan(planFiles(
+      [{ id: "S1", acceptance: ["Populates order_note and adds a required check constraint on order_note"] }],
+      [["S1"]],
+    ));
+    expect(messagesOf(dir)).toEqual([]);
+  });
+
+  test("an enforcement sentence naming no field, or a populate sentence naming a different field, is not flagged", () => {
+    const dir = writePlan(planFiles(
+      [
+        { id: "S1", acceptance: ["This is required and validated"] },
+        { id: "S2", acceptance: ["This story populates other_field when the order is created"] },
+      ],
+      [["S1", "S2"]],
+    ));
+    expect(messagesOf(dir)).toEqual([]);
+  });
+
+  test("the same field spelled snake_case in one story and PascalCase in the other is still caught (review finding on #365, the originating incident's exact shape)", () => {
+    const s1 = "Add a check constraint requiring `delivery_address_text` NOT NULL when fulfillment mode is Delivery";
+    const s4 = "The placement handler sets `DeliveryAddressText` for every Delivery order";
+    const dir = writePlan(planFiles(
+      [{ id: "S1", acceptance: [s1] }, { id: "S4", deps: ["S1"], acceptance: [s4] }],
+      [["S1"], ["S4"]],
+    ));
+    const issues = validatePlanShape(dir).issues;
+    expect(issues).toEqual([{
+      file: "stories/S1.md",
+      path: "acceptance",
+      message: invariantSequencingMessage("S1", "S4", "delivery_address_text", "DeliveryAddressText", s1, s4),
+    }]);
+    // The message quotes each story's OWN spelling verbatim — never a normalized one.
+    expect(issues[0]?.message).toContain("`delivery_address_text`");
+    expect(issues[0]?.message).toContain("`DeliveryAddressText`");
+  });
+
+  test("a genuinely different field is not flagged even across snake_case/PascalCase spellings", () => {
+    const s1 = "Add a check constraint requiring `delivery_zone_id` NOT NULL";
+    const s4 = "The placement handler sets `DeliveryAddressText` for every Delivery order";
+    const dir = writePlan(planFiles(
+      [{ id: "S1", acceptance: [s1] }, { id: "S4", deps: ["S1"], acceptance: [s4] }],
+      [["S1"], ["S4"]],
+    ));
+    expect(messagesOf(dir)).toEqual([]);
+  });
+
+  test("the keyword and verb sets are short, exported and non-empty", () => {
+    expect(ENFORCEMENT_KEYWORDS.length).toBeGreaterThan(0);
+    expect(ENFORCEMENT_KEYWORDS.length).toBeLessThanOrEqual(10);
+    expect(POPULATE_VERBS.length).toBeGreaterThan(0);
+    expect(POPULATE_VERBS.length).toBeLessThanOrEqual(10);
+  });
+});
+
 describe("the `plan` gate carries the shape", () => {
   const CHECK = { id: "plan", on: "post-write", repo: null, command: null, expect_exit: 0 } as const;
 
@@ -265,7 +383,7 @@ describe("one rule source: the prompt, the seed check and the skill read the sam
     const all = PLAN_SHAPE_RULES.map((r) => r.text).join("\n");
     expect(all).toContain(WAVE_CAP_REASON_KEY);
     expect(all).toContain(`${String(MAX_WAVES_PER_RUN)} waves`);
-    for (const issue of ["#316", "#317", "#318", "#319"]) {
+    for (const issue of ["#316", "#317", "#318", "#319", "#365"]) {
       expect(PLAN_SHAPE_RULES.some((r) => r.issue === issue), issue).toBe(true);
     }
   });

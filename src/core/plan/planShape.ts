@@ -110,6 +110,18 @@ export const PLAN_SHAPE_RULES: readonly PlanShapeRule[] = [
       + "final e2e story that depends on everything is the story never reached. The `plan` check names a command "
       + "some stories of one epic and repo carry and a sibling does not — an advisory: say in that story why not.",
   },
+  {
+    issue: "#365",
+    text: "**A story that adds an invariant over EXISTING data lands in the same story as, or in a wave after, the "
+      + "story that makes existing rows and fixtures satisfy it.** A check constraint, a `NOT NULL`, a required "
+      + "field or a validation rule written ahead of the story that populates what it enforces makes that earlier "
+      + "story's own dod structurally red — every fixture the enforcing story's own tests run against still lacks "
+      + "the value, and two stories in the SAME wave run in separate worktrees that never see each other's writes, "
+      + "so 'later wave' is the only way one story's data can satisfy another's rule. If the invariant must land "
+      + "first, write it NON-ENFORCING — nullable, consistency-only, no constraint — and let the later story "
+      + "tighten it once the data exists. The `plan` check refuses a story whose acceptance or test plan names an "
+      + "enforcement over a field a later story's acceptance or test plan names populating.",
+  },
 ];
 
 /**
@@ -148,6 +160,147 @@ export function unevenDodAdvisory(
     + "or say in the story why it is not";
 }
 
+/**
+ * Sequencing over an invariant (#365): the SHORT, EXPLICIT keyword set the
+ * mechanical check scans a story's `acceptance`/`test_plan` sentences for.
+ * Deliberately narrow — a wider net would flag honest prose ("this validates
+ * the happy path") as an enforcement claim, and the cost of a false positive
+ * here is a refused plan, not a warning. Exported so `test/plan-shape.test.ts`
+ * holds the list to the source, the way every other rule in this file does.
+ */
+export const ENFORCEMENT_KEYWORDS = [
+  "check constraint", "not null", "required", "must be present", "validation rule", "rejects", "refuses",
+] as const;
+
+/** The populate-verb half of the same pair (#365). Same shape, same reason it is short. */
+export const POPULATE_VERBS = ["sets", "populates", "writes", "stores", "fills", "assigns"] as const;
+
+/** The first phrase from `phrases` that appears in `text` as a whole word/phrase, case-insensitive; else `null`. */
+function firstMatch(text: string, phrases: readonly string[]): string | null {
+  const lower = text.toLowerCase();
+  for (const phrase of phrases) {
+    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`\\b${escaped}\\b`).test(lower)) return phrase;
+  }
+  return null;
+}
+
+/**
+ * Case and separators carry no identity for a field/column name — `delivery_address_text`,
+ * `DeliveryAddressText`, `deliveryAddressText` and `delivery-address-text` are one field spelled
+ * four ways. The incident this validator exists for was exactly a verbatim-token miss of this
+ * shape: the enforcing story's constraint named the field `snake_case`, the populating story's
+ * sentence named it `PascalCase`, and a plain string match saw two different fields (review
+ * finding on #365). Everything downstream compares on this normalized form; the ORIGINAL
+ * spelling — what `fieldsIn` actually captured — is kept separately for the refusal message,
+ * which must quote each story's own wording, findable verbatim in its file.
+ */
+function normalizeField(token: string): string {
+  return token.toLowerCase().replace(/[_-]/g, "");
+}
+
+/**
+ * The field/column names a sentence mentions, keyed by their NORMALIZED form so differently
+ * spelled mentions of the same field collide, valued by the spelling as it actually appears.
+ * Three candidate shapes, none of which plain English prose accidentally produces: a
+ * backtick-quoted identifier (any case, `_` or `-` allowed inside); a bare `snake_case` token;
+ * and a bare `camelCase`/`PascalCase` token (an inner capital following a lowercase run — a
+ * single Capitalized word, e.g. a sentence-initial one, has no SECOND capitalized segment and so
+ * does not match). Heuristic, not a parser: it costs nothing to miss a field named some other
+ * way, because the validator only ever REFUSES on a match — it never claims a plan is clean.
+ */
+function fieldsIn(text: string): ReadonlyMap<string, string> {
+  const found = new Map<string, string>();
+  const pattern = /`([a-zA-Z_][\w-]*)`|\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b|\b([A-Za-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+)\b/g;
+  for (const match of text.matchAll(pattern)) {
+    const raw = match[1] ?? match[2] ?? match[3] ?? "";
+    if (raw === "") continue;
+    const key = normalizeField(raw);
+    if (key !== "" && !found.has(key)) found.set(key, raw);
+  }
+  return found;
+}
+
+/**
+ * The gate's refusal for an invariant enforced at or before the story that populates it (#365).
+ * `enforceField`/`populateField` are each story's OWN spelling — equal when both stories wrote
+ * the field the same way, and named separately when they did not (review finding: a snake_case
+ * enforcement and a PascalCase populate are the same field and must both be readable in the
+ * message, never silently collapsed to one spelling).
+ */
+export function invariantSequencingMessage(
+  enforceId: string, populateId: string, enforceField: string, populateField: string,
+  enforceSentence: string, populateSentence: string,
+): string {
+  const spelling = enforceField === populateField ? "" : " — the same field, spelled differently in each story";
+  return `${enforceId} enforces \`${enforceField}\` ("${enforceSentence}") no later than ${populateId}, which `
+    + `populates \`${populateField}\` ("${populateSentence}")${spelling} — a story that adds an invariant over `
+    + `existing data lands in the same story as, or in a wave after, the story that makes existing rows satisfy `
+    + `it (#365); move ${enforceId} to a later wave, merge the two stories, or write ${enforceId}'s check `
+    + `non-enforcing (nullable/consistency-only) until ${populateId} lands`;
+}
+
+interface StoryText { readonly id: string; readonly sentences: readonly { readonly text: string; readonly field: string }[] }
+
+/** Every acceptance/test_plan sentence of a story, tagged with which list it came from. */
+function sentencesOf(story: { readonly acceptance: readonly string[]; readonly testPlan: readonly string[] }): StoryText["sentences"] {
+  return [
+    ...story.acceptance.map((text) => ({ text, field: "acceptance" })),
+    ...story.testPlan.map((text) => ({ text, field: "test_plan" })),
+  ];
+}
+
+/**
+ * The mechanical half of #365: a story enforcing a field no later than the
+ * story that populates it. `at` is the wave index each story id resolves to
+ * (`scheduleOf`) — the only order this reads, because a valid plan's
+ * `depends_on` graph already has to agree with it (`validateWaveOrder`
+ * refuses otherwise), so wave index and dependency order are the same
+ * question here. Two different stories sharing one wave still violates the
+ * rule: wave siblings run as parallel sub-agents in separate worktrees and
+ * never see each other's writes, so only "same story" or "a later wave"
+ * actually satisfies the invariant.
+ */
+function invariantSequencingIssues(
+  stories: ReadonlyMap<string, { readonly id: string; readonly acceptance: readonly string[]; readonly testPlan: readonly string[] }>,
+  at: ReadonlyMap<string, number>,
+): readonly PlanIssue[] {
+  const issues: PlanIssue[] = [];
+  const reported = new Set<string>();
+  for (const enforcer of stories.values()) {
+    const enforcerAt = at.get(enforcer.id);
+    if (enforcerAt === undefined) continue;
+    for (const enforceSentence of sentencesOf(enforcer)) {
+      if (firstMatch(enforceSentence.text, ENFORCEMENT_KEYWORDS) === null) continue;
+      const enforceFields = fieldsIn(enforceSentence.text);
+      if (enforceFields.size === 0) continue;
+      for (const populator of stories.values()) {
+        if (populator.id === enforcer.id) continue;
+        const populatorAt = at.get(populator.id);
+        if (populatorAt === undefined || enforcerAt > populatorAt) continue; // genuinely after: fine
+        for (const populateSentence of sentencesOf(populator)) {
+          if (firstMatch(populateSentence.text, POPULATE_VERBS) === null) continue;
+          const populateFields = fieldsIn(populateSentence.text);
+          const sharedKey = [...enforceFields.keys()].find((k) => populateFields.has(k));
+          if (sharedKey === undefined) continue;
+          const key = `${enforcer.id}>${populator.id}>${sharedKey}`;
+          if (reported.has(key)) continue;
+          reported.add(key);
+          issues.push({
+            file: `${STORIES_DIR}/${enforcer.id}.md`,
+            path: enforceSentence.field,
+            message: invariantSequencingMessage(
+              enforcer.id, populator.id, enforceFields.get(sharedKey) ?? sharedKey, populateFields.get(sharedKey) ?? sharedKey,
+              enforceSentence.text, populateSentence.text,
+            ),
+          });
+        }
+      }
+    }
+  }
+  return issues;
+}
+
 /** `tldrx seed check`'s size advisory. */
 export function storyCountAdvisory(stories: number): string {
   return `${String(stories)} stories — today the framework carries ${String(MAX_STORIES_PER_RUN)} per run alone `
@@ -176,7 +329,10 @@ export function validatePlanShape(planDir: string): PlanShapeReport {
   const issues: PlanIssue[] = [];
   const advisories: string[] = [];
 
-  interface Read { readonly id: string; readonly epic: string; readonly repo: string; readonly deps: readonly string[]; readonly dod: readonly string[] }
+  interface Read {
+    readonly id: string; readonly epic: string; readonly repo: string; readonly deps: readonly string[];
+    readonly dod: readonly string[]; readonly acceptance: readonly string[]; readonly testPlan: readonly string[];
+  }
   const stories = new Map<string, Read>();
   const dir = join(planDir, STORIES_DIR);
   const names = existsSync(dir) ? readdirSync(dir).filter((n) => n.endsWith(".md")).sort() : [];
@@ -184,7 +340,10 @@ export function validatePlanShape(planDir: string): PlanShapeReport {
     const parsed = validateStoryFile(readFileSync(join(dir, name), "utf8"));
     const story = parsed.story;
     if (story === null || stories.has(story.id)) continue;
-    stories.set(story.id, { id: story.id, epic: story.epic, repo: story.repo, deps: story.depends_on, dod: parsed.dod.commands });
+    stories.set(story.id, {
+      id: story.id, epic: story.epic, repo: story.repo, deps: story.depends_on, dod: parsed.dod.commands,
+      acceptance: story.acceptance, testPlan: story.test_plan,
+    });
   }
 
   const wavesPath = join(planDir, WAVES_FILE);
@@ -220,6 +379,8 @@ export function validatePlanShape(planDir: string): PlanShapeReport {
         }
       });
     });
+
+    issues.push(...invariantSequencingIssues(stories, at));
   }
 
   const groups = new Map<string, Read[]>();

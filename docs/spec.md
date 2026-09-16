@@ -2127,14 +2127,25 @@ advisories all read. It REFUSES (a failed check, so `approve` exits 2) a plan wi
 unless `wave_cap_reason` is a non-empty line, and a story scheduled in a later wave than its `depends_on` requires — a
 `depends_on: []` story outside W1, or one whose dependencies all finish two waves back. The first is the framework's
 current carry, not a law, so it has a recorded escape; the second has none because the one legitimate reason to wait,
-two stories editing one file (#286), is already a `depends_on` edge. It ADVISES, in the passed detail, when some stories
-of one epic in one repo carry a dod command a sibling does not (#319: an e2e story that depended on everything was
-never reached) — advisory because which stories share a shape is not machine-readable and the evidence is one epic.
-Measured by a planning audit of 9 runs (relayed): 25/54 build-gate rejections were dependency reopens and every
-multi-story plan in one workspace was a one-story-per-wave chain. Vertical slices (#317) and inventory files in
-`touches` (#318) are prompt rules only: no stack-independent name marks a route file, and no changed-file set exists at
-Plan time to compare against — `story.touches_widened` names the drift at Build. Like the budget check this is the
-gate's own and not a pass inside `validatePlan`, so a plan approved before it still loads at Build.
+two stories editing one file (#286), is already a `depends_on` edge. It also REFUSES a story whose `acceptance` or
+`test_plan` names an enforcement over a field — a short, exported keyword set, `ENFORCEMENT_KEYWORDS` (check
+constraint, not null, required, must be present, validation rule, rejects, refuses) — that a story no later in wave
+order names populating with a populate verb, `POPULATE_VERBS` (sets, populates, writes, fills, stores, assigns)
+(#365): the `depends_on` graph can be entirely valid and still leave an EARLIER story's own dod structurally red
+against fixtures only a LATER story populates, because `validateWaveOrder` only checks the graph the planner wrote by
+hand, never what the two stories' text actually says. Two different stories sharing one wave still counts as "not
+later" — wave siblings run as parallel sub-agents in separate worktrees and never see each other's writes. The
+refusal names both story ids, the field and both sentences; there is no override field, on purpose (owner decision,
+the cheaper substitute for re-enabling the `how` stage) — a false positive is cheap to fix by rewording past the
+keyword set or moving the story, not by adding an escape hatch to the plan file format. It ADVISES, in the passed
+detail, when some stories of one epic in one repo carry a dod command a sibling does not (#319: an e2e story that
+depended on everything was never reached) — advisory because which stories share a shape is not machine-readable and
+the evidence is one epic. Measured by a planning audit of 9 runs (relayed): 25/54 build-gate rejections were
+dependency reopens and every multi-story plan in one workspace was a one-story-per-wave chain. Vertical slices (#317)
+and inventory files in `touches` (#318) are prompt rules only: no stack-independent name marks a route file, and no
+changed-file set exists at Plan time to compare against — `story.touches_widened` names the drift at Build. Like the
+budget check this is the gate's own and not a pass inside `validatePlan`, so a plan approved before it still loads at
+Build.
 
 **The fourth artefact.** The same check reads `03-plan/budget.yml` when it exists, through the §2.11 validator every
 reader of it runs (`validateBudget`: `version`, `run`, `ceiling_usd`, `spent_usd`, `per_phase_usd` keyed by story),
