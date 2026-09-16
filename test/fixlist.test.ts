@@ -42,6 +42,7 @@ import {
 import { isFormatRejection } from "../src/core/build/review.ts";
 import { storiesView } from "../src/core/run/runOutcome.ts";
 import { readReviewLedger } from "../src/core/facilitator/executors/build.ts";
+import { EXIT_USAGE } from "../src/cli/exitCodes.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
@@ -347,9 +348,14 @@ describe("the fixlist verdict, through the host handshake", () => {
     expect(readFileSync(join(ws.runDir, ".agent", "build", "S1", "prompt.md"), "utf8"))
       .toContain("## Fix list");
 
-    // A path that is not a fix list at all.
+    // A path that is not a fix list at all. gh #218 (pre-merge review): this
+    // is a PRECONDITION refusal — nothing opened, nothing spent — and belongs
+    // in exit family 1 (usage / nothing-behind-it), not exit 5
+    // (EXIT_AGENT_FAILED, which stamps `run.yml` `status: failed` and makes
+    // the NEXT `tldrx next` print "retrying … (cost already spent is not
+    // refunded)", a lie for a call that never opened a worktree).
     const missing = await next(ws, { mode: "prepare", at: "2026-08-29T10:12:00Z", fixlist: "nope.md" });
-    expect(missing.code).toBe(5);
+    expect(missing.code).toBe(EXIT_USAGE);
     expect(missing.lines.join("\n")).toContain("--fixlist nope.md: no readable fix list there");
 
     // Another story's, refused rather than rendered.
@@ -365,7 +371,7 @@ describe("the fixlist verdict, through the host handshake", () => {
     const wrong = await next(ws, {
       mode: "prepare", at: "2026-08-29T10:14:00Z", fixlist: "04-build/fixlist/S9-1.md",
     });
-    expect(wrong.code).toBe(5);
+    expect(wrong.code).toBe(EXIT_USAGE);
     expect(wrong.lines.join("\n")).toContain("is not S1's fix list");
   }, 90_000);
 });

@@ -28,7 +28,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CLOSED_ON_EPIC, carriedFindings, isOpen, parseFixlistFile } from "../src/core/build/fixlist.ts";
+import { CLOSED_ON_EPIC, carriedFindings, isOpen, parseFixlistFile, type FixlistOnDisk } from "../src/core/build/fixlist.ts";
 import { sweepFixlistAgainstEpic } from "../src/core/build/fixlistSweep.ts";
 import { renderBuildHandoff, type BuildHandoffParts } from "../src/core/build/handoff.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
@@ -102,10 +102,10 @@ function fixlistText(
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
-function onDisk(dir: string, text: string): { round: number; path: string; rel: string; findings: ReturnType<typeof parseFixlistFile> } {
+function onDisk(dir: string, text: string): FixlistOnDisk {
   const path = join(dir, "S1-1.md");
   writeFileSync(path, text, "utf8");
-  return { round: 1, path, rel: "04-build/fixlist/S1-1.md", findings: parseFixlistFile(text) };
+  return { round: 1, path, rel: "04-build/fixlist/S1-1.md", findings: parseFixlistFile(text), unreadable: [] };
 }
 
 const AT = "2026-09-15T00:00:00Z";
