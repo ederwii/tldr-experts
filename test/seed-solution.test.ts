@@ -66,7 +66,7 @@ describe("the seed_solution grammar", () => {
 });
 
 describe("seedDocumentPaths", () => {
-  test("drops .tldrx/-rooted and phase-folder-relative entries, keeps the rest", () => {
+  test("drops the what stage's own template inputs and phase-folder-relative entries, keeps the rest", () => {
     const run = fakeRun([
       ".tldrx/memory/facts.yml", ".tldrx/map/api/domains.md",
       "01-what/seed-index.md", "requirements.md", "docs/adr/0001.md",
@@ -77,6 +77,19 @@ describe("seedDocumentPaths", () => {
   test("an unseeded run (no first stage) has no seed documents", () => {
     const run = { ...fakeRun([]), phases: [] } as unknown as RunFile;
     expect(seedDocumentPaths(run)).toEqual([]);
+  });
+
+  // gh #358: a seed under `.tldrx/seeds/` — where `run new --seed` and the docs
+  // put it — was dropped by the old blanket `.tldrx/`-prefix filter alongside the
+  // `what` stage's own template inputs. Only those two template families
+  // (`.tldrx/memory/`, `.tldrx/map/`) are excluded; a `.tldrx/seeds/` entry is a
+  // seed document like any other.
+  test("keeps a seed document under .tldrx/seeds/ while still dropping the what stage's own template inputs", () => {
+    const run = fakeRun([
+      ".tldrx/memory/facts.yml", ".tldrx/map/api/domains.md",
+      "01-what/seed-index.md", ".tldrx/seeds/payments.md",
+    ]);
+    expect(seedDocumentPaths(run)).toEqual([".tldrx/seeds/payments.md"]);
   });
 });
 
@@ -123,6 +136,29 @@ describe("hasDeclaredSeedSolution / extractSeedSolution", () => {
 
     expect(hasDeclaredSeedSolution(runDir, run)).toBe(false);
     expect(extractSeedSolution(runDir, run)).toBeNull();
+  });
+
+  // gh #358: a seed accepted at `.tldrx/seeds/<name>.md` (`run new --seed`'s
+  // documented location) must be read like any other seed document — the H2
+  // marker there fires `hasDeclaredSeedSolution` and, through `countSkipInputs`,
+  // `skip_if: seed_solution==1` on the `how` stage (stages/how/stage.yml).
+  test("a seed under .tldrx/seeds/ with the H2 marker is declared and skips how", () => {
+    const root = tempRoot();
+    mkdirSync(join(root, ".tldrx", "seeds"), { recursive: true });
+    writeFileSync(
+      join(root, ".tldrx", "seeds", "payments.md"),
+      ["# Payments", "", "## Solution", "", "Use the existing gateway."].join("\n"),
+      "utf8",
+    );
+    const runDir = join(root, "tldrx-work", "260916-demo");
+    mkdirSync(runDir, { recursive: true });
+    const run = fakeRun([".tldrx/memory/facts.yml", ".tldrx/map/api/domains.md", "01-what/seed-index.md", ".tldrx/seeds/payments.md"]);
+
+    expect(seedDocumentPaths(run)).toContain(".tldrx/seeds/payments.md");
+    expect(hasDeclaredSeedSolution(runDir, run)).toBe(true);
+    expect(countSkipInputs(runDir, run).seed_solution).toBe(1);
+    // Same shape `stages/how/stage.yml`'s `skip_if:` line uses.
+    expect(evaluateSkipIf("seed_solution==1", countSkipInputs(runDir, run))).toBe(true);
   });
 
   test("false on an unseeded run", () => {

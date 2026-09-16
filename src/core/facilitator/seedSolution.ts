@@ -11,9 +11,11 @@
  * docstring: "It COPIES NOTHING: every document stays where the team put it").
  * So "does the seed carry a solution" is answered by re-reading those same
  * files off disk, through the run's OWN record of which paths they were —
- * `run.phases[0]`'s first stage's `inputs`, minus the framework-relative ones
- * (`.tldrx/...`, that stage's OWN declared inputs) and the run-relative index
- * `run new` writes itself (`<phase>/seed-index.md`).
+ * `run.phases[0]`'s first stage's `inputs`, minus that stage's OWN
+ * template-declared inputs (`.tldrx/memory/...`, `.tldrx/map/...` — never a
+ * blanket `.tldrx/` prefix, which would also swallow a seed placed under the
+ * documented `.tldrx/seeds/`, gh #358) and the run-relative index `run new`
+ * writes itself (`<phase>/seed-index.md`).
  *
  * Heading detection reuses `seed/seedClaims.ts`'s fence-aware `seedHeadings` —
  * never a second regex over the same grammar (§7, "one implementation per
@@ -44,6 +46,24 @@ export const SEED_SOLUTION_HEADING_LEVEL = 2;
 /** A phase-folder-relative path (`01-what/seed-index.md`) — never a seed doc, which is workspace-root-relative. */
 const PHASE_RELATIVE_RE = /^0[1-9]-[a-z]+\//;
 
+/**
+ * The `what` stage's OWN template-declared inputs (`stages/what/stage.yml`,
+ * `seed: true`'s stage) — the only `.tldrx/`-rooted paths that stage ever
+ * declares for itself, as opposed to a seed document `run new --seed` appended.
+ *
+ * gh #358: the old filter dropped every `.tldrx/`-rooted path, which also
+ * swallowed `.tldrx/seeds/<name>.md` — where `run new --seed` and the docs put
+ * a seed. Excluding by these two families instead (not the whole `.tldrx/`
+ * tree) leaves a seed placed anywhere else under `.tldrx/`, `.tldrx/seeds/`
+ * included, visible to `seedDocumentPaths`. If `stages/what/stage.yml` ever
+ * declares another `.tldrx/`-rooted input, add its family here — this is the
+ * one place seed detection reads that stage's own inputs.
+ */
+const WHAT_STAGE_OWN_INPUT_PREFIXES = [
+  `${PROJECT_FRAMEWORK_DIR}/memory/`,
+  `${PROJECT_FRAMEWORK_DIR}/map/`,
+];
+
 /** The seed's own declared solution, verbatim, plus what a citation needs. */
 export interface SeedSolution {
   /** The section body, heading line included, trimmed. */
@@ -57,16 +77,19 @@ export interface SeedSolution {
 /**
  * The run's seed documents, resolved back to real files — every path the FIRST
  * stage's `inputs` carries (`newRun.ts`'s `declareSeedInputs`) that is neither
- * `.tldrx/`-rooted (that stage's own declared inputs, spec §2.3) nor inside a
- * phase folder (`seed-index.md`, the table of contents `run new` writes
- * itself). An unseeded run's first stage has no such entries, so this is `[]`
- * for it — never a guess dressed as an empty seed.
+ * that stage's OWN template-declared input (`WHAT_STAGE_OWN_INPUT_PREFIXES`,
+ * spec §2.3 — never a blanket `.tldrx/` prefix, gh #358) nor inside a phase
+ * folder (`seed-index.md`, the table of contents `run new` writes itself). A
+ * seed placed under `.tldrx/seeds/`, the documented location, is a seed
+ * document like any other. An unseeded run's first stage has no such entries,
+ * so this is `[]` for it — never a guess dressed as an empty seed.
  */
 export function seedDocumentPaths(run: RunFile): readonly string[] {
   const first = run.phases[0]?.stages[0];
   if (first === undefined) return [];
   return first.inputs.filter(
-    (path) => !path.startsWith(`${PROJECT_FRAMEWORK_DIR}/`) && !PHASE_RELATIVE_RE.test(path),
+    (path) => !WHAT_STAGE_OWN_INPUT_PREFIXES.some((prefix) => path.startsWith(prefix))
+      && !PHASE_RELATIVE_RE.test(path),
   );
 }
 
