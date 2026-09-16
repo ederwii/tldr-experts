@@ -241,7 +241,9 @@ describe("an invariant enforced before the story that populates it (#365)", () =
     expect(issues).toEqual([{
       file: "stories/S1.md",
       path: "acceptance",
-      message: invariantSequencingMessage("S1", "S4", "delivery_address_text", s1Acceptance, s4Acceptance),
+      message: invariantSequencingMessage(
+        "S1", "S4", "delivery_address_text", "delivery_address_text", s1Acceptance, s4Acceptance,
+      ),
     }]);
     expect(issues[0]?.message).toContain("S1");
     expect(issues[0]?.message).toContain("S4");
@@ -268,7 +270,7 @@ describe("an invariant enforced before the story that populates it (#365)", () =
       [["S1", "S2"]],
     ));
     expect(validatePlanShape(dir).issues.map((i) => i.message)).toEqual([
-      invariantSequencingMessage("S1", "S2", "order_note", s1, s2),
+      invariantSequencingMessage("S1", "S2", "order_note", "order_note", s1, s2),
     ]);
   });
 
@@ -297,6 +299,34 @@ describe("an invariant enforced before the story that populates it (#365)", () =
         { id: "S2", acceptance: ["This story populates other_field when the order is created"] },
       ],
       [["S1", "S2"]],
+    ));
+    expect(messagesOf(dir)).toEqual([]);
+  });
+
+  test("the same field spelled snake_case in one story and PascalCase in the other is still caught (review finding on #365, the originating incident's exact shape)", () => {
+    const s1 = "Add a check constraint requiring `delivery_address_text` NOT NULL when fulfillment mode is Delivery";
+    const s4 = "The placement handler sets `DeliveryAddressText` for every Delivery order";
+    const dir = writePlan(planFiles(
+      [{ id: "S1", acceptance: [s1] }, { id: "S4", deps: ["S1"], acceptance: [s4] }],
+      [["S1"], ["S4"]],
+    ));
+    const issues = validatePlanShape(dir).issues;
+    expect(issues).toEqual([{
+      file: "stories/S1.md",
+      path: "acceptance",
+      message: invariantSequencingMessage("S1", "S4", "delivery_address_text", "DeliveryAddressText", s1, s4),
+    }]);
+    // The message quotes each story's OWN spelling verbatim — never a normalized one.
+    expect(issues[0]?.message).toContain("`delivery_address_text`");
+    expect(issues[0]?.message).toContain("`DeliveryAddressText`");
+  });
+
+  test("a genuinely different field is not flagged even across snake_case/PascalCase spellings", () => {
+    const s1 = "Add a check constraint requiring `delivery_zone_id` NOT NULL";
+    const s4 = "The placement handler sets `DeliveryAddressText` for every Delivery order";
+    const dir = writePlan(planFiles(
+      [{ id: "S1", acceptance: [s1] }, { id: "S4", deps: ["S1"], acceptance: [s4] }],
+      [["S1"], ["S4"]],
     ));
     expect(messagesOf(dir)).toEqual([]);
   });

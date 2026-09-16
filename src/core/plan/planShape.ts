@@ -186,30 +186,58 @@ function firstMatch(text: string, phrases: readonly string[]): string | null {
 }
 
 /**
- * The field/column names a sentence mentions — a backtick-quoted identifier, or
- * a bare `snake_case` token (the shape a column or field name actually has;
- * plain English prose does not accidentally produce one). Heuristic, not a
- * parser: it costs nothing to miss a field named some other way, because the
- * validator only ever REFUSES on a match — it never claims a plan is clean.
+ * Case and separators carry no identity for a field/column name — `delivery_address_text`,
+ * `DeliveryAddressText`, `deliveryAddressText` and `delivery-address-text` are one field spelled
+ * four ways. The incident this validator exists for was exactly a verbatim-token miss of this
+ * shape: the enforcing story's constraint named the field `snake_case`, the populating story's
+ * sentence named it `PascalCase`, and a plain string match saw two different fields (review
+ * finding on #365). Everything downstream compares on this normalized form; the ORIGINAL
+ * spelling — what `fieldsIn` actually captured — is kept separately for the refusal message,
+ * which must quote each story's own wording, findable verbatim in its file.
  */
-function fieldsIn(text: string): ReadonlySet<string> {
-  const found = new Set<string>();
-  for (const match of text.matchAll(/`([a-zA-Z_]\w*)`|\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/g)) {
-    const id = (match[1] ?? match[2] ?? "").toLowerCase();
-    if (id !== "") found.add(id);
+function normalizeField(token: string): string {
+  return token.toLowerCase().replace(/[_-]/g, "");
+}
+
+/**
+ * The field/column names a sentence mentions, keyed by their NORMALIZED form so differently
+ * spelled mentions of the same field collide, valued by the spelling as it actually appears.
+ * Three candidate shapes, none of which plain English prose accidentally produces: a
+ * backtick-quoted identifier (any case, `_` or `-` allowed inside); a bare `snake_case` token;
+ * and a bare `camelCase`/`PascalCase` token (an inner capital following a lowercase run — a
+ * single Capitalized word, e.g. a sentence-initial one, has no SECOND capitalized segment and so
+ * does not match). Heuristic, not a parser: it costs nothing to miss a field named some other
+ * way, because the validator only ever REFUSES on a match — it never claims a plan is clean.
+ */
+function fieldsIn(text: string): ReadonlyMap<string, string> {
+  const found = new Map<string, string>();
+  const pattern = /`([a-zA-Z_][\w-]*)`|\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b|\b([A-Za-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+)\b/g;
+  for (const match of text.matchAll(pattern)) {
+    const raw = match[1] ?? match[2] ?? match[3] ?? "";
+    if (raw === "") continue;
+    const key = normalizeField(raw);
+    if (key !== "" && !found.has(key)) found.set(key, raw);
   }
   return found;
 }
 
-/** The gate's refusal for an invariant enforced at or before the story that populates it (#365). */
+/**
+ * The gate's refusal for an invariant enforced at or before the story that populates it (#365).
+ * `enforceField`/`populateField` are each story's OWN spelling — equal when both stories wrote
+ * the field the same way, and named separately when they did not (review finding: a snake_case
+ * enforcement and a PascalCase populate are the same field and must both be readable in the
+ * message, never silently collapsed to one spelling).
+ */
 export function invariantSequencingMessage(
-  enforceId: string, populateId: string, field: string, enforceSentence: string, populateSentence: string,
+  enforceId: string, populateId: string, enforceField: string, populateField: string,
+  enforceSentence: string, populateSentence: string,
 ): string {
-  return `${enforceId} enforces \`${field}\` ("${enforceSentence}") no later than ${populateId}, which populates `
-    + `\`${field}\` ("${populateSentence}") — a story that adds an invariant over existing data lands in the same `
-    + `story as, or in a wave after, the story that makes existing rows satisfy it (#365); move ${enforceId} to a `
-    + `later wave, merge the two stories, or write ${enforceId}'s check non-enforcing (nullable/consistency-only) `
-    + `until ${populateId} lands`;
+  const spelling = enforceField === populateField ? "" : " — the same field, spelled differently in each story";
+  return `${enforceId} enforces \`${enforceField}\` ("${enforceSentence}") no later than ${populateId}, which `
+    + `populates \`${populateField}\` ("${populateSentence}")${spelling} — a story that adds an invariant over `
+    + `existing data lands in the same story as, or in a wave after, the story that makes existing rows satisfy `
+    + `it (#365); move ${enforceId} to a later wave, merge the two stories, or write ${enforceId}'s check `
+    + `non-enforcing (nullable/consistency-only) until ${populateId} lands`;
 }
 
 interface StoryText { readonly id: string; readonly sentences: readonly { readonly text: string; readonly field: string }[] }
@@ -253,15 +281,18 @@ function invariantSequencingIssues(
         for (const populateSentence of sentencesOf(populator)) {
           if (firstMatch(populateSentence.text, POPULATE_VERBS) === null) continue;
           const populateFields = fieldsIn(populateSentence.text);
-          const field = [...enforceFields].find((f) => populateFields.has(f));
-          if (field === undefined) continue;
-          const key = `${enforcer.id}>${populator.id}>${field}`;
+          const sharedKey = [...enforceFields.keys()].find((k) => populateFields.has(k));
+          if (sharedKey === undefined) continue;
+          const key = `${enforcer.id}>${populator.id}>${sharedKey}`;
           if (reported.has(key)) continue;
           reported.add(key);
           issues.push({
             file: `${STORIES_DIR}/${enforcer.id}.md`,
             path: enforceSentence.field,
-            message: invariantSequencingMessage(enforcer.id, populator.id, field, enforceSentence.text, populateSentence.text),
+            message: invariantSequencingMessage(
+              enforcer.id, populator.id, enforceFields.get(sharedKey) ?? sharedKey, populateFields.get(sharedKey) ?? sharedKey,
+              enforceSentence.text, populateSentence.text,
+            ),
           });
         }
       }

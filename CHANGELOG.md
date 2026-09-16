@@ -152,8 +152,10 @@
   story's `acceptance`/`test_plan` sentences for a short, exported enforcement-keyword set
   (`ENFORCEMENT_KEYWORDS`: check constraint, not null, required, must be present, validation
   rule, rejects, refuses) naming a field, and refuses the plan when a story no later in wave
-  order names the same field with a populate verb (`POPULATE_VERBS`: sets, populates, writes,
-  stores, fills, assigns) — naming both story ids, the field, and both sentences. This is the
+  order names the same field — matched case- and separator-insensitively, so `delivery_address_text`
+  and `DeliveryAddressText` collide — with a populate verb (`POPULATE_VERBS`: sets, populates,
+  writes, stores, fills, assigns) — naming both story ids, each story's own spelling, and both
+  sentences. This is the
   cheaper substitute for re-enabling the `how` stage the owner already declined (owner decision):
   a targeted static check over the plan's own text, not a whole extra paid agent turn. No
   override field exists for a false positive on purpose — rewording the sentence past the
