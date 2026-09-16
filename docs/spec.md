@@ -106,7 +106,7 @@ notify:                      # optional: the ONE command a run may tell a person
 | `repos[].default_branch` / `.stack` / `.package_manager` | str / str[] / str\|null | y | Epic-branch base; detected languages (may be empty); `npm`, `nuget`, `pip`, … |
 | `repos[].commands.{build,test,lint,typecheck,run}` | str\|null | y (all keys) | Run from `path`; `null` = unavailable |
 | `repos[].commands.install` | str\|null | n | **Additive.** The command that puts this repo's dependencies in a tree. It is a declared command like any other — in the allowlist, argv-split, no shell — and it is the ONE slot Build runs by itself: it is executed in every FRESH story worktree, before the developer, and recorded as its own `check: "install"` (§2.9) with an exit code and a duration. A failed install BLOCKS the story with what it printed; the developer is never dispatched into a tree whose dependencies did not install. Left empty, tldrx installs nothing and guesses nothing — not `npm ci` from a lockfile, not a symlink of the base tree's `node_modules` — and a DoD command that then exits `127` in the worktree is reported as an environment absence naming this slot, not as a red test (gh #209). `tldrx init` writes the slot and does not probe it |
-| `repos[].commands.tool_restore` | str\|null | n | **Additive (2026-09-16, gh #363).** A second reserved slot for local per-checkout tool state `install:` does not restore — `dotnet tool restore` for a `.config/dotnet-tools.json` manifest is the measured case, a DIFFERENT command from `dotnet restore`. Declared like any other command — in the allowlist, argv-split, no shell — and run ONCE in the repo's own checkout, before the base pre-flight's first probed command (§2.4); a failure refuses Build by name, nothing dispatched, nothing charged. Unlike `install:`, it is NOT also run in a story's fresh worktree or the Build-entry probe's throwaway worktree — those doors are `install:`'s alone. Left empty, nothing runs and nothing is guessed. `tldrx init` writes the slot and does not probe it |
+| `repos[].commands.tool_restore` | str\|null | n | **Additive (2026-09-16, gh #363; 2026-09-16, gh #371).** A second reserved slot for local per-checkout tool state `install:` does not restore — `dotnet tool restore` for a `.config/dotnet-tools.json` manifest is the measured case, a DIFFERENT command from `dotnet restore`. Declared like any other command — in the allowlist, argv-split, no shell — and run ONCE in the repo's own checkout, before the base pre-flight's first probed command (§2.4); a failure refuses Build by name, nothing dispatched, nothing charged. It ALSO runs once in the Build-entry probe's own throwaway worktree (§2.4), before that worktree's `install:` and before any Definition-of-Done command's binary is resolved there — the same slot, through the one reader that runs it in both doors, never a second copy of the restore logic. It is still NOT run in a story's own fresh worktree — that remains `install:`'s door alone. Left empty, nothing runs and nothing is guessed. `tldrx init` writes the slot and does not probe it |
 | `repos[].commands.test_fast` | str | n | **Additive, and never detected.** The fast subset of this repo's suite — the command the Build developer ITERATES on while working. It is a declared command like any other: it is in the allowlist, the developer prompt lists it, a `cmd` src may cite it. What it is NOT is evidence — a story's ```dod block that names it is **refused at Plan time**, with a sentence naming the slot rather than the generic "not one of workspace.yml's commands", which would be false about a command this file declares. `tldrx init` never writes a value: no manifest says which subset of a suite is the fast one, and a synthesised one would be the conventional wisdom `command_probes` exists to keep out of this file — init emits the slot commented out, with a line saying what it is for. Never probed, for the same reason: nothing was declared to probe |
 | `repos[].commands.<slot>_scoped` | str | n | **Additive, and never detected (#257).** A TEMPLATE beside a declared slot — `test_scoped: "pytest {{paths}}"` — that narrows that slot's full command to a story's own paths. `{{paths}}` must appear as a whole word exactly once and becomes N argv elements, one per path, no shell opened (a path with a space is ONE argument); a template without the token, or whose base slot is not declared, is ignored. It is NOT a command: it is kept out of the allowlist, so nothing may cite it, the developer is never handed it, and a story's ```dod block that names it is **refused at Plan time** with a sentence naming the suffix — the dod names the FULL command and the gate narrows it itself. What it changes is Build's step (e): a dod line whose command has a template runs the template over the story's paths — declared `touches:` ∪ the branch's committed diff ∪ the worktree's dirty entries, existing paths only (`build/scopedPaths.ts`, one derivation) — and the `check: "dod"` row says `scope: "paths"` with the `paths`; a story with no mappable path runs the full command (`scope: "full"`). Then, once per epic, the moment the epic flips to `done` and at least one of its stories ran scoped, the deduped full commands of its stories run in the EPIC worktree — the epic head that ships — after `install:` if declared, recorded as `check: "dod"` rows with `scope: "full"` and `lane: <epic branch>` on the LAST merged story; a red there blocks that story, so the epic is no longer `done` and the Build gate's `stories` condition refuses. Measured reason (§2.9): 99 `check.*` rows on one 8-story epic, the full suite on every attempt and fix round, and the epic head never run. A repo that declares no template runs, records and cites exactly what it did before |
 | `repos[].command_probes.<slot>.{status,verified,exit_code,at,reason}` | enum / bool / int\|null / RFC3339 / str | n | What `init` MEASURED about the command in that slot: it ran each `build`/`test`/`lint`/`typecheck` command once. The four of a repo run CONCURRENTLY, each racing its own two-minute deadline, so a repo whose whole toolchain hangs costs one deadline rather than four (gh #180) — up to four of that repo's commands are in flight in its directory at once, and a command that cannot tolerate a sibling build in the same tree is a command to leave out of `commands:` or to run with `--no-probe`. The rows are written in slot order regardless of which probe finished first. `status` is the field to branch on — `ok` \| `failed` \| `timed-out` \| `unspawnable` \| `not-probed` \| `skipped` — and `verified` is `status == ok`. Only `failed` is a measured red. `exit_code` is non-null ONLY for `ok`/`failed`, because only those mean a process exited: a command whose binary is missing is `unspawnable` with the system's own message, never a fabricated `127`. `reason` is REQUIRED in every case, so a non-`ok` row always says why. `not-probed` has exactly two causes, and the `reason` says which: `run` (it starts a server, so a probe of it hangs or leaves a process behind) and a command that needs a shell, which the probe does not open — it argv-splits through the same `splitArgv` the DoD gate uses. `--no-probe` writes `skipped` on every slot it would have probed; `run` keeps its own `not-probed`, and a synthesised command's reason still says it was synthesised. **One row per DECLARED slot** — every slot whose `commands:` entry is non-null gets one, `run` included, so a repo declaring all five is written with five rows; the example above is abridged to two. Records only: `commands` above is still the sole allowlist, and a red probe refuses nothing |
@@ -122,7 +122,7 @@ notify:                      # optional: the ONE command a run may tell a person
 **Validation.** `name` unique; `path` exists, relative, inside root; enums as above; commands non-empty when non-null
 and free of `&& ; | > \`` (single argv, auditable); contract repos resolve; ≤64 repos, ≤128 contracts.
 `repos[].overlays`, `repos[].skills`, `repos[].command_probes`, `repos[].commands.test_fast`,
-`repos[].commands.<slot>_scoped`, `stack_packs` and `notify` are
+`repos[].commands.<slot>_scoped`, `repos[].commands.tool_restore`, `stack_packs` and `notify` are
 **additive**: a file written
 before they existed loads unchanged (absent ⇒ empty lists, no probes, switch off), and `version:` stays `1` — a format
 that only grows does not bump it. A `command_probes` that is present is checked: a mapping of slot to
@@ -3951,7 +3951,10 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    restore; a failure blocks Build by name, the same way a red base command does. `install:` is deliberately NOT
    auto-run here too — it already runs in a story's own fresh worktree and in the Build-entry probe's throwaway
    worktree (both above), and a third automatic door in the human's own checkout would refuse an install failure a
-   second time, through a different sentence, instead of catching anything new.
+   second time, through a different sentence, instead of catching anything new. The Build-entry probe's throwaway
+   worktree (below) now runs `tool_restore:` too, through the same slot (2026-09-16, gh #371) — it did not before,
+   which meant a command whose resolution DEPENDED on the restore having run could be refused at that door even
+   though the checkout door, which does run it, would have been fine.
 
    **A cached RED is narrower than a cached green (2026-09-06).** A row may additionally carry `command_hash` — the
    command hashed together with the workspace's WHOLE declared command list, because the refusal's own advice is "fix
@@ -4015,25 +4018,30 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    checkout and was never committed — a `git worktree` carries TRACKED FILES ONLY — so every story's install failed
    identically in its own tree, each time after the story was opened and immediately before the paid turn. So Build
    entry now asks the worktree question too, ONCE, after the base pre-flight and before `agent.spawned`: one
-   throwaway **detached** worktree at the base sha, the declared `install:` run inside it, then a RESOLUTION of each
-   declared dod command's first token in that tree — never the suite, because the base pre-flight already measures
-   the suite in the checkout. A failure is exit 2, naming the exact path or binary and the edit that fixes it, with
-   no story attempt spent. Two rules decide who is refused, and the asymmetry between them is the design. The
+   throwaway **detached** worktree at the base sha, the repo's declared `tool_restore:` run inside it FIRST when one
+   is declared (2026-09-16, gh #371 — the same slot `prepBaseTree` already runs at the checkout door, through the
+   one reader that runs it in both doors, never a second copy of the restore logic), then the declared `install:`,
+   then a RESOLUTION of each declared dod command's first token in that tree — never the suite, because the base
+   pre-flight already measures the suite in the checkout. A failure of either `tool_restore:` or `install:` is exit
+   2, naming the exact command, or (for a dod token) the path or binary and the edit that fixes it, with no story
+   attempt spent. Two rules decide who is refused, and the asymmetry between them is the design. The
    `install:` command's own relative-path token is refused by `git ls-files` with NOTHING executed — sound only
    because of WHEN the install runs: nothing has installed anything yet, so a path the install NAMES cannot be one it
    PRODUCED. A **dod** command's path token gets the opposite treatment: tracked-ness decides nothing, because
    `node_modules/.bin/vitest` is untracked in every repo and is present by the time the DoD runs, so it is probed
    AFTER the install in that tree and an untracked twin in the checkout is rendered as ADVICE, never as the verdict.
    A token is resolved exactly the way `runDodCommand` will spawn it — a `/` means the tree, a bare name means
-   `PATH` — and a repo that declares no `install:` and whose dod names only bare binaries opens **no worktree at
-   all**, since `PATH` is the same in both trees and the base pre-flight has already run the command there.
+   `PATH` — and a repo that declares no `install:`, no `tool_restore:`, and whose dod names only bare binaries opens
+   **no worktree at all**, since `PATH` is the same in both trees and the base pre-flight has already run the
+   command there.
 
    The result is cached beside the base results, in the same `04-build/preflight.yml`, under an additive `worktree:`
    key: one row per repo carrying `base_ref`, `base_sha`, `status`, `tail`, and optionally `install_command`,
-   `exit_code`, `refused_because`, `advice`, `declaration_hash`, `checked_at` and `duration_ms`. Three things narrow
-   it, not two: the base sha, the **declaration hash** (the install, every command probed and the whole workspace
-   allowlist hashed together, because the operator's fix is an edit to `workspace.yml` and that edit must not be
-   invisible), and AGE. A green is trusted for **6 hours** rather than forever — unlike a base green, this row is a
+   `tool_restore_command` (2026-09-16, gh #371), `exit_code`, `refused_because`, `advice`, `declaration_hash`,
+   `checked_at` and `duration_ms`. Three things narrow it, not two: the base sha, the **declaration hash** (the
+   install, the tool_restore, every command probed and the whole workspace allowlist hashed together, because the
+   operator's fix is an edit to `workspace.yml` and that edit must not be invisible), and AGE. A green is trusted for
+   **6 hours** rather than forever — unlike a base green, this row is a
    claim about an ENVIRONMENT (the host's `PATH`, the registry the install reached) and none of that is in the sha,
    and a stale green spends money by waving a run into an environment that has since broken. A red is trusted for the
    base red's **30 minutes**, because #162 is the filed failure where a row measured over a broken environment kept

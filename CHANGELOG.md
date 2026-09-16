@@ -28,6 +28,15 @@
   same `clampAgentText` call, the same `TASK_DONE_FIELD_MAX_BYTES` constant and the same
   `[clamped: N bytes exceeds the M byte cap]` marker convention #359 already set, so an
   oversized as-is note can no longer fail the build stage.
+- **The Build-entry probe's throwaway worktree ran a repo's `install:` but not its
+  `tool_restore:`, so a command whose resolution depended on the restore having run could be
+  refused there even though the checkout door — which does run `tool_restore:` since #363 —
+  would have been fine (part of #371).** `entryProbe.ts`'s per-repo declaration now also reads
+  `tool_restore:` (`toolRestoreCommandFor`, the same slot `prepBaseTree` already runs at the
+  checkout door) and runs it in the fresh worktree before that worktree's `install:` and before
+  any Definition-of-Done command's binary is resolved there, refusing Build by name on a
+  nonzero exit — the same shape the checkout door already uses, never a second copy of the
+  restore logic.
 
 ### Changed
 

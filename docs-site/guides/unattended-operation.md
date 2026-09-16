@@ -778,8 +778,11 @@ notification buys back:
 
    Unlike `install:`, tldrx runs `tool_restore:` in YOUR OWN checkout automatically, once,
    before the base pre-flight's first probed command — you do not need to run it there
-   yourself first. A failure refuses Build by name. It is deliberately not also run in the
-   story worktree or the Build-entry probe's worktree; `install:` already covers those.
+   yourself first. A failure refuses Build by name. It also runs, once, in the Build-entry
+   probe's own throwaway worktree, before that worktree's `install:` and before any Definition
+   of Done command's binary is resolved there (gh #371) — so a command that only resolves
+   once the restore has run is no longer refused at that door. It is still deliberately not
+   run in a story's own fresh worktree; `install:` covers that one alone.
 2. **Declare `test_fast`** in `.tldrx/workspace.yml` — the fast subset the Build developer
    iterates on. It is not a Definition of Done command; the DoD re-runs `test:`. Beside it,
    `test_scoped: "<cmd> {{paths}}"` narrows each story's own DoD check to the paths it

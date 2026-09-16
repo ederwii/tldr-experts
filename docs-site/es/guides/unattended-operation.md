@@ -806,9 +806,12 @@ que el aviso te devuelve:
 
    A diferencia de `install:`, tldrx corre `tool_restore:` en TU PROPIO checkout
    automáticamente, una sola vez, antes del primer comando que el pre-vuelo base comprueba —
-   no necesitas correrlo ahí tú primero. Una falla rechaza Build nombrándolo. Deliberadamente
-   no se corre también en el worktree de la historia ni en el del sondeo de entrada a Build;
-   `install:` ya cubre esos dos.
+   no necesitas correrlo ahí tú primero. Una falla rechaza Build nombrándolo. También corre,
+   una sola vez, en el worktree descartable del propio sondeo de entrada a Build, antes del
+   `install:` de ese worktree y antes de resolver el binario de cualquier comando de
+   Definition of Done ahí (gh #371) — así que un comando que sólo resuelve una vez que la
+   restauración corrió ya no se rechaza en esa puerta. Deliberadamente sigue sin correr en el
+   worktree propio de la historia; ese sigue siendo sólo de `install:`.
 2. **Declara `test_fast`** en `.tldrx/workspace.yml`: el subconjunto rápido sobre el que
    itera el developer de Build. No es un comando de Definition of Done; el DoD vuelve a
    correr `test:`. Junto a él, `test_scoped: "<cmd> {{paths}}"` acota el check de DoD de

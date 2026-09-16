@@ -160,6 +160,13 @@ export interface WorktreeProbeRow {
   readonly status: BaseStatus;
   /** The `install:` that ran in the probe tree, when the repo declares one. */
   readonly installCommand?: string;
+  /**
+   * The `tool_restore:` that ran in the probe tree, BEFORE `install:` above, when
+   * the repo declares one (gh #371). ADDITIVE: absent on every `preflight.yml`
+   * written before this key existed and on a row where the repo declares no
+   * `tool_restore:`.
+   */
+  readonly toolRestoreCommand?: string;
   /** Absent — and only ever absent — when nothing ran to produce one (#165). */
   readonly exitCode?: number;
   readonly timedOut: boolean;
@@ -253,6 +260,9 @@ export function emitPreflightYaml(preflight: BasePreflight): string {
         `    tail: ${yamlScalar(row.tail)}`,
       );
       if (row.installCommand !== undefined) lines.push(`    install_command: ${yamlScalar(row.installCommand)}`);
+      if (row.toolRestoreCommand !== undefined) {
+        lines.push(`    tool_restore_command: ${yamlScalar(row.toolRestoreCommand)}`);
+      }
       if (row.refusedBecause !== undefined) lines.push(`    refused_because: ${yamlScalar(row.refusedBecause)}`);
       if (row.advice !== undefined) lines.push(`    advice: ${yamlScalar(row.advice)}`);
       if (row.declarationHash !== undefined) lines.push(`    declaration_hash: ${yamlScalar(row.declarationHash)}`);
@@ -370,6 +380,7 @@ function parseWorktreeRows(value: unknown): readonly WorktreeProbeRow[] {
     const tail = asText(row.tail);
     if (status !== "unmeasured" && exitCode === null && refusedBecause === "" && tail === "") continue;
     const installCommand = asText(row.install_command);
+    const toolRestoreCommand = asText(row.tool_restore_command);
     const advice = asText(row.advice);
     const declarationHash = asText(row.declaration_hash);
     const checkedAt = asText(row.checked_at);
@@ -382,6 +393,7 @@ function parseWorktreeRows(value: unknown): readonly WorktreeProbeRow[] {
       timedOut: row.timed_out === true,
       tail,
       ...(installCommand === "" ? {} : { installCommand }),
+      ...(toolRestoreCommand === "" ? {} : { toolRestoreCommand }),
       ...(refusedBecause === "" ? {} : { refusedBecause }),
       ...(advice === "" ? {} : { advice }),
       ...(declarationHash === "" ? {} : { declarationHash }),
