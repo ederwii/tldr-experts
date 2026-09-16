@@ -24,7 +24,8 @@ Three metrics, measured on every run:
 - A 2-story run on 2026-09-15 cost $22.91 and took 53 min.
 - A 5-story run on 2026-09-16 cost $40.61 and took 6h55m, with 9 operator interventions —
   all framework defects, none design.
-- The ten efficiency adjustments (see below) cut pre-build spend from $12.77 to $3.44 (−73%).
+- The ten efficiency adjustments released on 2026-09-16 (see the CHANGELOG) cut pre-build
+  spend from $12.77 to $3.44 (−73%).
 - The reliability fixes for unattended runs are the current unreleased work: #359, #360,
   #361 and #367 are shipped; #363, #364, #365 and #366 are still open.
 - Next: a clean autonomous re-run measured against the three metrics above.
