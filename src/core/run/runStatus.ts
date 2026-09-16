@@ -7,8 +7,8 @@
  * phase's questions.md.
  */
 import { dashDuration, dashDurationAbsence } from "./duration.ts";
-import { remaining } from "../budget/wouldExceed.ts";
-import { runTally, unmeteredNote } from "../budget/budgetView.ts";
+import { retrySizing, remaining, type RetrySizing } from "../budget/wouldExceed.ts";
+import { nextStageOf, noRetryBlock, runTally, unmeteredNote } from "../budget/budgetView.ts";
 import { spentClause } from "../budget/spentFigure.ts";
 import type { RunBudget } from "../budget/RunBudget.ts";
 import { renderAttempts, stageAttempts, type StageAttempts } from "./attempts.ts";
@@ -21,6 +21,8 @@ import { gatePolicyFor, type GatePolicy, type GatesPolicy } from "./gatePolicy.t
 import { describeGateSignature } from "./gateAuthority.ts";
 import { failureReason, waitingFor, type Waiting, type WaitingKind } from "./waiting.ts";
 import { heldByNote, warnedByNote } from "./autoGate.ts";
+import { buildStageDefaults } from "./workflowPreset.ts";
+import { STAGE_TUNING_DEFAULTS } from "../schemas/stageTuning.ts";
 import {
   flatten, isFinished, isTerminal, recordedVersion,
   type AttendedBy, type RunFile, type RunGateAuthority, type RunGateExecutor, type RunPhase,
@@ -41,6 +43,26 @@ export interface PhaseProgress {
   readonly failure: string | null;
   readonly spent_usd: number;
   readonly ceiling_usd: number;
+  /**
+   * ADDITIVE (part of #232): the same retry-sizing verdict `budget show`
+   * computes (`wouldExceed.ts#retrySizing`) for this phase's own next stage —
+   * `attempts ×` its DECLARED `budget_usd`, never the derived estimate. Until
+   * now only `budget show` warned that a phase cannot afford a second attempt
+   * of its own stage; `run status` said nothing and the operator found out at
+   * the refusal. `not-evaluable` when the phase has no stage left to run, or
+   * that stage declares no budget — a refusal to judge, never a confident `ok`.
+   */
+  readonly retry_sizing: RetrySizing;
+  /** The stage `retry_sizing` was measured against, or null when none is left. */
+  readonly retry_next_stage: string | null;
+  /** That stage's own declared `budget_usd` — one attempt's worth. 0 when there is none. */
+  readonly retry_next_estimate_usd: number;
+  /** The `attempts:` this verdict was measured against. */
+  readonly retry_attempts: number;
+  /** What the ceiling must hold: `attempts ×` the declared one-attempt figure. */
+  readonly retry_holds_usd: number;
+  /** What the ceiling is short of holding those attempts, rounded up. 0 otherwise. */
+  readonly retry_short_by_usd: number;
 }
 
 /** One stage's gate: who is meant to sign it, and who did (spec §2.2). */
@@ -181,8 +203,14 @@ export interface RunStatusView {
   readonly truncations: readonly Truncation[];
 }
 
-export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): RunStatusView {
-  const phases = run.phases.map((phase) => progressOf(phase, budget));
+/**
+ * `root` (part of #232) is the workspace the run lives in, so the next stage's
+ * own `attempts:` can be resolved the same way `budget show` resolves it
+ * (`buildStageDefaults`, tolerant). Absent ⇒ the shipped default, which is what
+ * every caller before #232 effectively priced retries against.
+ */
+export function buildStatus(run: RunFile, budget: RunBudget, runDir: string, root?: string): RunStatusView {
+  const phases = run.phases.map((phase) => progressOf(phase, budget, root, run.scope));
   const tally = runTally(run);
   return {
     run: run.run,
@@ -259,11 +287,20 @@ function gateRows(run: RunFile): readonly GateRow[] {
   }));
 }
 
-function progressOf(phase: RunPhase, budget: RunBudget): PhaseProgress {
+function progressOf(phase: RunPhase, budget: RunBudget, root: string | undefined, scope: string): PhaseProgress {
   const total = phase.stages.length;
   const failedStages = phase.stages.filter((s) => s.status === "failed");
   const done = phase.stages.filter((s) => isTerminal(s.status) && s.status !== "failed").length;
   const money = budget.phases.find((p) => p.id === phase.id);
+  // Same derivation `budget show` uses (`buildBudgetView`): the first
+  // non-terminal stage is what `next` would run, its declared `budget_usd` is
+  // one attempt's worth, and `attempts:` is resolved the same tolerant way.
+  const next = nextStageOf(phase.stages);
+  const staticEstimate = next?.budget_usd ?? 0;
+  const attempts = root === undefined || next === null
+    ? STAGE_TUNING_DEFAULTS.attempts
+    : buildStageDefaults(root, scope, next.id).attempts;
+  const sizing = retrySizing(money?.ceiling_usd ?? 0, next === null ? 0 : staticEstimate, attempts);
   return {
     id: phase.id,
     status: phase.status,
@@ -274,6 +311,12 @@ function progressOf(phase: RunPhase, budget: RunBudget): PhaseProgress {
     failure: failedStages[0] === undefined ? null : failureReason(failedStages[0]),
     spent_usd: money?.spent_usd ?? 0,
     ceiling_usd: money?.ceiling_usd ?? 0,
+    retry_sizing: sizing.sizing,
+    retry_next_stage: next?.id ?? null,
+    retry_next_estimate_usd: staticEstimate,
+    retry_attempts: sizing.attempts,
+    retry_holds_usd: sizing.holdsUsd,
+    retry_short_by_usd: sizing.shortByUsd,
   };
 }
 
@@ -331,6 +374,20 @@ export function renderStatus(view: RunStatusView, verbose = false): string {
       `${marker} ${phase.id.padEnd(width)}  [${phase.bar}] ${String(phase.done)}/${String(phase.total)} stages` +
         `   $${phase.spent_usd.toFixed(2)} / $${phase.ceiling_usd.toFixed(2)}${failure}`,
     );
+  }
+  // Part of #232: the same warning `budget show` prints, on this screen too —
+  // a phase that cannot afford a SECOND attempt of its own stage, said before
+  // the first attempt's spend makes it permanent, never left to the refusal.
+  for (const phase of view.phases) {
+    if (phase.retry_sizing !== "one-attempt-only") continue;
+    lines.push(...noRetryBlock(view.run, {
+      id: phase.id,
+      next_stage: phase.retry_next_stage,
+      next_estimate_static_usd: phase.retry_next_estimate_usd,
+      retry_attempts: phase.retry_attempts,
+      retry_holds_usd: phase.retry_holds_usd,
+      retry_short_by_usd: phase.retry_short_by_usd,
+    }));
   }
   lines.push(
     "",

@@ -138,6 +138,9 @@ nothing to size, and saying nothing is not the same as saying it is fine.
 It is a warning, never a refusal — `tldrx next` still runs, and the all-clear line says how
 many phases are carrying it.
 
+`tldrx run status` prints the same `NO-RETRY` block for the same phases, so you do not have to
+run `budget show` on purpose to see it.
+
 And if you were not reading `budget show` when it mattered, the stage death says it too. The
 last line of a failed stage used to be the same literal every time — *"cost is recorded, not
 refunded — retry with `tldrx next`"* — which on a starved phase names the one command that

@@ -439,7 +439,7 @@ function runStatus(argv: readonly string[]): number {
     // refusal here would be a locked door with the key behind it. Exit 0 — this
     // is a complete answer, not a degraded one.
     if (resolution.kind === "ambiguous") {
-      const views = resolution.open.map((store) => buildStatus(store.run, store.budget, store.runDir));
+      const views = resolution.open.map((store) => buildStatus(store.run, store.budget, store.runDir, root));
       process.stdout.write(
         json
           ? `${JSON.stringify({ runs: views }, null, 2)}\n`
@@ -449,7 +449,7 @@ function runStatus(argv: readonly string[]): number {
     }
 
     const store = resolution.store;
-    const view = buildStatus(store.run, store.budget, store.runDir);
+    const view = buildStatus(store.run, store.budget, store.runDir, root);
     // `--verbose` only ADDS lines under the gate rows: the two instants behind a
     // stage's duration, the sentence naming which end is missing when there is
     // none, and the words on a signed gate (#120). `--json` already carries all

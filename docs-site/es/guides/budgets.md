@@ -146,6 +146,9 @@ bien.
 Es una advertencia, nunca un rechazo: `tldrx next` sigue corriendo, y la línea de "todo en
 orden" dice cuántas fases la arrastran.
 
+`tldrx run status` imprime el mismo bloque `NO-RETRY` para las mismas fases, así que no hace
+falta correr `budget show` a propósito para verlo.
+
 Y si no estabas leyendo `budget show` en el momento que importaba, la muerte de la etapa
 también lo dice. La última línea de una etapa fallida era siempre el mismo literal —*"cost is
 recorded, not refunded — retry with `tldrx next`"*— que en una fase sin margen nombra justo el
