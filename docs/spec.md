@@ -217,7 +217,7 @@ stage at `cursor`, or `done` when every phase is terminal.
 | `tasks[].id` / `.status` | `^t\d+$` / enum | y | One sub-agent invocation |
 | `tasks[].expert` | slug\|null | y | The STAGE's expert — `stages[].experts[0]`, the same value on every row of the stage. It is not who took THIS turn: a Build declares `experts: [developer]` and runs a reviewer under it too, which is what `role` exists to say |
 | `tasks[].role` | `developer`\|`reviewer` | n | **Additive.** WHICH TURN this row is, as against `expert`, which is the stage's. Until it existed every task row of a Build carried the stage's first expert, so a reviewer's turn — its money, its tokens, its span — was filed under `developer` and `run.yml` asserted something false about who did the work. Written by the executor that ran the turn, from the same role it spawned the agent under and emitted on `agent.spawned`. Absent means NOT RECORDED: every row written before this key, and every path that cannot say which role took the turn. A reader prints the absence; it never fills it in with `developer`, which is the guess the key was added to stop |
-| `tasks[].cost_usd` | number ≥0 \| `null` | y | `null` = **unmetered**: no provider-metered dollar figure ever reached this row. Three ways in, and they are not distinguished here — an in-session `--commit` turn nobody declared a cost for, a Codex turn (metered in tokens, never USD), and a SPAWNED turn whose result document carried no `total_cost_usd` at all, including one that died before writing a result document. Contributes nothing to any sum, so `spent_usd` is then a LOWER BOUND, and every report says so. A `0` here is a CLAIM — a provider that reported zero, or a host that declared it with `--cost-usd 0` — never a stand-in for an absence |
+| `tasks[].cost_usd` | number ≥0 \| `null` | y | `null` = **unmetered**: no provider-metered dollar figure ever reached this row. Four ways in, and they are not distinguished here — an in-session `--commit` turn nobody declared a cost for, a Codex turn (metered in tokens, never USD), a SPAWNED turn whose result document carried no `total_cost_usd` at all (including one that died before writing a result document), and a headless turn whose PARENT process died mid-spawn, SIGKILL-class, before any result line — its own or its parent's — could be read at all (`demoteStaleRunning`, gh #337). Contributes nothing to any sum, so `spent_usd` is then a LOWER BOUND, and every report says so. A `0` here is a CLAIM — a provider that reported zero, or a host that declared it with `--cost-usd 0` — never a stand-in for an absence |
 | `tasks[].metered` | bool | n | **Additive.** `false` iff `cost_usd` is `null`; absent means metered. The two always travel together, and a `null` cost without it is a schema error. For a SPAWNED turn it is decided in one place (`spawnAgent.ts`'s `interpret`), from whether the result document actually carried a USD figure — never from the provider's name ALONE, which is what let a Claude turn read as metered whether or not a dollar figure ever came back. The `provider === "claude"` guard stays only to keep Codex's synthesized `total_cost_usd: 0` (`agentEvents.ts`'s `resolveCodexResultDoc`) from reading as a measurement. For an in-session turn it is whether a cost was DECLARED |
 | `tasks[].tokens` | number | n | **Additive.** What `tldrx next --commit --tokens <n>` declared, when the host knew |
 | `tasks[].input_tokens` / `.output_tokens` | number ≥0 | n | **Additive.** The PROVIDER's own token split for a turn this process watched, read off the result document's `usage`. Distinct from `tokens`, which is a HOST declaration for a turn nothing here metered. Written only when BOTH sides came back strictly positive, and only together: the parse that produces them defaults a missing side to `0`, so a HALF-reported split is exactly as unverifiable as an absent one. Absent therefore means "no positive split reached the ledger" — never a zero standing in for one. Together with `cost_usd` they are what makes a dollar figure checkable against a price table instead of a number nobody can falsify |
@@ -1502,6 +1502,30 @@ to be read as a measurement. **No dollar figure is ever synthesised here.** Meas
 stream reports tokens per assistant message (`message.usage`) and dollars only on the final `type: "result"` line
 (`total_cost_usd`), which a killed process never reaches — so a USD figure for a killed turn could only be one this
 framework computed itself, and §2.11's rule is that a cost record never lies in the dangerous direction.
+
+**A demoted stale-lock stage now banks its orphaned HEADLESS turn as an unmetered `tasks[]` row,
+2026-09-15 (#337, the remaining half of #246).** §5's resume path — "a `running` left by a crash is
+demoted to `ready` when `.lock` holds a dead pid" — used to demote and say nothing else, whatever
+mode had opened the turn. For a headless spawn that is a real gap: `next` holds `.lock` for the
+whole of its `await spawnAgent(...)`, so a SIGKILL-class death there (the field case: `run auto`'s
+process died, the orphaned `claude` child kept running to completion, `handoff.md` reached disk)
+leaves a stage `running` under a dead lock with the sub-agent's cost recorded NOWHERE — not even
+as an unmetered row — and `budget.spent_usd` read a confident `0.00` for money a provider may
+really have charged. `demoteStaleRunning` now reads `startedHeadless` (`run/lastStart.ts`, §5's own
+derivation of which mode opened a stage's last turn, already read by the Ctrl-C path below) and,
+for a stage whose last start was genuinely `headless` — never a `--prepare` bundle waiting for a
+human, and never a Build executor phase, both of which spent nothing and are excluded the same way
+`preparedRefusal` excludes them — appends one `tasks[]` row: `status: "failed"`,
+`cost_usd: null, metered: false` (this is the fourth way a `cost_usd` reaches `null`: a SPAWNED
+turn whose own process died before it could read a result line at all, distinct from one whose
+result document merely carried no `total_cost_usd`) and
+`error: "turn outlived its parent; no result line was read"`. `expert`/`model`/`started_at` are
+carried over from the stage being demoted, so the row says who and when even though nothing here
+ever saw the turn finish. No new event is appended — the ledger's fix is the `run.yml` row
+`spendBasis`/`tallyOf` already know how to fold into a LOWER BOUND, not a second copy of
+`agent.result`'s late-arrival handling, which covers a different timing case (a relaunched
+invocation's result arriving after its slot closed) and never engages here, because no `agent.result`
+is ever appended for a turn whose parent never returned from the spawn.
 
 **`fact.conflict_raised` was added 2026-09-07 (#169).** The `tldrx answer` path runs the lexical duplicate check
 against the live facts before it appends (§2.5), and a hit RAISES rather than refuses: the answer is recorded, the

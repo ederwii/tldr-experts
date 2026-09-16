@@ -46,6 +46,22 @@
 
 ### Fixed
 
+- **A headless turn whose parent `tldrx` process is SIGKILL-class killed mid-spawn now banks its
+  cost as unmetered rather than nowhere at all (#337, the remaining half of #246).** #246's field
+  case: a `run auto` process died while blocked in `spawnAgent`'s `await` (`runNext.ts`); the
+  orphaned `claude` child kept running to completion, but `run.yml`'s `budget.spent_usd` stayed
+  `0.00` forever, because `demoteStaleRunning` — the code that finds the dead `.lock` and puts the
+  stage back to `ready` — wrote no task row for that attempt at all, not even an unmetered one. A
+  confident `0.00` for money a provider may really have charged is the one answer AGENTS.md §7
+  rules out. `demoteStaleRunning` now reads `startedHeadless` (`run/lastStart.ts`, the one
+  derivation of which mode opened a stage's last turn — already used by the Ctrl-C path) and, for
+  a genuinely orphaned HEADLESS spawn (never a `--prepare` bundle waiting for a human, and never a
+  Build executor phase, both of which are `preparedRefusal`'s and the executor's own business),
+  records a `status: "failed"` task with `cost_usd: null, metered: false` and
+  `error: "turn outlived its parent; no result line was read"` before demoting the stage — so
+  `spendBasis`/`tallyOf` (the one derivation, unchanged) count it as a LOWER BOUND, and `run
+  status`/`budget show`/the dashboard say so instead of printing a silent `$0.00`.
+
 - **`run auto` now names `--wait-gates` as the fix, at the moment an all-`auto` gate's only
   blocking questions are answered but nothing will sign it (#342).** Measured live on a
   `--gates none --questions none` run launched with no `--wait-gates`/`--wait-answers`: the
