@@ -73,7 +73,7 @@ const FAKE_KEYS = [
   "FAKE_BUILD_WRITE", "FAKE_BUILD_VERDICTS", "FAKE_BUILD_COST", "FAKE_BUILD_STATE",
   "FAKE_BUILD_ARGV_LOG", "FAKE_BUILD_PROMPT_DIR", "FAKE_BUILD_IS_ERROR",
   "FAKE_BUILD_FAIL", "FAKE_BUILD_FAIL_REASON", "FAKE_BUILD_DENIED", "FAKE_BUILD_GIT_RM",
-  "FAKE_BUILD_DENIED_WORK", "FAKE_BUILD_FAIL_WORK",
+  "FAKE_BUILD_DENIED_WORK", "FAKE_BUILD_FAIL_WORK", "FAKE_BUILD_RATE_LIMIT",
 ] as const;
 
 let open: BuildWorkspace[] = [];
@@ -4649,6 +4649,60 @@ describe("a story whose dependency is at `review` waits instead of blocking (gh 
     const said = again.lines.join("\n");
     expect(said).not.toContain("S2 is already `blocked` — left alone");
     expect(said).toContain("S2 was `blocked` for dependency S1, which is now `done`");
+  }, 90_000);
+
+  /**
+   * gh #361 — a release decided but never written survives no interruption.
+   *
+   * Measured on a live unattended run (0.31.1): a story sat `blocked` with its
+   * dependency `done` across a whole fresh invocation — `gate.requested` still
+   * named it `blocked`, with the generic `settled by an earlier \`tldrx next\``
+   * reason `fromDisk` writes for a row THIS process never touched. The release
+   * above (`staleDependencyHold` returning non-null) only pushes the row onto
+   * `pending` and logs a line; nothing writes `todo` to the story file until
+   * `driveStory` actually settles it. `driveStory`'s very first check is the
+   * gh #298 rate-limit park — "stop HERE, at a story boundary... nothing waits
+   * and nothing retries" — and it returns before any write when the wall was
+   * already up from the PRECEDING story's turn. So a story released here and
+   * then parked before its own turn is left exactly where it started: `blocked`
+   * on disk, with no attempt and no record that it was ever offered again. The
+   * next invocation re-reads the same stale `blocked` row and must re-derive
+   * the release from the log a second time — and if IT also parks before
+   * reaching this story, the story sits `blocked` indefinitely, never once
+   * written `todo`, which is what a person had to fix by hand on the live run.
+   */
+  test("a released story the rate-limit wall parks before its own turn still lands `todo`, not left `blocked` (gh #361)", async () => {
+    const ws = twoWaves();
+    parkS1AtReview();
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: review");
+
+    // The shape #280 fixed: S2 `blocked` with the dependency reason in its log.
+    writeFileSync(join(ws.planDir, "stories", "S2.md"), story(ws, "S2").replace("status: todo", "status: blocked"), "utf8");
+    const logDir = join(ws.runDir, "04-build", "log");
+    mkdirSync(logDir, { recursive: true });
+    writeFileSync(join(logDir, "S2.md"), [
+      "# Review — S2 · Second, in the next wave", "",
+      "- Verdict: **n-a**", "- Story status: `blocked`", "- Attempt: 0", "",
+      WHY_NOT_DONE_HEADING, "", dependencyHoldReason({ id: "S1", status: "review" }), "",
+    ].join("\n"), "utf8");
+
+    reenter(ws, "the reviewer died");
+    // gh #298: S1's re-review carries the provider's quota warning — the wall
+    // arrives exactly as the dependency lands, before S2 (just released) gets
+    // its own turn.
+    process.env.FAKE_BUILD_RATE_LIMIT = JSON.stringify({ S1: "allowed_warning@0.94" });
+    const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: done");
+    // The park, not a verdict: S2 was never attempted this pass either.
+    expect(started(ws, "S2")).toBe(false);
+    const said = again.lines.join("\n");
+    expect(said).toContain("S2 was `blocked` for dependency S1, which is now `done`");
+    expect(said).toContain("S2: not started — the provider warned its rate limit was close");
+    // THE DEFECT: the release was decided and reported, but nothing on disk
+    // says so — S2 must not still read `blocked` once this invocation exits.
+    expect(story(ws, "S2")).toContain("status: todo");
   }, 90_000);
 
   test("the recorded sentence is read back by the one function that writes it — and nothing else is", () => {

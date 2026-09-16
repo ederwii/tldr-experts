@@ -27,6 +27,19 @@
   chaining or heredocs … a compound line is refused unread". This changes the golden developer
   prompt's bytes on purpose — `test/build-golden.test.ts`'s fixtures are updated for exactly
   those lines.
+- **A story released from a stale dependency hold could sit `blocked` forever if the gh #298
+  rate-limit park landed on its own turn (#361).** `staleDependencyHold` deciding a `blocked`
+  row's dependency is now `done` only added the story to this pass's `pending` list and logged a
+  line — the story file itself stayed `blocked` until `driveStory` actually settled the attempt,
+  and `driveStory`'s very first act is the rate-limit park, which returns before any write when
+  the wall is already up from an earlier story's turn. Measured on a live unattended run
+  (0.31.1): a story sat `blocked` across a whole further invocation, with `gate.requested`
+  reporting the generic `settled by an earlier \`tldrx next\`` reason a never-touched row falls
+  back to, and an operator had to `story reopen` it by hand. The release is now written to the
+  story file (`blocked` → `todo`) the moment it is decided, so a park before the attempt leaves
+  the story exactly where an ordinary un-attempted `todo` row sits — picked up plainly by the
+  next invocation instead of re-deriving the same release from the log every time it gets that
+  far.
 
 ## 0.31.1 — 2026-09-16
 
