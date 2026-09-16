@@ -38,6 +38,7 @@ import { writeAtomic } from "../fs/writeAtomic.ts";
 import { hashText } from "../experts/packTemplates.ts";
 import { BUILD_PHASE } from "./plan.ts";
 import type { WorkspaceContext } from "../../hooks/lib/workspace.ts";
+import { installCommandFor } from "./worktreeDeps.ts";
 
 /** The file that decides what a red story means, run-relative. */
 export const PREFLIGHT_REL = `${BUILD_PHASE}/preflight.yml`;
@@ -676,6 +677,14 @@ export function baseRefusalLines(
 ): readonly string[] {
   const failed: string[] = [];
   let cached = false;
+  // gh #343: measured on a fresh clone where only part of a declared multi-step
+  // `install:` had been run — the commands were genuinely `command not found`, but
+  // the workspace names its own fix in the same file this refusal already reads,
+  // and the generic advice below never said so. One line per REPO, not per failing
+  // command: a repo with three red commands and one `install:` gets the fix named
+  // once, not three times.
+  const installNamed = new Set<string>();
+  const installLines: string[] = [];
   for (const served of failures) {
     failed.push(baseFailureLine(served.result));
     // #339, before the `tldrx init` corroboration: it QUALIFIES the line above, and a
@@ -688,6 +697,13 @@ export function baseRefusalLines(
     }
     const probe = initProbeLine(workspace, served.result);
     if (probe !== null) failed.push(probe);
+    if (workspace !== undefined && !installNamed.has(served.result.repo)) {
+      const install = installCommandFor(workspace, served.result.repo);
+      if (install !== null) {
+        installNamed.add(served.result.repo);
+        installLines.push(installAdviceLine(served.result.repo, install));
+      }
+    }
   }
   return [
     "[tldrx] build: a Definition of Done is a DELTA gate, and these commands already fail on the "
@@ -695,11 +711,24 @@ export function baseRefusalLines(
     ...failed,
     `Fix ${WORKSPACE_FILE} (or the base tree), then run \`tldrx next\` again. `
       + "Nothing was dispatched and nothing was charged.",
+    ...installLines,
     // #339: the advice above is WRONG for a re-used reading — it sends somebody at a
     // command the cache will refuse identically, without looking, until the expiry
     // named above. So when one of these was not taken now, say what clears it.
     ...(cached ? [cachedAdviceLine()] : []),
   ];
+}
+
+/**
+ * Names the workspace's own declared `install:` as the first thing to try (gh #343,
+ * recommendation (A)). It never RUNS the installer — running one in the operator's
+ * own checkout, unasked, ahead of a refusal that has not yet told them anything, is
+ * exactly the side effect `serveBaseResult`'s own reasoning avoids for gate commands,
+ * and an install step can write arbitrary files and take arbitrary time.
+ */
+function installAdviceLine(repo: string, install: string): string {
+  return `  · ${repo} declares \`install: ${install}\` in ${WORKSPACE_FILE} — run it in this checkout, `
+    + "then `tldrx next` re-measures";
 }
 
 /**

@@ -476,6 +476,26 @@ describe("the deferred gate notification is released by conditions, not by statu
     expect(events(ws).some((e) => e.type === "gate.approved" && e.stage === "alpha")).toBe(false);
   });
 
+  // gh #342 — measured on a live `run auto --run <id> --until-done=5` with no
+  // `--wait-gates`/`--wait-answers`: the loop answered the blocking questions itself
+  // (here, via `--wait-answers`) but nothing closes the gate they were the only thing
+  // holding, and the NEXT `next` call reports the stage as `awaiting_gate` with the
+  // generic `gate pending: tldrx approve` — never naming the flag that would have let
+  // the loop close it. The refusal now names the cure at the moment it is decided,
+  // not just the symptom.
+  test("gh #342 — with no --wait-gates, the stop names the flag that would have closed the gate", async () => {
+    const ws = workspace({ gates: { alpha: "auto", beta: "auto" }, questions: QUESTIONS });
+    const answering = answerWhenWaiting(ws);
+
+    const outcome = await auto(ws, { waitAnswersMs: 20_000, notifyEveryMs: 40 });
+    await answering;
+    expect(outcome.code).toBe(4);
+
+    const line = outcome.lines.find((l) => l.includes("--wait-gates") && l.includes("alpha"));
+    expect(line).toBeDefined();
+    expect(String(line)).toContain("holds");
+  });
+
   test("a SECOND condition, failing only by the time the answers land, IS notified — and with the current words", async () => {
     const ws = workspace({ gates: { alpha: "auto", beta: "auto" }, questions: QUESTIONS });
     // The gate fires held by `["questions"]` alone, so its notification is deferred; the

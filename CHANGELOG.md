@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.31.0 — unreleased
+
+### Fixed
+
+- **`run auto` now names `--wait-gates` as the fix, at the moment an all-`auto` gate's only
+  blocking questions are answered but nothing will sign it (#342).** Measured live on a
+  `--gates none --questions none` run launched with no `--wait-gates`/`--wait-answers`: the
+  loop answers a blocking question itself (`questions_policy: recommended`) or once
+  `--wait-answers` polls one in, but the ONLY thing that ever self-closes a parked `auto`
+  gate is `selfCloseAutoGate`, reached only from `waitForGate`'s poll — so the next `next`
+  call reports the stage as `awaiting_gate` with a generic `gate pending: tldrx approve`,
+  never saying the gate would have closed itself with one more flag. `settleDeferredGate`
+  (`runAuto.ts`) now says so, by name, at the exact moment the gap is decided. The deeper fix
+  — `next` re-evaluating a parked `auto` gate on its own, so this holds even for a `next`
+  launched by hand — is recommendation (1) on the issue and stays open there; it touches
+  `runNext.ts`, out of scope for this change.
+
+- **The base-tree DoD refusal now names the workspace's own declared `install:` as the fix
+  (#343).** Measured on a fresh clone where a multi-step installer had only partly run: the
+  refusal reported `eslint`/`tsc`/`vitest` all `command not found`, identical in shape to a
+  genuinely broken repo, even though the same `WorkspaceContext` the refusal already reads
+  carries the workspace's own `install:` line. `baseRefusalLines` (`preflight.ts`) now names
+  it, once per repo — never runs it: running an installer against the operator's own
+  checkout, unasked, ahead of a refusal that has not yet told them anything, is exactly the
+  side effect the base-measurement design already avoids for gate commands. The zero-touch
+  first-run guide (EN/ES) now says explicitly to run the declared `install:` in the checkout
+  itself before the first `run auto`, not only in a story's worktree.
+
 ## 0.30.0 — 2026-09-15
 
 ### Fixed
