@@ -553,23 +553,51 @@ function insertMarkerSpace(line: string): string | null {
 /**
  * A well-formed `[src: …]` sitting mid-sentence is moved to the true end of the
  * line, exactly as `SRC_RULES`'s own `trailing-position` pair does it by hand.
+ *
+ * Anchored on `line.lastIndexOf(SRC_MARKER)` — the SAME position
+ * `diagnoseSrcToken` reads to decide this is `trailing-position` in the first
+ * place (line 466 above). Reviewer-found (2026-09-15): an earlier cut used an
+ * unanchored FIRST-match regex here, so a line quoting a decorative example
+ * token before the real, mid-sentence one relocated the wrong (decorative)
+ * span — it re-verified clean and was written to disk citing the wrong file.
+ * There can be only one span at `lastIndexOf`, so "first vs. last" cannot
+ * recur here the way it can with a substring `.replace` (`straightenCmdArrow`,
+ * below).
  */
 function relocateTrailingToken(line: string): string | null {
-  const match = /\s?\[src: [^\]]*\]\s?/.exec(line);
-  if (match === null) return null;
-  // The matched span (token plus whatever whitespace hugs it on either side) is
+  const at = line.lastIndexOf(SRC_MARKER);
+  if (at === -1) return null;
+  const close = line.indexOf("]", at);
+  if (close === -1) return null;
+  const token = line.slice(at, close + 1);
+  // The span (token plus whatever whitespace hugs it on either side) is
   // collapsed to ONE space rather than dropped outright — dropping both sides
   // would fuse the words either side of the token into one.
   const withoutToken = (
-    line.slice(0, match.index) + " " + line.slice(match.index + match[0].length)
+    line.slice(0, at) + " " + line.slice(close + 1)
   ).replace(/\s+/g, " ").trim();
-  return `${withoutToken} ${match[0].trim()}`;
+  return `${withoutToken} ${token}`;
 }
 
-/** ASCII `->` inside a `cmd` source becomes the real arrow, U+2192 — nowhere else on the line. */
+/**
+ * ASCII `->` inside a `cmd` source becomes the real arrow, U+2192 — nowhere
+ * else on the line.
+ *
+ * Located by `line.lastIndexOf(tokenRaw)`, not `line.replace(tokenRaw, …)`
+ * (`String.replace` with a string needle rewrites the FIRST occurrence).
+ * `tokenRaw` is the TRAILING token `parseSrcToken` matched — the real,
+ * end-of-line citation — so if the same text also appears earlier as a quoted
+ * example, `.replace` would straighten the decorative copy and leave the real
+ * one broken. Reviewer-found (2026-09-15) alongside the sibling bug in
+ * `relocateTrailingToken`; caught here by this function's own re-verification
+ * before it ever produced a wrong repair, but fixed the same way regardless.
+ */
 function straightenCmdArrow(line: string, tokenRaw: string): string | null {
   if (!tokenRaw.includes("->")) return null;
-  return line.replace(tokenRaw, tokenRaw.replace(/->/g, "→"));
+  const at = line.lastIndexOf(tokenRaw);
+  if (at === -1) return null;
+  const fixed = tokenRaw.replace(/->/g, "→");
+  return line.slice(0, at) + fixed + line.slice(at + tokenRaw.length);
 }
 
 export interface SrcRepair {

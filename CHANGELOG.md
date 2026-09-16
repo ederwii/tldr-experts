@@ -7,10 +7,10 @@
 - **A `[src:]` citation on a Watch card that only has a punctuation slip — the marker missing its
   space, a token sitting mid-sentence, an ASCII `->` in place of the real arrow — is repaired
   locally, for $0.00, before the card is judged, instead of failing the stage over formatting a
-  script already knew how to fix (#345, watch-card half). Measured (workspace B audit,
-  `audit-aparece-runs.md` §4): 10 of 54 failed tasks across 22 runs were malformed watch cards —
-  caught only after a full paid turn wrote the card, by the same `parseWatcherCard` this repair now
-  runs ahead of. `repairSrcSyntax` (`src/core/text/srcToken.ts`) only accepts a fix it can VERIFY
+  script already knew how to fix (#345, watch-card half). Measured over two field audits: 10 of 54
+  failed tasks across 22 runs in one workspace were malformed watch cards — caught only after a
+  full paid turn wrote the card, by the same `parseWatcherCard` this repair now runs ahead of.
+  `repairSrcSyntax` (`src/core/text/srcToken.ts`) only accepts a fix it can VERIFY
   re-parses clean (mirrors `parseYamlRepairing`'s own rule) and only touches the three rules that
   are pure syntax — `marker-spelling`, `trailing-position`, `cmd-arrow` — never a rule that would
   need an invented line number, path or fact id (AGENTS.md §7). The repair is written back to disk

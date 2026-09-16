@@ -45,6 +45,46 @@ describe("repairSrcTokenLine — the three syntax-only rules", () => {
     expect(diagnoseSrcToken(repaired?.text ?? "")).toBeNull();
   });
 
+  /**
+   * Reviewer-found (2026-09-15): `diagnoseSrcToken` picks the LAST `[src:` on
+   * the line (`lastIndexOf`) to decide `trailing-position`, but the first cut
+   * of `relocateTrailingToken` found its span with an unanchored FIRST-match
+   * regex. A line quoting a decorative example token before the real,
+   * mid-sentence one relocated the wrong (decorative) span, re-verified clean,
+   * and was written to disk citing the wrong file. Repro is the reviewer's own.
+   */
+  test("trailing-position: with two spans, only the LAST (real) one is relocated — a quoted example is left alone", () => {
+    const line = "- example format is `[src: api:src/Ex.ts:1]` and the real fix cites "
+      + "[src: api:src/Real.ts:9] before ranking";
+    const repaired = repairSrcTokenLine(line);
+    expect(repaired).not.toBeNull();
+    expect(repaired?.rule).toBe("trailing-position");
+    expect(repaired?.text).toBe(
+      "- example format is `[src: api:src/Ex.ts:1]` and the real fix cites before ranking [src: api:src/Real.ts:9]",
+    );
+    // The quoted example is BYTE-IDENTICAL to how it was written — nothing in
+    // it was touched.
+    expect(repaired?.text ?? "").toContain("`[src: api:src/Ex.ts:1]`");
+    expect(diagnoseSrcToken(repaired?.text ?? "")).toBeNull();
+  });
+
+  /** Sibling of the above for `cmd-arrow`: `line.replace(tokenRaw, …)` finds the
+   * FIRST occurrence of a string, not the last — a decorative example that
+   * happens to be byte-identical to the real trailing token must not be the
+   * one that gets straightened. */
+  test("cmd-arrow: with two identical spans, only the trailing (real) one is straightened", () => {
+    const line = "- example format is `[src: $ bun test -> exit 0]` and the real check is "
+      + "[src: $ bun test -> exit 0]";
+    const repaired = repairSrcTokenLine(line);
+    expect(repaired).not.toBeNull();
+    expect(repaired?.rule).toBe("cmd-arrow");
+    expect(repaired?.text).toBe(
+      "- example format is `[src: $ bun test -> exit 0]` and the real check is "
+      + "[src: $ bun test → exit 0]",
+    );
+    expect(diagnoseSrcToken(repaired?.text ?? "")).toBeNull();
+  });
+
   test("cmd-arrow: ASCII `->` inside a cmd source becomes the real arrow", () => {
     const bad = srcRule("cmd-arrow").bad;
     const good = srcRule("cmd-arrow").good;
