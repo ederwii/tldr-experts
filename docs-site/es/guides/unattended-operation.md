@@ -771,6 +771,15 @@ que el aviso te devuelve:
          install: "npm ci"      # pnpm install --frozen-lockfile, uv sync, dotnet restore, …
          test: "npm run test"
    ```
+
+   **Corre ese mismo `install:` también en tu propio checkout, antes del primer `run auto`**
+   — no sólo en el worktree de la historia. El pre-vuelo base de Build mide cada comando
+   declarado de DoD en ESTE checkout, una sola vez, antes de despachar ninguna historia (gh
+   #41); un comando que sólo falla ahí porque el `install:` se corrió a medias (un monorepo
+   donde `uv sync` corrió pero `npm --prefix frontend ci` no, por ejemplo) se lee idéntico a
+   un repo genuinamente roto, y el rechazo ahora nombra tu propio `install:` declarado como lo
+   primero para probar (gh #343) — pero nombrarlo no cuesta nada si ya sabes correrlo tú
+   primero.
 2. **Declara `test_fast`** en `.tldrx/workspace.yml`: el subconjunto rápido sobre el que
    itera el developer de Build. No es un comando de Definition of Done; el DoD vuelve a
    correr `test:`. Junto a él, `test_scoped: "<cmd> {{paths}}"` acota el check de DoD de
@@ -796,9 +805,11 @@ que el aviso te devuelve:
 worktree de la historia no tenía el binario. Declara `install:` (punto 1 de arriba) y tldrx
 instala ahí las dependencias antes del developer. El check que falló trae `tree: "worktree"`,
 así que se distingue del pre-vuelo de entrada a Build, que corre el mismo comando en tu propio
-checkout — donde las dependencias ya están, que es por qué puede estar verde minutos antes. Desde
-el sondeo en worktree al entrar a Build esto debería ser raro: la misma ausencia normalmente se
-rechaza una sola vez, en la entrada, antes de pagar ningún turno.
+checkout — donde las dependencias ya están SÓLO SI corriste `install:` ahí tú primero (gh
+#343; tldrx nunca lo corre contra tu propio checkout sin que se lo pidas). Desde el sondeo en
+worktree al entrar a Build esto debería ser raro: la misma ausencia normalmente se rechaza una
+sola vez, en la entrada, antes de pagar ningún turno — y si el que está rojo es tu PROPIO
+checkout, el rechazo nombra el `install:` declarado como la solución.
 
 **El developer dice "This command requires approval to run".** Arreglado en gh #209: cada
 comando declarado ahora se concede tanto exacto como con argumentos al final, así que un

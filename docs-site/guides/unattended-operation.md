@@ -745,6 +745,14 @@ notification buys back:
          install: "npm ci"      # pnpm install --frozen-lockfile, uv sync, dotnet restore, …
          test: "npm run test"
    ```
+
+   **Run the same `install:` in your own checkout too, before the first `run auto`** — not
+   only in the story worktree. Build's base pre-flight measures every declared DoD command in
+   THIS checkout, once, before any story is dispatched (gh #41); a command that only fails
+   here because `install:` was only partly run (a monorepo where `uv sync` ran but `npm
+   --prefix frontend ci` did not, say) reads identically to a genuinely broken repo, and the
+   refusal now names your own declared `install:` as the first thing to try (gh #343) — but
+   naming it costs nothing to skip if you already know to run it yourself first.
 2. **Declare `test_fast`** in `.tldrx/workspace.yml` — the fast subset the Build developer
    iterates on. It is not a Definition of Done command; the DoD re-runs `test:`. Beside it,
    `test_scoped: "<cmd> {{paths}}"` narrows each story's own DoD check to the paths it
@@ -769,9 +777,11 @@ notification buys back:
 worktree did not have the binary. Declare `install:` (item 1 above) and tldrx installs the
 dependencies there before the developer. The check that failed carries `tree: "worktree"`, so
 it can be told apart from the Build-entry pre-flight, which runs the same command in your own
-checkout — where the dependencies already are, which is why it can be green minutes earlier. Since
-the Build-entry worktree probe this should now be rare: the same absence is normally refused
-once, at entry, before any turn is paid for.
+checkout — where the dependencies already are ONLY IF you ran `install:` there yourself first
+(gh #343; tldrx never runs it against your own checkout unasked). Since the Build-entry
+worktree probe this should now be rare: the same absence is normally refused once, at entry,
+before any turn is paid for — and if it is your OWN checkout that is red, the refusal names
+the declared `install:` as the fix.
 
 **The developer says "This command requires approval to run".** Fixed in gh #209: every
 declared command is now granted both exactly and with trailing arguments, so a developer can

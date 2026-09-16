@@ -17,6 +17,16 @@
   launched by hand — is recommendation (1) on the issue and stays open there; it touches
   `runNext.ts`, out of scope for this change.
 
+- **The base-tree DoD refusal now names the workspace's own declared `install:` as the fix
+  (#343).** Measured on a fresh clone where a multi-step installer had only partly run: the
+  refusal reported `eslint`/`tsc`/`vitest` all `command not found`, identical in shape to a
+  genuinely broken repo, even though the same `WorkspaceContext` the refusal already reads
+  carries the workspace's own `install:` line. `baseRefusalLines` (`preflight.ts`) now names
+  it, once per repo — never runs it: running an installer against the operator's own
+  checkout, unasked, ahead of a refusal that has not yet told them anything, is exactly the
+  side effect the base-measurement design already avoids for gate commands. The zero-touch
+  first-run guide (EN/ES) now says explicitly to run the declared `install:` in the checkout
+  itself before the first `run auto`, not only in a story's worktree.
 
 ## 0.30.0 — 2026-09-15
 

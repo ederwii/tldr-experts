@@ -947,6 +947,57 @@ describe("the base refusal cites init's probe when one exists", () => {
 });
 
 /**
+ * gh #343 — measured on a fresh clone where only `uv sync` had run of a declared
+ * `install: scripts/gate/install.sh`: the base refusal named the failing commands
+ * (`eslint`/`tsc`/`vitest` all `command not found`) but its advice line
+ * (`Fix .tldrx/workspace.yml (or the base tree), then run tldrx next again.`) never
+ * named the workspace's OWN declared `install:` — even though the same
+ * `WorkspaceContext` this refusal already reads carries it (`decl.install`, read
+ * elsewhere at Build entry, `entryProbe.ts:312-467`). The fix: recommend (A) from
+ * the issue — name it, never run it unasked against the operator's own checkout.
+ */
+describe("the base refusal names the workspace's own declared install: (gh #343)", () => {
+  const failure: BaseCommandResult = {
+    repo: "app", command: "npx eslint .", status: "failed", exitCode: 127, timedOut: false,
+    baseRef: "main", baseSha: "abc1234", tail: "sh: eslint: command not found",
+  };
+
+  function context(installCommand: string | null): WorkspaceContext {
+    const roles = new Map<string, string>([["lint", "npx eslint ."]]);
+    if (installCommand !== null) roles.set("install", installCommand);
+    return {
+      root: "/w",
+      repos: new Map([["app", "."]]),
+      commands: new Set(["npx eslint .", ...(installCommand === null ? [] : [installCommand])]),
+      repoCommands: new Map([["app", ["npx eslint ."]]]),
+      commandRoles: new Map([["app", roles]]),
+      commandProbes: new Map([["app", new Map()]]),
+      iterationCommands: new Set<string>(),
+      scopedCommands: new Map(),
+      scopedTemplates: new Set<string>(),
+      defaultBranches: new Map([["app", "main"]]),
+      seedTriageThresholdTokens: null,
+    };
+  }
+
+  test("a repo with a declared install: gets it named as the fix, once", () => {
+    const lines = baseRefusalLines([{ result: failure, provenance: null }], context("npm ci && npm run build"));
+    const named = lines.filter((line) => line.includes("install:") && line.includes("npm ci && npm run build"));
+    expect(named).toHaveLength(1);
+    // The command a person actually runs, not just its own re-statement of the symptom.
+    expect(named[0]).toContain("app");
+  });
+
+  test("a repo with no declared install: and no workspace at all name nothing new", () => {
+    const none = baseRefusalLines([{ result: failure, provenance: null }], context(null));
+    const noWorkspace = baseRefusalLines([{ result: failure, provenance: null }]);
+    for (const lines of [none, noWorkspace]) {
+      expect(lines.some((line) => line.includes("install:"))).toBe(false);
+    }
+  });
+});
+
+/**
  * The whole path, off disk: `workspace.yml` → `loadWorkspace` → the refusal line (#168).
  *
  * Everything above builds a `WorkspaceContext` by hand, so nothing proved that
