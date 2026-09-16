@@ -45,6 +45,43 @@ import type { DodResult } from "./outcome.ts";
 export const INSTALL_SLOT = "install";
 
 /**
+ * A second reserved `commands:` slot: local per-checkout TOOL state a package
+ * manager's own install does not restore (gh #363).
+ *
+ * Measured live, tldrx 0.31.1: a workspace declared `tool_restore: dotnet tool
+ * restore` and no `install:` at all. Nothing ran it anywhere automatically —
+ * `install:` was the only slot any code read — so the local tool a story's own
+ * `dod:` needed (`dotnet-ef`, restored by `dotnet tool restore`, a DIFFERENT
+ * command from `dotnet restore`) was missing on the base pre-flight's own first
+ * probed command, which refused naming the tool by its own message
+ * (`Run "dotnet tool restore" to make the "dotnet-ef" command available.`)
+ * before an operator had any evidence beyond that refusal.
+ */
+export const TOOL_RESTORE_SLOT = "tool_restore";
+
+/**
+ * The declared `tool_restore:` command for one repo, or null when the slot is
+ * empty — `installCommandFor`'s sibling, read from `commandRoles` the same way
+ * and never guessed from the command TEXT.
+ *
+ * Deliberately NOT generalized into an `install:`-plus-`tool_restore:` ordered
+ * list that a single caller walks: `install:` already has ITS OWN auto-run
+ * doors — a story's fresh worktree (`runWorktreeInstall` below) and the
+ * Build-entry probe's throwaway worktree (`entryProbe.ts`, #254), both of which
+ * a failing install refuses through, with the install's OWN stderr, BEFORE a
+ * story opens (`test/story-worktree-deps.test.ts`, case (d)). Running `install:`
+ * a THIRD time, automatically, in the human's own checkout — a tree #41's own
+ * design deliberately leaves to the human — would refuse Build a second time
+ * for the same failure, through a different message, from a door nobody asked
+ * for (measured regression while building this: case (d) failed on the WRONG
+ * sentence once `install:` was added here). `tool_restore:` has no such door
+ * anywhere; this is the first one.
+ */
+export function toolRestoreCommandFor(workspace: WorkspaceContext, repo: string): string | null {
+  return workspace.commandRoles.get(repo)?.get(TOOL_RESTORE_SLOT) ?? null;
+}
+
+/**
  * The declared install command for one repo, or null when the slot is empty.
  *
  * Read from `commandRoles` (slot -> command), never guessed from the command
@@ -164,6 +201,14 @@ export function installFailureReason(check: InstallCheck, repo: string): string 
  * either record said they were different trees.
  */
 export const WORKTREE_TREE = "worktree";
+
+/**
+ * `WORKTREE_TREE`'s sibling (gh #363): the base pre-flight's own tree — the
+ * repo's checkout, not a fresh `git worktree`. Named here, beside
+ * `WORKTREE_TREE`, so the two trees a DoD command can run in are ONE pair of
+ * constants and never two independently-spelled strings.
+ */
+export const BASE_TREE = "checkout";
 
 /** What an exit 127 in a story worktree turned out to be, as data. */
 export interface AbsentBinary {

@@ -764,6 +764,22 @@ notification buys back:
    --prefix frontend ci` did not, say) reads identically to a genuinely broken repo, and the
    refusal now names your own declared `install:` as the first thing to try (gh #343) — but
    naming it costs nothing to skip if you already know to run it yourself first.
+
+   **If your repo needs LOCAL TOOL STATE beyond `install:`** — a `.NET` local-tool manifest
+   restored by `dotnet tool restore`, which is a different command from `dotnet restore` and
+   is not covered by an `install:` that only runs the latter — declare it under `tool_restore:`
+   (gh #363):
+
+   ```yaml
+       commands:
+         install: "dotnet restore"
+         tool_restore: "dotnet tool restore"
+   ```
+
+   Unlike `install:`, tldrx runs `tool_restore:` in YOUR OWN checkout automatically, once,
+   before the base pre-flight's first probed command — you do not need to run it there
+   yourself first. A failure refuses Build by name. It is deliberately not also run in the
+   story worktree or the Build-entry probe's worktree; `install:` already covers those.
 2. **Declare `test_fast`** in `.tldrx/workspace.yml` — the fast subset the Build developer
    iterates on. It is not a Definition of Done command; the DoD re-runs `test:`. Beside it,
    `test_scoped: "<cmd> {{paths}}"` narrows each story's own DoD check to the paths it
@@ -789,10 +805,13 @@ worktree did not have the binary. Declare `install:` (item 1 above) and tldrx in
 dependencies there before the developer. The check that failed carries `tree: "worktree"`, so
 it can be told apart from the Build-entry pre-flight, which runs the same command in your own
 checkout — where the dependencies already are ONLY IF you ran `install:` there yourself first
-(gh #343; tldrx never runs it against your own checkout unasked). Since the Build-entry
+(gh #343; tldrx never runs `install:` against your own checkout unasked — a declared
+`tool_restore:` is the one exception, run there automatically, gh #363). Since the Build-entry
 worktree probe this should now be rare: the same absence is normally refused once, at entry,
 before any turn is paid for — and if it is your OWN checkout that is red, the refusal names
-the declared `install:` as the fix.
+the declared `install:` as the fix. Every base-tree row also carries `tree: "checkout"` in
+`04-build/preflight.yml` (gh #363) — a reminder that a green reading there is a fact about your
+checkout, not a promise about the worktree a story's own DoD actually runs in.
 
 **The developer says "This command requires approval to run".** Fixed in gh #209: every
 declared command is now granted both exactly and with trailing arguments, so a developer can
