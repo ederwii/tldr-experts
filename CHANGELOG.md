@@ -53,6 +53,15 @@
   `(clos|fix|resolv)[a-z]*[[:punct:]]* #` (measured exit 0 on the same sentence); the real
   discipline stays "never write a closing-shaped phrase near a `#N` that should not close" —
   the grep is a tripwire, not the fix (closes #372).
+- **`ci.yml` now keeps `test/merge-wave.test.ts`'s tmp sandbox as a build artifact when the
+  job fails.** This is an INSTRUMENT change, not a fix for the still-undiagnosed #237 flake
+  (interrupted-merge case expects a SIGTERM exit of 143, sometimes sees 0 after ~92s): every
+  #237 data point so far recorded the same second wall on top of the first — "no merge.log is
+  available from the CI sandbox" — because the sandbox `test/merge-wave.test.ts:104` plants
+  via `mkdtempSync(tmpdir())` was discarded with the runner. The `bun test` step's `TMPDIR` now
+  points at `${{ runner.temp }}/mw` instead of the OS default, and a new `if: failure()` step
+  uploads that directory (`actions/upload-artifact@v4`, `retention-days: 14`) so the next red
+  leaves a `merge.log` and lock state an agent can actually read (see #237, closes #373).
 
 ## 0.32.0 — 2026-09-16
 
