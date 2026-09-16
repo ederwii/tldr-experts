@@ -1316,8 +1316,21 @@ because the record must not be silent about a warning just because the stage had
 story left unstarted after it carries the park as its REASON in `handoff.md`'s `## Unknowns`, never the residue
 sentence that says this stage had no reason at all. It changes no outcome: stories
 already running finish and are settled, and only the NEXT story (or the next attempt) is not started — the run parks at
-a story boundary instead of spending developers into the wall. It never waits, and never retries: waiting to a reset the
-provider stated is the other half of #298 and is not built.
+a story boundary instead of spending developers into the wall.
+
+**An `allowed_warning` parks only at or above 90% utilization of the window that carries it, since gh #367** (owner
+decision, Slack, 2026-09-16; measured on a run that logged 7 parks at 53–60% utilization and cost 3 operator
+interventions). Below the line, `agent.rate_limited` is still written once per stage — `parked_absent: "below the 90%
+park threshold — dispatch continued"` reuses the same absent-with-reason field a one-story wave's park does — and
+dispatch is not held up. At or above the line, and for any status OTHER than `allowed`/`allowed_warning` (a real wall,
+or one this repo has no reading for), the park is unconditional, exactly as before #367. `run auto --wait-gates` reads
+the park's own `resets_at` back off the ledger and resumes the parked stage itself once the provider's own clock has
+passed it — `reject --and-continue` signed `run auto (rate-limit)`, a different actor from #231's checks-retry
+(`run auto`) so the two automatic-retry bounds can never spend each other's — backing off a fixed interval when the
+frame stated no reset at all. So it DOES now wait and retry, on the provider's own schedule alone, never a guess: the
+"never waits, never retries" line above described #298's first cut, before #367 built the other half. `tldrx run
+status` names this on a stage held only by unfinished stories that a park explains: "parked by a rate-limit warning …
+resumes automatically at `<ts>`" instead of "held by: stories", which used to read as a decision waiting on a person.
 
 **`run.created` carries `attended_by`** when `run new --attended-by host` set it, beside the fields it already carried;
 absent on every other run, so an ordinary `run.created` is what it was.

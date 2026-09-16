@@ -22,7 +22,10 @@ import { RunStore } from "../run/RunStore.ts";
 import { isAttendedByHost, isTerminal, type GateType, type RunFile, type RunPhase, type RunStage, type RunTask } from "../run/RunFile.ts";
 import { runChecks, runPrecondition, type CheckOutcome, type PreconditionOutcome } from "../run/checks.ts";
 import { approve } from "../run/gates.ts";
-import { AUTO_GATE_ACTOR, AUTO_GATE_RETRY_ACTOR, evaluateAutoGate, heldBy, unreadableHeadings, warningLinesOf } from "../run/autoGate.ts";
+import {
+  AUTO_GATE_ACTOR, AUTO_GATE_RETRY_ACTOR, RATE_LIMIT_RESUME_ACTOR, evaluateAutoGate, heldBy, unreadableHeadings,
+  warningLinesOf,
+} from "../run/autoGate.ts";
 import {
   describeAgentFallthroughs, evaluateAgentGate, type AgentGateInput, type AgentGateVerdict,
 } from "../run/agentGate.ts";
@@ -3006,7 +3009,13 @@ export function describePreviousAttempt(
       // not a person's verdict, and a prompt that calls it one lies about who is watching.
       stage.gate.by === AUTO_GATE_RETRY_ACTOR
         ? "The previous attempt's auto gate was refused by failed checks, and `run auto` re-ran it. Its note is the primary instruction for this one:"
-        : "A human rejected the previous attempt. Their note is the primary instruction for this one:",
+        // gh #367: a resume off a rate-limit park's own clock, not a person's verdict either —
+        // the same reason the checks-retry branch above gets its own sentence rather than
+        // sharing "a human rejected".
+        : stage.gate.by === RATE_LIMIT_RESUME_ACTOR
+          ? "The previous attempt's auto gate was held by a rate-limit park, and `run auto` resumed it once the "
+            + "provider's own clock cleared it. Its note is the primary instruction for this one:"
+          : "A human rejected the previous attempt. Their note is the primary instruction for this one:",
       "",
       ...stage.gate.note.trim().split("\n").map((line) => `> ${line}`),
     );

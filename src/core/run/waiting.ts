@@ -26,9 +26,11 @@
 import { basename, join } from "node:path";
 import { blockingQuestionIds } from "../facilitator/skipIf.ts";
 import { isAlive, readLock } from "../facilitator/Lock.ts";
+import { rateLimitLine } from "../facilitator/agentEvents.ts";
 import { hasPreparedBundle } from "./prepared.ts";
 import { startedHeadless } from "./lastStart.ts";
 import { heldByNote } from "./autoGate.ts";
+import { lastRateLimitPark } from "./rateLimitPark.ts";
 
 /**
  * Every kind, as a VALUE — so a reader can enumerate them.
@@ -233,6 +235,26 @@ export function waitingFor(run: WaitingRun, runDir: string): Waiting {
       // refuses is otherwise strictly worse than a human one: a human gate at
       // least says the ball is yours.
       const held = heldByNote(entry.stage.gate?.note ?? "");
+      // gh #367: "held by stories" alone, with nothing else refusing the gate, is
+      // not always a decision waiting on a person — a provider's rate-limit
+      // warning parked the stage before every story finished, and `run auto`
+      // resumes that one itself (`runAuto.ts`'s `waitForGate`). Say so, and when
+      // the provider named a reset instant, say when — the same fact `run auto`
+      // is waiting on, off the same event, so the two cannot disagree.
+      if (held.length === 1 && held[0] === "stories") {
+        const park = lastRateLimitPark(runDir, entry.stage.id);
+        if (park !== null) {
+          return {
+            kind: "gate",
+            message: `gate on ${entry.phase.id}/${entry.stage.id} — parked by a rate-limit warning `
+              + `(${rateLimitLine(park)})`
+              + (park.resetsAt === null
+                ? " — it stated no reset instant, so nothing here knows when it resumes"
+                : `, resumes automatically at ${new Date(park.resetsAt * 1000).toISOString()}`),
+            questions: open,
+          };
+        }
+      }
       return {
         kind: "gate",
         message: `gate on ${entry.phase.id}/${entry.stage.id}`

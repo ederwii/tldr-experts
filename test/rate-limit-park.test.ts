@@ -26,6 +26,10 @@ import { EVENT_TYPES } from "../src/core/events/Event.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { runNext } from "../src/core/facilitator/runNext.ts";
+import { runAuto } from "../src/core/facilitator/runAuto.ts";
+import { RATE_LIMIT_RESUME_ACTOR, refusalNote, type AutoGateVerdict } from "../src/core/run/autoGate.ts";
+import { waitingFor } from "../src/core/run/waiting.ts";
+import { RunStore } from "../src/core/run/RunStore.ts";
 import { summarize } from "../src/core/ui/summary.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
@@ -151,7 +155,7 @@ async function next(ws: BuildWorkspace, parallel?: number, at = "2026-09-15T09:0
   return outcome.lines;
 }
 
-type Ev = { type: string; payload: Record<string, unknown> };
+type Ev = { type: string; actor: string; payload: Record<string, unknown> };
 function events(ws: BuildWorkspace): readonly Ev[] {
   return EventLog.forRun(ws.runDir).read() as never;
 }
@@ -330,5 +334,164 @@ describe("a wave's lanes park on the same signal", () => {
     expect(developerSpawns(ws, "S3")).toBe(0);
     expect(lines.join("\n")).toContain("S3: not started — the provider warned its rate limit was close");
     expect(events(ws).filter((e) => e.type === "agent.rate_limited")).toHaveLength(1);
+  });
+});
+
+// --- gh #367: a warning parks only at or above the threshold ---------------
+
+describe("gh #367 — an allowed_warning parks only at or above 90% utilization", () => {
+  test("0.60 utilization does not park — the next story is dispatched", async () => {
+    const ws = workspace(twoStories());
+    process.env.FAKE_BUILD_RATE_LIMIT = JSON.stringify({ S1: "allowed_warning@0.60" });
+
+    const lines = await next(ws);
+
+    expect(developerSpawns(ws, "S1")).toBe(1);
+    expect(developerSpawns(ws, "S2")).toBe(1);
+    expect(lines.join("\n")).not.toContain("S2: not started");
+    expect(lines.join("\n")).toContain(
+      "the provider warned its rate limit, but stayed below the park threshold — dispatch continues: "
+        + "allowed_warning 60% of the five_hour window",
+    );
+
+    const warned = events(ws).filter((e) => e.type === "agent.rate_limited");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]?.payload).toMatchObject({
+      status: "allowed_warning",
+      window: "five_hour",
+      utilization: 0.6,
+      parked_absent: "below the 90% park threshold — dispatch continued",
+    });
+    // Nothing was withheld, so nothing may claim to have been (AGENTS.md §7).
+    expect(Object.keys(warned[0]?.payload ?? {})).not.toContain("parked");
+  });
+
+  test("0.89 utilization — just under the line — still does not park (boundary)", async () => {
+    const ws = workspace(twoStories());
+    process.env.FAKE_BUILD_RATE_LIMIT = JSON.stringify({ S1: "allowed_warning@0.89" });
+
+    await next(ws);
+
+    expect(developerSpawns(ws, "S2")).toBe(1);
+    const warned = events(ws).filter((e) => e.type === "agent.rate_limited");
+    expect(warned[0]?.payload).toMatchObject({
+      utilization: 0.89,
+      parked_absent: "below the 90% park threshold — dispatch continued",
+    });
+  });
+
+  test("0.90 utilization — the line itself — still parks (boundary)", async () => {
+    const ws = workspace(twoStories());
+    process.env.FAKE_BUILD_RATE_LIMIT = JSON.stringify({ S1: "allowed_warning@0.90" });
+
+    const lines = await next(ws);
+
+    expect(developerSpawns(ws, "S2")).toBe(0);
+    expect(lines.join("\n")).toContain(
+      "S2: not started — the provider warned its rate limit was close, so the run parked before it bit: "
+        + "allowed_warning 90% of the five_hour window",
+    );
+    const parked = events(ws).filter((e) => e.type === "agent.rate_limited");
+    expect(parked[0]?.payload).toMatchObject({ status: "allowed_warning", utilization: 0.9, parked: "S2" });
+  });
+
+  test("a non-allowed_warning status still parks unconditionally, whatever the utilization", async () => {
+    const ws = workspace(twoStories());
+    // A status this repo has no reading for, at a LOW utilization — the threshold is
+    // read by `allowed_warning` alone; every other status still parks as #298 always has.
+    process.env.FAKE_BUILD_RATE_LIMIT = JSON.stringify({ S1: "blocked@0.10" });
+
+    const lines = await next(ws);
+
+    expect(developerSpawns(ws, "S2")).toBe(0);
+    expect(lines.join("\n")).toContain("S2: not started — the provider warned its rate limit was close");
+    const parked = events(ws).filter((e) => e.type === "agent.rate_limited");
+    expect(parked[0]?.payload).toMatchObject({ status: "blocked", utilization: 0.1, parked: "S2" });
+  });
+
+  test("allowed_warning with NO stated utilization still parks — an unknown magnitude is not evidence it is far away", async () => {
+    const ws = workspace(twoStories());
+    process.env.FAKE_BUILD_RATE_LIMIT = JSON.stringify({ S1: "allowed_warning@none" });
+
+    const lines = await next(ws);
+
+    expect(developerSpawns(ws, "S2")).toBe(0);
+    expect(lines.join("\n")).toContain("S2: not started — the provider warned its rate limit was close");
+  });
+});
+
+// --- gh #367: `run auto` resumes a park on the provider's clock, not a human's ---
+
+describe("gh #367 — run auto treats a rate-limit-parked gate as a timed wait", () => {
+  test("resumes the stage automatically once resets_at has passed, with no human gate", async () => {
+    const ws = workspace({ ...twoStories(), gates: "none" });
+    // resets_at 90s in the (real) past: past the floor the instant this is polled.
+    const resetsAtSec = Math.floor((Date.now() - 90_000) / 1000);
+    process.env.FAKE_BUILD_RATE_LIMIT = JSON.stringify({ S1: `allowed_warning@0.94@${String(resetsAtSec)}` });
+
+    const outcome = await runAuto({
+      root: ws.root, yolo: false, actor: "alan", at: "2026-09-16T09:00:00Z",
+      waitGatesMs: spawnTestTimeout(30_000),
+    });
+
+    expect(outcome.code).toBe(0);
+    expect(developerSpawns(ws, "S1")).toBe(1);
+    // S2 never ran on the FIRST pass (the park), but did on the resumed one.
+    expect(developerSpawns(ws, "S2")).toBe(1);
+    const resumed = events(ws).filter((e) => e.type === "gate.rejected" && e.actor === RATE_LIMIT_RESUME_ACTOR);
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0]?.payload.and_continue).toBe(true);
+    expect(outcome.lines.join("\n")).toContain(`signed "${RATE_LIMIT_RESUME_ACTOR}"`);
+    // Never asked a person: no rejection signed by the operator's own name, and the
+    // #231 checks-retry actor never signed anything either.
+    expect(events(ws).filter((e) => e.type === "gate.rejected" && e.actor === "alan")).toHaveLength(0);
+  });
+
+  test("run status names the park and when it resumes, instead of \"held by: stories\"", () => {
+    const ws = workspace({ ...twoStories(), gates: "none" });
+    const resetsAtSec = Math.floor(Date.now() / 1000) + 3600; // an hour from now — not yet due
+    const verdict: AutoGateVerdict = {
+      ok: false,
+      conditions: [
+        { id: "stories", ok: false, detail: "1 of 2 done — S2:todo; a build stage self-signs only when every story is `done`" },
+      ],
+      note: "",
+      why: "stories=1 of 2 done — S2:todo",
+      warnedBy: [],
+      failedChecks: [],
+    };
+    const store = RunStore.open(ws.runDir);
+    store.mutate((run) => ({
+      ...run,
+      phases: run.phases.map((phase) => ({
+        ...phase,
+        stages: phase.stages.map((stage) =>
+          stage.id === "build"
+            ? { ...stage, status: "awaiting_gate", gate: { ...stage.gate, type: "approve", status: "pending", note: refusalNote(verdict) } }
+            : stage
+        ),
+      })),
+    }));
+    store.save();
+    EventLog.forRun(ws.runDir).append({
+      ts: "2026-09-16T09:00:00.000Z",
+      run: store.runId,
+      stage: "build",
+      type: "agent.rate_limited",
+      actor: "developer",
+      cost_usd: 0,
+      payload: {
+        phase: "04-build", status: "allowed_warning", window: "five_hour", utilization: 0.94,
+        resets_at: resetsAtSec, parked: "S2",
+      },
+    });
+
+    const reloaded = RunStore.open(ws.runDir);
+    const waiting = waitingFor(reloaded.run, reloaded.runDir);
+
+    expect(waiting.kind).toBe("gate");
+    expect(waiting.message).toContain("parked by a rate-limit warning");
+    expect(waiting.message).toContain(`resumes automatically at ${new Date(resetsAtSec * 1000).toISOString()}`);
+    expect(waiting.message).not.toContain("held by stories");
   });
 });
