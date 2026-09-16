@@ -136,6 +136,31 @@
   before merge versus after), a measured "where we are" for 2026-09-16, and how the shipped
   pieces and the still-unbuilt ones map to it.
 
+### Added
+
+- **The `plan` gate refuses a story that enforces an invariant over existing data ahead of the
+  story that populates it (#365).** Measured on a live unattended run: S1 (wave 1) added a
+  database check constraint reading, in effect, "when fulfillment mode = Delivery, three columns
+  are NOT NULL" — and S4 (wave 2), the story that starts populating those columns, ran a wave
+  later. The `depends_on` graph was VALID (S4 legitimately depended on S1), so `validateWaveOrder`
+  saw nothing wrong; the defect was semantic, not structural — every existing Delivery fixture
+  violated S1's own constraint the moment S1 added it, so S1's DoD was structurally red before a
+  line of implementation. Two changes, `src/core/plan/planShape.ts`: (a) a new `PLAN_SHAPE_RULES`
+  entry tells the Plan agent a story adding an invariant over existing data lands in the same
+  story as, or in a wave after, the story that satisfies it — write it non-enforcing
+  (nullable/consistency-only) if it must land first; (b) `validatePlanShape` now scans each
+  story's `acceptance`/`test_plan` sentences for a short, exported enforcement-keyword set
+  (`ENFORCEMENT_KEYWORDS`: check constraint, not null, required, must be present, validation
+  rule, rejects, refuses) naming a field, and refuses the plan when a story no later in wave
+  order names the same field with a populate verb (`POPULATE_VERBS`: sets, populates, writes,
+  stores, fills, assigns) — naming both story ids, the field, and both sentences. This is the
+  cheaper substitute for re-enabling the `how` stage the owner already declined (owner decision):
+  a targeted static check over the plan's own text, not a whole extra paid agent turn. No
+  override field exists for a false positive on purpose — rewording the sentence past the
+  keyword set, or moving the story, is cheaper than a new plan-file escape hatch, and none of
+  the sibling shape rules (the wave cap's `wave_cap_reason` aside, which relaxes a different,
+  purely numeric rule) has one either.
+
 ## 0.31.1 — 2026-09-16
 
 ### Fixed
