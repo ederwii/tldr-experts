@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.31.0 — unreleased
+
+### Fixed
+
+- **`run auto` now names `--wait-gates` as the fix, at the moment an all-`auto` gate's only
+  blocking questions are answered but nothing will sign it (#342).** Measured live on a
+  `--gates none --questions none` run launched with no `--wait-gates`/`--wait-answers`: the
+  loop answers a blocking question itself (`questions_policy: recommended`) or once
+  `--wait-answers` polls one in, but the ONLY thing that ever self-closes a parked `auto`
+  gate is `selfCloseAutoGate`, reached only from `waitForGate`'s poll — so the next `next`
+  call reports the stage as `awaiting_gate` with a generic `gate pending: tldrx approve`,
+  never saying the gate would have closed itself with one more flag. `settleDeferredGate`
+  (`runAuto.ts`) now says so, by name, at the exact moment the gap is decided. The deeper fix
+  — `next` re-evaluating a parked `auto` gate on its own, so this holds even for a `next`
+  launched by hand — is recommendation (1) on the issue and stays open there; it touches
+  `runNext.ts`, out of scope for this change.
+
+
 ## 0.30.0 — 2026-09-15
 
 ### Fixed

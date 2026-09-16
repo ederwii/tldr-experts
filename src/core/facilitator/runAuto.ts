@@ -1083,6 +1083,21 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
             + "holds and --wait-gates signs it on the next poll");
           return;
         }
+        // gh #342: every condition holds RIGHT NOW — the questions that were the only
+        // thing failing this `auto` gate are the ones this call just answered — but
+        // nothing will act on that without `--wait-gates`: the only thing that ever
+        // signs a parked `auto` gate is `selfCloseAutoGate`, reached only from
+        // `waitForGate`'s poll. The next `next` call sees a stage still `awaiting_gate`
+        // and reports it as terminal for this call (`runNext.ts`), with a generic
+        // `gate pending: tldrx approve` that never says the gate would have closed
+        // itself. Naming the flag HERE, at the moment the gap is decided, costs nothing
+        // and needs no new trust boundary — closing the gap itself is `next`'s to fix
+        // (recommendation (1) on the issue) and out of scope here.
+        if (verdict !== null && verdict.ok && options.waitGatesMs === undefined) {
+          say(`${parked.stage}'s auto gate now holds on every condition, but nothing will sign it — `
+            + "pass --wait-gates <duration> (with --wait-answers) so an all-auto run does not stop "
+            + "for a person on a gate it can close itself (#342)");
+        }
         // `why` is empty on a verdict that passed and sentences on one that did not,
         // which is exactly what `gateHeld` carries — one shape, two readings of the one
         // derivation. Null only when no verdict could be measured at all, and then the
