@@ -180,7 +180,9 @@ una que un agente *puede* cerrar, nunca una que tú no puedas.
 ## Cómo elegir la política
 
 Cada scope trae sus valores por omisión, y todos conservan al menos una compuerta humana.
-`feature` es `what: human, how: auto, plan: human, build: auto, watch: human`.
+`feature` es `what: human, how: auto, plan: human, build: auto, watch: auto` — `watch` sigue a
+`build` (gh #349): en cuanto `build` es `auto`, la etapa `watch`, de menor riesgo, recibe la
+misma confianza.
 
 ```bash
 tldrx run new pay --gates what,plan,build           # la lista SON las compuertas humanas

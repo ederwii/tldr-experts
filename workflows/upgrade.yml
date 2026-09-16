@@ -32,6 +32,11 @@ default_budget_usd: 16
 #           taken while the stage ran, plus a validated evidence note. Every stage
 #           still ENDS at a gate; this only says who signs it. A stage not named
 #           here is `human`.
+# `watch` stays `human` HERE ON PURPOSE (gh #349): every other stage in this scope
+# is already `auto`, and following `build` into `auto` too would leave the scope
+# with no human gate at all — the one thing every shipped scope guarantees (spec
+# "no all-auto preset"). This is the one shipped scope the #349 default does not
+# reach.
 gates: {what: auto, plan: auto, build: auto, watch: human}
 changes:
   - "How is skipped: the design is the vendor changelog. Cite it."

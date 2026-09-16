@@ -32,6 +32,10 @@ default_budget_usd: 50
 #           taken while the stage ran, plus a validated evidence note. Every stage
 #           still ENDS at a gate; this only says who signs it. A stage not named
 #           here is `human`.
-gates: {what: human, how: auto, plan: human, build: auto, watch: human}
+# `watch` follows `build` here: once Build's own gate is `auto`, Watch (a
+# transcription-shaped stage over evidence Build already produced) is trusted
+# the same way — owner decision 2026-09-16, gh #349, on the field evidence that
+# auto-gating `what`/`how`/`plan` produced zero measured incidents.
+gates: {what: human, how: auto, plan: human, build: auto, watch: auto}
 changes:
   - "No deltas — this is the baseline every other scope is described against."

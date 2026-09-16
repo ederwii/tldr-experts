@@ -171,7 +171,8 @@ the point of the split: an agent gate is one an agent *may* close, never one you
 ## Choosing the policy
 
 Each scope ships defaults, and every scope keeps at least one human gate. `feature` is
-`what: human, how: auto, plan: human, build: auto, watch: human`.
+`what: human, how: auto, plan: human, build: auto, watch: auto` — `watch` follows `build` (gh
+#349): once `build` is `auto`, the lower-stakes `watch` stage is trusted the same way.
 
 ```bash
 tldrx run new pay --gates what,plan,build           # the list IS the human gates
