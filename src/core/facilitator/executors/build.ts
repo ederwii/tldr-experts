@@ -4903,6 +4903,7 @@ class BuildSession {
       lines: this.lines,
       at: this.ctx.at,
       emit: (type, payload) => { this.ctx.emit(type, payload); },
+      timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
     };
   }
 

@@ -1273,7 +1273,7 @@ Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with
 **Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `run.attended` `run.relaunched` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `agent.rate_limited` `question.asked` `question.answered`
 `gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `gate.policy_changed` `questions.policy_changed` `story.reopened` `story.base_fastforwarded` `story.base_updated` `story.conflict_turn` `story.review_retried` `story.work_rescued`
-`story.touches_widened` `plan.fix_round` `epic.released` `worktree.foreign_work_aside` `worktree.foreign_work_restored` `result.unreadable` `input.truncated` `operator_note` `check.passed` `check.failed` `budget.warned`
+`story.touches_widened` `plan.fix_round` `epic.released` `epic.resumed` `worktree.foreign_work_aside` `worktree.foreign_work_restored` `result.unreadable` `input.truncated` `operator_note` `check.passed` `check.failed` `budget.warned`
 `budget.blocked` `budget.raised` `budget.granted` `fact.added` `fact.retired` `fact.superseded` `fact.conflict_raised` `doc.superseded` `notify.sent` `notify.failed` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
 
@@ -1401,6 +1401,20 @@ left alone — one checked out in a worktree, or one git could not count against
 the operator line names why. Story branches (`story/<run>/<story>`, #129) are never touched: that is where a cancelled
 run's work lives. Measured reason: a cancelled run's leftover `epic/main-ci-green`, zero commits beyond `main`, refused
 the ordinary retry at Build after $3.70 of what/how/plan.
+
+**`epic.resumed` was added 2026-09-16 (gh #347), owner decision.** The automatic half of `--reuse-epic`: a relaunch
+finding its OWN `build.epic_branch` already names a branch this exact process did not itself just cut in this
+invocation — the ordinary shape of `tldrx run auto <runId>` resuming a run that died mid-story, and the one case
+`foreignEpicRefusal` may adopt without a human typing the flag, because the claim names THIS run and no other. A
+branch another run's `build.epic_branch` claims is refused exactly as before this existed — nothing here relaxes
+that. Adoption is gated, never assumed: the branch head must still resolve (`sha` in the payload), and when the repo
+declares a `typecheck` command it is run once, in a throwaway DETACHED worktree removed immediately after
+(`addDetachedWorktree`/`removeWorktree`), before the claim is trusted. A repo with no `typecheck` role is adopted with
+`typecheck: absent` said in the payload rather than assumed green; a declared `typecheck` that fails REFUSES the stage
+(naming the command, its exit and its tail) instead of writing this event — the same escape hatch as any other foreign
+claim, `tldrx next --reuse-epic`, still adopts it deliberately. Written at most once per branch per process: a second
+story of the same epic in the same invocation finds `EpicState.claimed` already holding the branch and is never
+re-gated or re-typechecked.
 
 **`worktree.foreign_work_aside` and `worktree.foreign_work_restored` were added 2026-09-09 (#164).** They are the
 THIRD and fourth events in the enum that record tldrx touching git on the operator's behalf, and they are the pair that

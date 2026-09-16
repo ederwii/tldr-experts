@@ -163,6 +163,17 @@ tldrx run cancel <id> --note "superseded — the fix landed by hand"
 closing it out from under the loop; a cancelled run is terminal, its files stay on disk,
 and the epic branch it cut is released for the next run of the same feature.
 
+If the process dies on its own instead — a killed session, an OOM kill, a power cut — and you
+never cancel it, running `tldrx run auto <id>` again resumes it rather than starting the story
+over. The epic branch that attempt already cut and claimed is this run's own (`build.epic_branch`
+names it), so the relaunch adopts it automatically — there is nobody present to type
+`--reuse-epic` — but never blindly: the branch head has to still resolve and, when the repo
+declares a `typecheck` command, that command has to pass in a throwaway worktree first. Either
+way it says so — a "resumed" line naming the sha and the typecheck verdict (`ok`, or `absent`
+when the repo declares no `typecheck` command); one that FAILS refuses the stage by name instead
+of building on it. A branch a DIFFERENT run claimed is refused exactly as always — this only ever
+adopts this run's own dead attempt.
+
 ### The honest boundary
 
 What this recipe proves is that the *engine* can carry one small, well-seeded change to a

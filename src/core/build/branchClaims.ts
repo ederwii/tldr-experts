@@ -9,21 +9,24 @@ import {
 } from "../plan/branchModel.ts";
 import { RunStore } from "../run/RunStore.ts";
 import {
-  branchExists, currentBranch, dirtyEntries, operationInProgress, repoDirOf, stateDirPrefixes,
+  addDetachedWorktree, branchExists, currentBranch, dirtyEntries, operationInProgress, removeWorktree,
+  repoDirOf, shaOf, stateDirPrefixes,
 } from "./git.ts";
 import {
   classifyDirty, namePaths, NAMED_PATHS, shellQuote, stashCommand, submodulePaths,
 } from "./foreignWork.ts";
 import type { NextMode } from "../facilitator/runNext.ts";
-import { basename } from "node:path";
+import { mkdirSync } from "node:fs";
+import { basename, join } from "node:path";
 import type { EventType } from "../events/Event.ts";
-import { PROJECT_WORK_DIR } from "../paths.ts";
+import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
 import { isFinished } from "../run/RunFile.ts";
 import { listRunDirs } from "../../hooks/lib/workspace.ts";
 import { releaseRunEpics } from "./epicRelease.ts";
 import type { EpicSummaryRow } from "./handoff.ts";
+import { DodCommandRefused, runDodCommand } from "../../hooks/lib/story.ts";
 import type { BuildRefusal, StoryOutcome } from "./outcome.ts";
-import type { PlannedEpic, PlannedStory } from "./plan.ts";
+import { WORKTREES, type PlannedEpic, type PlannedStory } from "./plan.ts";
 import type { EpicState } from "./worktrees.ts";
 
 /** What `build/branchClaims.ts` needs to claim, refuse or report an epic branch. */
@@ -40,6 +43,12 @@ export interface ClaimParts {
   readonly at: string;
   /** This run's own ledger: a leftover moved aside is written on it as well as on its owner's. */
   readonly emit: (type: EventType, payload: Record<string, unknown>) => void;
+  /**
+   * The cheap-gate timeout for `resumedEpicClaimVerdict` (gh #347) — the same
+   * figure every other DoD spawn in Build uses (`story.timeout_s * 1000`),
+   * never a second number invented for this one check.
+   */
+  readonly timeoutMs: number;
 }
 
 /** `run.yml`'s whole `build:` block, or an empty one when the file will not open. */
@@ -121,6 +130,18 @@ export async function foreignEpicRefusal(
 ): Promise<BuildRefusal | null> {
   const claimed = new Set(buildOnFile(parts.runDir).epic_branch);
   const seen = new Set<string>();
+  // Branches this CALL has already verified as a resumed claim (gh #347) — a
+  // LOCAL set, never `state.claimed`. `state.claimed` feeds `withClaims`
+  // (`executors/build.ts`), which overwrites `outcome.epicBranches` with it on
+  // EVERY exit whenever it is non-empty — including a refusal this loop never
+  // reaches, like `--fixlist`'s precondition check a few lines later in
+  // `prepare()`. Measured: adding an already-on-disk branch to `state.claimed`
+  // here made `isSequencingRefusal` (`runNext.ts`) see "work to record" on an
+  // unrelated `--fixlist nope.md` refusal and promote its exit from 1 to 2 —
+  // there was nothing NEW this invocation cut, so there is nothing for
+  // `withClaims` to persist, and this set exists only to skip a second
+  // typecheck for a second story of the same epic in the same call.
+  const resumedThisCall = new Set<string>();
   for (const planned of stories) {
     const epic = parts.epics.get(planned.story.epic);
     if (epic === undefined) continue;
@@ -130,7 +151,47 @@ export async function foreignEpicRefusal(
     seen.add(key);
     const repoDir = repoDirOf(parts.workspace, planned.story.repo);
     if (!(await branchExists(repoDir, branch))) continue;   // we are about to cut it
-    if (claimed.has(branch)) continue;                       // this run cut it earlier
+    if (claimed.has(branch)) {
+      // This run's OWN `build.epic_branch` already names it — the ordinary
+      // shape of `tldrx run auto <runId>` resuming a dead attempt (gh #347).
+      // `seen` above already keys this loop by `repo:branch`, so ONE call to
+      // this function verifies a given branch at most once no matter how many
+      // pending stories share its epic — `resumedThisCall` only guards the
+      // (currently unreachable, kept for the day `seen`'s key changes) case of
+      // a second look at the same branch inside one call. Nothing here touches
+      // `state.claimed`: that set is `withClaims`'s (`executors/build.ts`)
+      // signal that THIS invocation cut or adopted something NEW to persist,
+      // and this branch is already on disk — there is nothing new to write,
+      // and marking it claimed here made an UNRELATED later refusal in the
+      // same call (`--fixlist nope.md`'s precondition check) read as "this
+      // invocation has work to record" and lose its exit-1 sequencing status.
+      // `--reuse-epic` is a human's own deliberate word and skips the gate
+      // outright, exactly as it already adopts a FOREIGN branch outright.
+      if (!resumedThisCall.has(branch) && !parts.reuseEpic) {
+        resumedThisCall.add(branch);
+        const verdict = await resumedEpicClaimVerdict(parts, planned.story.repo, repoDir, branch);
+        if (!verdict.ok) {
+          return {
+            lines: [
+              `[tldrx] build: \`${branch}\` in ${planned.story.repo} is this run's own claim ` +
+                `(\`build.epic_branch\`), but resuming it failed — ${verdict.note}.`,
+              "  fix the branch by hand and relaunch, or run `tldrx next --reuse-epic` to adopt it "
+                + "without the check.",
+            ],
+            error: `epic branch \`${branch}\` in ${planned.story.repo} is this run's own claim, `
+              + `but ${verdict.note}`,
+          };
+        }
+        parts.lines.push(
+          `  · resumed \`${branch}\` in ${planned.story.repo} from ${verdict.sha}: `
+            + `claim by this run ${parts.runId}, ${verdict.note}`,
+        );
+        parts.emit("epic.resumed", {
+          repo: planned.story.repo, branch, run: parts.runId, sha: verdict.sha, typecheck: verdict.typecheck,
+        });
+      }
+      continue;
+    }
     if (parts.reuseEpic) {
       state.claimed.add(branch);
       parts.lines.push(`  · adopting existing \`${branch}\` in ${planned.story.repo} (--reuse-epic)`);
@@ -208,6 +269,70 @@ export async function foreignEpicRefusal(
     }; this run cuts its own`);
   }
   return null;
+}
+
+/** What verifying a RESUMED epic claim (gh #347) found — never trusted silently. */
+interface ResumedEpicClaimVerdict {
+  readonly ok: boolean;
+  /** Short sha `branch` resolves to, or `""` when it no longer resolves. */
+  readonly sha: string;
+  /** What ran, or why nothing did — said out loud either way. */
+  readonly note: string;
+  readonly typecheck: "ok" | "failed" | "absent";
+}
+
+/**
+ * Verify a branch THIS run's own `run.yml` already claims, but that this
+ * PROCESS did not itself just cut — owner decision, 2026-09-16 (gh #347).
+ *
+ * Two checks, both named in the record: (a) the branch head still resolves —
+ * `shaOf` returning `""` is not a sha to resume from — and (b) the workspace's
+ * OWN `typecheck` command, run in a throwaway DETACHED worktree of the branch
+ * (`addDetachedWorktree`/`removeWorktree`, the same disposable-checkout idiom
+ * `entryProbe.ts` uses for its own base-of-tree measurement), removed whether
+ * it passes or not. Never a shared or persistent worktree: nothing else is
+ * entitled to the branch just because this check looked at it.
+ *
+ * A repo with no `typecheck` role cannot be gated on one — absent-with-reason,
+ * never assumed green — and the claim is honoured with that said out loud
+ * rather than silently trusted the way it was before this existed.
+ */
+async function resumedEpicClaimVerdict(
+  parts: ClaimParts,
+  repo: string,
+  repoDir: string,
+  branch: string,
+): Promise<ResumedEpicClaimVerdict> {
+  const sha = await shaOf(repoDir, branch);
+  if (sha === "") {
+    return { ok: false, sha: "", note: `\`${branch}\` no longer resolves to a commit`, typecheck: "failed" };
+  }
+  const command = parts.workspace.commandRoles.get(repo)?.get("typecheck");
+  if (command === undefined) {
+    return { ok: true, sha, note: "typecheck: absent — repo declares no typecheck command", typecheck: "absent" };
+  }
+  const scratch = join(
+    parts.root, PROJECT_FRAMEWORK_DIR, WORKTREES, repo,
+    `_resume-${parts.runId}-${branch.replace(/[^a-zA-Z0-9_.-]/g, "-")}`,
+  );
+  try {
+    mkdirSync(join(scratch, ".."), { recursive: true });
+    await addDetachedWorktree(repoDir, scratch, branch);
+    const result = await runDodCommand(command, scratch, parts.timeoutMs, parts.workspace.commands);
+    if (result.exitCode !== 0 || result.timedOut) {
+      return {
+        ok: false, sha, typecheck: "failed",
+        note: `typecheck: \`${command}\` ${result.timedOut ? "timed out" : `exited ${String(result.exitCode)}`}`
+          + ` — ${result.tail}`,
+      };
+    }
+    return { ok: true, sha, note: `typecheck ok (\`${command}\`)`, typecheck: "ok" };
+  } catch (error) {
+    const why = error instanceof DodCommandRefused || error instanceof Error ? error.message : String(error);
+    return { ok: false, sha, note: `typecheck: could not run \`${command}\` — ${why}`, typecheck: "failed" };
+  } finally {
+    await removeWorktree(repoDir, scratch);
+  }
 }
 
 /** Every OTHER run under `tldrx-work/` whose `build.epic_branch` claims `branch`, newest first. */

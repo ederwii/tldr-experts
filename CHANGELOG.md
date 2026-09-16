@@ -172,6 +172,20 @@
   rather than crashing the run mid-wave), since the correctness half above already closes the
   dangerous direction independently of this door.
 
+- **A relaunch of `tldrx run auto <runId>` resuming its OWN already-claimed epic branch now
+  verifies it instead of trusting it silently (#347).** `run auto` does not expose `--reuse-epic`
+  (there is nobody present to type it), so `foreignEpicRefusal`'s `claimed.has(branch)` case — this
+  run's own `build.epic_branch` already naming the branch a killed attempt cut and claimed before
+  it died — was a bare `continue`: no check that the branch head still resolved, no gate, and no
+  record that anything had been resumed at all. It now confirms the branch is still reachable and,
+  when the repo declares a `typecheck` command, runs it once in a throwaway detached worktree
+  (removed immediately after) before trusting the claim; a repo with no `typecheck` role is
+  adopted with that said explicitly (`typecheck: absent`) rather than assumed green. Recorded
+  honestly either way — an `epic.resumed` line and event carrying the sha and the typecheck
+  verdict — and a typecheck that FAILS refuses the stage by name instead of building on a possibly
+  broken branch (`tldrx next --reuse-epic` still adopts it deliberately, unchanged). A claim
+  another run wrote is refused exactly as before — nothing here relaxes that guard.
+
 ## 0.30.0 — 2026-09-15
 
 ### Fixed

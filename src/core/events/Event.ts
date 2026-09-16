@@ -213,6 +213,22 @@ import {
  * the frame is the fact, and a one-story wave that warned and recorded nothing
  * was the first review's finding. It changes no outcome: the stories already
  * running finish, and only the NEXT one is not started.
+ *
+ * `epic.resumed` was added 2026-09-16 (issue #347). It is the automatic half of
+ * `--reuse-epic`: a relaunch (`tldrx run auto <runId>`, headless, with nobody
+ * present to type the flag) finding its OWN `build.epic_branch` already names a
+ * branch this exact process did not itself just cut — the ordinary shape of a
+ * run that died mid-story and came back. It is adopted only because the claim
+ * is this run's own; a branch another run claims is refused exactly as before
+ * `foreignEpicRefusal` ever grew this case. Written once per branch per fresh
+ * process, after the branch head still resolves and, when the repo declares a
+ * `typecheck` command, after that command passes in a throwaway detached
+ * worktree — never on the strength of the on-disk claim alone, and never
+ * silently. Its payload carries `branch`, `repo`, `run` (this run's own id,
+ * named for symmetry with `epic.released`'s `owner`), `sha` (what the branch
+ * resolved to) and `typecheck` (`ok` | `absent` — no `typecheck` role declared,
+ * so nothing could be run; a check that FAILS refuses the stage instead of
+ * writing this event at all).
  */
 export const EVENT_TYPES = [
   "run.created", "run.closed", "run.unlocked", "run.cancelled", "run.attended", "run.relaunched",
@@ -228,7 +244,7 @@ export const EVENT_TYPES = [
   "story.work_rescued",
   "story.touches_widened",
   "plan.fix_round",
-  "epic.released",
+  "epic.released", "epic.resumed",
   "worktree.foreign_work_aside", "worktree.foreign_work_restored",
   "result.unreadable",
   "input.truncated",

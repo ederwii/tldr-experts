@@ -276,6 +276,12 @@ function bullet(item: NumberedEvent, trail: Map<string, ReviewerProvenance | nul
           : `renamed to \`${text(payload.renamed_to) || "?"}\` — ${String(payload.commits ?? "?")} commit(s) `
             + `beyond \`${text(payload.base) || "?"}\` survive there`)
         + ` (${text(payload.via) || "?"})`;
+    // (#347) The automatic half of `--reuse-epic`: a relaunch adopting its OWN
+    // claim, never another run's. `typecheck` says whether that was verified or
+    // could not be — a repo with no `typecheck` role never gets asked one.
+    case "epic.resumed":
+      return `${prefix}resumed \`${text(payload.branch) || "?"}\` from ${text(payload.sha) || "?"} — `
+        + `claim by this run (typecheck: ${text(payload.typecheck) || "?"})`;
     case "story.work_rescued":
       return `${prefix}story ${text(payload.story) || "?"}'s UNCOMMITTED work rescued to`
         + ` \`${text(payload.branch) || "?"}\` as ${text(payload.sha) || "?"}`
