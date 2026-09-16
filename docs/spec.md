@@ -3802,8 +3802,9 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    file all still block with the wording above after one attempt. With work the refusal is still
    written — `- Developer: … was refused for approval …` on the review log, `permission_refused` (additive) on
    `task.done`, a bullet in the handoff's `## Unknowns` — and the DoD decides: green goes on to review, red blocks
-   with both reasons on one row, the DoD's first. The developer prompt's `## Rules` also says to run each DoD
-   command verbatim and alone, and why.
+   with both reasons on one row, the DoD's first. The developer prompt's `## Rules` also says to run each Bash call
+   verbatim and alone, and why — widened from the Definition of Done alone (gh #360, below): 4 of 4 refusals
+   measured on a field run were an ad hoc verification line the prompt's DoD-only wording never covered.
 
    **A refusal with NO work names its cure, and a chained line is retried once with the cure in front (gh #278).**
    Measured on two real runs in one day, six refusals across sonnet and opus developers with #271's rule in every
@@ -4074,11 +4075,24 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    prompt carries the kept output under `## Previous attempt` with the DoD header (#211). The last attempt blocks as
    before, and when more than one attempt in a row went red its reason says `the DoD stayed red on <n> of <m>
    attempts`. Everything that is not a plain red still blocks on the first attempt, because a second one would buy
-   the same outcome: a developer refused at the permission layer (#271) or killed on its cap (#277), a REFUSED dod
-   command (#165), a binary absent from the tree (#209), a story with no dod commands, a reopened story whose
-   developer changed nothing (#308). Measured reason: 17 human `story reopen`s over 12 run folders were a red DoD the
-   developer's own attempt never got a second look at. Headless only: the host door (`--prepare`/`--commit`) is
-   unchanged.
+   the same outcome: a developer killed on its cap (#277), a REFUSED dod command (#165), a binary absent from the
+   tree (#209), a story with no dod commands, a reopened story whose developer changed nothing (#308). Measured
+   reason: 17 human `story reopen`s over 12 run folders were a red DoD the developer's own attempt never got a
+   second look at. Headless only: the host door (`--prepare`/`--commit`) is unchanged.
+
+   **A refused ad hoc line is narrower than that exclusion (#360).** A developer refused at the permission layer
+   (#271) blocked here too, on the reasoning that "the same allowance would refuse the same command again" — true of
+   a verbatim re-ask, but measured wrong for its most common shape: on one unattended run, 4 of 4 refusals were the
+   developer's own ad hoc verification line, never the DoD command itself, and 2 stories blocked on a DoD that had
+   already run and decided. A refused line `classifyRefusal` (`build/refusalKind.ts`) reads as `separator` (a
+   compound shell line — `&&`, `;`, a pipe, a redirect, a heredoc's newline) or `undeclared` (a command no
+   `commands:` slot grants, decidable only when the caller passes the workspace's declared list) is refused by its
+   SHAPE, not by what it names, so a second attempt is not obliged to repeat it — `dodRedRequeue`
+   (`build/reviewRound.ts`) now requeues those two kinds like any other red DoD, with the refusal still written
+   everywhere it always was (`permission_refused` on `task.done`, the review log, the handoff). A `verb` (an
+   ungranted git verb) or `elsewhere` (`git -C`) refusal is unchanged and still blocks on the first attempt — the
+   SAME line, verbatim, would be refused again. The developer prompt's `## Rules` states the "one command per Bash
+   call" rule for every Bash call now, not only the Definition of Done's (below).
 
    **A FORMAT-refused envelope is re-prompted, not charged (#78, #79).** An envelope Build cannot read falls to
    `changes` as above — but that is a fault in the reviewer's REPORT, not in the diff, and charging the story one of

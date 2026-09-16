@@ -2423,7 +2423,12 @@ class BuildSession {
   ): Promise<void> {
     const id = story.planned.story.id;
     const spent = this.counters.dodRequeuesSpent(this.ctx.runDir, id);
-    const requeue = dodRedRequeue({ dod, ...cause, attempt: story.attempt, attempts: this.attempts });
+    const requeue = dodRedRequeue({
+      dod, ...cause, attempt: story.attempt, attempts: this.attempts,
+      // gh #360: the `undeclared` refusal kind is only decidable with the
+      // workspace's own declared commands beside it — see `classifyRefusal`.
+      declared: this.repoCommands(story.planned.story.repo),
+    });
     if (requeue) {
       this.counters.countDodRequeue(id, spent);
       this.dodRequeued.add(id);

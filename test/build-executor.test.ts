@@ -3946,8 +3946,17 @@ describe("a refusal after the developer committed (gh #271)", () => {
     expect(handoff).toContain("refused for approval");
   }, 60_000);
 
-  test("committed work + a red DoD: blocked, and the row carries BOTH reasons", async () => {
-    const ws = workspace({ ...ONE, testScript: RED_ONLY_AFTER_DEVELOPER });
+  /**
+   * gh #360 narrowed `dodRedRequeue`: `PLUMBED` chains (`;`), so with an attempt
+   * left this same refusal would now be REQUEUED rather than block (see
+   * `test/build-dod-red-requeue.test.ts`'s "#360 ·" suites). `attempts: 1`
+   * keeps this test's original intent — the row carries BOTH reasons on the
+   * one attempt a story actually has — because `dodRedRequeue`'s
+   * `attempt >= attempts` bound blocks regardless of the refusal's kind once
+   * no attempt is left to spend.
+   */
+  test("committed work + a red DoD, one attempt total: blocked, and the row carries BOTH reasons", async () => {
+    const ws = workspace({ ...ONE, testScript: RED_ONLY_AFTER_DEVELOPER, attempts: 1 });
     refusedWith("committed");
 
     const outcome = await next(ws);

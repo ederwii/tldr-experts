@@ -461,10 +461,15 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     // DoD run wrapped in `> log 2>&1; echo …`. The permission layer splits a line
     // at every separator and each fragment must match a grant on its own, so the
     // mechanism is stated rather than the rule alone.
-    "- Run each Definition of Done command verbatim and alone: no redirection, pipes or chaining.",
-    "  Shell separators (`>`, `>>`, `2>&1`, `<`, `|`, `;`, `&&`, `||`, `&`, `$()`) split a line into",
-    "  subcommands, and each subcommand must match its own grant, so a compound line is refused",
-    "  even when the script itself is allowed.",
+    // gh #360: that rule was stated for the Definition of Done alone, and 4 of 4
+    // refusals measured on a field run were an ad hoc verification line the
+    // developer chose on its own — this prompt never told it those were held to
+    // the same rule. One command per Bash call, always, not only a DoD command.
+    "- One command per Bash call, run verbatim and alone — every Bash call you make, not only a",
+    "  Definition of Done command: no redirection, pipes, chaining or heredocs. Shell separators",
+    "  (`>`, `>>`, `2>&1`, `<`, `|`, `;`, `&&`, `||`, `&`, `$()`, a heredoc's newline) split a line into",
+    "  subcommands, and each subcommand must match its own grant, so a compound line is refused unread",
+    "  even when every command in it is allowed on its own.",
     // gh #294: three attempts on one story appended `; echo "EXIT:$?"`, each
     // refused, each re-spawned with "run each command alone" — which never said
     // WHY the echo was unnecessary, so the developer kept reaching for the number

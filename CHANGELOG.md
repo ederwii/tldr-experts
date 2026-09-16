@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.32.0 — unreleased
+
+### Fixed
+
+- **A refused COMPOUND ad hoc Bash line — never the Definition of Done command itself — was
+  turning an ordinary red DoD into a human `blocked` (#360).** Measured on a live unattended run:
+  4 of 4 refusals were the developer's own ad hoc verification line (a `dotnet format … > log
+  2>&1; echo …`, a `;`-chained `find`, a piped `find … | xargs cat`, a `docker info … && echo …`
+  — none of them the DoD), and 2 of 5 stories blocked at attempt 1 of 2 even though each had
+  committed work and a DoD that went on to run and decide, each costing an operator `story
+  reopen` + `reject --and-continue` (22–27 minutes measured twice). The #271/#313 rule reasoned
+  that "the same allowance would refuse the same command again", which is true of a verbatim
+  re-ask but not of a compound line refused for its SHAPE: `dodRedRequeue`
+  (`src/core/build/reviewRound.ts`) now requeues a red DoD, like any other, when the refusal
+  `classifyRefusal` (`src/core/build/refusalKind.ts`) reads as `separator` (chained — `&&`, `;`,
+  a pipe, a redirect, a heredoc) or `undeclared` (a command no `commands:` slot grants) — an
+  ungranted git `verb` or `git -C` (`elsewhere`) refusal still blocks on the first attempt,
+  because THAT line, verbatim, would be refused again. The refusal stays on the record either
+  way; only the block is narrowed.
+- **The developer prompt told every Bash call to run one command alone only for the Definition of
+  Done (#360).** `## Rules` (`src/core/build/prompts.ts`) carried the "no redirection, pipes or
+  chaining" sentence beside the DoD rule alone, so a developer choosing its OWN ad hoc
+  verification command — 4 of 4 refusals in the run above — never read it. The rule now covers
+  every Bash call: "one command per Bash call, run verbatim and alone … no redirection, pipes,
+  chaining or heredocs … a compound line is refused unread". This changes the golden developer
+  prompt's bytes on purpose — `test/build-golden.test.ts`'s fixtures are updated for exactly
+  those lines.
+
 ## 0.31.1 — 2026-09-16
 
 ### Fixed
