@@ -80,6 +80,51 @@ import {
   buildDeveloperPrompt, REVIEW_SCHEMA, type ConflictTurnPrompt, type PreviousAttemptKind, type ReopenNote,
 } from "../../build/prompts.ts";
 import { ITERATION_ONLY_SLOT } from "../../schemas/commandAllowlist.ts";
+import { boundBytes, DOD_DETAIL_MAX_BYTES } from "../../build/dodOutput.ts";
+
+/**
+ * The byte budget for ONE free-text `task.done` field that can carry
+ * agent-authored text of unbounded length (gh #359) — `DOD_DETAIL_MAX_BYTES`
+ * (dodOutput.ts), the SAME quarter-of-the-§2.9-cap the DoD excerpt already
+ * uses, reused rather than re-derived (AGENTS.md §7).
+ */
+const TASK_DONE_FIELD_MAX_BYTES = DOD_DETAIL_MAX_BYTES;
+
+/**
+ * Clamp a `task.done` field that can carry agent-authored text of unbounded
+ * length — `permission_refused` (the command a permission layer refused,
+ * copied verbatim, gh #271) and `budget_death` (a developer's own kill
+ * message) are the two measured so far.
+ *
+ * `capPayload` (Event.ts) is the REACTIVE valve at the emit seam — it drops a
+ * still-oversized field as a last resort, for any event, but only for the
+ * fields it is TAUGHT (`DROPPABLE_LISTS`/`DROPPABLE_PROSE`); `permission_refused`
+ * was never on that list, a 5474-byte refused heredoc alone put a real
+ * `task.done` over the §2.9 cap, `EventLog.append` threw, and the throw failed
+ * the whole STAGE — not just the story — buying `run auto` a relaunch nobody
+ * owed (measured on a field run, gh #359). This is the PROACTIVE half: bound
+ * the field BEFORE it can ever make the payload oversized, so the reactive
+ * valve never has to be taught this field at all.
+ *
+ * `boundBytes` is dodOutput.ts's ONE byte-safe truncation (§7) — reused here,
+ * not re-derived. What THIS function adds is the marker: how big the original
+ * was, and where the full text still lives. That pointer is true BY
+ * CONSTRUCTION, never a promise about a file that may not exist — `settle`
+ * always calls `writeLog` (which renders `permissionRefused`/`budgetDeath`
+ * verbatim) before it builds `task.done`, so `logRel` already carries the text
+ * this marker points at.
+ */
+function clampAgentText(text: string, logRel: string): string {
+  const originalBytes = Buffer.byteLength(text, "utf8");
+  if (originalBytes <= TASK_DONE_FIELD_MAX_BYTES) return text;
+  const marker = ` [clamped: ${String(originalBytes)} bytes exceeds the ${String(TASK_DONE_FIELD_MAX_BYTES)}` +
+    `-byte field budget — full text: ${logRel}]`;
+  // A floor, not the ordinary case: guards `boundBytes` against a budget below
+  // its own ellipsis (3 bytes) — unreachable with `logRel`'s real, short shape,
+  // but a marker is text too and this function does not get to assume its size.
+  const headBudget = Math.max(64, TASK_DONE_FIELD_MAX_BYTES - Buffer.byteLength(marker, "utf8"));
+  return `${boundBytes(text, headBudget)}${marker}`;
+}
 
 /** `testFast` as an optional prompt field: present only when the repo declares one. */
 function testFastPart(
@@ -4359,10 +4404,16 @@ class BuildSession {
         : { epic_base: parts.epicBase }),
       // ADDITIVE (gh #271): the command the permission layer refused on an
       // attempt the DoD went on to decide. Omitted when there was none.
-      ...(outcome.permissionRefused == null ? {} : { permission_refused: outcome.permissionRefused }),
+      // Clamped (gh #359): the command is copied verbatim from the agent and
+      // can be arbitrarily long (a multi-line heredoc, measured); the FULL
+      // text is unaffected — it is in `reviewRel`, written above by `writeLog`.
+      ...(outcome.permissionRefused == null
+        ? {}
+        : { permission_refused: clampAgentText(outcome.permissionRefused, reviewRel) }),
       // ADDITIVE (gh #277): the cap the developer died on during an attempt the
-      // DoD went on to decide. Omitted when there was none.
-      ...(outcome.budgetDeath == null ? {} : { budget_death: outcome.budgetDeath }),
+      // DoD went on to decide. Omitted when there was none. Clamped (gh #359):
+      // same reasoning — a developer's own kill message is not bounded either.
+      ...(outcome.budgetDeath == null ? {} : { budget_death: clampAgentText(outcome.budgetDeath, reviewRel) }),
       // ADDITIVE (gh #289): no reviewer was spawned because the stage could not
       // fund one. Omitted on every turn where one was.
       ...(outcome.reviewerUnfunded == null ? {} : { reviewer_unfunded: outcome.reviewerUnfunded }),

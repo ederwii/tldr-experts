@@ -4081,6 +4081,84 @@ describe("a refusal after the developer committed (gh #271)", () => {
 });
 
 /**
+ * gh #359 — a refusal too big to carry.
+ *
+ * Measured on a field run (tldrx 0.31.1): the developer's refused command was a
+ * ~110-line heredoc; `permission_refused` (gh #271, additive) alone pushed
+ * `task.done`'s JSON payload past the §2.9 4096-byte cap, `EventLog.append`
+ * refused it, the EXECUTOR threw, and the STAGE failed — not just the story —
+ * so `run auto` relaunched and re-dispatched the sibling story's developer for a
+ * turn nothing it did bought. `permission_refused` was never one of
+ * `capPayload`'s droppable fields (`recording_error`, `detail` — Event.ts), so
+ * the reactive valve at the emit seam could not rescue it either.
+ *
+ * The fix clamps the field the way DoD output is clamped (`dodOutput.ts`): the
+ * head, bounded, plus a marker naming the original byte length and where the
+ * FULL text already lives — `04-build/log/<story>.md`, written by `writeLog`
+ * before this event is ever built, so the pointer is true by construction.
+ */
+describe("an oversized permission refusal does not fail the stage (gh #359)", () => {
+  const S1_FILE = "s1.txt";
+  const ONE: BuildWorkspaceOptions = {
+    stories: [{ id: "S1", epic: "E1", title: "Write a file", touches: [S1_FILE] }],
+    epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+    waves: [["S1"]],
+  };
+  // A ~110-line heredoc — the measured shape — comfortably past the §2.9 cap on
+  // `permission_refused` alone (this string alone is already > 4096 bytes).
+  const LONG_REFUSAL = `cat <<'EOF' > /tmp/scratch.sh\n${
+    Array.from(
+      { length: 110 },
+      (_, i) => `echo "verification step ${String(i)} of the developer's own script" >&2`,
+    ).join("\n")
+  }\nEOF`;
+
+  test(
+    "a ~110-line refused heredoc no longer throws the stage down — S1 still settles, "
+      + "task.done still carries the refusal, clamped",
+    async () => {
+      const ws = workspace(ONE);
+      process.env.FAKE_BUILD_DENIED = JSON.stringify({ S1: LONG_REFUSAL });
+      process.env.FAKE_BUILD_DENIED_WORK = JSON.stringify({ S1: "committed" });
+
+      const outcome = await next(ws);
+
+      // The stage did NOT fail: no relaunch-buying `stage.failed`, and the story
+      // reached the ordinary green-and-parked outcome (#271's own shape) rather
+      // than the whole stage blocking on an event-recording accident.
+      expect(events(ws).find((e) => e.type === "stage.failed")).toBeUndefined();
+      expect(outcome.code).toBe(4);
+      expect(story(ws, "S1")).toContain("status: done");
+
+      const done = events(ws).find((e) => e.type === "task.done" && e.payload.story === "S1");
+      expect(done).toBeDefined();
+      const refused = String(done?.payload.permission_refused ?? "");
+      const originalBytes = Buffer.byteLength(LONG_REFUSAL, "utf8");
+      // Clamped: shorter than the original, still carries the CITE-able head
+      // verbatim, and says both how big the original was and where the rest is.
+      expect(refused.length).toBeLessThan(LONG_REFUSAL.length);
+      // The kept head, minus `boundBytes`'s own trailing ellipsis, is a
+      // VERBATIM prefix of the original — the cite-able part actually cites.
+      const head = (refused.split(" [clamped:")[0] ?? "\0").replace(/…$/, "");
+      expect(LONG_REFUSAL.startsWith(head)).toBe(true);
+      expect(refused).toContain(String(originalBytes));
+      expect(refused).toContain("04-build/log/S1.md");
+      // Every event THIS invocation wrote is itself inside the cap — the whole
+      // point, not just the one field.
+      for (const event of events(ws)) {
+        expect(Buffer.byteLength(JSON.stringify(event.payload), "utf8")).toBeLessThanOrEqual(4096);
+      }
+
+      // The FULL text is not lost — it is exactly where the clamp says: the
+      // story's own build log, written before `task.done` (true by construction).
+      const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+      expect(log).toContain(LONG_REFUSAL);
+    },
+    60_000,
+  );
+});
+
+/**
  * gh #278 — a refusal with NO work is classified, the record names the cure,
  * and a CHAINED line is retried once with the cure in front of the prompt.
  *
