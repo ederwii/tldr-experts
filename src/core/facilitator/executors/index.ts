@@ -88,6 +88,14 @@ export interface ExecutorTask {
    * writes `duration_ms` + `duration_basis: "spawned"` only when this is here.
    */
   readonly durationMs?: number;
+  /**
+   * A named cause for a task row this executor is about to write as `failed`
+   * for a reason OTHER than a transport error (gh #364) — reuses
+   * `AgentFailureKind` (`facilitator/spawnAgent.ts`) rather than a second
+   * vocabulary. Absent on every task before this existed and on every task
+   * whose only failure cause (if any) is already `error`'s text.
+   */
+  readonly failureKind?: string | null;
 }
 
 export interface ExecutorContext {
@@ -137,6 +145,16 @@ export interface ExecutorContext {
   readonly relaunching: boolean;
   /** `--keep-worktrees` — Build keeps its story worktrees after a story settles. */
   readonly keepWorktrees: boolean;
+  /**
+   * This stage's `questions_policy` resolved to anything but `human` (gh
+   * #364, `questionsPolicyFor` in `run/questionsPolicy.ts`) — nobody is
+   * expected to answer a question this stage's sub-agent raises. OPTIONAL and
+   * additive: absent (every `ExecutorContext` built before this existed,
+   * including every test fixture that constructs one by hand) reads as
+   * `false` — a human answers, which was every run's behaviour before this
+   * field existed.
+   */
+  readonly unattended?: boolean;
   /**
    * `--reuse-epic` — adopt an `epic/<slug>` branch this run did not create.
    *

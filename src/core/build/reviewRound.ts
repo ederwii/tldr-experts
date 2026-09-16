@@ -174,6 +174,26 @@ export class ReviewCounters {
   countConflictTurn(storyId: string, spent: number): void {
     this.conflictTurns.set(storyId, spent + 1);
   }
+
+  /**
+   * Developer attempts spent asking instead of acting, in an unattended run
+   * (gh #364) — a sixth map, for the sixth thing: a turn that returned a
+   * readable envelope, named a question in `questions_asked`, and left the
+   * tree exactly as it was handed. It spends an attempt the way a red DoD
+   * does and is neither of the other five. This process first, then the
+   * ledger's `askedNoDiffAttempts`, the same two-source shape every counter
+   * here uses.
+   */
+  private readonly askedNoDiff = new Map<string, number>();
+
+  askedNoDiffSpent(runDir: string, storyId: string): number {
+    return this.askedNoDiff.get(storyId) ?? readReviewLedger(runDir, storyId).askedNoDiffAttempts;
+  }
+
+  /** Allocate the attempt `settleAskedNoDiff` just spent requeuing this story. */
+  countAskedNoDiff(storyId: string, spent: number): void {
+    this.askedNoDiff.set(storyId, spent + 1);
+  }
 }
 
 /**

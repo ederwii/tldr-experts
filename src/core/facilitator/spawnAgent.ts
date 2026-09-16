@@ -204,9 +204,20 @@ export type AgentRateLimit = Omit<Extract<AgentEvent, { kind: "rate-limit" }>, "
  *    shapes above applies. `AgentOutcome.error` still carries the raw signal
  *    seen (the exit code, `is_error`, and any subtype), so nothing is lost —
  *    this is the value gh #348 exists to shrink, not a place to guess.
+ *  - `"asked_no_diff"` — NOT derived here, and the one value on this list
+ *    `ok: true` can carry (gh #364): the Build executor's own classification
+ *    of a developer turn that returned a perfectly readable envelope, named
+ *    at least one thing in `questions_asked`, and left the worktree exactly
+ *    as it was handed, in a run where `questions_policy` means nobody answers.
+ *    `spawnAgent` never sets this — it has no worktree to compare against —
+ *    `executors/build.ts` does, on the task row it already wrote, once the
+ *    diff comparison it needed has run. Reusing this type rather than a
+ *    second one is the point: one vocabulary for "why does this task row read
+ *    failed", spawn-level and application-level causes both.
  *
- * `null` on every outcome where `ok` is `true` and on a read-cap kill (see
- * `stoppedBy`, which already names that death in full).
+ * `null` on every outcome where `ok` is `true` and this content-level
+ * classification does not apply, and on a read-cap kill (see `stoppedBy`,
+ * which already names that death in full).
  */
 export type AgentFailureKind =
   | "timeout"
@@ -216,7 +227,15 @@ export type AgentFailureKind =
   | "non_zero_exit"
   | "result_error"
   | "malformed_result"
-  | "unclassified";
+  | "unclassified"
+  | "asked_no_diff";
+
+/**
+ * The `AgentFailureKind` value gh #364 added — its own constant so a build
+ * executor and its tests spell it once, never as a bare string literal that
+ * could drift from the type above.
+ */
+export const ASKED_NO_DIFF_FAILURE_KIND: AgentFailureKind = "asked_no_diff";
 
 export interface AgentOutcome {
   readonly ok: boolean;

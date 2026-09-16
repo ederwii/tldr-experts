@@ -50,6 +50,7 @@ import { raiseGrantVerdict, raisedPayload } from "../budget/raiseBudget.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { closeRun, describeOpenQuestions, describeStateCommit } from "../run/closeRun.ts";
+import { questionsPolicyFor } from "../run/questionsPolicy.ts";
 import { BUILD_PHASE } from "../run/buildProgress.ts";
 import {
   deliveredPhrase, gateStoriesPayload, storiesView, withRunOutcome,
@@ -1610,6 +1611,9 @@ async function runExecutor(
     at: options.at,
     relaunching: options.relaunching === true,
     keepWorktrees: options.keepWorktrees === true,
+    // gh #364: absence in `run.yml` means `human`, so a run written before
+    // `questions_policy` existed is `unattended: false` here — unchanged.
+    unattended: questionsPolicyFor(store.run.questions_policy, stageId) !== "human",
     reuseEpic: options.reuseEpic === true,
     // `--parallel` beats the workflow's `<stage>: {parallel: N}`, which beats
     // `stage.yml`'s. Absent everywhere it is 1 — the sequential path, unchanged.
@@ -1925,6 +1929,7 @@ function recordExecutorTasks(
       ...(metered ? {} : { metered: false }),
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
       error: task.error,
+      ...(task.failureKind === undefined || task.failureKind === null ? {} : { failure_kind: task.failureKind }),
       session_id: task.sessionId,
       started_at: options.at,
       ended_at: nowish(options),

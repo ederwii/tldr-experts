@@ -375,12 +375,13 @@ export function renderInputs(
   inputs: readonly PromptInput[],
   note?: string,
   absent: readonly string[] = [],
+  role: PreambleRole = "reader",
 ): string {
   if (inputs.length === 0) {
     const none = "_No input files are declared for this stage. Do not go looking for others._";
     return absent.length === 0 ? none : [none, "", ...absentBlocks(absent)].join("\n").trimEnd();
   }
-  const out = [...preamble(inputs)];
+  const out = [...preamble(inputs, role)];
   const trimmed = (note ?? "").trim();
   if (trimmed !== "") out.push(`**${trimmed}**`, "");
 
@@ -444,6 +445,22 @@ export const NOT_IN_WORKTREE =
   "NOT in this worktree — its content is only what the handoff quotes.";
 
 /**
+ * Who `preamble()` is addressing, and the one thing it changes: whether the
+ * declared inputs are also a READ ceiling. Default `"reader"` is every caller
+ * before gh #364 existed — Watch, the `What` stage's stage-preamble prompt,
+ * and every other `renderInputs` caller — for which the declared inputs ARE
+ * the whole of what that sub-agent was ever handed to look at, so "the only
+ * ones you may read" was never false for them. `"developer"` is the Build
+ * developer alone: it works inside a full repo checkout with `Read`/`Grep`/
+ * `Glob`, and gh #364 measured a developer reading that same sentence as a
+ * hard restriction on a REPO it could open freely — asking a question and
+ * writing nothing rather than opening the interface file its own acceptance
+ * criteria needed. One function, one meaning per role, rather than a second
+ * `preamble` a `developer` prompt could drift from.
+ */
+export type PreambleRole = "reader" | "developer";
+
+/**
  * The two sentences `## Inputs` can open with, and the rule for which.
  *
  * "Their full content is inlined below, so there is nothing to open and nothing
@@ -452,9 +469,41 @@ export const NOT_IN_WORKTREE =
  * exists on disk; do not guess at its content" — and the two documents the run
  * existed to edit were among the six. The preamble and the blocks below it
  * contradicted each other, and the preamble is the one the agent believed.
+ *
+ * gh #364 found the OTHER way this sentence lies, for `role: "developer"`
+ * alone: "the ONLY ones you may read" is true of what is INLINED, never of
+ * what the developer may open on disk. Measured live, 2026-09-16: a story
+ * with 2 `touches` files, both inlined, read this line plus `## Investigate`
+ * step 1 ("They are the whole brief") as a ban on reading the port interface
+ * and sibling tests its acceptance criteria needed, asked a question instead
+ * of opening them, and left no diff — $0.50 and a story blocked until an
+ * operator reopened it. `touches` (and, here, "declared inputs") is a WRITE
+ * allowlist; a repo checkout with `Read`/`Grep`/`Glob` has nothing stopping it
+ * from reading anything else, and the prompt saying otherwise was the bug.
  */
-export function preamble(inputs: readonly PromptInput[]): readonly string[] {
+export function preamble(inputs: readonly PromptInput[], role: PreambleRole = "reader"): readonly string[] {
   const missing = inputs.filter(isNotInlined);
+  if (role === "developer") {
+    const opening = missing.length === 0
+      ? ["Every declared input is inlined below — there is nothing on disk you need to open for", "these paths specifically."]
+      : (() => {
+          const listed = missing
+            .map((input) => `${input.path}${input.notInWorktree === true ? " (NOT in this worktree)" : ""}`)
+            .join(", ");
+          return [
+            `Inlined below: ${String(inputs.length - missing.length)} of ${String(inputs.length)} declared inputs.`,
+            "The rest exist on disk — READ them at the listed paths before relying on them; do not",
+            `guess: ${listed}`,
+          ];
+        })();
+    return [
+      ...opening,
+      "These declared inputs are a WRITE allowlist, not a read allowlist. Read any other file in",
+      "this repo you need — an interface it implements, a sibling test, a command's real fields —",
+      "never guess when you can open it.",
+      "",
+    ];
+  }
   if (missing.length === 0) {
     return [
       "These files are the ONLY ones you may read. Their full content is inlined below,",
