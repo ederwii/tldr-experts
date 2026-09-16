@@ -959,11 +959,21 @@ class BuildSession {
     // `--prepare` already extends to a story waiting on a review, and for the
     // same reason: handing an author a bundle that omits the findings it is
     // being re-dispatched over is the mistake, not the convenience.
+    // gh #218 (pre-merge review): every throw out of `fixlistFor` is a
+    // PRECONDITION refusal decided before anything is opened, spent or
+    // attempted — no worktree, no spawn, nothing this invocation did that the
+    // next one needs undone. `failed()` was the wrong door: it reads as a
+    // STAGE failure (`failStage`, exit 5), which stamps `run.yml` `status:
+    // failed` and makes the next `tldrx next` print "retrying … (cost already
+    // spent is not refunded)" — a lie, since nothing was ever spent here.
+    // `refusedOnSequence` is the same shape `offerAtFrontier`'s "wait" case
+    // and the as-is refusal a few lines below already use for exactly this —
+    // exit 1 (usage / nothing-behind-it), `run.yml` untouched.
     let fixlist: FixlistOnDisk | null;
     try {
-      fixlist = this.fixlistFor(planned.story.id);
+      fixlist = this.fixlistFor(planned.story.id, true);
     } catch (error) {
-      return failed(this.ctx, error instanceof Error ? error.message : String(error), []);
+      return refusedOnSequence(this.ctx, error instanceof Error ? error.message : String(error));
     }
 
     this.noteIfReopened(planned, this.statusOf(planned));
@@ -2650,7 +2660,16 @@ class BuildSession {
         if (!matches) continue;
         if (settled.commit !== merge.commit) continue;
         const fixlist = latestFixlist(this.ctx.runDir, BUILD_PHASE, planned.story.id);
-        if (fixlist === null || openFindings(fixlist.findings).length > 0) continue;
+        // gh #218 (correctness half): `unreadable` must be empty too. A parse
+        // that dropped a heading (a typo'd `Disposition:`) or read no heading
+        // at all (a truncated file) reads back as `findings: []` /
+        // `openFindings === 0` exactly like a genuinely closed round — this is
+        // the one check `openFixNow` (below) and this cheap off-files check
+        // must BOTH make, since this candidate list decides who is even ASKED.
+        // Kept PURE (no `this.lines` here): this method is also called from
+        // `prepare()`'s early-exit `.length` probe, before `settleClosedFixlists`
+        // runs, and a side effect here would print the same line twice.
+        if (fixlist === null || fixlist.unreadable.length > 0 || openFindings(fixlist.findings).length > 0) continue;
         rows.push({ planned, kind });
       }
     }
@@ -2806,12 +2825,29 @@ class BuildSession {
     const storyId = story.planned.story.id;
     const fixlist = latestFixlist(this.ctx.runDir, BUILD_PHASE, storyId);
     if (fixlist === null) return null;
+    // gh #218 (correctness half): a heading the parse could not read back as a
+    // finding is not evidence of zero — it is evidence the count is not to be
+    // trusted. Measured reproduction: `**fix-now**` typo'd to `**fix-noww**`
+    // silently dropped a live correctness finding from `findings`, and a plain
+    // `--prepare` read the resulting `openFindings(...).length === 0` as
+    // "nothing left to fix" and settled the story `done` with no re-review.
+    // Asked BEFORE `verifyResolutions`: a claim git cannot verify is still a
+    // claim about a finding the parse COULD read; a finding the parse could
+    // not read at all is a different failure and gets its own name.
+    const first = fixlist.unreadable[0];
+    if (first !== undefined) {
+      return `${String(fixlist.unreadable.length)} heading(s) in ${fixlist.rel} could not be read as a `
+        + `finding — #${String(first.n)} · ${first.finding} (${first.reason}). A story may not settle `
+        + "`done` on a fix list this could not fully parse: fix the file's `Disposition:` line (or its "
+        + "heading, if the file was truncated) so it reads as one of `fix-now`, `defer-with-log`, "
+        + "`refuted` or `out-of-scope`, then run the Build stage again";
+    }
     const { findings, refused } = await this.verifyResolutions(story, fixlist);
     const open = openFindings(findings);
-    const first = open[0];
-    if (first === undefined) return null;
+    const firstOpen = open[0];
+    if (firstOpen === undefined) return null;
     return `${String(open.length)} fix-list finding(s) are still \`fix-now\` in ${fixlist.rel} — `
-      + `#${String(first.n)} · ${first.finding}. `
+      + `#${String(firstOpen.n)} · ${firstOpen.finding}. `
       + (refused.length === 0
         ? ""
         : `${String(refused.length)} \`Resolved: yes\` claim(s) did not check out and were `
@@ -5208,9 +5244,28 @@ class BuildSession {
    * from `fix-now` is finished, and re-rendering it into the next attempt would
    * be asking for work somebody already decided not to do.
    */
-  private fixlistFor(storyId: string): FixlistOnDisk | null {
+  /**
+   * `refuseCorrupted` (gh #218, correctness half) is true only from `prepare()`
+   * — the one caller with a `try`/`catch` (routed to `refusedOnSequence`, exit
+   * 1: no worktree, no spawn, nothing to undo) around this call. The OTHER
+   * caller, `spawnDeveloper`'s headless auto fix-round, builds this string
+   * mid-prompt with `agent.spawned` already emitted and no such catch — a throw
+   * there would crash the invocation past every other story in the wave for a
+   * file a human could have corrupted between runs. It keeps the pre-#218
+   * reading (a corrupted round falls through to a plain bundle: wasteful, not
+   * unsafe) rather than trade a wasted turn for a run-ending crash; the
+   * DANGEROUS half — never settling `done` on an unreadable round — is closed
+   * independently in `openFixNow`/`closedFixlistCandidates`, which both callers
+   * of a fix list already go through before anything is proposed.
+   */
+  private fixlistFor(storyId: string, refuseCorrupted = false): FixlistOnDisk | null {
     const named = this.ctx.fixlist;
-    if (named === undefined) return openFixlist(this.ctx.runDir, BUILD_PHASE, storyId);
+    if (named === undefined) {
+      const latest = latestFixlist(this.ctx.runDir, BUILD_PHASE, storyId);
+      const problem = latest === null ? null : this.describeUnreadableFixlist(latest);
+      if (problem !== null && refuseCorrupted) throw new Error(problem);
+      return openFixlist(this.ctx.runDir, BUILD_PHASE, storyId);
+    }
     for (const base of [this.ctx.root, this.ctx.runDir, process.cwd()]) {
       const path = isAbsolute(named) ? named : join(base, named);
       const read = readFixlistAt(path, relative(this.ctx.runDir, path));
@@ -5234,6 +5289,12 @@ class BuildSession {
         + `the story at the cursor is ${storyId}`,
       );
     }
+    // gh #218 (correctness half): a corrupted file's `openFindings` is 0
+    // whether or not it really has nothing open — asked BEFORE the 0-open
+    // refusal below, so a truncated/malformed file is never misread as "this
+    // has genuinely nothing to fix".
+    const problem = this.describeUnreadableFixlist(read);
+    if (problem !== null) throw new Error(`--fixlist ${named}: ${problem}`);
     // gh #218: naming a file explicitly is a stronger claim than the unnamed
     // door's courtesy carry-forward, so it gets a REFUSAL, not a silent
     // downgrade to a plain bundle — a fixlist with nothing open dispatched a
@@ -5248,6 +5309,21 @@ class BuildSession {
       );
     }
     return read;
+  }
+
+  /**
+   * A sentence naming what `fixlist`'s parse could not read, or `null` when it
+   * parsed cleanly (gh #218, correctness half). Shared by both fixlist doors
+   * — the unnamed carry-forward and `--fixlist <path>` — so a corrupted round
+   * is refused the same way, and named, wherever it is found.
+   */
+  private describeUnreadableFixlist(fixlist: FixlistOnDisk): string | null {
+    const first = fixlist.unreadable[0];
+    if (first === undefined) return null;
+    return `${fixlist.rel} has ${String(fixlist.unreadable.length)} heading(s) that could not be read as a `
+      + `finding — #${String(first.n)} · ${first.finding} (${first.reason}). Its open count cannot be `
+      + "trusted until every heading parses: fix the file's `Disposition:` line (or its heading, if the "
+      + "file was truncated or overwritten), then try again";
   }
 
   /**

@@ -73,6 +73,31 @@
   `openFixNow` before either. `--fixlist <path>` naming a file with 0 open findings is now a refusal
   that names the file and the count, not a silent downgrade to a bundle.
 
+- **A fix list the parser could not fully read — a typo'd `Disposition:` word, or a round file
+  emptied by a crash or a disk-full write — can no longer settle a story `done` (#218, pre-merge
+  review).** Reviewer-measured: `**fix-now**` mistyped `**fix-noww**` is silently dropped by
+  `parseFixlistFile` (by design — a heading with no readable disposition is not a finding, and
+  inventing `fix-now` for it would block a story over a typo), so `openFindings(...).length` read 0
+  exactly as it would for a genuinely closed round, and a plain `--prepare` settled the story `done`
+  with no spawn and no re-review over a live, undetected defect. `parseFixlistFile`'s parse now also
+  reports what it could not read (`unreadableFindings`/`fixlistFullyParsed`, `fixlist.ts`), and
+  `openFixNow`/`closedFixlistCandidates` (both the `blocked`/`approve` shape and the `review`/
+  `fixlist` shape above share this one check) hold rather than settle when a round parsed
+  uncleanly, naming the exact heading and line that could not be read.
+
+- **`--fixlist <path>` naming a file this framework cannot fully parse — corrupted, truncated, or
+  another story's misnamed file — refuses with exit 1 (usage), not exit 5 (agent failed) (#218,
+  pre-merge review).** The refusal used to throw out of `fixlistFor` and land in the generic
+  executor `catch`, which reads any thrown `Error` as a STAGE failure: `run.yml`'s stage was stamped
+  `status: failed` with `cost_usd: 0.00`, and the next `tldrx next` printed "retrying … (cost already
+  spent is not refunded)" — a lie, since the refusal fires before anything is opened or spent. It
+  now returns the same `refusedOnSequence` precondition-refusal `offerAtFrontier`'s dependency wait
+  already uses: exit 1, `run.yml` untouched, no false retry line. The unnamed door's own corruption
+  check is scoped to `--prepare` only (the one caller with a `try`/`catch` around it) — the headless
+  in-session fix-round spawn keeps the pre-#218 fallback (a corrupted round is treated as absent
+  rather than crashing the run mid-wave), since the correctness half above already closes the
+  dangerous direction independently of this door.
+
 ## 0.30.0 — 2026-09-15
 
 ### Fixed

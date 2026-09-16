@@ -16,6 +16,8 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
+import { RunStore } from "../src/core/run/RunStore.ts";
+import { EXIT_USAGE } from "../src/cli/exitCodes.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
@@ -151,9 +153,67 @@ describe("`--fixlist <path>` naming a file with 0 open findings is a refusal, no
 
     const prepared = await next(ws, { mode: "prepare", fixlist: "04-build/fixlist/S1-1.md" });
 
-    expect(prepared.code).not.toBe(0);
+    // RED (pre-fix, pre-merge review): this threw out of `fixlistFor`, was
+    // caught by `failed()` and read back as a STAGE failure — exit 5
+    // (EXIT_AGENT_FAILED), `run.yml`'s stage stamped `status: failed`, and the
+    // NEXT `tldrx next` printed "retrying … (cost already spent is not
+    // refunded)" though nothing was ever spent. It must be exit 1
+    // (EXIT_USAGE, family "usage / nothing-behind-it") with the stage left
+    // exactly as it was.
+    expect(prepared.code).toBe(EXIT_USAGE);
     expect(prepared.lines.join("\n")).toContain("0 `fix-now` finding(s)");
     expect(prepared.lines.join("\n")).toContain("04-build/fixlist/S1-1.md");
     expect(existsSync(join(ws.runDir, ".agent", "build", "S1", "pending.json"))).toBe(false);
+    const stage = RunStore.open(ws.runDir).run.phases[0]?.stages[0];
+    expect(stage?.status).not.toBe("failed");
+
+    // The next invocation must not read this as a retry of a failed stage.
+    const again = await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
+    expect(again.lines.join("\n")).not.toContain("cost already spent is not refunded");
+  }, 120_000);
+});
+
+describe("a fix list the parse could not fully read must never settle done (gh #218, correctness half)", () => {
+  test("a typo'd Disposition silently drops the live finding — must hold, not settle done", async () => {
+    const ws = workspace();
+    await parkAtReviewBehindOpenFixlist(ws);
+
+    // Reviewer-measured repro: `**fix-now**` typo'd to `**fix-noww**`.
+    // `parseFixlistFile` cannot recognise it as a disposition, so the finding
+    // is silently DROPPED from `findings` (by design — see its own doc) —
+    // `openFindings(...).length` reads 0, indistinguishable from "every
+    // finding was genuinely dispositioned away", unless the parse's own
+    // account of what it could not read is consulted too.
+    const path = fixlistPath(ws);
+    writeFileSync(path, readFileSync(path, "utf8").replace("Disposition: **fix-now**", "Disposition: **fix-noww**"), "utf8");
+
+    const prepared = await next(ws, { mode: "prepare", at: "2026-08-29T10:00:00Z" });
+
+    // RED (pre-fix, pre-merge review): `closedFixlistCandidates` trusted
+    // `openFindings(fixlist.findings).length === 0` on its own and settled
+    // the story `done` with no spawn and no re-review — a live correctness
+    // defect reported as shipped and proven.
+    expect(story(ws, "S1")).not.toContain("status: done");
+    expect(prepared.lines.join("\n")).not.toContain("settles `done`");
+    const said = prepared.lines.join("\n");
+    expect(said).toContain("could not be read as a finding");
+    expect(said).toContain("Concurrent double-confirm mints two sessions");
+  }, 120_000);
+
+  test("an empty/truncated round file reads as 0 findings — must hold, not settle done", async () => {
+    const ws = workspace();
+    await parkAtReviewBehindOpenFixlist(ws);
+
+    // A round file a crash or a disk-full write left empty. `latestFixlist`
+    // (unlike `readFixlistAt`) has no "0 findings means not a fix list"
+    // guard, so this reads as `findings: []` exactly like a fully-resolved
+    // round — the same silent zero as the typo case, from a different cause.
+    writeFileSync(fixlistPath(ws), "", "utf8");
+
+    const prepared = await next(ws, { mode: "prepare", at: "2026-08-29T10:00:00Z" });
+
+    expect(story(ws, "S1")).not.toContain("status: done");
+    expect(prepared.lines.join("\n")).not.toContain("settles `done`");
+    expect(prepared.lines.join("\n")).toContain("could not be read as a finding");
   }, 120_000);
 });

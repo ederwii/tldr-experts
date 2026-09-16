@@ -758,27 +758,62 @@ const DO_NOT_RE = /^Do NOT:\s*(.*)$/;
 const STORY_RE = /^#\s+Fix list\s+—\s+(\S+)\s+·/;
 
 /**
- * Read the artifact back — the half that makes the block possible.
+ * One numbered heading the parse could not read back as a finding (gh #218,
+ * correctness half) — its `Disposition:` line was missing, or present but not
+ * one of the four recognised words (a typo: `**fix-noww**`).
  *
- * The file is EDITABLE by design: a host closes a finding by writing one word in
- * it, so the settle-time question ("is anything still open?") has to be asked of
- * the file on disk rather than of the envelope that produced it. Anything this
- * cannot parse is skipped rather than guessed at; a heading with no readable
- * disposition is not a finding, and inventing `fix-now` for it would block a
- * story over a typo.
+ * `parseFixlistFile` drops these SILENTLY by design (see its own doc: a
+ * heading with no readable disposition is not a finding, and inventing
+ * `fix-now` for it would block a story over a typo). That is the right answer
+ * for RENDERING — there is nothing to act on — and the wrong answer for
+ * deriving "is this round SPENT": a live defect that vanished from the count
+ * because of a typo is not a defect anybody dispositioned away, and
+ * `openFindings(...).length === 0` cannot tell the two apart on its own
+ * (AGENTS.md §7 — a value nothing derived is named, never defaulted to zero).
+ * This is that name.
  */
-export function parseFixlistFile(text: string): readonly FixFinding[] {
+export interface UnreadableFinding {
+  readonly n: number;
+  readonly finding: string;
+  readonly reason: string;
+}
+
+interface FixlistParse {
+  readonly findings: readonly FixFinding[];
+  readonly unreadable: readonly UnreadableFinding[];
+}
+
+/**
+ * The one parse both `parseFixlistFile` (findings only, the long-standing
+ * public shape) and `unreadableFindings`/`fixlistFullyParsed` (the parse's own
+ * account of what it could not read, gh #218) are thin views over — ONE
+ * derivation for a file that both a renderer and a settle-time gate must read
+ * (§7, "one implementation per derivation").
+ */
+function parseFixlistDocument(text: string): FixlistParse {
   const findings: FixFinding[] = [];
+  const unreadable: UnreadableFinding[] = [];
   let current: {
     n: number; finding: string; severity: string; kind: FindingKind | null;
     normalisedFrom: Disposition | null;
-    where: string; disposition: Disposition | null; resolved: boolean; resolvedSha: string | null;
+    where: string; disposition: Disposition | null; rawDisposition: string | null;
+    resolved: boolean; resolvedSha: string | null;
     resolvedShaRefusal: string | null;
     claimedSha: string | null; closedOnEpicSha: string | null; swept: string | null;
     detail: string[]; doNot: string[];
   } | null = null;
   const flush = (): void => {
-    if (current === null || current.disposition === null) return;
+    if (current === null) return;
+    if (current.disposition === null) {
+      unreadable.push({
+        n: current.n,
+        finding: current.finding,
+        reason: current.rawDisposition === null
+          ? "no `Disposition:` line"
+          : `\`Disposition: **${current.rawDisposition}**\` is not one of ${DISPOSITIONS.join(", ")}`,
+      });
+      return;
+    }
     findings.push({
       n: current.n,
       kind: current.kind,
@@ -806,7 +841,8 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
         finding: (heading[2] ?? "").trim(),
         severity: (heading[3] ?? "unrated").trim(),
         kind: null, normalisedFrom: null,
-        where: "", disposition: null, resolved: false, resolvedSha: null, resolvedShaRefusal: null,
+        where: "", disposition: null, rawDisposition: null,
+        resolved: false, resolvedSha: null, resolvedShaRefusal: null,
         claimedSha: null, closedOnEpicSha: null, swept: null,
         detail: [], doNot: [],
       };
@@ -837,6 +873,7 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
     const disposition = DISPOSITION_RE.exec(line);
     if (disposition !== null) {
       const value = disposition[1] ?? "";
+      current.rawDisposition = value;
       if (isDisposition(value)) current.disposition = value;
       continue;
     }
@@ -873,7 +910,53 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
     current.detail.push(line);
   }
   flush();
-  return findings;
+  // No numbered heading read at all — not even an unreadable one. A round file
+  // is only ever written with at least one finding (`writeFixlistFor` renders
+  // the reviewer's own list, never an empty one), so a round that parses to
+  // NOTHING — including a fully empty file — is not "a round with zero
+  // findings"; it is a file that could not be read as a fix list at all:
+  // empty, truncated mid-write, or overwritten. Named here, once, rather than
+  // inferred later from a bare `findings: []` (gh #218, measured: an emptied
+  // round file read back as "nothing open" and settled the story `done`).
+  if (findings.length === 0 && unreadable.length === 0) {
+    unreadable.push({
+      n: 0,
+      finding: "(the file itself)",
+      reason: "no numbered `## N · <finding>` heading could be read — the file may be truncated or corrupted",
+    });
+  }
+  return { findings, unreadable };
+}
+
+/**
+ * Read the artifact back — the half that makes the block possible.
+ *
+ * The file is EDITABLE by design: a host closes a finding by writing one word in
+ * it, so the settle-time question ("is anything still open?") has to be asked of
+ * the file on disk rather than of the envelope that produced it. Anything this
+ * cannot parse is skipped rather than guessed at; a heading with no readable
+ * disposition is not a finding, and inventing `fix-now` for it would block a
+ * story over a typo. See `unreadableFindings`/`fixlistFullyParsed` for what this
+ * silence drops — a settle-time reader must consult one of those before reading
+ * a `findings` list with nothing `fix-now` in it as "this round is spent".
+ */
+export function parseFixlistFile(text: string): readonly FixFinding[] {
+  return parseFixlistDocument(text).findings;
+}
+
+/** Every heading `parseFixlistFile` had to drop from `text` — see `UnreadableFinding`. */
+export function unreadableFindings(text: string): readonly UnreadableFinding[] {
+  return parseFixlistDocument(text).unreadable;
+}
+
+/**
+ * Whether `text` parsed CLEANLY — no heading dropped, and at least one heading
+ * read at all. `false` means `parseFixlistFile`'s `findings` cannot be trusted
+ * as the whole story; a settle-time gate must hold rather than read a low or
+ * zero open count as "nothing left to fix" (gh #218).
+ */
+export function fixlistFullyParsed(text: string): boolean {
+  return parseFixlistDocument(text).unreadable.length === 0;
 }
 
 /** The story a fix-list file is about, from its own heading. */
@@ -1141,6 +1224,15 @@ export interface FixlistOnDisk {
   readonly path: string;
   readonly rel: string;
   readonly findings: readonly FixFinding[];
+  /**
+   * What this round's parse could not read back as a finding (gh #218) — empty
+   * when the file parsed cleanly. Every reader that decides "is this round
+   * SPENT" off `openFindings(findings).length === 0` must check this is ALSO
+   * empty first: `findings` silently omits a dropped heading, so a zero count
+   * here can mean either "everything is closed or routed away" or "the parse
+   * lost a live defect" (AGENTS.md §7), and only this field tells them apart.
+   */
+  readonly unreadable: readonly UnreadableFinding[];
 }
 
 /** Every round written for one story, lowest round first. */
@@ -1159,7 +1251,8 @@ export function fixlistRounds(runDir: string, phaseDir: string, storyId: string)
     if (match === null) continue;
     const round = Number(match[1] ?? "0");
     const path = join(dir, entry);
-    rows.push({ round, path, rel: fixlistRel(phaseDir, storyId, round), findings: readFindings(path) });
+    const { findings, unreadable } = readFixlistParse(path);
+    rows.push({ round, path, rel: fixlistRel(phaseDir, storyId, round), findings, unreadable });
   }
   return rows.sort((a, b) => a.round - b.round);
 }
@@ -1194,17 +1287,17 @@ export function readFixlistAt(path: string, rel: string): FixlistOnDisk | null {
   } catch {
     return null;
   }
-  const findings = parseFixlistFile(text);
-  if (findings.length === 0) return null;
+  const { findings, unreadable } = parseFixlistDocument(text);
+  if (findings.length === 0 && unreadable.length === 0) return null;
   const round = Number(/-(\d{1,4})\.md$/.exec(path)?.[1] ?? "1");
-  return { round: Number.isFinite(round) ? round : 1, path, rel, findings };
+  return { round: Number.isFinite(round) ? round : 1, path, rel, findings, unreadable };
 }
 
-function readFindings(path: string): readonly FixFinding[] {
+function readFixlistParse(path: string): FixlistParse {
   try {
-    return parseFixlistFile(readFileSync(path, "utf8"));
+    return parseFixlistDocument(readFileSync(path, "utf8"));
   } catch {
-    return [];
+    return { findings: [], unreadable: [] };
   }
 }
 
