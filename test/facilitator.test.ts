@@ -647,6 +647,74 @@ describe("skip_if", () => {
     expect(types(ws)).toContain("stage.skipped");
   });
 
+  /**
+   * gh #346: a stage's OWN `skip_if` default (no workflow entry involved — see
+   * `stageSpec.ts`'s `overlay`), fired by the seed's declared solution, and the
+   * materialised `design.md` a later stage would otherwise read as silently
+   * empty (`prompt.ts`'s `absentBlocks` names it `absent:` instead — but this
+   * skip additionally WRITES the file, because it is the one skip that leaves
+   * a downstream stage an input nothing else can produce).
+   */
+  test("seed_solution==1 skips a `how`-shaped stage and materialises its design.md", async () => {
+    const solutionSeed = "## Solution\n\nReuse the existing payments gateway rather than build one.\n";
+    const ws = workspace(
+      [
+        TWO_STAGE[0] as StageOptions,
+        {
+          id: "beta", phase: "02-how", budgetUsd: 4, gate: "auto",
+          outputs: [{ path: "02-how/design.md" }, { path: "02-how/handoff.md" }],
+        },
+      ],
+      { seed: "requirements.md", files: { "requirements.md": `# Payments\n\n${solutionSeed}` } },
+    );
+    writeStageKey(ws, "beta", 'skip_if: "seed_solution==1"');
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS });
+
+    await next(ws); // runs `alpha` and stops at its gate — one stage per call
+    const outcome = await next(ws); // `beta` is next: seed_solution==1 holds, it is skipped
+    expect(outcome.lines.join("\n")).toContain("skipped 02-how/beta (skip_if: seed_solution==1)");
+
+    const store = RunStore.open(ws.runDir);
+    expect(store.run.phases[0]?.stages[0]?.status).toBe("done");
+    expect(store.run.phases[1]?.stages[0]?.status).toBe("skipped");
+    expect(types(ws)).toContain("stage.skipped");
+
+    const design = readFileSync(join(ws.runDir, "02-how", "design.md"), "utf8");
+    expect(design).toContain("Reuse the existing payments gateway rather than build one.");
+    expect(design).toContain("skip_if: seed_solution==1");
+    expect(design).toContain("[src: requirements.md:");
+  });
+
+  test("materialisation is a no-op when the seed carries no marker — never inferred from prose", async () => {
+    const ws = workspace(
+      [
+        TWO_STAGE[0] as StageOptions,
+        {
+          id: "beta", phase: "02-how", budgetUsd: 4, gate: "auto",
+          outputs: [{ path: "02-how/design.md" }, { path: "02-how/handoff.md" }],
+        },
+      ],
+      { seed: "requirements.md", files: { "requirements.md": "# Payments\n\nWe will probably reuse the gateway.\n" } },
+    );
+    writeStageKey(ws, "beta", 'skip_if: "seed_solution==1"');
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS });
+
+    await next(ws); // runs `alpha`
+    await next(ws); // `beta` is next: seed_solution==1 does NOT hold
+
+    const store = RunStore.open(ws.runDir);
+    // No marker, so seed_solution==1 never holds and `beta` runs like any other
+    // stage rather than being skipped — the fixture's fake claude never wrote
+    // 02-how/design.md or handoff.md, so `beta` is left pending on its own gate.
+    expect(store.run.phases[1]?.stages[0]?.status).not.toBe("skipped");
+    expect(existsSync(join(ws.runDir, "02-how", "design.md"))).toBe(false);
+  });
+
+  function writeStageKey(ws: FacilitatorWorkspace, stageId: string, line: string): void {
+    const path = join(ws.root, ".tldrx", "stages", stageId, "stage.yml");
+    writeFileSync(path, `${readFileSync(path, "utf8")}${line}\n`, "utf8");
+  }
+
   test("the grammar is closed", () => {
     const counts = { stories: 3, repos: 2, questions: 0 };
     expect(evaluateSkipIf("stories<=1", counts)).toBe(false);

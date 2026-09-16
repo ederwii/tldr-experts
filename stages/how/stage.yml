@@ -5,7 +5,28 @@
 name: how
 title: How
 phase: 2
-model: opus
+# `model:` [owner decision, gh #346, 2026-09-16]: sonnet, not opus. Measured
+# across three field samples cited on the issue: `how` cost $10.40-$269.90 per
+# sample, 11.4-45% of the run's total spend, and its own output went unread
+# downstream in roughly half of every sample taken so far. A workspace or a
+# single invocation that wants the strong model back overrides
+# this the same way every other stage's model is overridden: `.tldrx/stages/how/
+# stage.yml` with `model: opus`, or `tldrx next --model opus` / `tldrx run auto
+# --model opus` for one invocation (`src/cli/helpText.ts`'s `model()` flag —
+# "Everywhere [but --commit --review] the two flags override the stage's
+# model:/effort: for every sub-agent of the invocation").
+model: sonnet
+# `skip_if:` [owner decision, gh #346, 2026-09-16]: when the run's seed already
+# declares its own technical solution (an explicit `## Solution` / `## Technical
+# approach` H2 — never inferred from prose, `seedSolution.ts`), `how` is
+# skipped and `plan` reads that section instead of a `how`-written `design.md`
+# (`runNext.ts`'s skip branch materialises `02-how/design.md` from it — the
+# ONLY skip_if that does, because it is the only one that leaves a downstream
+# stage an input nothing else can produce). No shipped `workflows/*.yml` uses
+# the §2.4 record shape yet, so this is the stage's own built-in default
+# (`stageSpec.ts`'s `overlay`) rather than a per-scope workflow edit; a
+# workflow that declares its own `skip_if` for `how` still wins.
+skip_if: "seed_solution==1"
 # --effort for this stage's sub-agent (spec §2.3). The cost lever
 # `--max-budget-usd` is not: the budget flag only STOPS a turn already in flight.
 # `[assumption]` — How is where the thinking is. Every component must land on a

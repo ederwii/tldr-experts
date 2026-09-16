@@ -123,7 +123,16 @@ export interface StageSpec {
    */
   readonly tuning: StageTuning;
   readonly dryRunAllowed: boolean;
-  /** From the WORKFLOW entry (spec §2.4), not from stage.yml. */
+  /**
+   * The WORKFLOW entry's `skip_if` (spec §2.4) when it declares one, else the
+   * STAGE's own top-level `skip_if:` as a built-in default (gh #346) — the
+   * shipped `workflows/*.yml` are all the draft bare-string shape today (no
+   * scope actually uses the §2.4 record form yet, `workflowPreset.ts`'s
+   * two-shapes note), so a condition every scope using this stage should get
+   * cannot live only in the workflow file without twelve near-identical edits.
+   * A workflow that DOES declare its own `skip_if` for this stage id always
+   * wins; this is only what a stage gets when nothing overrides it.
+   */
   readonly skipIf: string | null;
   readonly questionsMax: number | null;
 }
@@ -176,6 +185,10 @@ function overlay(
   for (const entry of entries) {
     if (!isRecord(entry) || entry.id !== stageId) continue;
     if (typeof entry.skip_if === "string" && entry.skip_if !== "") skipIf = entry.skip_if;
+  }
+  // gh #346: the stage's OWN default, only when the workflow said nothing above.
+  if (skipIf === null && isRecord(stageDoc) && typeof stageDoc.skip_if === "string" && stageDoc.skip_if !== "") {
+    skipIf = stageDoc.skip_if;
   }
 
   const questions = isRecord(stageDoc) && isRecord(stageDoc.questions) ? stageDoc.questions : null;
