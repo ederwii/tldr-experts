@@ -104,8 +104,15 @@ function meaningfulLines(output: string): readonly string[] {
   return output.split("\n").map((line) => line.trimEnd()).filter((line) => line.trim() !== "");
 }
 
-/** Cut `text` to at most `maxBytes` UTF-8 bytes, saying so when it cuts. */
-function boundBytes(text: string, maxBytes: number): string {
+/**
+ * Cut `text` to at most `maxBytes` UTF-8 bytes, saying so when it cuts.
+ *
+ * Exported (gh #359): the ONE byte-safe truncation this repo has (§7) — reused
+ * by `build.ts` to clamp `task.done`'s own free-text fields (`permission_refused`,
+ * `budget_death`) at the source, rather than growing a second copy of the same
+ * cut-on-a-UTF-8-boundary logic beside it.
+ */
+export function boundBytes(text: string, maxBytes: number): string {
   if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
   // Byte-safe: slice on the buffer, then drop a trailing partial code point. The
   // ellipsis is itself 3 UTF-8 bytes, and the RESULT is what the bound is about.

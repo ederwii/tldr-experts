@@ -40,6 +40,20 @@
   the story exactly where an ordinary un-attempted `todo` row sits — picked up plainly by the
   next invocation instead of re-deriving the same release from the log every time it gets that
   far.
+- **An oversized `permission_refused` failed the whole BUILD STAGE, not just the story, and bought
+  `run auto` a relaunch nobody owed (#359).** Measured on a live unattended run (0.31.1): a
+  developer's refused command was a ~110-line heredoc; `permission_refused` (#271, additive) is
+  copied verbatim and was never on the emit seam's droppable-field list
+  (`detail`/`recording_error`/`outputs`/the `touches_widened` path lists), so a 5474-byte refused
+  command alone put a real `task.done` over the §2.9 4096-byte cap, `EventLog.append` refused it,
+  the executor threw, and the stage failed — re-dispatching a sibling story's developer for a turn
+  its own attempt never spent. `permission_refused` and `budget_death` (#277, the same shape) are
+  now clamped in `executors/build.ts`'s `settle` — head, bounded to 1024 bytes (a quarter of the
+  cap, `dodOutput.ts`'s existing budget, reused rather than re-derived), plus a marker naming the
+  original byte count and pointing at `04-build/log/<story>.md`, which already carries the field
+  in full (written by `writeLog` before this event, so the pointer is true by construction). The
+  review log, the handoff and the blocked-story reason are unaffected — none of them carry the
+  event-payload cap.
 
 ## 0.31.1 — 2026-09-16
 

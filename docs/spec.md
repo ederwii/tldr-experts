@@ -3806,6 +3806,20 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    verbatim and alone, and why — widened from the Definition of Done alone (gh #360, below): 4 of 4 refusals
    measured on a field run were an ad hoc verification line the prompt's DoD-only wording never covered.
 
+   **`permission_refused` and `budget_death` are CLAMPED before they ever reach `task.done`'s payload (gh #359).**
+   Both are copied verbatim from the agent side — a refused command, a developer's own kill message — and neither
+   is bounded at the source: measured on a live run, a ~110-line refused heredoc alone put a real `task.done` at
+   5474 bytes, over §2.9's 4096-byte cap, and neither field was on the emit seam's droppable list
+   (`payload.detail_omitted` above covers `detail`/`recording_error`/`outputs`/the `touches_widened` path lists
+   only). `EventLog.append` threw, the EXECUTOR threw with it, and the whole STAGE failed — not just the story —
+   which bought `run auto` a relaunch that re-dispatched a sibling story's developer for a turn nothing it did
+   owed. The fix is proactive rather than reactive: `settle` (`executors/build.ts`) bounds each field to 1024 bytes
+   (a quarter of the cap, the same budget `detail`'s DoD excerpt already uses) BEFORE building the event — the head
+   of the text, verbatim, plus a trailing marker naming the original byte count and where the full text lives:
+   `04-build/log/<story>.md`, written by `writeLog` earlier in the same `settle` call, so the pointer is true by
+   construction. The review log, the handoff and the blocked-story reason are UNCHANGED — none of them carry the
+   4 KB event-payload constraint, so all three keep the field in full.
+
    **A refusal with NO work names its cure, and a chained line is retried once with the cure in front (gh #278).**
    Measured on two real runs in one day, six refusals across sonnet and opus developers with #271's rule in every
    prompt: each was a shell chain or an ungranted git verb, each had no work since spawn, each blocked after one
