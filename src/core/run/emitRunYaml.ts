@@ -147,6 +147,12 @@ function task(t: RunTask, indent: string): string {
     ...(t.stopped_by === undefined || t.stopped_by === null
       ? []
       : [`${inner}stopped_by: ${yamlScalar(t.stopped_by)},`]),
+    // Named cause for a failed turn (gh #348), same rule as `stopped_by` right
+    // above: written only when a failure earned one, so a row from before this
+    // key existed, and every row that finished `ok`, round-trip byte-for-byte.
+    ...(t.failure_kind === undefined || t.failure_kind === null
+      ? []
+      : [`${inner}failure_kind: ${yamlScalar(t.failure_kind)},`]),
     // Both additive, both written only when present — a row from before either
     // existed, or one that never earned either, round-trips byte-for-byte.
     ...(t.banked_before_refusal === undefined ? [] : [`${inner}banked_before_refusal: true,`]),

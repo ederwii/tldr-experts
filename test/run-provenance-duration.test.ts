@@ -34,7 +34,9 @@ import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { stageLines } from "../src/core/facilitator/runAuto.ts";
 import { frameworkVersion, frameworkVersionSync } from "../src/core/frameworkVersion.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
-import { asRunFile, recordedVersion, validateRunFile, VERSION_NOT_RECORDED } from "../src/core/run/RunFile.ts";
+import {
+  asRunFile, recordedVersion, validateRunFile, VERSION_NOT_RECORDED, type RunFile,
+} from "../src/core/run/RunFile.ts";
 import { emitRunYaml } from "../src/core/run/emitRunYaml.ts";
 import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
 import { buildBudgetView, renderBudget } from "../src/core/budget/budgetView.ts";
@@ -301,6 +303,76 @@ describe("a task row carries a measured span (#184)", () => {
     } as TldrxEvent);
     expect(old?.durationMs).toBeUndefined();
     expect(durationCell(old?.durationMs, old?.durationBasis)).toBe("not recorded");
+  });
+});
+
+/**
+ * `failure_kind` (gh #348) — additive on the task row, the same rule
+ * `emitRunYaml.ts` already applies to `stopped_by`: written only when a
+ * failure earned one, so a row from before this key existed, and every row
+ * that finished `ok`, round-trip byte-for-byte.
+ */
+describe("a failed task row carries a named cause (gh #348)", () => {
+  function minimalTask(overrides: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: "t1", status: "failed", expert: null, model: "sonnet", cost_usd: 0.1,
+      error: "claude timed out (killed after the stage's timeout_s)",
+      session_id: null, started_at: "2026-08-28T09:00:00Z", ended_at: "2026-08-28T09:01:00Z",
+      outputs: [],
+      ...overrides,
+    };
+  }
+
+  function runWithTask(task: Record<string, unknown>): RunFile {
+    return {
+      version: 1,
+      run: "260828-demo",
+      title: "Demo",
+      scope: "feature",
+      workflow: "feature",
+      repos: ["api"],
+      created_at: "2026-08-28T09:00:00Z",
+      updated_at: "2026-08-28T09:00:00Z",
+      status: "ready",
+      cursor: { phase: "01-what", stage: "alpha", task: null },
+      // Matches the one task's `cost_usd` below — `validateRunFile` cross-checks
+      // `budget.spent_usd` against the task total, and this fixture is not the
+      // place to exercise that unrelated invariant.
+      budget: { ceiling_usd: 10, spent_usd: 0.1, per_agent_max_usd: 3 },
+      phases: [{
+        id: "01-what",
+        status: "ready",
+        stages: [{
+          id: "alpha", status: "failed", expert: null, model: null, budget_usd: 10, cost_usd: 0.1,
+          started_at: null, ended_at: null, inputs: [], outputs: [],
+          gate: { type: "approve", status: "pending", by: null, at: null, note: "" },
+          tasks: [task],
+        }],
+      }],
+    } as unknown as RunFile;
+  }
+
+  test("a row with no failure_kind emits no such key — byte-identical to before #348", () => {
+    const emitted = emitRunYaml(runWithTask(minimalTask({})));
+    expect(emitted).not.toContain("failure_kind");
+  });
+
+  test("a row with failure_kind: null emits no such key either — absent, never a literal null", () => {
+    const emitted = emitRunYaml(runWithTask(minimalTask({ failure_kind: null })));
+    expect(emitted).not.toContain("failure_kind");
+  });
+
+  test("a row with a named failure_kind writes it beside stopped_by's own line", () => {
+    const emitted = emitRunYaml(runWithTask(minimalTask({ failure_kind: "timeout" })));
+    expect(emitted).toContain("failure_kind: timeout,");
+  });
+
+  test("it round-trips through the validator and a second emit is byte-identical", () => {
+    const run = runWithTask(minimalTask({ failure_kind: "process_killed" }));
+    const once = emitRunYaml(run);
+    const parsed = parseYaml(once);
+    expect(validateRunFile(parsed).ok).toBe(true);
+    expect(emitRunYaml(parsed as RunFile)).toBe(once);
   });
 });
 

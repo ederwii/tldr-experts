@@ -289,4 +289,25 @@ describe("the override reaches every place the CLI is named", () => {
     expect(argv).toContain("-p");                 // still claude's argv, on purpose
     expect(argv).toContain("stream-json");
   });
+
+  /**
+   * Pre-merge review, 2026-09-15 (gh #348): `spawnAgent`'s own `capped ? … : …`
+   * split (the read cap vs. everything else) had no end-to-end proof that an
+   * ordinary external kill — no read cap involved at all — reaches
+   * `failureKind: "process_killed"` through a REAL spawned process, not just
+   * through `interpret()` called directly on a synthetic exit code.
+   */
+  test("a real process that exits 137 with no read cap is process_killed, stoppedBy null", async () => {
+    const dir = tmp();
+    const stub = join(dir, "stub-claude");
+    writeFileSync(stub, "#!/usr/bin/env bash\ncat > /dev/null\nexit 137\n");
+    chmodSync(stub, 0o755);
+    process.env.TLDRX_CLAUDE_BIN = stub;
+
+    const outcome = await spawnAgent({ ...request(dir), env: { ...process.env } });
+    expect(outcome.ok).toBe(false);
+    expect(outcome.stoppedBy).toBeNull();
+    expect(outcome.failureKind).toBe("process_killed");
+    expect(outcome.error).toContain("SIGKILL");
+  });
 });
