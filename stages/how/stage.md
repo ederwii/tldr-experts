@@ -49,7 +49,6 @@
 
 - `design.md`
 - `contracts.md` (APIs / DTOs / events)
-- `risks.md`
 - `test-strategy.md`
 
 ## Gate

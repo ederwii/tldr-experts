@@ -54,7 +54,7 @@ usually has zero questions and "Gate" is tests-green + review).
 | # | Phase | Input | Output (files) | Default experts |
 |---|---|---|---|---|
 | 1 | **What** | a phrase, a PRD, any doc, a Jira epic | `intent.md`, `scope.md` (in/out, MoSCoW), `success-metrics.md`, `open-questions.md` | product, domain expert(s) |
-| 2 | **How** | phase-1 files + code map | `design.md` (placed on real files/modules), `contracts.md` (APIs/DTOs/events), `risks.md`, `test-strategy.md` | architect, domain expert(s), stack experts |
+| 2 | **How** | phase-1 files + code map | `design.md` (placed on real files/modules), `contracts.md` (APIs/DTOs/events), `test-strategy.md` | architect, domain expert(s), stack experts |
 | 3 | **Plan** | phase-2 files | `epics/<epic>.md`, `stories/<id>.md` (AC + test plan + touched files), `waves.yml` (dependency-ordered batches), `budget.yml` | delivery, architect |
 | 4 | **Execute** | waves.yml | per story: branch, commits, tests, `stories/<id>.md` updated with evidence; per epic: epic branch + integration test log | developer (+ stack experts), reviewer |
 | 5 | **Observe** | shipped stories | `watchers/<feature>.md`: signal that proves it works, where to look, what "broken" looks like, alert/query snippets | operations |

@@ -56,10 +56,18 @@ inputs:
   - ".tldrx/map/{repo}/conventions.md"
   - ".tldrx/memory/facts.yml"
 
+# `risks.md` [owner decision, gh #350, 2026-09-16]: dropped from `outputs:` —
+# "stop generating," not "generate and drop from the bundle" — since nothing
+# downstream ever read it. Measured on gh #350: `stages/plan/stage.yml`'s own
+# `inputs:` names only `design.md`, `contracts.md` and `test-strategy.md`; grep
+# over `src/core/learn/chapters.ts`, every `workflows/*.yml` and the dashboard
+# found no other reader. `handoff.md` and `questions.md` stay: they are not
+# bundle content either, but they are load-bearing elsewhere (the auto gate's
+# `questions` condition, `claim-sources`, `boundary`'s `SURFACE_HANDOFFS`, the
+# dashboard's phase artefacts) — that is a different, unmeasured change.
 outputs:
   - "design.md"
   - "contracts.md"
-  - "risks.md"
   - "test-strategy.md"
   - "handoff.md"
   - "questions.md"

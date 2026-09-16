@@ -367,7 +367,10 @@ const CHAPTER_3: Chapter = {
 // 4 — build one story
 // ---------------------------------------------------------------------------
 
-/** The How stage's six outputs. Its gate is `auto`, so its questions.md must parse. */
+/**
+ * The How stage's five outputs (gh #350 trimmed `risks.md`, which nothing
+ * downstream read). Its gate is `auto`, so its questions.md must parse.
+ */
 const HOW_OUTPUTS: Readonly<Record<string, string>> = {
   "{runDir}/02-how/design.md": [
     "# Design",
@@ -385,13 +388,6 @@ const HOW_OUTPUTS: Readonly<Record<string, string>> = {
     "",
     "## priceOf",
     "- `priceOf(sku: string): number` keeps its signature, and its cents [src: src/pricing.ts:2]",
-    "",
-  ].join("\n"),
-  "{runDir}/02-how/risks.md": [
-    "# Risks",
-    "",
-    "## Risks",
-    "- A SKU the table does not name has no price — it has none today either [src: src/pricing.ts:3]",
     "",
   ].join("\n"),
   "{runDir}/02-how/test-strategy.md": [
