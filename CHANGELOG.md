@@ -38,7 +38,11 @@
   following `build` would leave it with no human gate at all, which spec.md's "no all-auto
   preset" guarantee forbids — its `watch` stays `human`. `hotfix`/`security-patch`/`migration`
   are unaffected: their `build` gate is `human`, so the "build already signed" condition never
-  applies.
+  applies. The tutorial's attended chapter (`tldrx learn`, chapter 7) ran its `next --commit` on
+  a `feature`-scope run expecting the Watch gate to still stop it (`expectExit: [4]`) — now that
+  `watch` self-signs there, the chapter sets it back to `human` explicitly first
+  (`run gates set watch:human --note …`), because the lesson is the attended human handoff, not
+  the shipped default.
 
 ### Fixed
 
