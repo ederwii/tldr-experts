@@ -130,6 +130,18 @@ export async function foreignEpicRefusal(
 ): Promise<BuildRefusal | null> {
   const claimed = new Set(buildOnFile(parts.runDir).epic_branch);
   const seen = new Set<string>();
+  // Branches this CALL has already verified as a resumed claim (gh #347) — a
+  // LOCAL set, never `state.claimed`. `state.claimed` feeds `withClaims`
+  // (`executors/build.ts`), which overwrites `outcome.epicBranches` with it on
+  // EVERY exit whenever it is non-empty — including a refusal this loop never
+  // reaches, like `--fixlist`'s precondition check a few lines later in
+  // `prepare()`. Measured: adding an already-on-disk branch to `state.claimed`
+  // here made `isSequencingRefusal` (`runNext.ts`) see "work to record" on an
+  // unrelated `--fixlist nope.md` refusal and promote its exit from 1 to 2 —
+  // there was nothing NEW this invocation cut, so there is nothing for
+  // `withClaims` to persist, and this set exists only to skip a second
+  // typecheck for a second story of the same epic in the same call.
+  const resumedThisCall = new Set<string>();
   for (const planned of stories) {
     const epic = parts.epics.get(planned.story.epic);
     if (epic === undefined) continue;
@@ -142,13 +154,21 @@ export async function foreignEpicRefusal(
     if (claimed.has(branch)) {
       // This run's OWN `build.epic_branch` already names it — the ordinary
       // shape of `tldrx run auto <runId>` resuming a dead attempt (gh #347).
-      // `state.claimed` is THIS PROCESS's memory, empty here unless an earlier
-      // story of the SAME invocation already verified (or itself just cut) the
-      // branch — so a second story of one epic in one invocation is never
-      // re-gated, only a genuine new process picking up an old claim is.
+      // `seen` above already keys this loop by `repo:branch`, so ONE call to
+      // this function verifies a given branch at most once no matter how many
+      // pending stories share its epic — `resumedThisCall` only guards the
+      // (currently unreachable, kept for the day `seen`'s key changes) case of
+      // a second look at the same branch inside one call. Nothing here touches
+      // `state.claimed`: that set is `withClaims`'s (`executors/build.ts`)
+      // signal that THIS invocation cut or adopted something NEW to persist,
+      // and this branch is already on disk — there is nothing new to write,
+      // and marking it claimed here made an UNRELATED later refusal in the
+      // same call (`--fixlist nope.md`'s precondition check) read as "this
+      // invocation has work to record" and lose its exit-1 sequencing status.
       // `--reuse-epic` is a human's own deliberate word and skips the gate
       // outright, exactly as it already adopts a FOREIGN branch outright.
-      if (!state.claimed.has(branch) && !parts.reuseEpic) {
+      if (!resumedThisCall.has(branch) && !parts.reuseEpic) {
+        resumedThisCall.add(branch);
         const verdict = await resumedEpicClaimVerdict(parts, planned.story.repo, repoDir, branch);
         if (!verdict.ok) {
           return {
@@ -170,7 +190,6 @@ export async function foreignEpicRefusal(
           repo: planned.story.repo, branch, run: parts.runId, sha: verdict.sha, typecheck: verdict.typecheck,
         });
       }
-      state.claimed.add(branch);
       continue;
     }
     if (parts.reuseEpic) {
