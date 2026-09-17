@@ -2581,6 +2581,36 @@ class BuildSession {
   }
 
   /**
+   * gh #369: the shared shape of a "requeue this attempt, attempts remain"
+   * settle. `settleAskedNoDiff` and `settleRedDod` below each built this
+   * literal by hand — the eight-field n-a-review object and
+   * `keepWorktree: true` copied verbatim in two places — which is exactly the
+   * duplication AGENTS.md §12 calls out once it is this literal. Extracted so
+   * there is exactly one implementation, taking the varying fields as DATA
+   * (`dod`, `reason`, `askedNoDiff`) — never `ctx`, never the session.
+   *
+   * No behavior change: same keys, same values, same order of operations as
+   * both call sites had before this helper existed.
+   */
+  private async settleRequeue(
+    story: StoryContext,
+    before: PlanStatus,
+    parts: { dod: readonly DodResult[]; cost: number; reason: string; askedNoDiff?: boolean },
+  ): Promise<void> {
+    await this.settle(story, before, {
+      dod: parts.dod, commit: null, merged: false, carried: null, conflicts: [], verdict: "n-a",
+      review: {
+        verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [],
+        formatProblems: [], verdictProblem: null,
+      },
+      keepWorktree: true,
+      cost: parts.cost,
+      reason: parts.reason,
+      askedNoDiff: parts.askedNoDiff,
+    });
+  }
+
+  /**
    * gh #364: the requeue twin of `settleRedDod` below, for a developer that
    * asked instead of acting in a run where nobody answers.
    *
@@ -2599,17 +2629,7 @@ class BuildSession {
       const spent = this.counters.askedNoDiffSpent(this.ctx.runDir, id);
       this.counters.countAskedNoDiff(id, spent);
       this.askedNoDiffRequeued.add(id);
-      await this.settle(story, before, {
-        dod: [], commit: null, merged: false, carried: null, conflicts: [], verdict: "n-a",
-        review: {
-          verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [],
-          formatProblems: [], verdictProblem: null,
-        },
-        keepWorktree: true,
-        cost,
-        reason: failure,
-        askedNoDiff: true,
-      });
+      await this.settleRequeue(story, before, { dod: [], cost, reason: failure, askedNoDiff: true });
       return;
     }
     await this.block(story, failure, cost, []);
@@ -2657,14 +2677,8 @@ class BuildSession {
       // a terminal state for a story about to be dispatched again. A process that
       // dies here leaves the story offerable, and the ledger's `redDodAttempts`
       // (not this process's memory) is what holds its next attempt to the bound.
-      await this.settle(story, before, {
-        dod, commit: null, merged: false, carried: null, conflicts: [], verdict: "n-a",
-        review: {
-          verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [],
-          formatProblems: [], verdictProblem: null,
-        },
-        keepWorktree: true,
-        cost,
+      await this.settleRequeue(story, before, {
+        dod, cost,
         reason: `the DoD was red on attempt ${String(story.attempt)} of ${String(this.attempts)}, `
           + `so the next attempt is handed its output: ${failure}`,
       });
@@ -4619,9 +4633,13 @@ class BuildSession {
       // ADDITIVE (gh #279): the branch was taken AS IT STANDS and no developer
       // was spawned for it — with the person who signed that, and their note.
       // Omitted on every ordinary turn, where absent means what it always meant.
+      // Clamped (gh #368): the note is operator-typed via `--as-is --note`, free
+      // text like `permission_refused`/`budget_death` (gh #359) and just as
+      // unbounded — nothing stops a long, scripted or pasted note from putting
+      // `task.done` over the §2.9 cap the same way.
       ...(outcome.asIs == null
         ? {}
-        : { as_is: true, as_is_by: outcome.asIs.actor, as_is_note: outcome.asIs.note }),
+        : { as_is: true, as_is_by: outcome.asIs.actor, as_is_note: clampAgentText(outcome.asIs.note, reviewRel) }),
       // ADDITIVE (gh #295): WHICH as-is case this was. Omitted on the case #279
       // shipped, so a record written before this key reads as it always did.
       ...(outcome.asIs?.reason === undefined ? {} : { as_is_reason: outcome.asIs.reason }),
