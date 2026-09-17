@@ -443,11 +443,11 @@ const INLINE_TOKEN_RE = /\[src: ([^\]]*)\]/g;
  * Execution claims in PROSE, found paragraph by paragraph.
  *
  * Measured 2026-08-29 — the header of the training-run fixture (synthesised for
- * #389; same shape, `test/fixtures/knowledge/billing-api-header.md`):
+ * #389; same shape, `test/fixtures/knowledge/ledger-api-header.md`):
  *
- *     Gate state at training time: `dotnet build` exit 0, 0 warnings, 0 errors — measured, exit code captured
- *     unpiped [src: northwind-ledger:.tldrx/workspace.yml:19]. `scripts/test.sh …`
- *     → 78/78 passed, exit 0 — measured [src: northwind-ledger:scripts/test.sh:105]. …
+ *     Gate state at training time: `pytest` exit 0, 0 warnings, 0 errors — measured, exit code captured
+ *     unpiped [src: meridian-holdings:.tldrx/workspace.yml:19]. `scripts/test.sh …`
+ *     → 78/78 passed, exit 0 — measured [src: meridian-holdings:scripts/test.sh:105]. …
  *
  * Three claims of a measurement, three citations to declarations, and not one of
  * them visible to a bullet-level check: they are not bullets, and their tokens are
