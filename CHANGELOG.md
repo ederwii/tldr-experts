@@ -156,10 +156,11 @@
   `test/maintain-skill.test.ts`) carried their own copy of the private-workspace pattern for an
   unrelated skill-content guard, and now import it from the one file still allowed to hold it.
   With nothing left needing an allowlist, `test/public-surface-consistency.test.ts` drops its
-  `SRC_CITATION_COUNTS`/`DOCS_CITATION_COUNTS` maps and now refuses ANY occurrence across
-  `src/**`, `docs/**`, `templates/**`, `docs-site/**`, `test/**` (itself excepted, since the
-  pattern has to live somewhere to be checked against) and the unreleased CHANGELOG heading.
-  Released CHANGELOG sections are history and stay out of the guard's reach.
+  `SRC_CITATION_COUNTS`/`DOCS_CITATION_COUNTS` maps and now refuses ANY occurrence — in file
+  CONTENT and tracked file names — across `src/**`, `docs/**`, `templates/**`, `docs-site/**`,
+  `test/**` (itself excepted, since the pattern has to live somewhere to be checked against) and
+  the unreleased CHANGELOG heading. Released CHANGELOG sections are history and stay out of the
+  guard's reach.
 
 ## 0.34.0 — 2026-09-17
 

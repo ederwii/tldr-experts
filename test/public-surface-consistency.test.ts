@@ -437,6 +437,12 @@ describe("no public surface names a private workspace (#191, #389)", () => {
    * since the pattern below has to exist somewhere to be checked against. A single matching
    * line anywhere else in that surface fails the test, naming the file and line. Adding one
    * back is a regression, not a case to allowlist.
+   *
+   * A second re-review caught what the first pass missed: everything above reads BYTES —
+   * a tracked file whose own PATH (any directory segment, or its basename) names the
+   * workspace passed clean as long as its content didn't. A file's path is as public as its
+   * content, so `pathHits` below checks the full `<root>/<rel>` string of every file this
+   * test already walks, the same way `findHits` checks every line of it.
    */
   const PRIVATE_WORKSPACE_NAME = new RegExp(`${PATTERN_A_FRAGMENT}-v2|${PATTERN_B_FRAGMENT}`, "i");
   const WHY = "a private workspace name (#191, #389)";
@@ -449,6 +455,18 @@ describe("no public surface names a private workspace (#191, #389)", () => {
       .map((line, i) => ({ line, n: i + 1 }))
       .filter(({ line }) => re.test(line))
       .map(({ line, n }) => `${rel}:${n}: ${line.trim()}`);
+  }
+
+  /**
+   * `<fullPath>: file name matches`, when the file's own path — including every directory
+   * segment, not only its basename — matches `re`. Content can be perfectly clean while the
+   * PATH still names the workspace (a directory, or the file itself): `findHits` above never
+   * reads a path, only bytes, so a file named after the workspace with innocent content inside
+   * passed clean. `fullPath` is the same `<root>/<rel>` string `findHits` reports against, so a
+   * content hit and a name hit on the same file read identically in the failure list.
+   */
+  function pathHits(fullPath: string, re: RegExp): string[] {
+    return re.test(fullPath) ? [`${fullPath}: file name matches`] : [];
   }
 
   /** Every file under `root` whose name passes `filter`, read as text. */
@@ -478,26 +496,30 @@ describe("no public surface names a private workspace (#191, #389)", () => {
     return lines.slice(start, end === -1 ? lines.length : end).join("\n");
   }
 
-  test("no occurrence of a private-workspace name in src/**, docs/**, templates/**, docs-site/**, test/** (this file excepted), or the unreleased CHANGELOG", () => {
-    const srcHits = walkTextFiles(join(FRAMEWORK_ROOT, "src"), (name) => name.endsWith(".ts")).flatMap(
-      ({ rel, text }) => findHits(`src/${rel}`, text, PRIVATE_WORKSPACE_NAME),
-    );
-    const docsHits = walkTextFiles(join(FRAMEWORK_ROOT, "docs"), (name) => name.endsWith(".md")).flatMap(
-      ({ rel, text }) => findHits(`docs/${rel}`, text, PRIVATE_WORKSPACE_NAME),
-    );
-    const templateHits = walkTextFiles(join(FRAMEWORK_ROOT, "templates"), () => true).flatMap(({ rel, text }) =>
-      findHits(`templates/${rel}`, text, PRIVATE_WORKSPACE_NAME),
-    );
-    const docsSiteHits = DOCS.flatMap(({ rel, text }) => findHits(`docs-site/${rel}`, text, PRIVATE_WORKSPACE_NAME));
-    const testHits = walkTextFiles(join(FRAMEWORK_ROOT, "test"), () => true)
+  test("no occurrence of a private-workspace name in src/**, docs/**, templates/**, docs-site/**, test/** (this file excepted), or the unreleased CHANGELOG — content OR path", () => {
+    const src = walkTextFiles(join(FRAMEWORK_ROOT, "src"), (name) => name.endsWith(".ts")).map(({ rel, text }) => ({
+      full: `src/${rel}`, text,
+    }));
+    const docs = walkTextFiles(join(FRAMEWORK_ROOT, "docs"), (name) => name.endsWith(".md")).map(({ rel, text }) => ({
+      full: `docs/${rel}`, text,
+    }));
+    const templates = walkTextFiles(join(FRAMEWORK_ROOT, "templates"), () => true).map(({ rel, text }) => ({
+      full: `templates/${rel}`, text,
+    }));
+    const docsSite = DOCS.map(({ rel, text }) => ({ full: `docs-site/${rel}`, text }));
+    const test = walkTextFiles(join(FRAMEWORK_ROOT, "test"), () => true)
       .filter(({ rel }) => rel !== GUARD_FILE)
-      .flatMap(({ rel, text }) => findHits(`test/${rel}`, text, PRIVATE_WORKSPACE_NAME));
+      .map(({ rel, text }) => ({ full: `test/${rel}`, text }));
+
+    const roots = [...src, ...docs, ...templates, ...docsSite, ...test];
+    const contentHits = roots.flatMap(({ full, text }) => findHits(full, text, PRIVATE_WORKSPACE_NAME));
+    const nameHits = roots.flatMap(({ full }) => pathHits(full, PRIVATE_WORKSPACE_NAME));
     const changelogHits = findHits(
       "CHANGELOG.md (unreleased)",
       unreleasedChangelogSection(),
       PRIVATE_WORKSPACE_NAME,
     );
-    const offenders = [...srcHits, ...docsHits, ...templateHits, ...docsSiteHits, ...testHits, ...changelogHits];
+    const offenders = [...contentHits, ...nameHits, ...changelogHits];
     expect(offenders, `${WHY}\n${offenders.join("\n")}`).toEqual([]);
   });
 });
