@@ -88,6 +88,19 @@
   past — its `at:` is stamped off `Date.now()` (with a 5-minute forward buffer, since the note is
   written before the step that starts the stage it signs) rather than a date fixed at authoring
   time.
+- **`tldrx reject` now archives a stage's scratch evidence note instead of leaving it for the
+  next attempt to sign over (see #199).** A reject sent a stage back to `ready` but never
+  touched `.agent/<stage>/evidence.md`, so a note that had already said `verdict: sign` over one
+  attempt's outputs was still the first (and only) thing either signer found after the stage
+  re-ran with different outputs — and could sign again over an attempt it never read. The note
+  is renamed to `evidence.rejected-<at>.md` in the same scratch directory (moved, not deleted:
+  it is still the record of a real check somebody made), so the re-run meets the ordinary "no
+  evidence note at …" state instead. `reject` also advances the stage's `attempt_started_at`
+  anchor to its own moment (see #144's entry above) — closing a gap pre-merge review found:
+  without it, `approve --evidence <path>` pointed straight at the just-archived note still
+  signed, since nothing yet had moved the anchor past it. Archiving is collision-safe too
+  (`-2`, `-3`, … suffixes): two rejections landing in the same clock second used to let the
+  second silently overwrite the first's archive.
 
 ## 0.33.0 — 2026-09-17
 

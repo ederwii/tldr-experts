@@ -20,7 +20,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 import { codexGateExecutorId, runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
-import { approve } from "../src/core/run/gates.ts";
+import { approve, reject } from "../src/core/run/gates.ts";
 import { approveCommand } from "../src/cli/commands/approve.ts";
 import { evaluateAgentGate, budgetEventsInWindow } from "../src/core/run/agentGate.ts";
 import {
@@ -647,6 +647,139 @@ describe("a note that is missing or broken", () => {
 
     expect(outcome.code).toBe(4);
     expect(outcome.lines.join("\n")).toContain("is not the stage at the cursor (01-what/alpha)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `tldrx reject` archives the scratch note it is sending back (issue #199)
+// ---------------------------------------------------------------------------
+
+describe("reject and a stage's scratch evidence note", () => {
+  test("a reject moves the stale note aside, so the next attempt finds none — not the old refusal", async () => {
+    const ws = workspace();
+    writeNote(ws.runDir, "alpha", note({ verdict: "refuse" }));
+    expect((await next(ws)).code).toBe(4);
+    expect(stageOf(ws.runDir)?.status).toBe("awaiting_gate");
+
+    const scratch = evidencePath(ws.runDir, "alpha");
+    expect(existsSync(scratch)).toBe(true);
+
+    const outcome = reject(RunStore.open(ws.runDir), {
+      root: ws.root, actor: "alan", at: "2026-08-29T09:10:00Z",
+      note: "redo it — the fix list was too small",
+    });
+    expect(outcome.stage).toBe("alpha");
+    expect(outcome.archivedEvidence).not.toBeNull();
+
+    // The scratch path is empty now — archived, not deleted.
+    expect(existsSync(scratch)).toBe(false);
+    const archived = join(ws.runDir, outcome.archivedEvidence as string);
+    expect(existsSync(archived)).toBe(true);
+    expect(readFileSync(archived, "utf8")).toBe(note({ verdict: "refuse" }));
+
+    // The re-run meets the ordinary "no evidence note at all" state — not the
+    // rejected note, still saying `verdict: refuse`, which would have signed (or
+    // re-refused) over an attempt the operator just threw away.
+    const again = await next(ws);
+    expect(again.code).toBe(4);
+    expect(again.lines.join("\n")).toContain("evidence: no evidence note at");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Evidence is anchored on the CURRENT attempt, not the stage's frozen first
+// one (issue #144 F1, found in pre-merge review of the #144/#199 fix). A note
+// re-dated between an old attempt's start and a later one's used to sign,
+// because the check compared against `started_at`, which `markRunning` only
+// ever fills ONCE — never against whichever attempt is actually being closed.
+// ---------------------------------------------------------------------------
+
+describe("evidence anchored on the current attempt (issue #144 F1)", () => {
+  test("reject, rerun a day later: a note dated between the two starts refuses; one dated after attempt 2 starts signs", async () => {
+    const ws = workspace();
+    // Attempt 1: a note that falls to a person, so the stage parks
+    // `awaiting_gate` with the note still on disk to be rejected.
+    writeNote(ws.runDir, "alpha", note({ verdict: "refuse", at: "2026-08-29T09:05:00Z" }));
+    expect((await next(ws)).code).toBe(4);
+    expect(stageOf(ws.runDir)?.status).toBe("awaiting_gate");
+
+    const rejected = reject(RunStore.open(ws.runDir), {
+      root: ws.root, actor: "alan", at: "2026-08-29T09:10:00Z", note: "redo it",
+    });
+    expect(rejected.archivedEvidence).not.toBeNull();
+
+    // Attempt 2, a day later.
+    expect((await next(ws, { at: "2026-08-30T09:00:00Z" })).code).toBe(4);
+    expect(stageOf(ws.runDir)?.status).toBe("awaiting_gate");
+    expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.attempt_started_at)
+      .toBe("2026-08-30T09:00:00Z");
+
+    // Dated AFTER attempt 1's start but BEFORE attempt 2's — exactly what a
+    // check anchored on the frozen `started_at` (attempt 1's) would still
+    // have accepted.
+    writeNote(ws.runDir, "alpha", note({ at: "2026-08-29T12:00:00Z" }));
+    const between = await approveCommand.run(["--root", ws.root, "--as-agent"]);
+    expect(between).toBe(2);
+
+    // Dated after attempt 2 actually started signs.
+    writeNote(ws.runDir, "alpha", note({ at: "2026-08-30T09:05:00Z" }));
+    const after = await approveCommand.run(["--root", ws.root, "--as-agent"]);
+    expect(after).toBe(0);
+  });
+
+  test("`--evidence` pointed at an archived `evidence.rejected-*.md` still refuses", async () => {
+    const ws = workspace();
+    writeNote(ws.runDir, "alpha", note({ verdict: "refuse", at: "2026-08-29T09:05:00Z" }));
+    expect((await next(ws)).code).toBe(4);
+
+    const rejected = reject(RunStore.open(ws.runDir), {
+      root: ws.root, actor: "alan", at: "2026-08-29T09:10:00Z", note: "redo it",
+    });
+    const archived = rejected.archivedEvidence;
+    expect(archived).not.toBeNull();
+
+    expect((await next(ws, { at: "2026-08-30T09:00:00Z" })).code).toBe(4);
+
+    const exit = await approveCommand.run([
+      "--root", ws.root, "--as-agent", "--evidence", join(ws.runDir, archived as string),
+    ]);
+    expect(exit).toBe(2);
+  });
+});
+
+describe("archiving never overwrites an earlier archive (issue #144 F3)", () => {
+  test("two rejects landing in the same clock second archive to distinct files", async () => {
+    const ws = workspace();
+    writeNote(ws.runDir, "alpha", note({ verdict: "refuse", by: "fable" }));
+    expect((await next(ws)).code).toBe(4);
+
+    const SAME_AT = "2026-08-29T09:10:00Z";
+    const first = reject(RunStore.open(ws.runDir), { root: ws.root, actor: "alan", at: SAME_AT, note: "one" });
+    expect(first.archivedEvidence).not.toBeNull();
+
+    // Force the stage back to a rejectable state with a SECOND, different
+    // note — standing in for a second attempt's own rejection landing in the
+    // same clock second (a fast scripted loop, or two calls sharing a fixed
+    // `--at`).
+    const store = RunStore.open(ws.runDir);
+    store.mutate((run) => ({
+      ...run,
+      phases: run.phases.map((p) => (p.id !== "01-what" ? p : {
+        ...p, stages: p.stages.map((s) => (s.id !== "alpha" ? s : { ...s, status: "awaiting_gate" as const })),
+      })),
+    }));
+    store.save();
+    writeNote(ws.runDir, "alpha", note({ verdict: "refuse", by: "someone-else" }));
+
+    const second = reject(RunStore.open(ws.runDir), { root: ws.root, actor: "alan", at: SAME_AT, note: "two" });
+    expect(second.archivedEvidence).not.toBeNull();
+    expect(second.archivedEvidence).not.toBe(first.archivedEvidence);
+
+    // Neither archive was overwritten — both still carry their OWN bytes.
+    const firstText = readFileSync(join(ws.runDir, first.archivedEvidence as string), "utf8");
+    const secondText = readFileSync(join(ws.runDir, second.archivedEvidence as string), "utf8");
+    expect(firstText).toContain("by: fable");
+    expect(secondText).toContain("by: someone-else");
   });
 });
 

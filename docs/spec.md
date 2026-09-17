@@ -2390,6 +2390,17 @@ order, each holding a list item · every list item sourced and resolving · `cit
 `verdict: sign` · `gate:` equal to the stage at the cursor · `at` a real RFC3339 instant (issue #144 F2) not before the
 CURRENT attempt's own start (issue #144 F1).
 
+**`tldrx reject` archives a stale note rather than leaving it for the next attempt** (issue #199). Sending a stage back
+to `ready` used to leave `.agent/<stage>/evidence.md` exactly where it was — still parsing, still saying `verdict: sign`
+— so the re-run's own signer, and a host's `gate template`, both found the PREVIOUS attempt's note before either wrote a
+new one, and a note that had signed could sign again over outputs it never saw. `reject` now renames it to
+`.agent/<stage>/evidence.rejected-<at>.md` in the same scratch directory — moved, not deleted, because it is still the
+record of a real check somebody made — so the ordinary "no evidence note at …" state is what the next attempt meets.
+Collision-safe (issue #144 F3): a second reject landing in the same clock second gets `-2`, `-3`, … rather than silently
+overwriting the first archive. `reject` also advances `stages[].attempt_started_at` (§2.2, issue #144 F1) to its own
+moment — otherwise `approve --evidence <path>` pointed straight at the just-archived note still signed, since nothing
+had yet moved the anchor past it.
+
 **`tldrx gate template`** writes the blank form, filling only what a tool can COUNT or already knows — `version`,
 `gate`, `role: agent`, `by` (the current actor, which becomes `gate.by` if the note is signed), `at`, `citations.of`,
 `touches.audited`, and empty `caveats` / `recommend` — and leaving `verdict` and `diff_vs_stories` blank. It writes no
