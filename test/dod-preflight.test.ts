@@ -480,6 +480,84 @@ describe("gh #363 — a repo's declared prep commands run in the checkout before
 });
 
 /**
+ * gh #362 — a mutating GENERATOR command in a story's dod block must never be
+ * RUN by the base-tree pre-flight, even as a measurement.
+ *
+ * Measured live, tldrx 0.31.1: a `.NET` story's dod block declared, among
+ * ordinary build/test commands, `dotnet ef migrations add …`. The base-tree
+ * probe ran it against the UNTOUCHED base tree as a routine measurement and
+ * would have written a migration triple into pristine `main` as a side effect
+ * of asking a question. `schemas/story.ts`'s `validateStoryDod` now refuses a
+ * generator at Plan time, so a plan is never written this way — this is the
+ * SECOND door, defense in depth for a story file that reached Build some other
+ * way, and it is pinned by never having RUN the command at all, not merely by
+ * a refusal existing.
+ */
+describe("gh #362 — the base pre-flight refuses a generator command, and never runs it", () => {
+  const passThrough: SerialWrite = async (work) => await work();
+
+  function baseParts(ws: BuildWorkspace): BaseParts {
+    return {
+      workspace: loadWorkspace(ws.root),
+      cache: new PreflightCache(ws.runDir),
+      at: "2026-08-29T09:00:00Z",
+      preparing: false,
+      relaunching: false,
+      timeoutMs: 60_000,
+      runDir: ws.runDir,
+      write: passThrough,
+      advisories: [],
+      root: ws.root,
+      runId: ws.runId,
+    };
+  }
+
+  const declaring = (commands: readonly string[]): readonly PlannedStory[] =>
+    [{ story: { repo: "app" }, dod: { commands } } as unknown as PlannedStory];
+
+  test("a `migrations add`-shaped generator is never spawned against the base tree", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-generator-"));
+    const marker = join(dir, "migrated");
+    // Would WRITE `marker` if it ever ran — this is the instrument that proves
+    // the command was refused rather than merely that the run looked green.
+    const GENERATOR =
+      `node -e 'require("fs").writeFileSync(${JSON.stringify(marker)}, "x")' migrations add Foo`;
+    const ws = workspace({
+      ...ONE,
+      commands: {
+        build: null, test: "npm run test", lint: null, typecheck: null, migrate: GENERATOR,
+      },
+    });
+
+    const refusal = await redBaseRefusal(baseParts(ws), declaring(["npm run test", GENERATOR]));
+
+    // Defense in depth, never a second veto: an `unmeasured` row refuses
+    // nothing (preflight.ts's own rule), the same way an undeclared command's
+    // refusal does not halt Build a second time over what Plan already refused.
+    expect(refusal).toBeNull();
+    expect(existsSync(marker)).toBe(false);
+    const cached = readFileSync(join(ws.runDir, PREFLIGHT_REL), "utf8");
+    // `yamlScalar` escapes the command's own quotes, so this checks for the
+    // unquoted shape the pattern match is keyed on, not the raw string.
+    expect(cached).toContain("migrations add Foo");
+    expect(cached).toContain("status: unmeasured");
+    expect(cached).toContain("GENERATOR");
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
+  test("the SAME shape with an ordinary command is measured for real — the guard is not a blanket refusal", async () => {
+    const ws = workspace({ ...ONE, testScript: GREEN_ON_BASE });
+
+    const refusal = await redBaseRefusal(baseParts(ws), declaring(["npm run test"]));
+
+    expect(refusal).toBeNull();
+    expect(tickCount()).toBe(1);
+    const cached = readFileSync(join(ws.runDir, PREFLIGHT_REL), "utf8");
+    expect(cached).toContain("status: ok");
+  }, 60_000);
+});
+
+/**
  * gh #371 (remainder of #363, Item A): the base pre-flight's own declared
  * commands, ALSO measured in a fresh worktree of the base sha, opt-in only.
  *

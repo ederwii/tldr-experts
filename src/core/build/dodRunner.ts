@@ -21,6 +21,7 @@ import {
 import { FALLBACK_DEFAULT_BRANCH, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import type { EventType } from "../events/Event.ts";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
+import { generatorDodMessage, isGeneratorCommand } from "../schemas/commandAllowlist.ts";
 import {
   baseOutputId, failureExcerpt, failureSummaryLine, writeDodOutput, type DodOutputFile,
 } from "./dodOutput.ts";
@@ -270,6 +271,23 @@ async function measureBaseCommand(
   const timeoutMs = parts.timeoutMs;
   let measured: BaseCommandResult;
   try {
+    // gh #362, defense in depth: the plan validator already refuses a generator
+    // command in a dod block (`validateStoryDod`, `schemas/story.ts`) so a plan
+    // is never WRITTEN this way — but this probe runs against a story file that
+    // may have reached Build some other way (hand-edited, or written before that
+    // rule existed), and a DELTA-gate MEASUREMENT is not supposed to mutate the
+    // tree it is measuring. Refused through the SAME `DodCommandRefused` path an
+    // undeclared command already takes, one derivation (`isGeneratorCommand`,
+    // `schemas/commandAllowlist.ts`) read from both doors, never a second copy of
+    // what "is this a generator" means.
+    // Checked only once the command is KNOWN declared: an undeclared command
+    // that also happens to be generator-shaped is refused by `runDodCommand`'s
+    // own allowlist check below, with the more fundamental "not one of
+    // workspace.yml's commands" sentence — `validateStoryDod`'s own precedence
+    // (`schemas/story.ts`) is the same call, for the same reason.
+    if (isGeneratorCommand(command) && parts.workspace.commands.has(command)) {
+      throw new DodCommandRefused(generatorDodMessage(command));
+    }
     const outcome = await measureOnce(
       () => runDodCommand(command, cwd, timeoutMs, parts.workspace.commands),
     );

@@ -23,7 +23,9 @@ import {
   type PlanStatus, type StoryStakes,
 } from "./planCommon.ts";
 import { parseFrontMatter } from "./frontMatter.ts";
-import { allowlistIssue, iterationOnlyDodMessage, scopedOnlyDodMessage } from "./commandAllowlist.ts";
+import {
+  allowlistIssue, generatorDodMessage, isGeneratorCommand, iterationOnlyDodMessage, scopedOnlyDodMessage,
+} from "./commandAllowlist.ts";
 
 export interface Story {
   readonly version: number;
@@ -220,11 +222,25 @@ export function validateStoryDod(
     // generic refusal would fire on its own — but it would say "not one of
     // workspace.yml's commands" about a line the file plainly carries. The
     // sentence that names the suffix is the true one.
+    // A generator command (gh #362) is checked LAST, deliberately the opposite
+    // order from `test_fast`/`<slot>_scoped`: those two are declared BY
+    // CONSTRUCTION (`iterationOnly`/`scopedOnly` are read off the workspace's
+    // own commandRoles), so the allowlist would say nothing is wrong and hide
+    // the real issue. A generator is detected by the command TEXT, independent
+    // of declaration, so it can ALSO be undeclared — and when it is, "not one
+    // of workspace.yml's commands" is the more fundamental, prior problem (gh
+    // #285's own fixture, `dotnet ef migrations add Tenancy`, is exactly this
+    // shape: undeclared AND generator-shaped, and the undeclared refusal is
+    // the one that names the actual fix). The generator refusal is the true
+    // one only once the allowlist has nothing to say.
+    const allow = allowlistIssue(command, allowed, "story");
     const message = iterationOnly.has(command)
       ? iterationOnlyDodMessage(command)
       : scopedOnly.has(command)
         ? scopedOnlyDodMessage(command)
-        : allowlistIssue(command, allowed, "story");
+        : allow !== null
+          ? allow
+          : isGeneratorCommand(command) ? generatorDodMessage(command) : null;
     if (message !== null) issues.push({ path: `${base}[${i}]`, message });
   });
   return issues;
