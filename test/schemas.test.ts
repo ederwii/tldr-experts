@@ -369,3 +369,38 @@ describe("workspace.yml: stack_packs is additive and validated when present (sta
     expect(issueText("workspace", { ...base, stack_packs: "on" })).toContain("stack_packs: expected a mapping");
   });
 });
+
+describe("workspace.yml: `commands` is free of shell metacharacters on LOAD too, not only at `init` (gh #181)", () => {
+  const base = { version: 1, mode: "single", root: ".", repos: [] };
+  const withCommand = (command: unknown) => ({
+    ...base,
+    repos: [{ name: "app", path: ".", commands: { lint: command } }],
+  });
+
+  test("a bare metacharacter command is refused, naming the command, the slot and the character", () => {
+    const text = issueText("workspace", withCommand("npm run test | tee lint.log"));
+    expect(text).toContain("repos[0].commands.lint");
+    expect(text).toContain("npm run test | tee lint.log");
+    expect(text).toContain("`|`");
+  });
+
+  test("each of & ; | > ` is caught, one command at a time", () => {
+    for (const command of ["a && b", "a; b", "a | b", "a > out", "a `b`"]) {
+      expect(validate("workspace", withCommand(command)).ok, command).toBe(false);
+    }
+  });
+
+  test("a clean single-argv command still loads", () => {
+    expect(validate("workspace", withCommand("npm run lint")).ok).toBe(true);
+  });
+
+  test("`null`, `\"\"` (both spell \"unavailable\", spec §2.1) and an absent `commands` block are untouched", () => {
+    expect(validate("workspace", withCommand(null)).ok).toBe(true);
+    expect(validate("workspace", withCommand("")).ok).toBe(true);
+    expect(validate("workspace", { ...base, repos: [{ name: "app", path: "." }] }).ok).toBe(true);
+  });
+
+  test("a whitespace-only command is refused as empty, not blamed on a character it doesn't have", () => {
+    expect(issueText("workspace", withCommand("   "))).toContain("empty");
+  });
+});

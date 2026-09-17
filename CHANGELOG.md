@@ -18,6 +18,17 @@
   `01-what/intent.md` keep not matching. A real drift (a wrong id) still matches none of the
   120 orderings, so the drifted case still falls to the equality guard exactly as before —
   only the ORDER stopped being load-bearing for the shape guard.
+- **`validateWorkspace` now enforces spec §2.1's no-shell-metacharacter rule for
+  `repos[].commands` on LOAD, not only in `tldrx init`'s own emitted document (see #181).**
+  A hand-edited `.tldrx/workspace.yml` carrying a bare `& ; | > \`` in a command — e.g.
+  `commands.lint: "npm run test | tee lint.log"` — loaded with no complaint, because
+  `validateWorkspace` (`src/core/schemas/workspace.ts`) checked `mode`/`root`/`repos[].name`/
+  `.path`/`.command_probes` but never touched `repos[].commands` at all; only
+  `validateEmitted.ts`'s own `tldrx init`-time check ever ran the rule. The refusal now names
+  the command, its slot and the offending character, reusing the same `isSingleArgvCommand`
+  both enforcement points always shared, so the two can never drift on what counts as a
+  metacharacter. `null` and `""` both still mean "unavailable" (the shipped
+  `templates/workspace.yml` skeleton's own convention) and carry nothing to check.
 
 ## 0.34.0 — 2026-09-17
 

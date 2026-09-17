@@ -51,6 +51,17 @@ export function isSingleArgvCommand(command: string): boolean {
   return command.trim() !== "" && !SHELL_METACHARACTERS.test(command);
 }
 
+/**
+ * The one banned character `command` carries, or `null` if it carries none (spec
+ * §2.1). Exists so a refusal can NAME what's wrong instead of a bare "no" —
+ * `isSingleArgvCommand` above stays the boolean every call site actually branches
+ * on; this is the same `SHELL_METACHARACTERS` class, read once, never a second
+ * copy of it (AGENTS.md §7: one implementation per derivation).
+ */
+export function singleArgvViolation(command: string): string | null {
+  return SHELL_METACHARACTERS.exec(command)?.[0] ?? null;
+}
+
 export async function detectCommands(repoDir: string, stack: StackDetection): Promise<DetectedCommands> {
   const found: Found = new Map();
 
