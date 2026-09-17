@@ -46,6 +46,8 @@
 #             12 the merged CHANGELOG has two unreleased headings, or one at or below the last release — by its top dated heading (#299) or by package.json (#304)
 #             13 gave up waiting for a release in flight (#299)
 #             15 --status could not look — the merge-lock.sh sibling is missing, or cwd is not inside a git repository (14 is release.sh's own code)
+#             16 the merge changed a RELEASED, DATED CHANGELOG section — a clean rebase-then-merge across
+#                a release can land a bullet inside an already-shipped section with no conflict at all (#336)
 # One code per condition, deliberately: this table is its own namespace and has nothing to do
 # with `src/cli/exitCodes.ts`'s families (where 2 is a gate refusal). Here 2 is already "merge
 # conflict", so the review refusal took the next free code rather than making 2 ambiguous.
@@ -441,6 +443,27 @@ if [ -f CHANGELOG.md ]; then
       echo "FAIL changelog: '$UNRELEASED' is not above package.json's version ($PKG_V) — package.json is what shipped, whatever the CHANGELOG's dated headings say; a heading at or below it would have release.sh date a section for a version that already exists (AGENTS.md §5); merge commit rewound, nothing pushed."; exit 12
     fi
   fi
+  # --- a dated section is immutable, even across a clean merge (#336) ---------
+  # The heading check above only ever counts UNRELEASED headings; a branch rebased across a
+  # release merges CLEANLY (no conflict, no heading touched) and can still land a bullet
+  # inside an already-DATED section. Measured live on #306 and #246: caught only by a human
+  # reading the merge diff, or much later by `release-check.sh`'s #200 gate — by which point
+  # the corruption may already have survived several waves. Checked here against `$PRE` (main
+  # immediately before this run's `git merge`, captured above), not a tag: a section that only
+  # just became dated by an earlier wave in this same session has no tag yet. Same
+  # section-extraction technique `release-check.sh:36`'s `changelog_section` already uses,
+  # ported rather than shared because that script keys off tags and this one off `$PRE`.
+  changelog_section() { awk -v v="$1" '/^## /{ if ($2 == v) { p = 1; print; next } else if (p) { exit } } p { print }'; }
+  PRE_CHANGELOG="$(git show "$PRE:CHANGELOG.md" 2>/dev/null || true)"
+  for ver in $(printf '%s\n' "$PRE_CHANGELOG" | grep -oE '^## [0-9]+\.[0-9]+\.[0-9]+ — [0-9]{4}-[0-9]{2}-[0-9]{2}$' | awk '{print $2}'); do
+    WAS="$(printf '%s\n' "$PRE_CHANGELOG" | changelog_section "$ver")"
+    NOW="$(changelog_section "$ver" < CHANGELOG.md)"
+    if [ "$WAS" != "$NOW" ]; then
+      HEADING="$(printf '%s\n' "$WAS" | head -1)"
+      FIRST="$(diff <(printf '%s\n' "$WAS") <(printf '%s\n' "$NOW") | grep -m1 -E '^[<>] ' | cut -c3- | cut -c1-200)"
+      echo "FAIL changelog: released section '$HEADING' changed by this merge — AGENTS.md §5 says dated sections are immutable; first difference: $FIRST; merge commit rewound, nothing pushed. Move the bullet under the unreleased heading, rebase, and re-review."; exit 16
+    fi
+  done
 fi
 bun install >/dev/null 2>&1
 bun run typecheck >"$LOGS/tc.log" 2>&1; TC=$?

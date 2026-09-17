@@ -13,6 +13,14 @@
   prints `unknown: <reason>` and exits **15**, its own code (`14` stays release.sh's — see
   AGENTS.md §2 and docs/RELEASING.md), so a caller polling stdout can no longer read "could not
   check" as "nothing is happening".
+- **`merge-wave.sh` now diffs a released, dated CHANGELOG section's content, not just its
+  heading, so a rebase-then-merge across a release can no longer land a bullet inside it
+  silently.** The exit-12 gate only ever counted unreleased headings; a branch written before
+  a release and rebased onto main after that release merged CLEANLY — no conflict, no heading
+  touched — and its bullet landed inside the now-dated, supposedly immutable section, caught
+  only by a human reading the diff or much later by `release-check.sh`'s own #200 check. The
+  wave now compares every dated section against what main had immediately before the merge and
+  refuses with its own exit **16**, naming the section and the first difference (see #336).
 
 ## 0.33.0 — 2026-09-17
 

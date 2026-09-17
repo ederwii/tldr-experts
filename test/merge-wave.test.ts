@@ -1653,6 +1653,16 @@ describe("a branch merges only with a review record on it (#192)", () => {
   });
 });
 
+/** A branch whose CHANGELOG.md is `text` — committed and reviewed, so only a CHANGELOG gate can refuse it. */
+function changelogBranch(sb: Sandbox, branch: string, text: string): void {
+  sb.git("checkout", "-q", "-b", branch, "main");
+  writeFileSync(join(sb.main, "CHANGELOG.md"), text);
+  sb.git("add", "-A");
+  sb.git("commit", "-q", "-m", `${branch} work`);
+  reviewRecord(sb, branch);
+  sb.git("checkout", "-q", "main");
+}
+
 /**
  * #299 — the pieces of the two-session protocol that were prose, made mechanical.
  *
@@ -1666,16 +1676,6 @@ describe("a branch merges only with a review record on it (#192)", () => {
  * mtime, once wrongly.
  */
 describe("the merged tree carries exactly one unreleased CHANGELOG heading, above the last release (#299)", () => {
-  /** A branch whose CHANGELOG.md is `text` — committed and reviewed, so only the heading gate can refuse it. */
-  function changelogBranch(sb: Sandbox, branch: string, text: string): void {
-    sb.git("checkout", "-q", "-b", branch, "main");
-    writeFileSync(join(sb.main, "CHANGELOG.md"), text);
-    sb.git("add", "-A");
-    sb.git("commit", "-q", "-m", `${branch} work`);
-    reviewRecord(sb, branch);
-    sb.git("checkout", "-q", "main");
-  }
-
   test("two unreleased headings refuse — exit 12, both named, main rewound, nothing pushed", async () => {
     const sb = sandbox();
     const before = sb.git("rev-parse", "HEAD");
@@ -1760,6 +1760,56 @@ describe("the merged tree carries exactly one unreleased CHANGELOG heading, abov
     const r = await run.done;
     expectExit(run, r, 0);
     expect(originLog(sb)[0]).toBe("merge wave-minor-bump");
+  });
+});
+
+/**
+ * #336 — a bullet landing inside a RELEASED, DATED section, silently.
+ *
+ * Measured live on two branches (#306, #246): a branch written before a release carried its
+ * bullet under `## <V> — unreleased`; by merge time `<V>` had shipped, so main's heading was
+ * now `## <V> — <date>` (dated — AGENTS.md §5 says immutable). Rebasing the branch onto main
+ * merged CLEANLY — no conflict, no heading touched — and the bullet landed inside the
+ * released section. The exit-12 gate above only ever counts UNRELEASED headings; it never
+ * diffs a dated section's CONTENT against what main already had. Caught only by a human
+ * reading the diff, or much later by `release-check.sh`'s #200 immutability gate — by which
+ * point the corruption may have survived several waves. This describe block is that gate,
+ * moved to merge time, using the merge base ($PRE, captured before `git merge` in the script)
+ * rather than a tag: no tag exists yet for a section that only just became dated.
+ */
+describe("a dated CHANGELOG section changed by the merge refuses — it is supposed to be immutable (#336)", () => {
+  test("a bullet added inside the dated section refuses — new exit code, section and first diff named, main rewound, nothing pushed", async () => {
+    const sb = sandbox();
+    const before = sb.git("rev-parse", "HEAD");
+    const published = originLog(sb);
+    changelogBranch(sb, "wave-dated-bullet", CHANGELOG_OK.replace(
+      "## 0.1.0 — 2026-01-01\n\n- shipped\n",
+      "## 0.1.0 — 2026-01-01\n\n- shipped\n- silently added after release\n",
+    ));
+    const run = invoke(sb, "wave-dated-bullet");
+    const r = await run.done;
+    expectExit(run, r, 16);
+    expect(r.stdout).toContain("FAIL changelog");
+    expect(r.stdout).toContain("## 0.1.0 — 2026-01-01");           // the released heading, named
+    expect(r.stdout).toContain("silently added after release");    // the offending line, named
+    expect(r.stdout).toContain("nothing pushed");
+    expect(originLog(sb)).toEqual(published);
+    expect(sb.git("rev-parse", "HEAD")).toBe(before);               // the merge commit was rewound (#116)
+    expect(sb.git("status", "--porcelain")).toBe("");
+    expect(existsSync(lockDir(sb))).toBe(false);
+    expect(gateShas(sb, "wave-dated-bullet")).toEqual([]);           // and no gate was spent on it
+  });
+
+  test("guard: a bullet added under the UNRELEASED heading still merges — this gate looks only at the dated section", async () => {
+    const sb = sandbox();
+    changelogBranch(sb, "wave-unreleased-bullet", CHANGELOG_OK.replace(
+      "## 0.1.1 — unreleased\n\n- work in flight\n",
+      "## 0.1.1 — unreleased\n\n- work in flight\n- a second bullet, still unreleased\n",
+    ));
+    const run = invoke(sb, "wave-unreleased-bullet");
+    const r = await run.done;
+    expectExit(run, r, 0);
+    expect(originLog(sb)[0]).toBe("merge wave-unreleased-bullet");
   });
 });
 
