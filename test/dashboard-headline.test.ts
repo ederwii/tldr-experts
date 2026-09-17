@@ -84,7 +84,7 @@ run: ${RUN_ID}
 title: "Check/Order aggregates and idempotent creation"
 scope: feature
 workflow: feature
-repos: [aparece]
+repos: [workspace-w1]
 created_at: 2026-09-01T00:44:28Z
 updated_at: 2026-09-02T14:14:00Z
 status: awaiting_gate
@@ -207,7 +207,7 @@ run: ${RUN_ID}
 title: "A host run that declared its tokens"
 scope: feature
 workflow: feature
-repos: [aparece]
+repos: [workspace-w1]
 status: awaiting_gate
 attended_by: host
 cursor: {phase: 01-what, stage: what, task: null}
@@ -239,7 +239,7 @@ run: ${RUN_ID}
 title: "An ordinary metered run"
 scope: feature
 workflow: feature
-repos: [aparece]
+repos: [workspace-w1]
 status: awaiting_gate
 cursor: {phase: 01-what, stage: what, task: null}
 budget: {ceiling_usd: 25.0, spent_usd: 2.40, per_agent_max_usd: 3.0}
@@ -268,7 +268,7 @@ run: ${RUN_ID}
 title: "A Codex Build stage: no host tokens, a full provider split"
 scope: feature
 workflow: feature
-repos: [aparece]
+repos: [workspace-w1]
 status: awaiting_gate
 attended_by: host
 cursor: {phase: 01-what, stage: what, task: null}
@@ -301,7 +301,7 @@ run: ${RUN_ID}
 title: "A Codex Build stage: no host tokens anywhere, only a provider split"
 scope: feature
 workflow: feature
-repos: [aparece]
+repos: [workspace-w1]
 status: awaiting_gate
 attended_by: host
 cursor: {phase: 01-what, stage: what, task: null}
@@ -401,7 +401,7 @@ run: ${RUN_ID}
 title: "No cursor"
 scope: feature
 workflow: feature
-repos: [aparece]
+repos: [workspace-w1]
 status: running
 budget: {ceiling_usd: 25.0, spent_usd: 0.0, per_agent_max_usd: 3.0}
 phases: []

@@ -193,7 +193,7 @@ export const TRUNCATION_MARK = " …";
  *
  * Over `MAX_FACT_CHARS` the text is cut and marked. It used to be cut silently, at
  * 300, and a reader could not tell a short answer from a beheaded one: on the
- * aparece run of 2026-08-30 four of six facts ended mid-clause and the clause that
+ * workspace-W1 run of 2026-08-30 four of six facts ended mid-clause and the clause that
  * went missing was the one naming the ADR they settle.
  */
 export function factTextFor(title: string, answer: string): string {

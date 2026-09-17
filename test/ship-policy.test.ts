@@ -392,7 +392,7 @@ describe("`tldrx ship` under `ship: {push, pr, auto_merge: checks}`", () => {
   // #274 — a PR REPORTING checks is not a base that REQUIRES them
   // -------------------------------------------------------------------------
   //
-  // Measured in the field (dev/whatsapp-agent PR #34, 2026-09-13): the rollup
+  // Measured in the field (dev/W3 PR #34, 2026-09-13): the rollup
   // reported four checks that had STARTED two seconds earlier, the guard counted
   // `> 0`, `--auto` was armed, and GitHub merged 2 s later because the base
   // required nothing. Every one of those four checks completed AFTER the merge.

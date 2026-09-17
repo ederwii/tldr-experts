@@ -549,7 +549,7 @@ async function openPlan(
  *
  * The bundle is a rendering of the plan, so throwing the bundle away and keeping
  * the plan re-hands the developer the same story — which is exactly what happened
- * on the aparece run of 2026-08-30: the operator fixed nothing by re-preparing,
+ * on the workspace-W1 run of 2026-08-30: the operator fixed nothing by re-preparing,
  * because `loadImplicitPlan` writes the file once and reads it forever after.
  *
  * It is only safe while the story has produced NOTHING. Two conditions, both

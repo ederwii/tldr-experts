@@ -157,24 +157,24 @@ describe("an offered option maps to a process.yml value", () => {
 
 describe("parseGithubRemote", () => {
   test("https, with and without .git and a trailing slash", () => {
-    expect(parseGithubRemote("https://github.com/ederwii/aparece-api")).toBe("ederwii/aparece-api");
-    expect(parseGithubRemote("https://github.com/ederwii/aparece-api.git")).toBe("ederwii/aparece-api");
-    expect(parseGithubRemote("https://github.com/ederwii/aparece-api/")).toBe("ederwii/aparece-api");
-    expect(parseGithubRemote("https://alan@github.com/ederwii/aparece-api.git")).toBe("ederwii/aparece-api");
+    expect(parseGithubRemote("https://github.com/acme/billing-api")).toBe("acme/billing-api");
+    expect(parseGithubRemote("https://github.com/acme/billing-api.git")).toBe("acme/billing-api");
+    expect(parseGithubRemote("https://github.com/acme/billing-api/")).toBe("acme/billing-api");
+    expect(parseGithubRemote("https://alan@github.com/acme/billing-api.git")).toBe("acme/billing-api");
   });
 
   test("ssh, scp-style and ssh:// alike", () => {
-    expect(parseGithubRemote("git@github.com:ederwii/aparece-api.git")).toBe("ederwii/aparece-api");
-    expect(parseGithubRemote("git@github.com:ederwii/aparece-api")).toBe("ederwii/aparece-api");
-    expect(parseGithubRemote("ssh://git@github.com/ederwii/aparece-api.git")).toBe("ederwii/aparece-api");
+    expect(parseGithubRemote("git@github.com:acme/billing-api.git")).toBe("acme/billing-api");
+    expect(parseGithubRemote("git@github.com:acme/billing-api")).toBe("acme/billing-api");
+    expect(parseGithubRemote("ssh://git@github.com/acme/billing-api.git")).toBe("acme/billing-api");
   });
 
   test("anything that is not a github `owner/repo` is null, not half-parsed", () => {
-    expect(parseGithubRemote("https://gitlab.com/ederwii/aparece-api.git")).toBeNull();
-    expect(parseGithubRemote("git@bitbucket.org:ederwii/aparece-api.git")).toBeNull();
+    expect(parseGithubRemote("https://gitlab.com/acme/billing-api.git")).toBeNull();
+    expect(parseGithubRemote("git@bitbucket.org:acme/billing-api.git")).toBeNull();
     expect(parseGithubRemote("https://github.example.com/o/r.git")).toBeNull();
-    expect(parseGithubRemote("/Users/alan/src/aparece-api")).toBeNull();
-    expect(parseGithubRemote("https://github.com/ederwii")).toBeNull();
+    expect(parseGithubRemote("/Users/alan/src/billing-api")).toBeNull();
+    expect(parseGithubRemote("https://github.com/acme")).toBeNull();
     expect(parseGithubRemote("")).toBeNull();
   });
 });
@@ -238,14 +238,14 @@ describe("applyProcessAnswers", () => {
     const result = await applyProcessAnswers({
       root,
       answers: answers(null, label.github),
-      runner: fakeGit({ [root]: "https://github.com/ederwii/aparece-api.git" }),
+      runner: fakeGit({ [root]: "https://github.com/acme/billing-api.git" }),
       when: "2026-08-29T10:00:00Z",
     });
-    expect(result).toMatchObject({ changed: true, ticketTool: "github", project: "ederwii/aparece-api" });
+    expect(result).toMatchObject({ changed: true, ticketTool: "github", project: "acme/billing-api" });
     expect(result.notes).toEqual([]);
     // The assertion that matters: the command that reads this file sees it.
-    expect(readTicketToolConfig(root)).toMatchObject({ kind: "github", project: "ederwii/aparece-api" });
-    expect(renderProcessApply(result)).toBe("process.yml: ticket_tool=github (ederwii/aparece-api)\n");
+    expect(readTicketToolConfig(root)).toMatchObject({ kind: "github", project: "acme/billing-api" });
+    expect(renderProcessApply(result)).toBe("process.yml: ticket_tool=github (acme/billing-api)\n");
   });
 
   test("github with no github remote sets kind, leaves project, and says so", async () => {

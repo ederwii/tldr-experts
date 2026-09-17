@@ -403,17 +403,19 @@ describe("the env.yml example in docs/spec.md", () => {
 });
 
 /**
- * The two private-workspace name fragments #191 found leaking across the tree (see the
+ * The four private-workspace name fragments #191 found leaking across the tree (see the
  * describe block below). Exported so `test/plan-skill.test.ts` and `test/maintain-skill.test.ts`
- * — which separately check that the shipped skill markdown never names either workspace —
- * build their own regexes from these fragments instead of carrying a second literal copy of
- * the names: #389 widened this guard's own scan to `test/**`, and two files each spelling out
- * the same private name is exactly the footprint that scan exists to catch. This file's path is
- * the guard's one exemption (by exact path, not by pattern) — everything else that matches
- * either fragment, anywhere under `test/**`, is a failure.
+ * — which separately check that the shipped skill markdown never names any of them — build
+ * their own regexes from these fragments instead of carrying a second literal copy of the
+ * names: #389 widened this guard's own scan to `test/**`, and two files each spelling out the
+ * same private name is exactly the footprint that scan exists to catch. This file's path is the
+ * guard's one exemption (by exact path, not by pattern) — everything else that matches any
+ * fragment, anywhere under `test/**`, is a failure.
  */
 export const PATTERN_A_FRAGMENT = "aparece";
 export const PATTERN_B_FRAGMENT = "scavtopia";
+export const PATTERN_C_FRAGMENT = "whatsapp";
+export const PATTERN_D_FRAGMENT = "codiks";
 
 describe("no public surface names a private workspace (#191, #389)", () => {
   /**
@@ -443,30 +445,82 @@ describe("no public surface names a private workspace (#191, #389)", () => {
    * workspace passed clean as long as its content didn't. A file's path is as public as its
    * content, so `pathHits` below checks the full `<root>/<rel>` string of every file this
    * test already walks, the same way `findHits` checks every line of it.
+   *
+   * A THIRD re-review found the pattern itself was too narrow — it only ever matched
+   * `aparece-v2` (with the literal `-v2` suffix) or bare `scavtopia`, so the same workspace
+   * named a different way read clean: a private repo slug (`<word>-api`, `<word>-platform`,
+   * `<word>-platform-abstractions`, a knowledge-file name like `<word>-api.md`), the bare word
+   * used as an English project name ("the <word> run", "The <word> graph", "the whole <word>
+   * sample" — an open-ended list of nouns, so disambiguated by the article "the" up to two
+   * words earlier instead), the same bare word as DATA inside a `[...]` list literal
+   * (`repos: [<word>]`), the capitalised word used as a bare product name mid-sentence
+   * ("nothing else in <Word>"), and two OTHER private workspace names
+   * (`test/maintain-skill.test.ts` already banned both for the skill, but this guard never
+   * checked the framework's own src/test for them) spelled `<word>-agent` and a bare fourth
+   * word. Eight sub-patterns below, ORed together, cover all of it — except the bare lowercase
+   * word alone, which is a common Spanish verb ("aparece" = "appears"; "desaparece"/"aparecer"
+   * are unrelated words that merely contain it) used legitimately throughout `docs-site/es/**`
+   * and Spanish audit prose, so the bare word is matched only in the disambiguated shapes
+   * above, never on its own — none of which a genuine Spanish sentence can produce, since none
+   * of "the", `[...]`, `-agent` or a mid-sentence capital exist in that prose. See the
+   * false-positive control test below for the two sentences that prove Spanish prose survives.
    */
-  const PRIVATE_WORKSPACE_NAME = new RegExp(`${PATTERN_A_FRAGMENT}-v2|${PATTERN_B_FRAGMENT}`, "i");
+  const PRIVATE_WORKSPACE_PATTERNS: readonly RegExp[] = [
+    // A hyphenated form: the workspace name followed by "-" and any suffix at all — a repo
+    // slug, a knowledge-file name, the old literal "-v2". Not anchored at the end, so
+    // "<word>-platform-abstractions.md" matches on its first hyphen.
+    new RegExp(`\\b${PATTERN_A_FRAGMENT}-\\w`, "i"),
+    // The bare word used as an English project name — "the aparece run", "The aparece graph",
+    // "the whole aparece sample", "the three aparece survivors". Disambiguated by the English
+    // article "the" up to two words earlier, never by the noun that follows (there turned out
+    // to be too many: run, workspace, repo, pilot, graph, sample, shape, seed, survivors — an
+    // open-ended list is a list that is always one word behind the next comment). "the" does
+    // not exist in Spanish, so this shape is never grammatical Spanish at any distance.
+    new RegExp(`\\bthe\\s+(?:\\w+\\s+){0,2}${PATTERN_A_FRAGMENT}\\b`, "i"),
+    // The bare word as DATA — a repo id/slug inside a `[...]` list literal (`repos: [aparece]`
+    // in a YAML-shaped fixture string) rather than prose.
+    new RegExp(`\\[${PATTERN_A_FRAGMENT}\\]`, "i"),
+    // The capitalised word as a bare product name — deliberately NOT case-insensitive, and
+    // deliberately requiring a lowercase letter and a space immediately before it, so a
+    // sentence-INITIAL "Aparece" (legitimate Spanish: capitalised only because it opens the
+    // sentence) never matches; only a capital mid-sentence — never grammatical Spanish — does.
+    new RegExp(`(?<=[a-z]\\s)${PATTERN_A_FRAGMENT.charAt(0).toUpperCase()}${PATTERN_A_FRAGMENT.slice(1)}\\b`),
+    // The second workspace: unchanged, a bare word with no legitimate homonym to avoid.
+    new RegExp(`\\b${PATTERN_B_FRAGMENT}\\b`, "i"),
+    // The third workspace, spelled as the real leaks spell it: "<word>-agent".
+    new RegExp(`\\b${PATTERN_C_FRAGMENT}-agent\\b`, "i"),
+    // The fourth workspace: a bare word with no legitimate homonym to avoid.
+    new RegExp(`\\b${PATTERN_D_FRAGMENT}\\b`, "i"),
+  ];
+
+  /** True when `text` matches any private-workspace pattern — content OR a file's own path. */
+  function isPrivateWorkspaceName(text: string): boolean {
+    return PRIVATE_WORKSPACE_PATTERNS.some((re) => re.test(text));
+  }
+
   const WHY = "a private workspace name (#191, #389)";
   const GUARD_FILE = "public-surface-consistency.test.ts";
 
-  /** `path:line: the whole line`, for every line of `text` matching `re` — undecorated, unlike `hits()` above. */
-  function findHits(rel: string, text: string, re: RegExp): string[] {
+  /** `path:line: the whole line`, for every line of `text` that names a private workspace. */
+  function findHits(rel: string, text: string): string[] {
     return text
       .split("\n")
       .map((line, i) => ({ line, n: i + 1 }))
-      .filter(({ line }) => re.test(line))
+      .filter(({ line }) => isPrivateWorkspaceName(line))
       .map(({ line, n }) => `${rel}:${n}: ${line.trim()}`);
   }
 
   /**
    * `<fullPath>: file name matches`, when the file's own path — including every directory
-   * segment, not only its basename — matches `re`. Content can be perfectly clean while the
-   * PATH still names the workspace (a directory, or the file itself): `findHits` above never
-   * reads a path, only bytes, so a file named after the workspace with innocent content inside
-   * passed clean. `fullPath` is the same `<root>/<rel>` string `findHits` reports against, so a
-   * content hit and a name hit on the same file read identically in the failure list.
+   * segment, not only its basename — names a private workspace. Content can be perfectly clean
+   * while the PATH still names the workspace (a directory, or the file itself): `findHits`
+   * above never reads a path, only bytes, so a file named after the workspace with innocent
+   * content inside passed clean. `fullPath` is the same `<root>/<rel>` string `findHits`
+   * reports against, so a content hit and a name hit on the same file read identically in the
+   * failure list.
    */
-  function pathHits(fullPath: string, re: RegExp): string[] {
-    return re.test(fullPath) ? [`${fullPath}: file name matches`] : [];
+  function pathHits(fullPath: string): string[] {
+    return isPrivateWorkspaceName(fullPath) ? [`${fullPath}: file name matches`] : [];
   }
 
   /** Every file under `root` whose name passes `filter`, read as text. */
@@ -512,14 +566,33 @@ describe("no public surface names a private workspace (#191, #389)", () => {
       .map(({ rel, text }) => ({ full: `test/${rel}`, text }));
 
     const roots = [...src, ...docs, ...templates, ...docsSite, ...test];
-    const contentHits = roots.flatMap(({ full, text }) => findHits(full, text, PRIVATE_WORKSPACE_NAME));
-    const nameHits = roots.flatMap(({ full }) => pathHits(full, PRIVATE_WORKSPACE_NAME));
-    const changelogHits = findHits(
-      "CHANGELOG.md (unreleased)",
-      unreleasedChangelogSection(),
-      PRIVATE_WORKSPACE_NAME,
-    );
+    const contentHits = roots.flatMap(({ full, text }) => findHits(full, text));
+    const nameHits = roots.flatMap(({ full }) => pathHits(full));
+    const changelogHits = findHits("CHANGELOG.md (unreleased)", unreleasedChangelogSection());
     const offenders = [...contentHits, ...nameHits, ...changelogHits];
     expect(offenders, `${WHY}\n${offenders.join("\n")}`).toEqual([]);
+  });
+
+  /**
+   * The bare lowercase word is an ordinary Spanish verb ("aparece" = "(it) appears"), used
+   * constantly and legitimately in `docs-site/es/**` and Spanish audit prose; "desaparece" and
+   * "aparecer" are different words that merely contain the same letters. None of the six
+   * patterns above may fire on it. Two genuine shapes: mid-sentence ("el error aparece cuando
+   * el token expira") and sentence-initial, which is also the one shape where Spanish
+   * capitalises it exactly like the private product name — the pattern that disambiguates the
+   * capitalised form is what has to get this one right.
+   */
+  test("ordinary Spanish 'aparece' prose is never flagged (false-positive control)", () => {
+    const innocent = [
+      "El error aparece cuando el token expira y el usuario debe volver a iniciar sesión.",
+      "Aparece un aviso en el panel si la sincronización falla; desaparece solo al reintentar.",
+    ];
+    for (const sentence of innocent) {
+      expect(isPrivateWorkspaceName(sentence), sentence).toBe(false);
+    }
+    // The disambiguating heuristic itself: the same capitalised word DOES match mid-sentence,
+    // where Spanish grammar would never capitalise it.
+    const CAPITALISED = PATTERN_A_FRAGMENT.charAt(0).toUpperCase() + PATTERN_A_FRAGMENT.slice(1);
+    expect(isPrivateWorkspaceName(`nothing else depends on it in ${CAPITALISED} here`)).toBe(true);
   });
 });

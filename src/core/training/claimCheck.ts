@@ -6,7 +6,7 @@
  * a check on the CITATION. It says nothing about the CLAIM, and the two came apart
  * in the first real corpus this framework produced.
  *
- * Measured 2026-08-29 on `W1/.tldrx/experts/aparece-api/knowledge/aparece-api.md`,
+ * Measured 2026-08-29 on `W1/.tldrx/experts/ledger-api/knowledge/ledger-api.md`,
  * written by a real training run: its header asserts
  *
  *     `dotnet build` exit 0, 0 warnings, 0 errors — measured, exit code captured
@@ -56,7 +56,7 @@ export const PARAPHRASE_RATIO = 0.9;
  * parenthetical — `(measured)`, and `(measured: the two AddSingleton calls
  * precede the builder)` — and a LEADING emphasised label, `- *measured* — The
  * assembly depends on nothing else…`, which is how all 38 bullets of
- * `aparece-platform-abstractions` are written. Both are the same instruction
+ * `core-platform-abstractions` are written. Both are the same instruction
  * being obeyed (§2.3: "Say which of measured / inferred / assumed each claim
  * is"), and missing the second spelling refused that whole file for it.
  */

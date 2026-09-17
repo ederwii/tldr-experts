@@ -29,7 +29,7 @@
  *     src` — a warning, and no second row for one reading.
  *
  * And `## Sources` earns nothing at all. Measured 2026-08-29: it was 41 of 107
- * bullets in `aparece-platform` and 18 of 56 in `aparece-platform-abstractions`,
+ * bullets in `core-platform` and 18 of 56 in `core-platform-abstractions`,
  * every one of them re-citing a source the file had already cited above. A section
  * whose whole job is to repeat the citations is not a second body of evidence.
  */
@@ -314,7 +314,7 @@ export function parseKnowledgeFile(
   }
 
   // Prose carries claims too, and the corpus proves it: the one dangerous line in
-  // the whole aparece sample is a HEADER paragraph, not a bullet, and its tokens
+  // the whole workspace-W1 sample is a HEADER paragraph, not a bullet, and its tokens
   // sit mid-line where a line-anchored parser never looks.
   issues.push(...proseExecutionIssues(text));
 

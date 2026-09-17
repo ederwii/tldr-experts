@@ -327,7 +327,7 @@ describe("the derivations", () => {
   });
 
   test("tldrx's own state is cited as evidence, and never lands in `touches`", () => {
-    // Measured on the aparece run of 2026-08-30: 13 touched paths, three of them
+    // Measured on the workspace-W1 run of 2026-08-30: 13 touched paths, three of them
     // `run.yml`, a triage `split.yml` and an agent bundle's `prompt.md`. The
     // developer prompt inlines every touched path and calls a change outside
     // `touches` a plan deviation — so those three read as an invitation to
@@ -789,7 +789,7 @@ describe("which answers count, and which document each settles", () => {
   test("a bullet whose subject is the What's own deliverable is detected by its literal mentions", () => {
     expect(whatSignal("In scope: one `questions.md` block per item")).toBe("questions.md");
     expect(whatSignal("it holds exactly 6 `### Q` blocks")).toBe("### Q");
-    // The three aparece survivors of the first three signals, in their own words.
+    // The three workspace-W1 survivors of the first three signals, in their own words.
     expect(whatSignal(
       "**Gate passes.** `01-what/handoff.md`'s four required sections each hold at least one sourced bullet.",
     )).toBe("01-what/");
@@ -1001,7 +1001,7 @@ describe("a run whose questions have been answered", () => {
 // ---------------------------------------------------------------------------
 
 /**
- * The aparece shape, minimised: the What cites ADR-D008 and never mentions
+ * The workspace-W1 shape, minimised: the What cites ADR-D008 and never mentions
  * ADR-D013, whose decision the run's own answer to Q2 makes. The stored fact is
  * cut before the clause that names it — which is how the real one looked.
  */

@@ -161,6 +161,27 @@
   `test/**` (itself excepted, since the pattern has to live somewhere to be checked against) and
   the unreleased CHANGELOG heading. Released CHANGELOG sections are history and stay out of the
   guard's reach.
+- **The private-workspace guard matched one literal spelling per name, so the same four
+  workspaces kept leaking in every OTHER shape (see #389, #191).** `git grep` measured what the
+  regex could not see: a hyphenated repo slug (`<word>-api`, `<word>-platform`,
+  `<word>-platform-abstractions`, a knowledge-file name), the bare word used as an English
+  project name with no fixed noun after it ("the `<word>` run", "The `<word>` graph", "the whole
+  `<word>` sample" — an open-ended list, so disambiguated by the article "the" up to two words
+  earlier instead), the same bare word as DATA inside a `repos: [<word>]` list literal, the
+  capitalised word as a bare product name mid-sentence, and two OTHER private workspace names
+  this guard never scanned for at all — already banned for the skill markdown by
+  `test/maintain-skill.test.ts`, but leaking in `src/core/run/ship.ts` and
+  `test/ship-policy.test.ts` as a `dev/<name>` branch in a real PR citation, now `dev/W3`. A real
+  GitHub `owner/repo` remote (`test/interview.test.ts`, `test/process-answers.test.ts`, 17
+  occurrences) is now an invented `acme/billing-api`, keeping every `parseGithubRemote` shape
+  (https, ssh, scp-style, `.git` suffix, trailing slash, the negative cases) exercising the same
+  parse. Eight sub-patterns now cover all of it, engineered so the bare lowercase word — an
+  ordinary Spanish verb ("it appears") used constantly and legitimately in `docs-site/es/**` and
+  Spanish audit prose — is never matched on its own; a new false-positive control test asserts
+  two genuine Spanish sentences survive. A commit message from the previous
+  pass on this branch had leaked one such identifier itself (rewritten, since the sha had not
+  reached `main`) and carried its own review record, which is stale the moment a sha changes and
+  was dropped rather than rewritten.
 
 ## 0.34.0 — 2026-09-17
 

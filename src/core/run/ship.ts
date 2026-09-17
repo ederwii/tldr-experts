@@ -690,7 +690,7 @@ async function checksReported(options: ShipOptions, repo: ShipRepo, url: string)
  * `gh pr merge --auto` hands the wait to GitHub's auto-merge, and GitHub's
  * auto-merge waits on the PR's REQUIREMENTS — not on the checks the PR happens to
  * report. Over a base that requires nothing, `--auto` is not "merge when green",
- * it is "merge now". Measured (dev/whatsapp-agent PR #34, 2026-09-13): the PR
+ * it is "merge now". Measured (dev/W3 PR #34, 2026-09-13): the PR
  * merged at 06:20:14Z with four checks reported and PENDING — they had started at
  * 06:20:12 and completed between 06:21:38 and 06:24:56, every one of them AFTER
  * the merge the record called `queued`. `branches/main/protection` → 404,

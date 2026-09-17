@@ -226,7 +226,7 @@ export function truncateAtHeading(text: string, limit: number): string {
  *
  * The recap section is excluded for the same reason §2.6 stopped deriving
  * evidence from it (`knowledgeFile.ts`): measured 2026-08-29, it was 41 of 107
- * bullets in `aparece-platform` and 18 of 56 in `aparece-platform-abstractions`,
+ * bullets in `core-platform` and 18 of 56 in `core-platform-abstractions`,
  * and every one of them re-cited a source already cited above. Counting them made
  * "12 findings" mean "8 findings and 4 restatements of them", and that number is
  * what a truncation notice and a star chart are read off.

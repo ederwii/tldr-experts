@@ -75,7 +75,7 @@ export const IMPLICIT_STORY_NOTE =
  * What's decisions have moved to `context:` — so the note has to say which list
  * is the work and which is the background, or a developer reads "Out of scope:
  * selecting an answer on the owner's behalf" as an instruction and stops. That
- * is the sentence the aparece run of 2026-08-30 handed its developer.
+ * is the sentence the workspace-W1 run of 2026-08-30 handed its developer.
  */
 export function implicitStoryNote(factIds: readonly string[]): string {
   if (factIds.length === 0) return IMPLICIT_STORY_NOTE;
@@ -113,7 +113,7 @@ export const STATE_DIRS: readonly string[] = [PROJECT_WORK_DIR, PROJECT_FRAMEWOR
  * Is this path inside tldrx's own state?
  *
  * `touches` is built from what the What handoff CITES, and a handoff cites state
- * as evidence: measured on the aparece run of 2026-08-30, 13 touched paths of
+ * as evidence: measured on the workspace-W1 run of 2026-08-30, 13 touched paths of
  * which three were `run.yml`, `.tldrx/triage/**\/split.yml` and
  * `.agent/**\/prompt.md`. The developer prompt inlines every touched path and
  * tells the sub-agent that a change outside `touches` is a plan deviation — so
@@ -249,7 +249,7 @@ export interface ImplicitPlanContent {
   /**
    * The What stage's own Decisions, when the run has answers to apply.
    *
-   * Background, never instructions. On the aparece run of 2026-08-30 they were
+   * Background, never instructions. On the workspace-W1 run of 2026-08-30 they were
    * the whole of `goal:` and they read "Out of scope: selecting an answer on the
    * owner's behalf … every relevant ADR is status `proposed`" — the exact
    * opposite of the job the answers had just created. With no answers there is
@@ -304,7 +304,7 @@ export function implicitPlanContent(parts: ImplicitPlanParts): ImplicitPlanConte
   const index = answerIndex(parts.runDir);
 
   // A document a fact SETTLES belongs in `touches` even when the What never cited
-  // it. Measured on the aparece run of 2026-08-30: F010 decided ADR-D013 and the
+  // it. Measured on the workspace-W1 run of 2026-08-30: F010 decided ADR-D013 and the
   // handoff never mentioned the file, so the story's `touches` left it out and
   // the developer prompt forbids changes outside `touches` — the one story of the
   // run could not do the thing the run was for.
@@ -633,7 +633,7 @@ export function runFacts(facts: readonly Fact[], runId: string): readonly Fact[]
  * Signals that a bullet's subject is the WHAT stage's own deliverable.
  *
  * Every one is a LITERAL the run's own documents actually use, never an
- * inference about intent. Measured on the aparece run: the first three caught
+ * inference about intent. Measured on the workspace-W1 run: the first three caught
  * three of six bullets and left "Every question names what is blocked", "No
  * recorded fact is re-asked" and "Gate passes" behind — three criteria about
  * `01-what/questions.md`'s contents that never name the file. The last three
@@ -688,7 +688,7 @@ export function isWhatDeliverable(bullet: string): boolean {
  * document ABOUT the questions is specified; it is not evidence that the subject
  * is `01-what/questions.md`. The document named is.
  *
- * The signals are unchanged and still drop what they always dropped: the aparece
+ * The signals are unchanged and still drop what they always dropped: the workspace-W1
  * bullets that fired them ("Every question names what is blocked", "No recorded
  * fact is re-asked", "Gate passes") name no product document and are dropped
  * exactly as before.
@@ -812,7 +812,7 @@ export function wasTruncated(text: string): boolean {
  * What `01-what/questions.md` holds, in the three shapes the plan needs.
  *
  * `.tldrx/memory/facts.yml` caps a fact (spec §2.5) and `captureAnswers` builds
- * it as `"<question> — <answer>"`, so a long answer is cut — on the aparece run
+ * it as `"<question> — <answer>"`, so a long answer is cut — on the workspace-W1 run
  * of 2026-08-30, four of six lost the very clause that names the ADR they settle.
  * `questions.md` still holds the whole thing under `[Answer]:`, and a question
  * block's footer carries the fact id it produced, so either key finds it.
