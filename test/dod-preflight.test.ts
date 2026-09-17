@@ -26,11 +26,14 @@ import { EventLog } from "../src/core/events/EventLog.ts";
 import {
   baseRefusalLines, baseResultFor, commandHash, emitPreflightYaml, failedOnBase, loadPreflight, parsePreflight,
   preExistingFailureReason, PREFLIGHT_REL as SOURCE_PREFLIGHT_REL, PREFLIGHT_RED_TTL_MS, refusalFreshness,
-  savePreflight, withResult, type BaseCommandResult, type BasePreflight, type BaseProvenance,
+  savePreflight, withResult, WORKTREE_PROBE_RED_MARKER, type BaseCommandResult, type BasePreflight,
+  type BaseProvenance,
 } from "../src/core/build/preflight.ts";
 import { loadWorkspace, type WorkspaceContext } from "../src/hooks/lib/workspace.ts";
 import type { CommandProbeRecord } from "../src/core/schemas/workspace.ts";
-import { PreflightCache, redBaseRefusal, type BaseParts } from "../src/core/build/dodRunner.ts";
+import {
+  baseWorktreeProbePath, PreflightCache, redBaseRefusal, type BaseParts,
+} from "../src/core/build/dodRunner.ts";
 import type { SerialWrite } from "../src/core/build/outcome.ts";
 import type { PlannedStory } from "../src/core/build/plan.ts";
 import {
@@ -425,6 +428,8 @@ describe("gh #363 — a repo's declared prep commands run in the checkout before
       runDir: ws.runDir,
       write: passThrough,
       advisories: [],
+      root: ws.root,
+      runId: ws.runId,
     };
   }
 
@@ -471,6 +476,118 @@ describe("gh #363 — a repo's declared prep commands run in the checkout before
     const refusal = await redBaseRefusal(baseParts(ws), declaring(["npm run test"]));
 
     expect(refusal).toBeNull();
+  }, 60_000);
+});
+
+/**
+ * gh #371 (remainder of #363, Item A): the base pre-flight's own declared
+ * commands, ALSO measured in a fresh worktree of the base sha, opt-in only.
+ *
+ * #363's own declined scope named the gap this closes: a command green in the
+ * checkout and red only in a story's own worktree (a `.git` FILE vs. a `.git`
+ * directory is the measured case) went unnoticed until a story paid for the
+ * difference. `probe_in_worktree: true` asks the base pre-flight the SAME
+ * question a story's own worktree would, before any story opens — and the
+ * checkout row it already wrote stays exactly as it was: this is `ALSO`
+ * measured, never `INSTEAD`.
+ */
+describe("gh #371 — an opt-in worktree probe on the base pre-flight itself", () => {
+  const passThrough: SerialWrite = async (work) => await work();
+
+  function baseParts(ws: BuildWorkspace): BaseParts {
+    return {
+      workspace: loadWorkspace(ws.root),
+      cache: new PreflightCache(ws.runDir),
+      at: "2026-08-29T09:00:00Z",
+      preparing: false,
+      relaunching: false,
+      timeoutMs: 60_000,
+      runDir: ws.runDir,
+      write: passThrough,
+      advisories: [],
+      root: ws.root,
+      runId: ws.runId,
+    };
+  }
+
+  const declaring = (commands: readonly string[]): readonly PlannedStory[] =>
+    [{ story: { repo: "app" }, dod: { commands } } as unknown as PlannedStory];
+
+  // `.git` is a directory in a normal checkout and a FILE in a `git worktree` —
+  // the same instrument the sibling `gh #363` describe block above uses.
+  const TREE_SHAPE_SCRIPT = 'node -e "process.exit(require(\'fs\').statSync(\'.git\').isFile() ? 1 : 0)"';
+
+  test("a command green in the checkout and red only in a fresh worktree is caught at Build entry when opted in (part of #371)", async () => {
+    const ws = workspace({ ...ONE, probeInWorktree: true, testScript: TREE_SHAPE_SCRIPT });
+
+    const refusal = await redBaseRefusal(baseParts(ws), declaring(["npm run test"]));
+
+    expect(refusal).not.toBeNull();
+    expect(refusal?.lines.join("\n")).toContain(WORKTREE_PROBE_RED_MARKER);
+    const cached = readFileSync(join(ws.runDir, PREFLIGHT_REL), "utf8");
+    // BOTH readings are kept — the checkout row this repo always wrote, and the
+    // new worktree row beside it, never one shadowing the other (§7's dedup key
+    // is now repo+command+TREE, not repo+command alone).
+    expect(cached).toContain("tree: checkout");
+    expect(cached).toContain("tree: worktree");
+  }, 60_000);
+
+  test("without the flag, the same command is measured in the checkout only — exactly as before this key existed", async () => {
+    const ws = workspace({ ...ONE, testScript: TREE_SHAPE_SCRIPT });
+
+    const refusal = await redBaseRefusal(baseParts(ws), declaring(["npm run test"]));
+
+    expect(refusal).toBeNull();
+    const cached = readFileSync(join(ws.runDir, PREFLIGHT_REL), "utf8");
+    expect(cached).toContain("tree: checkout");
+    expect(cached).not.toContain("tree: worktree");
+  }, 60_000);
+
+  /**
+   * A `git worktree add`/`remove` this call did not need to pay for, because
+   * every declared command already has a fresh `tree: worktree` reading, is a
+   * cost with nothing behind it — the SAME session (one `PreflightCache`
+   * instance, the shape a `tldrx next --prepare` followed by the real call
+   * takes) must not reopen a worktree it already measured.
+   *
+   * Measured by POLLING the exact deterministic path `baseWorktreeProbePath`
+   * uses, concurrently with each call: the worktree exists on disk only for the
+   * span between `addDetachedWorktree` and the `finally`'s `removeWorktree`, so
+   * a tight poll running alongside the call catches it if — and only if — git
+   * actually opened one. The DoD command sleeps ~150 ms so a real worktree stays
+   * open long enough for the poll to see it; the second call, if the fix holds,
+   * never creates the directory AT ALL, which is not a timing race — there is
+   * nothing to miss.
+   */
+  test("a second call in the same session does not reopen a worktree every declared command is already cached for (part of #371 follow-up)", async () => {
+    const ws = workspace({
+      ...ONE, probeInWorktree: true,
+      testScript: 'node -e "const s=Date.now()+150;while(Date.now()<s){}process.exit(0)"',
+    });
+    const parts = baseParts(ws);
+    const stories = declaring(["npm run test"]);
+    const dir = baseWorktreeProbePath(ws.root, "app", ws.runId);
+
+    async function callAndWatch(): Promise<boolean> {
+      let sawWorktree = false;
+      let polling = true;
+      const poll = (async () => {
+        while (polling) {
+          if (existsSync(dir)) sawWorktree = true;
+          await new Promise((resolve) => setTimeout(resolve, 2));
+        }
+      })();
+      await redBaseRefusal(parts, stories);
+      polling = false;
+      await poll;
+      return sawWorktree;
+    }
+
+    expect(await callAndWatch()).toBe(true);
+
+    // SAME `parts` — same `PreflightCache` instance, same in-memory preflight —
+    // the shape a second `redBaseRefusal` call in one process actually has.
+    expect(await callAndWatch()).toBe(false);
   }, 60_000);
 });
 
@@ -525,6 +642,8 @@ describe("the base refusal names every red command, not the first (gh #297)", ()
       runDir: ws.runDir,
       write: passThrough,
       advisories: [],
+      root: ws.root,
+      runId: ws.runId,
     };
   }
 
@@ -1002,6 +1121,7 @@ describe("the base refusal cites init's probe when one exists", () => {
       scopedTemplates: new Set<string>(),
       defaultBranches: new Map([["app", "main"]]),
       seedTriageThresholdTokens: null,
+      probeInWorktree: false,
     };
   }
 
@@ -1104,6 +1224,7 @@ describe("the base refusal names the workspace's own declared install: (gh #343)
       scopedTemplates: new Set<string>(),
       defaultBranches: new Map([["app", "main"]]),
       seedTriageThresholdTokens: null,
+      probeInWorktree: false,
     };
   }
 

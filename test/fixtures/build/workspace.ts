@@ -137,6 +137,13 @@ export interface BuildWorkspaceOptions {
   readonly stackExperts?: boolean;
   /** `stack_packs: {enabled: true}` in workspace.yml — the packs switch (stack packs design §4.3). */
   readonly stackPacks?: boolean;
+  /**
+   * `probe_in_worktree: true` at the top of workspace.yml (gh #371) — the opt-in
+   * switch that makes the base pre-flight ALSO measure its declared commands in a
+   * fresh worktree of the base sha. Default false, matching every fixture before
+   * this option existed.
+   */
+  readonly probeInWorktree?: boolean;
   /** `repos[].overlays` as detection would have written them. */
   readonly overlays?: readonly { readonly id: string; readonly evidence: string }[];
   /** `repos[].skills` as detection would have written them. */
@@ -179,6 +186,7 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
   // --- the workspace --------------------------------------------------------
   write(root, ".tldrx/workspace.yml", workspaceYaml(repoName, options.commands, rootIsRepo, {
     stackPacks: options.stackPacks ?? false, overlays: options.overlays ?? [], skills: options.skills ?? [],
+    probeInWorktree: options.probeInWorktree ?? false,
   }));
   write(root, ".tldrx/memory/facts.yml", "version: 1\nfacts: []\n");
   write(root, ".tldrx/conventions/shared.md", "# Shared conventions\n\n- Done means proven.\n");
@@ -379,6 +387,7 @@ function workspaceYaml(
     readonly stackPacks: boolean;
     readonly overlays: readonly { readonly id: string; readonly evidence: string }[];
     readonly skills: readonly { readonly name: string; readonly description: string; readonly path: string; readonly tracked: boolean }[];
+    readonly probeInWorktree?: boolean;
   } = { stackPacks: false, overlays: [], skills: [] },
 ): string {
   const declared = commands ?? { build: null, test: "npm run test", lint: null, typecheck: null, run: null };
@@ -404,7 +413,8 @@ repos:
 ${overlays.length === 0 ? "    overlays: []" : `    overlays:\n${overlays.join("\n")}`}
 ${skills.length === 0 ? "    skills: []" : `    skills:\n${skills.join("\n")}`}
     confidence: high
-${packs.stackPacks ? "stack_packs:\n  enabled: true\n  enabled_at: 2026-09-05T10:00:00Z\n" : ""}`;
+${packs.stackPacks ? "stack_packs:\n  enabled: true\n  enabled_at: 2026-09-05T10:00:00Z\n" : ""}${
+  packs.probeInWorktree === true ? "probe_in_worktree: true\n" : ""}`;
 }
 
 export function storyMarkdown(story: StorySpec, repo: string): string {

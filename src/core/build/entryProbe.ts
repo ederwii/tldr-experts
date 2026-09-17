@@ -56,7 +56,7 @@ import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
 import { WORKTREES } from "./plan.ts";
 import { addDetachedWorktree, git, removeWorktree, repoDirOf, shaOf } from "./git.ts";
 import { DodCommandRefused, isAllowedDodCommand, runDodCommand, splitArgv } from "../../hooks/lib/story.ts";
-import { INSTALL_SLOT, installCommandFor } from "./worktreeDeps.ts";
+import { INSTALL_SLOT, installCommandFor, TOOL_RESTORE_SLOT, toolRestoreCommandFor } from "./worktreeDeps.ts";
 import {
   PREFLIGHT_RED_TTL_MS, WORKSPACE_FILE, commandHash, type BaseStatus, type WorktreeProbeRow,
 } from "./preflight.ts";
@@ -153,6 +153,14 @@ interface RepoDeclaration {
   readonly repo: string;
   /** The `install:` command, or null when the repo declares none. */
   readonly install: string | null;
+  /**
+   * The `tool_restore:` command, or null when the repo declares none (gh #371,
+   * part of #363's declined scope). `toolRestoreCommandFor` runs at the
+   * checkout door already; this is the SAME slot's sibling call, for the
+   * Build-entry throwaway worktree, through the one function that reads it
+   * (§7: one implementation, never a second copy of the restore logic).
+   */
+  readonly toolRestore: string | null;
   /** Every pending story's DoD commands, deduplicated, in first-seen order. */
   readonly dod: readonly string[];
 }
@@ -167,16 +175,21 @@ export function declarationsOf(
     for (const command of planned.dod.commands) if (!list.includes(command)) list.push(command);
     byRepo.set(planned.story.repo, list);
   }
-  return [...byRepo].map(([repo, dod]) => ({ repo, install: installCommandFor(workspace, repo), dod }));
+  return [...byRepo].map(([repo, dod]) => ({
+    repo, install: installCommandFor(workspace, repo), toolRestore: toolRestoreCommandFor(workspace, repo), dod,
+  }));
 }
 
 /**
- * What the row was measured UNDER: the install, every DoD command probed, and the
- * whole workspace allowlist — through `commandHash`, the one hash this repo has
- * for "a declared command plus what it was allowed to run" (§7).
+ * What the row was measured UNDER: the install, the tool_restore, every DoD
+ * command probed, and the whole workspace allowlist — through `commandHash`, the
+ * one hash this repo has for "a declared command plus what it was allowed to
+ * run" (§7).
  */
 export function declarationHash(decl: RepoDeclaration, workspace: WorkspaceContext): string {
-  return commandHash(JSON.stringify([decl.install, [...decl.dod].sort()]), [...workspace.commands]);
+  return commandHash(
+    JSON.stringify([decl.install, decl.toolRestore, [...decl.dod].sort()]), [...workspace.commands],
+  );
 }
 
 /**
@@ -324,7 +337,8 @@ export async function entryProbeRefusal(
     // pre-flight has already RUN the command, which is the stronger measurement.
     // So no worktree is opened and nothing is written down: this gate costs
     // exactly zero in the case where it could learn exactly nothing.
-    const needsTree = decl.install !== null || dod.some((command) => repoPathToken(command) !== null);
+    const needsTree = decl.install !== null || decl.toolRestore !== null
+      || dod.some((command) => repoPathToken(command) !== null);
     if (!needsTree) continue;
 
     const baseRef = parts.workspace.defaultBranches.get(decl.repo) ?? FALLBACK_DEFAULT_BRANCH;
@@ -390,6 +404,32 @@ async function measureWorktree(
     });
   }
   try {
+    // gh #371: the SAME `tool_restore:` slot `prepBaseTree` (`dodRunner.ts`) already
+    // runs at the checkout door, run here too, BEFORE `install:` — local per-checkout
+    // tool state (a `.NET` local-tool manifest is the measured case, #363) that a
+    // package manager's own install does not restore, and that the DoD resolution
+    // below would otherwise refuse or misjudge for want of. Through
+    // `toolRestoreCommandFor`, the one reader of this slot (§7) — never a second copy
+    // of `prepBaseTree`'s restore logic.
+    if (decl.toolRestore !== null) {
+      let restored;
+      try {
+        restored = await runDodCommand(decl.toolRestore, dir, parts.timeoutMs, parts.workspace.commands);
+      } catch (error) {
+        if (!(error instanceof DodCommandRefused)) throw error;
+        // The gate would not run it. Nothing was learned, the same #165 rule the
+        // install branch below follows.
+        return stamp({ status: "unmeasured", timedOut: false, tail: error.message, refusedBecause: error.message });
+      }
+      const exitCode = restored.timedOut ? 124 : restored.exitCode;
+      if (exitCode !== 0 || restored.timedOut) {
+        return stamp({
+          status: "failed", exitCode, timedOut: restored.timedOut, toolRestoreCommand: decl.toolRestore,
+          tail: `\`${decl.toolRestore}\` (the \`${TOOL_RESTORE_SLOT}:\` command) exited ${String(exitCode)}`
+            + `${restored.timedOut ? " (timed out)" : ""} in the fresh worktree — ${restored.tail}`,
+        });
+      }
+    }
     if (decl.install !== null) {
       let installed;
       try {
@@ -459,7 +499,8 @@ async function measureWorktree(
       });
     }
     return stamp({
-      status: "ok", exitCode: 0, timedOut: false, installCommand: decl.install ?? undefined,
+      status: "ok", exitCode: 0, timedOut: false,
+      installCommand: decl.install ?? undefined, toolRestoreCommand: decl.toolRestore ?? undefined,
       tail: decl.install === null
         ? `every declared command's binary resolves in a fresh worktree of \`${baseRef}\``
         : `\`${decl.install}\` exited 0 in a fresh worktree of \`${baseRef}\` and every declared `
@@ -470,6 +511,7 @@ async function measureWorktree(
     if (!removed) parts.advisories.push(`the Build-entry probe worktree at ${dir} could not be removed`);
     parts.lines.push(
       `  · ${decl.repo}: Build-entry worktree probe — ${String(Date.now() - started)} ms`
+      + `${decl.toolRestore === null ? "" : ` (including \`${decl.toolRestore}\`)`}`
       + `${decl.install === null ? "" : ` (including \`${decl.install}\`)`}`,
     );
   }

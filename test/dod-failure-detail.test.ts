@@ -535,6 +535,8 @@ describe("#229 · a red base pre-flight keeps its output too", () => {
       runDir: ws.runDir,
       write: async <T,>(work: () => T | Promise<T>) => await work(),
       advisories: [],
+      root: ws.root,
+      runId: ws.runId,
     }, ws.repoName, command);
     return { ws, result };
   }

@@ -63,6 +63,20 @@ const INSTALL_JS = [
   "",
 ].join("\n");
 
+/**
+ * What a real `dotnet tool restore` does, minus the network: put LOCAL TOOL
+ * STATE in the tree that `install:` never restores (gh #363's own measured
+ * case) — a binary at a path outside `node_modules`, so this cannot be
+ * confused with `INSTALL_JS` above.
+ */
+const TOOL_RESTORE_JS = [
+  "const fs = require('node:fs');",
+  "fs.mkdirSync('.tools', {recursive: true});",
+  "fs.writeFileSync('.tools/restored', '#!/bin/sh\\nexit 0\\n');",
+  "fs.chmodSync('.tools/restored', 0o755);",
+  "",
+].join("\n");
+
 function make(options: Partial<BuildWorkspaceOptions>): BuildWorkspace {
   const made = makeBuildWorkspace({ ...ONE_STORY, ...options } as BuildWorkspaceOptions);
   open.push(made);
@@ -206,6 +220,41 @@ describe("a DoD command whose binary the worktree will not have", () => {
     const text = result.lines.join("\n");
     expect(text).not.toContain(WORKTREE_UNREACHABLE_MARKER);
     expect(text).not.toContain(UNTRACKED_INSTALL_MARKER);
+    expect(eventsOfType(ws, "agent.spawned").length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * gh #371 (remainder of #363): `tool_restore:` already runs once at the
+ * checkout door (`prepBaseTree`, `dodRunner.ts`). It did not run at THIS door —
+ * the Build-entry throwaway worktree probe — so a DoD command that only
+ * resolves once the restore has run was refused here even though the exact
+ * same repo, measured at the checkout door, would have been fine.
+ */
+describe("a declared tool_restore: at the Build-entry worktree door", () => {
+  test("a DoD command that only resolves after tool_restore ran succeeds once the restore runs first, in the SAME fresh worktree (part of #371)", async () => {
+    const ws = make({
+      repoFiles: { ".gitignore": ".tools/\n", "tool-restore.js": TOOL_RESTORE_JS },
+      commands: {
+        build: null, test: "npm run test", lint: null, typecheck: null,
+        tool_restore: "node tool-restore.js", check: "./.tools/restored",
+      },
+      // FIRST in the dod list on purpose (the same reason the check.sh test
+      // above puts its own path-naming command first): a path named at index 0
+      // is the VERDICT, not the advisory a later index would downgrade to.
+      stories: [{ id: "S1", epic: "E1", title: "First story", dod: ["./.tools/restored", "npm run test"] }],
+    });
+
+    const result = await next(ws);
+    const text = result.lines.join("\n");
+    // The Build-entry probe itself is satisfied — not refused at exit 2, and a
+    // turn IS paid for. (The story's own worktree may still block on its own
+    // terms, since `tool_restore:` auto-runs at the checkout door and at THIS
+    // probe door only — never in a story's own fresh worktree — which is
+    // exactly what the entry probe was measuring here and out of this issue's
+    // scope otherwise.)
+    expect(result.code).not.toBe(2);
+    expect(text).not.toContain(WORKTREE_UNREACHABLE_MARKER);
     expect(eventsOfType(ws, "agent.spawned").length).toBeGreaterThan(0);
   });
 });

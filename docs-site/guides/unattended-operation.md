@@ -778,8 +778,26 @@ notification buys back:
 
    Unlike `install:`, tldrx runs `tool_restore:` in YOUR OWN checkout automatically, once,
    before the base pre-flight's first probed command — you do not need to run it there
-   yourself first. A failure refuses Build by name. It is deliberately not also run in the
-   story worktree or the Build-entry probe's worktree; `install:` already covers those.
+   yourself first. A failure refuses Build by name. It also runs, once, in the Build-entry
+   probe's own throwaway worktree, before that worktree's `install:` and before any Definition
+   of Done command's binary is resolved there (gh #371) — so a command that only resolves
+   once the restore has run is no longer refused at that door. It is still deliberately not
+   run in a story's own fresh worktree; `install:` covers that one alone.
+
+   **If an environment-only red only shows up in a WORKTREE, not your checkout**, opt the
+   whole workspace into a second reading of the base pre-flight:
+
+   ```yaml
+   probe_in_worktree: true
+   ```
+
+   at the top of `.tldrx/workspace.yml` (gh #371). Off by default — every workspace before
+   this key existed keeps measuring the checkout only. On, every declared base-pre-flight
+   command is ALSO measured, once per repo, in a fresh detached worktree of the base sha —
+   kept beside the checkout row, never instead of it, under the same `tree:` field
+   (`"checkout"` vs. `"worktree"`) in `04-build/preflight.yml`. It costs one extra worktree
+   per repo per run, so leave it off unless you have actually seen a command differ between
+   the two trees — a `.git` FILE vs. a `.git` directory is the measured case (gh #363).
 2. **Declare `test_fast`** in `.tldrx/workspace.yml` — the fast subset the Build developer
    iterates on. It is not a Definition of Done command; the DoD re-runs `test:`. Beside it,
    `test_scoped: "<cmd> {{paths}}"` narrows each story's own DoD check to the paths it

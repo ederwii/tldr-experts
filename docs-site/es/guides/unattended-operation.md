@@ -806,9 +806,28 @@ que el aviso te devuelve:
 
    A diferencia de `install:`, tldrx corre `tool_restore:` en TU PROPIO checkout
    automáticamente, una sola vez, antes del primer comando que el pre-vuelo base comprueba —
-   no necesitas correrlo ahí tú primero. Una falla rechaza Build nombrándolo. Deliberadamente
-   no se corre también en el worktree de la historia ni en el del sondeo de entrada a Build;
-   `install:` ya cubre esos dos.
+   no necesitas correrlo ahí tú primero. Una falla rechaza Build nombrándolo. También corre,
+   una sola vez, en el worktree descartable del propio sondeo de entrada a Build, antes del
+   `install:` de ese worktree y antes de resolver el binario de cualquier comando de
+   Definition of Done ahí (gh #371) — así que un comando que sólo resuelve una vez que la
+   restauración corrió ya no se rechaza en esa puerta. Deliberadamente sigue sin correr en el
+   worktree propio de la historia; ese sigue siendo sólo de `install:`.
+
+   **Si un rojo que sólo aparece en un WORKTREE, no en tu checkout**, activa una segunda
+   lectura del pre-vuelo base para todo el workspace:
+
+   ```yaml
+   probe_in_worktree: true
+   ```
+
+   al comienzo de `.tldrx/workspace.yml` (gh #371). Apagado por defecto — todo workspace
+   anterior a esta clave sigue midiendo sólo el checkout. Encendido, cada comando declarado
+   del pre-vuelo base se mide TAMBIÉN, una vez por repo, en un worktree separado descartable
+   del sha base — guardado junto a la fila del checkout, nunca en su lugar, bajo el mismo
+   campo `tree:` (`"checkout"` vs. `"worktree"`) en `04-build/preflight.yml`. Cuesta un
+   worktree extra por repo por run, así que déjalo apagado a menos que hayas visto de verdad
+   un comando que difiere entre los dos árboles — un `.git` ARCHIVO contra un `.git` directorio
+   es el caso medido (gh #363).
 2. **Declara `test_fast`** en `.tldrx/workspace.yml`: el subconjunto rápido sobre el que
    itera el developer de Build. No es un comando de Definition of Done; el DoD vuelve a
    correr `test:`. Junto a él, `test_scoped: "<cmd> {{paths}}"` acota el check de DoD de

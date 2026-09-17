@@ -13,22 +13,26 @@
  * within a process the file is opened at most once. A cache that reloaded per
  * call would make a resumed run re-pay for a `dotnet test`.
  */
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import {
   DodCommandRefused, runDodCommand, runScopedDodCommand, type CommandResult,
 } from "../../hooks/lib/story.ts";
 import { FALLBACK_DEFAULT_BRANCH, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import type { EventType } from "../events/Event.ts";
+import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
 import {
   baseOutputId, failureExcerpt, failureSummaryLine, writeDodOutput, type DodOutputFile,
 } from "./dodOutput.ts";
-import { repoDirOf, shaOf } from "./git.ts";
+import { addDetachedWorktree, removeWorktree, repoDirOf, shaOf } from "./git.ts";
 import { dodRefused } from "./outcome.ts";
 import type { BuildRefusal, DodRecheck, DodResult, SerialWrite } from "./outcome.ts";
+import { WORKTREES } from "./plan.ts";
 import type { PlannedStory } from "./plan.ts";
 import {
   BaseGateFailure, baseRefusalLines, baseResultFor, cachedProvenance, commandHash, EMPTY_PREFLIGHT, loadPreflight,
   measuredProvenance, PREFLIGHT_REL, refusalFreshness, savePreflight, withResult, withWorktreeRow, WORKSPACE_FILE,
-  type BaseCommandResult,
+  type BaseCommandResult, type BaseFreshness,
   type BasePreflight, type BaseServed, type WorktreeProbeRow,
 } from "./preflight.ts";
 import {
@@ -197,6 +201,15 @@ export interface BaseParts {
   readonly write: SerialWrite;
   /** stderr sink, append-only, owned by the executor. */
   readonly advisories: string[];
+  /**
+   * The workspace root and this run's id — gh #371's opt-in worktree probe needs
+   * both to open its own throwaway detached worktree, the same way
+   * `entryProbe.ts`'s `EntryProbeParts` already does for the Build-entry door.
+   * Unused, and never read, when `workspace.probeInWorktree` is false — which is
+   * every workspace before this key existed.
+   */
+  readonly root: string;
+  readonly runId: string;
 }
 
 /**
@@ -231,6 +244,19 @@ export async function serveBaseResult(
   }
   const baseRef = parts.workspace.defaultBranches.get(repo) ?? FALLBACK_DEFAULT_BRANCH;
   const baseSha = await shaOf(repoDir, baseRef);
+  return measureBaseCommand(parts, repo, command, repoDir, BASE_TREE, baseRef, baseSha);
+}
+
+/**
+ * The ONE measurement + cache logic every base command goes through (§7) —
+ * `serveBaseResult` (the checkout, `cwd = repoDir`, `tree = BASE_TREE`) and
+ * `probeBaseInWorktree` (gh #371's opt-in second reading, `cwd` a throwaway
+ * worktree, `tree = WORKTREE_TREE`) are the same derivation with a different
+ * tree, never two copies of it.
+ */
+async function measureBaseCommand(
+  parts: BaseParts, repo: string, command: string, cwd: string, tree: string, baseRef: string, baseSha: string,
+): Promise<BaseServed> {
   const hash = commandHash(command, [...parts.workspace.commands]);
   const preflight = parts.cache.read();
   const cached = baseResultFor(preflight, repo, command, baseSha, {
@@ -238,14 +264,14 @@ export async function serveBaseResult(
     at: parts.at,
     prepare: parts.preparing,
     relaunch: parts.relaunching,
-  });
+  }, tree);
   if (cached !== null) return { result: cached, provenance: cachedProvenance(cached, preflight.checkedAt) };
 
   const timeoutMs = parts.timeoutMs;
   let measured: BaseCommandResult;
   try {
     const outcome = await measureOnce(
-      () => runDodCommand(command, repoDir, timeoutMs, parts.workspace.commands),
+      () => runDodCommand(command, cwd, timeoutMs, parts.workspace.commands),
     );
     const exitCode = outcome.exitCode;
     const output = outcome.output;
@@ -269,12 +295,10 @@ export async function serveBaseResult(
         outputLine: kept.line,
       }),
       status: exitCode === 0 && !outcome.timedOut ? "ok" : "failed", commandHash: hash,
-      // gh #363, absent-with-reason: WHICH tree this row is a fact about. Every
-      // base measurement runs in the checkout today (`redBaseRefusal`'s own
-      // "Where it runs"), so this is a constant now — but a constant a reader
-      // can cite is worth more than one they have to assume, and it is the seam
-      // a future per-row tree, if ever added, would use without a second field.
-      tree: BASE_TREE,
+      // gh #363, absent-with-reason: WHICH tree this row is a fact about. Given
+      // by the caller now (gh #371: a second caller measures a second tree),
+      // but still a fact a reader can cite rather than assume.
+      tree,
     };
   } catch (error) {
     if (!(error instanceof DodCommandRefused)) throw error;
@@ -282,7 +306,9 @@ export async function serveBaseResult(
     // exit code is invented to say so (#165). `unmeasured` is the status that
     // already means this, and it still refuses nothing and excuses nothing. The
     // story-level DoD refuses it on its own terms; this must not double as a
-    // second, differently-worded veto.
+    // second, differently-worded veto. No `tree` either: the refusal is a fact
+    // about the ALLOWLIST, not about either tree, and is the same regardless of
+    // which one asked.
     measured = {
       repo, command, baseRef, baseSha, timedOut: false,
       tail: error.message, refusedBecause: error.message,
@@ -294,6 +320,91 @@ export async function serveBaseResult(
     if (advisory !== null) parts.advisories.push(advisory);
   });
   return { result: measured, provenance: measuredProvenance(parts.at) };
+}
+
+/**
+ * gh #371 Item A: the base pre-flight's declared commands, measured a SECOND
+ * time inside a fresh detached worktree of the base sha — kept BESIDE the
+ * checkout row (`tree: WORKTREE_TREE` vs. `tree: BASE_TREE`, `measureBaseCommand`
+ * above), never instead of it. OFF unless the workspace declares
+ * `probe_in_worktree: true`: `dodRunner.ts`'s own "Where it runs" already names
+ * the cost of moving the PRIMARY probe into a worktree (the `node_modules`-less
+ * outage); this pays that cost only for a workspace that opted in, and only
+ * once per repo — one worktree, every declared command run inside it in
+ * order, never one worktree per command.
+ *
+ * #363's own declined scope, closed here: a command green in the checkout and
+ * red only inside a story's own worktree (a `.git` FILE vs. a `.git` directory
+ * is the measured case) went unnoticed until a story paid for the difference.
+ * This asks the base pre-flight the SAME question a story's own worktree would,
+ * before any story opens.
+ */
+async function probeBaseInWorktree(
+  parts: BaseParts, repo: string, commands: readonly string[],
+): Promise<readonly BaseServed[]> {
+  if (commands.length === 0) return [];
+  let repoDir: string;
+  try {
+    repoDir = repoDirOf(parts.workspace, repo);
+  } catch {
+    return [];   // a repo the workspace does not declare: no evidence, not a verdict
+  }
+  const baseRef = parts.workspace.defaultBranches.get(repo) ?? FALLBACK_DEFAULT_BRANCH;
+  const baseSha = await shaOf(repoDir, baseRef);
+
+  // A `git worktree add`/`remove` this call does not need to pay for: every
+  // declared command already has a FRESH `tree: WORKTREE_TREE` reading, the same
+  // freshness rule `measureBaseCommand` applies per command. Checked BEFORE
+  // touching git at all — measured live: a session that calls `redBaseRefusal`
+  // more than once (a `prepare()` followed by the real call, in one process)
+  // paid for the worktree open/close on EVERY call, even though every command
+  // inside it was already a cache hit and nothing was ever spawned there.
+  const preflight = parts.cache.read();
+  const freshness = (command: string): BaseFreshness => ({
+    commandHash: commandHash(command, [...parts.workspace.commands]),
+    at: parts.at, prepare: parts.preparing, relaunch: parts.relaunching,
+  });
+  const cachedOnly: BaseServed[] = [];
+  for (const command of commands) {
+    const cached = baseResultFor(preflight, repo, command, baseSha, freshness(command), WORKTREE_TREE);
+    if (cached === null) { cachedOnly.length = 0; break; }
+    cachedOnly.push({ result: cached, provenance: cachedProvenance(cached, preflight.checkedAt) });
+  }
+  if (cachedOnly.length === commands.length) return cachedOnly;
+
+  const dir = baseWorktreeProbePath(parts.root, repo, parts.runId);
+  // A tree left behind by a killed run is not evidence of anything; take it away
+  // before asking git for a new one at the same path.
+  if (existsSync(dir)) await removeWorktree(repoDir, dir);
+  try {
+    await addDetachedWorktree(repoDir, dir, baseSha === "" ? baseRef : baseSha);
+  } catch {
+    // git could not give us the tree. NOTHING was learned, so nothing is
+    // written and nothing refuses — the same third case `entryProbe.ts`'s own
+    // worktree probe already has when its `addDetachedWorktree` throws.
+    return [];
+  }
+  try {
+    const served: BaseServed[] = [];
+    for (const command of commands) {
+      served.push(await measureBaseCommand(parts, repo, command, dir, WORKTREE_TREE, baseRef, baseSha));
+    }
+    return served;
+  } finally {
+    const removed = await removeWorktree(repoDir, dir);
+    if (!removed) {
+      parts.advisories.push(`the base pre-flight's worktree probe for repo ${repo} at ${dir} could not be removed`);
+    }
+  }
+}
+
+/**
+ * `.tldrx/worktrees/<repo>/<run>-_base-worktree-probe` — thrown away when every
+ * command has been asked. Exported so a test can assert on the exact path a
+ * worktree would (or, cache-satisfied, would NOT) appear at.
+ */
+export function baseWorktreeProbePath(root: string, repo: string, runId: string): string {
+  return join(root, PROJECT_FRAMEWORK_DIR, WORKTREES, repo, `${runId}-_base-worktree-probe`);
 }
 
 /**
@@ -414,6 +525,7 @@ export async function redBaseRefusal(
 
   const failures: BaseServed[] = [];
   const seen = new Set<string>();
+  const perRepoCommands = new Map<string, string[]>();
   for (const planned of stories) {
     for (const command of planned.dod.commands) {
       const key = `${planned.story.repo}\u0000${command}`;
@@ -421,6 +533,18 @@ export async function redBaseRefusal(
       seen.add(key);
       const served = await serveBaseResult(parts, planned.story.repo, command);
       if (served !== null && served.result.status === "failed") failures.push(served);
+      const list = perRepoCommands.get(planned.story.repo) ?? [];
+      list.push(command);
+      perRepoCommands.set(planned.story.repo, list);
+    }
+  }
+  // gh #371 Item A: opt-in ONLY. A workspace that has never heard of
+  // `probe_in_worktree:` gets exactly the loop above and nothing else — the same
+  // behavior this repo shipped before the flag existed.
+  if (parts.workspace.probeInWorktree) {
+    for (const [repo, commands] of perRepoCommands) {
+      const served = await probeBaseInWorktree(parts, repo, commands);
+      for (const one of served) if (one.result.status === "failed") failures.push(one);
     }
   }
   if (failures.length === 0) return null;

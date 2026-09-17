@@ -38,7 +38,7 @@ import { writeAtomic } from "../fs/writeAtomic.ts";
 import { hashText } from "../experts/packTemplates.ts";
 import { BUILD_PHASE } from "./plan.ts";
 import type { WorkspaceContext } from "../../hooks/lib/workspace.ts";
-import { installCommandFor } from "./worktreeDeps.ts";
+import { BASE_TREE, installCommandFor, WORKTREE_TREE } from "./worktreeDeps.ts";
 
 /** The file that decides what a red story means, run-relative. */
 export const PREFLIGHT_REL = `${BUILD_PHASE}/preflight.yml`;
@@ -160,6 +160,13 @@ export interface WorktreeProbeRow {
   readonly status: BaseStatus;
   /** The `install:` that ran in the probe tree, when the repo declares one. */
   readonly installCommand?: string;
+  /**
+   * The `tool_restore:` that ran in the probe tree, BEFORE `install:` above, when
+   * the repo declares one (gh #371). ADDITIVE: absent on every `preflight.yml`
+   * written before this key existed and on a row where the repo declares no
+   * `tool_restore:`.
+   */
+  readonly toolRestoreCommand?: string;
   /** Absent — and only ever absent — when nothing ran to produce one (#165). */
   readonly exitCode?: number;
   readonly timedOut: boolean;
@@ -253,6 +260,9 @@ export function emitPreflightYaml(preflight: BasePreflight): string {
         `    tail: ${yamlScalar(row.tail)}`,
       );
       if (row.installCommand !== undefined) lines.push(`    install_command: ${yamlScalar(row.installCommand)}`);
+      if (row.toolRestoreCommand !== undefined) {
+        lines.push(`    tool_restore_command: ${yamlScalar(row.toolRestoreCommand)}`);
+      }
       if (row.refusedBecause !== undefined) lines.push(`    refused_because: ${yamlScalar(row.refusedBecause)}`);
       if (row.advice !== undefined) lines.push(`    advice: ${yamlScalar(row.advice)}`);
       if (row.declarationHash !== undefined) lines.push(`    declaration_hash: ${yamlScalar(row.declarationHash)}`);
@@ -370,6 +380,7 @@ function parseWorktreeRows(value: unknown): readonly WorktreeProbeRow[] {
     const tail = asText(row.tail);
     if (status !== "unmeasured" && exitCode === null && refusedBecause === "" && tail === "") continue;
     const installCommand = asText(row.install_command);
+    const toolRestoreCommand = asText(row.tool_restore_command);
     const advice = asText(row.advice);
     const declarationHash = asText(row.declaration_hash);
     const checkedAt = asText(row.checked_at);
@@ -382,6 +393,7 @@ function parseWorktreeRows(value: unknown): readonly WorktreeProbeRow[] {
       timedOut: row.timed_out === true,
       tail,
       ...(installCommand === "" ? {} : { installCommand }),
+      ...(toolRestoreCommand === "" ? {} : { toolRestoreCommand }),
       ...(refusedBecause === "" ? {} : { refusedBecause }),
       ...(advice === "" ? {} : { advice }),
       ...(declarationHash === "" ? {} : { declarationHash }),
@@ -584,10 +596,23 @@ export function baseResultFor(
   command: string,
   baseSha = "",
   freshness: BaseFreshness = {},
+  /**
+   * gh #371: which TREE the row must be a fact about. `undefined` matches any
+   * (every caller before this key existed, and the DoD-attribution reader
+   * today — a red is a red, whichever tree found it first); `BASE_TREE` /
+   * `WORKTREE_TREE` matches only that one, which is how the checkout probe and
+   * the opt-in worktree probe keep SEPARATE rows for the same repo+command
+   * instead of one shadowing the other. A row with no `tree` at all (every
+   * `preflight.yml` written before #363, and every `unmeasured` row since) is
+   * treated as `BASE_TREE` for this comparison only — the one tree that
+   * existed before the field did.
+   */
+  tree?: string,
 ): BaseCommandResult | null {
   if (preflight === null) return null;
   for (const row of preflight.results) {
     if (row.repo !== repo || row.command !== command) continue;
+    if (tree !== undefined && (row.tree ?? BASE_TREE) !== tree) continue;
     if (baseSha !== "" && row.baseSha !== "" && row.baseSha !== baseSha) continue;
     if (row.status !== "failed") return row;
     if (freshness.prepare === true) continue;
@@ -631,7 +656,15 @@ export function withResult(
   result: BaseCommandResult,
   checkedAt: string,
 ): BasePreflight {
-  const kept = preflight.results.filter((row) => !(row.repo === result.repo && row.command === result.command));
+  // gh #371: the dedup key is (repo, command, TREE), not just (repo, command) —
+  // the opt-in worktree probe writes a SECOND row for the same repo+command, under
+  // `tree: WORKTREE_TREE`, and it must supersede only its own kind, never the
+  // checkout row beside it (or vice versa). A row with no `tree` at all reads as
+  // `BASE_TREE` here, the same fallback `baseResultFor` uses, so this behaves
+  // exactly as it did before the field existed for every file that predates it.
+  const treeOf = (row: BaseCommandResult): string => row.tree ?? BASE_TREE;
+  const kept = preflight.results.filter((row) =>
+    !(row.repo === result.repo && row.command === result.command && treeOf(row) === treeOf(result)));
   // The row carries the moment it was measured, beside the file-level stamp: the
   // freshness rule is per row, and one shared clock would make re-probing the
   // first stale red look like a re-probe of every other row in the file.
@@ -663,6 +696,12 @@ export function withWorktreeRow(
 
 // --- what the operator reads ------------------------------------------------
 
+/**
+ * Exported so a test can assert on it rather than on an English word that
+ * would false-positive on innocent prose (§8).
+ */
+export const WORKTREE_PROBE_RED_MARKER = "measured in a fresh worktree of that base tree, not the checkout";
+
 export function baseFailureLine(result: BaseCommandResult): string {
   const at = result.baseSha === "" ? "" : ` (${result.baseSha})`;
   const why = result.tail === "" ? "" : ` — ${result.tail}`;
@@ -677,9 +716,14 @@ export function baseFailureLine(result: BaseCommandResult): string {
   const cite = result.outputPath === undefined
     ? ""
     : ` [src: ${result.outputPath}:${String(result.outputLine ?? 1)}]`;
+  // gh #371: the opt-in worktree probe's own red is the SAME command, the SAME
+  // repo, and it must not read as the ordinary checkout red the sentence above
+  // already covers — an operator fixing what the checkout says would otherwise
+  // fix nothing, because the checkout row for this command is green.
+  const treeNote = result.tree === WORKTREE_TREE ? ` (${WORKTREE_PROBE_RED_MARKER})` : "";
   return `  · \`${result.command}\` ${ran}`
     + `${result.timedOut ? " (timed out)" : ""} in repo ${result.repo}`
-    + ` on \`${result.baseRef}\`${at}${why}${cite}`;
+    + ` on \`${result.baseRef}\`${at}${why}${treeNote}${cite}`;
 }
 
 /**
