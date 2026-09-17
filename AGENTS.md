@@ -136,6 +136,14 @@ sells: measured over asserted, refused over guessed, named over silent.
   exit 12** — the merge commit is rewound, nothing is pushed, and the refusal names both figures. Two sessions once staged `0.22.1` and `0.23.0` for the same next
   version, each branch internally consistent; agree the next version with your peer BEFORE
   writing the heading (`.claude/skills/maintain/SKILL.md` §9 says when).
+- **A released, DATED section is immutable, and the wave checks it too, not only
+  `release-check.sh` (#336).** A branch written before a release, then rebased across that
+  release, merges CLEANLY — no conflict, no heading touched — and can still land a bullet
+  inside a section that is now dated (measured live on #306 and #246). The wave diffs every
+  dated section's CONTENT on the merged tree against what main had immediately before this
+  merge and refuses with **exit 16** if any differs, naming the heading and the first
+  difference; merge commit rewound, nothing pushed. Move the bullet under the current
+  unreleased heading, rebase, and re-review.
 - Clean up: remove your worktree and delete your branch after the wave. The branch delete may
   be refused by the ref guard while a sibling holds the lock — retry in a bounded loop; never
   force.

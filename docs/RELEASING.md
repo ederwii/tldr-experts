@@ -127,6 +127,13 @@ with exit 12 (`AGENTS.md` §2), because two sessions once staged two headings fo
 version, each branch consistent on its own. Agree the next version before writing the heading;
 the choice is the judgement below.
 
+**A released, dated section is immutable — checked at merge time too, not only here.** A
+branch rebased across a release can merge cleanly and still land a bullet inside a section
+that has since been dated; `merge-wave.sh` diffs every dated section's content on the merged
+tree against what main had before the merge and refuses with exit 16 if any differs
+(`AGENTS.md` §2, #336) — the same invariant this script's own #200 check enforces below, moved
+to the point where it is cheapest to catch.
+
 **`--tag` is not optional in practice.** Omit it and `release.sh` writes `alpha`
 (`scripts/release.sh:12`, `TAG="alpha"`), which stopped being this project's status at 0.4.0 —
 so the flag has to be passed with the status you actually mean, and today that is `beta`.
