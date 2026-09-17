@@ -108,7 +108,7 @@ export interface ReopenOutcome {
 
 import {
   /* Spec §3: `refused`. Every one of this verb's own refusals is a refusal to act. */
-  EXIT_OK, EXIT_GATE_REFUSED as EXIT_REFUSED, EXIT_NOT_FOUND,
+  EXIT_OK, EXIT_GATE_REFUSED as EXIT_REFUSED, EXIT_NOT_FOUND, EXIT_USAGE,
 } from "../../cli/exitCodes.ts";
 
 /**
@@ -188,6 +188,38 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
   // pure read of `events.jsonl`, and BOTH halves of this verb need it: the fix
   // round's bound is in it, and the plain verb's reset count is too.
   const ledger = readReviewLedger(store.runDir, id);
+
+  // #227: the RUN decides whether a reopen can ever be acted on, not the story.
+  // `rollUp` derives `done` from every stage being terminal — a story can sit
+  // `blocked` (never `done`) while the Build stage it belongs to has already
+  // closed, so the `row.status === "done"` check below never sees this case.
+  // Checked before every other branch (`forFix`, `asIs`, plain) because all
+  // three write the same status line, and all three would leave it stranded:
+  // `next` reads the RUN's own status, not the story's, so `tldrx next` answers
+  // "is done — nothing to advance" without ever looking at what this just
+  // wrote. A gate signed on a later phase is the same trap one phase over — the
+  // signature would go on covering Build work it never saw (see #144). Owner's
+  // call (2026-09-17, #227): refuse before writing anything, in the usage
+  // family — this is "nothing behind it", not a gate this verb can undo.
+  const runDone = store.run.status === "done";
+  const gateSigned = stage?.gate.status === "approved";
+  if (runDone || gateSigned) {
+    const door = `${BUILD_PHASE}/${stage?.id ?? "build"}`;
+    const why = runDone && gateSigned
+      ? `${store.runId} is \`done\` and ${door}'s gate is approved`
+      : runDone
+        ? `${store.runId} is \`done\``
+        : `${door}'s gate is approved`;
+    return {
+      code: EXIT_USAGE,
+      lines: [
+        `${id} cannot be reopened — ${why}`,
+        "  writing it back to `todo` would leave it with nothing that will ever dispatch it: `next` reads",
+        "  the run's own status, not the story's, and a signed gate would go on covering work it never saw",
+        `  \`tldrx reject --stage ${door} --note "…"\` revokes the gate and reopens the stage — or start a new run`,
+      ],
+    };
+  }
 
   if (forFix) {
     // The bound the owner set: ONE open fix round per story (2026-09-01). Checked

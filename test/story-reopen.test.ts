@@ -28,11 +28,12 @@ import { storyBranchOf } from "../src/core/plan/branchModel.ts";
 import {
   AS_IS_JUDGED_MARK, AS_IS_MARK, AS_IS_NOT_AHEAD_MARK, AS_IS_REVIEW_ONLY_MARK, NO_DIFF_MARK,
 } from "../src/core/build/outcome.ts";
-import { reject } from "../src/core/run/gates.ts";
+import { approve, reject } from "../src/core/run/gates.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { loadRun, renderReplay } from "../src/core/replay/index.ts";
 import { validateEvent } from "../src/core/events/Event.ts";
+import { updateStoryFront } from "../src/core/build/storyFile.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 import { REOPEN_NOTE_HEADING } from "../src/core/build/prompts.ts";
@@ -331,6 +332,46 @@ describe("what reopen refuses", () => {
     expect(events(ws).filter((e) => e.type === "story.reopened")).toHaveLength(0);
   });
 
+  /**
+   * #227: a story that is NOT `done` — `blocked`, here, S3's own shape — while
+   * the RUN itself has already closed. Measured on a real workspace: the Build
+   * stage's gate got signed over a run that never built this story, `rollUp`
+   * derives `status: done` from every stage being terminal (blocked counts),
+   * and the `row.status === "done"` check above never fires because the STORY
+   * is `blocked`, not `done`. Before the fix this wrote `status: todo` and
+   * `next` answered "is done — nothing to advance" without naming S1 at all.
+   */
+  test("a run that is `done` with its Build gate signed — reject --stage is the only door (#227)", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "changes"] });
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: blocked");
+
+    const store = RunStore.open(ws.runDir);
+    const approved = await approve(store, {
+      root: ws.root, actor: "alan", at: "2026-08-29T10:30:00Z", note: "shipping without S1",
+    });
+    expect(approved.ok).toBe(true);
+    expect(approved.runDone).toBe(true);
+    expect(RunStore.open(ws.runDir).run.status).toBe("done");
+
+    const before = story(ws, "S1");
+    const beforeEvents = events(ws).filter((e) => e.type === "story.reopened").length;
+    // Named explicitly, as the live report did (`--run <id>`): `RunStore.resolve`
+    // only auto-picks a NON-terminal run, and this run is now `done` on purpose.
+    const outcome = reopen(ws, "S1", WHY, { runId: ws.runId });
+    const said = outcome.lines.join("\n");
+
+    expect(outcome.code).toBe(1);
+    expect(said).toContain("S1 cannot be reopened");
+    expect(said).toContain("`done`");
+    expect(said).toContain("04-build/build's gate is approved");
+    expect(said).toContain("tldrx reject --stage 04-build/build");
+    // Nothing written, nothing appended — the run decides before either file moves.
+    expect(story(ws, "S1")).toBe(before);
+    expect(events(ws).filter((e) => e.type === "story.reopened")).toHaveLength(beforeEvents);
+  });
+
   test("a `todo` story — it is already pending", async () => {
     const ws = workspace(ONE);
     const outcome = reopen(ws, "S1", WHY);
@@ -378,6 +419,55 @@ describe("what reopen refuses", () => {
     const ws = workspace(ONE);
     await next(ws);
     expect(reopen(ws, "S1", WHY, { runId: "260101-nope" }).code).toBe(3);
+  });
+});
+
+/**
+ * #227's other half: a run an OLDER binary reopened (before this fix existed)
+ * can still be sitting on disk with `status: done` and a story `story.reopened`
+ * left it back at `todo`. `next` used to answer "is done — nothing to advance"
+ * without ever looking at the story — this simulates that legacy shape directly
+ * (reopenStory itself now refuses to create it, per the tests above) and checks
+ * `next` names the stuck story and the door instead of staying silent about it.
+ */
+describe("tldrx next names a reopened story it cannot advance (#227)", () => {
+  test("a `story.reopened` left standing on a `done` run is named, with the door", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "changes"] });
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: blocked");
+
+    const store = RunStore.open(ws.runDir);
+    const approved = await approve(store, {
+      root: ws.root, actor: "alan", at: "2026-08-29T10:30:00Z", note: "shipping without S1",
+    });
+    expect(approved.ok).toBe(true);
+    expect(RunStore.open(ws.runDir).run.status).toBe("done");
+
+    // What an older `reopenStory` used to leave behind: the file patched and the
+    // event appended, with nothing re-deriving the run's own status.
+    const path = join(ws.planDir, "stories", "S1.md");
+    writeFileSync(path, updateStoryFront(readFileSync(path, "utf8"), { status: "todo" }), "utf8");
+    const legacy = RunStore.open(ws.runDir);
+    legacy.append({
+      ts: "2026-08-29T11:00:00Z", run: legacy.runId, stage: null, type: "story.reopened", actor: "alan",
+      cost_usd: 0,
+      payload: {
+        phase: "04-build", story: "S1", wave: "W1", from_status: "blocked", to_status: "todo",
+        verdicts: 2, reason: "attempts", note: "the owner overruled the block, an older binary let it through",
+      },
+    });
+    legacy.save();
+    expect(story(ws, "S1")).toContain("status: todo");
+
+    const outcome = await next(ws, { runId: ws.runId });
+    const said = outcome.lines.join("\n");
+
+    expect(outcome.code).toBe(0);
+    expect(said).toContain(`run ${ws.runId} is done — nothing to advance`);
+    expect(said).toContain("S1 was reopened by alan");
+    expect(said).toContain("still `todo`");
+    expect(said).toContain("tldrx reject --stage 04-build/build");
   });
 });
 

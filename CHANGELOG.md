@@ -42,6 +42,20 @@
   read a command through it — one derivation of "quoted vs bare" for the whole codebase, each
   caller still applying its own banned-character set (the gate's fifteen, spec §2.1's five)
   unchanged.
+- **`tldrx story reopen` now refuses on a run whose own status is `done` or whose Build gate
+  is signed, instead of writing a story back to `todo` that nothing will ever dispatch (see
+  #227).** `rollUp` derives a run's `done` from its STAGES being terminal, not from every
+  story reaching `done` — a `blocked` story can outlive the run it belongs to, so the
+  existing `row.status === "done"` guard never saw this case: measured on a real workspace,
+  the reopen wrote the file, appended the event, and `tldrx next` answered "is done — nothing
+  to advance" without ever naming the story it had just reopened. The new check runs before
+  either write, for the plain verb and `--for-fix`/`--as-is` alike, and refuses in the usage
+  family (exit 1, per the owner's decision) naming the story and the door —
+  `tldrx reject --stage 04-build/build --note "…"`, or a new run — rather than leave a
+  signature standing over work it never saw (see #144). `next`'s own "is done — nothing to
+  advance" line now also names any `story.reopened` a run already carries that this fix
+  cannot retroactively undo, so a run an older binary left in this state is not silent about
+  it either.
 
 ### Added
 

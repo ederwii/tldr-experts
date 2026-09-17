@@ -51,7 +51,8 @@ import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { closeRun, describeOpenQuestions, describeStateCommit } from "../run/closeRun.ts";
 import { questionsPolicyFor } from "../run/questionsPolicy.ts";
-import { BUILD_PHASE } from "../run/buildProgress.ts";
+import { buildProgress, BUILD_PHASE } from "../run/buildProgress.ts";
+import { readReviewLedger } from "../build/reviewLedger.ts";
 import {
   deliveredPhrase, gateStoriesPayload, storiesView, withRunOutcome,
 } from "../run/runOutcome.ts";
@@ -572,7 +573,11 @@ async function trySelfCloseParkedAutoGate(
 async function advance(store: RunStore, options: NextOptions, notes: string[]): Promise<NextOutcome> {
   for (let step = 0; step < MAX_CURSOR_STEPS; step++) {
     if (store.run.status === "done" || store.run.status === "cancelled") {
-      return out(EXIT_OK, [...notes, `run ${store.runId} is ${store.run.status} — nothing to advance`]);
+      return out(EXIT_OK, [
+        ...notes,
+        `run ${store.runId} is ${store.run.status} — nothing to advance`,
+        ...reopenedStoryNotes(store),
+      ]);
     }
     const entry = store.cursorEntry();
     if (entry === null) {
@@ -688,6 +693,37 @@ async function advance(store: RunStore, options: NextOptions, notes: string[]): 
     return await runStage(store, options, phaseId, stageId, spec, notes);
   }
   return out(EXIT_USAGE, [...notes, "the cursor did not settle on a runnable stage"]);
+}
+
+/**
+ * #227: a run written before `reopenStory` refused this (or one a peer's older
+ * binary reopened) can still hold a `story.reopened` whose story never got
+ * built — the reopen wrote `status: todo`, nothing re-derived the run's own
+ * `done`, and this "nothing to advance" refusal used to say so without naming
+ * the story at all. Read-only, off the same plan and ledger `story reopen`
+ * itself reads: a story whose LAST reopen is still standing (not superseded by
+ * a later verdict — `readReviewLedger` clears `reopened` on one) and that never
+ * reached `done` gets one line naming it and the door back in.
+ */
+function reopenedStoryNotes(store: RunStore): readonly string[] {
+  const progress = buildProgress(store.runDir);
+  if (progress === null) return [];
+  const buildStageId = store.run.phases.find((p) => p.id === BUILD_PHASE)?.stages[0]?.id ?? "build";
+  const door = `${BUILD_PHASE}/${buildStageId}`;
+  const lines: string[] = [];
+  for (const wave of progress.waves) {
+    for (const row of wave.stories) {
+      if (row.status === "done") continue;
+      const reopened = readReviewLedger(store.runDir, row.id).reopened;
+      if (reopened === null) continue;
+      lines.push(
+        `  ${row.id} was reopened by ${reopened.actor} at ${reopened.at} and is still \`${row.status}\` — `
+          + `nothing here will ever pick it up: \`tldrx reject --stage ${door} --note "…"\` revokes the gate `
+          + "and reopens the stage, or start a new run",
+      );
+    }
+  }
+  return lines;
 }
 
 async function runStage(
