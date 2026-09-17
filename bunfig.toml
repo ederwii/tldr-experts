@@ -1,0 +1,5 @@
+[test]
+# Runs before every test file, once, in the same process — this is where the #335 guard
+# lives (`test/preload/tmpdirGuard.ts`): it refuses when $TMPDIR resolves inside a git
+# work tree, unless TLDRX_ALLOW_TMPDIR_IN_WORKTREE=1. See test/fixtures/tmpdirGuard.ts.
+preload = ["./test/preload/tmpdirGuard.ts"]

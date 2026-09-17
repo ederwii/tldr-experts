@@ -21,6 +21,17 @@
   only by a human reading the diff or much later by `release-check.sh`'s own #200 check. The
   wave now compares every dated section against what main had immediately before the merge and
   refuses with its own exit **16**, naming the section and the first difference (see #336).
+- **A spawning test run whose `$TMPDIR` sits inside a git work tree can no longer commit its
+  scratch paths onto the enclosing branch (#335).** Fixtures resolve their sandbox through
+  `os.tmpdir()`/`$TMPDIR` and run real git inside it; when that path is inside a worktree,
+  git's own upward repo search walks out of the fixture and finds the WORKTREE's repo, so
+  `git add`/`git commit` there land on whatever branch is checked out — #335 measured 960
+  tracked scratch paths and dozens of foreign commits on a real branch this way, and the same
+  underlying mechanism reproduced here on `490f637` from a fresh throwaway worktree as the same
+  two test failures the issue reported (`test/gitignore-shadow.test.ts`,
+  `test/install.test.ts`). The `bun test` preload `test/preload/tmpdirGuard.ts` now refuses,
+  named, before any test runs, when the resolved `$TMPDIR` is inside a git work tree — opt out
+  only with `TLDRX_ALLOW_TMPDIR_IN_WORKTREE=1`, once the isolation is verified some other way.
 
 ## 0.33.0 — 2026-09-17
 

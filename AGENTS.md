@@ -257,7 +257,10 @@ Full checklist: `docs/RELEASING.md`. The shape, so you recognize the moving part
 - Hermeticity is law: every spawning test gets a **private `$TMPDIR` per invocation** (#95/#97);
   never scan shared tmp; `test/machine-load.test.ts` auto-adds a guard row per test file that
   spawns processes (your +N will be one higher than the tests you wrote — reconcile, don't
-  hand-wave).
+  hand-wave). That private `$TMPDIR` must also sit OUTSIDE every git work tree (#335): the
+  `bunfig.toml` preload `test/preload/tmpdirGuard.ts` refuses, named, before any test runs, when
+  it doesn't — opt out only with `TLDRX_ALLOW_TMPDIR_IN_WORKTREE=1`, once you've verified the
+  isolation some other way.
 - The agent boundary is a **real executable fake on PATH anchored to a recorded transcript**
   (`test/fixtures/agent/stream-json.jsonl` for Claude, the codex fixture for Codex), with ONE
   shared emitter (`fakeTranscript.ts`) both fakes route through — a second emitter is the only
