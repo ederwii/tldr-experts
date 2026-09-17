@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.34.0 — unreleased
+
+### Fixed
+
+- **`merge-wave.sh --status` now says why it could not look instead of answering `idle` (see
+  #332).** AGENTS.md §2 calls this command the authoritative instrument for "is a wave alive" —
+  the reference-transaction guard and the merge lock exist precisely so nobody has to `ps` plus
+  a marker's mtime. Measured on the first autonomous run against this repo (2026-09-17): run
+  from outside a git repository, or with its `merge-lock.sh` sibling missing, it answered `idle`
+  and exit 0 — a false all-clear that could start a wave on top of one already live. It now
+  prints `unknown: <reason>` and exits **15**, its own code (`14` stays release.sh's — see
+  AGENTS.md §2 and docs/RELEASING.md), so a caller polling stdout can no longer read "could not
+  check" as "nothing is happening".
+
 ## 0.33.0 — 2026-09-17
 
 ### Added
