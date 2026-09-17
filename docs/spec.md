@@ -68,11 +68,11 @@ root_is_repo: true
 detected_at: 2026-08-28T14:02:11Z
 detected_by: "tldrx 0.1.0"
 repos:
-  - {name: api, path: Scavtopia.Workflows, default_branch: main, stack: [dotnet], package_manager: nuget,
+  - {name: api, path: Northlake.Workflows, default_branch: main, stack: [dotnet], package_manager: nuget,
      commands: {build: "dotnet build", test: "dotnet test", lint: "dotnet format --verify-no-changes",
-                typecheck: null, run: "dotnet run --project src/Scavtopia.Api"},
+                typecheck: null, run: "dotnet run --project src/Northlake.Api"},
      ci: [".github/workflows/deploy.yml"], confidence: high}
-  - {name: lab, path: scavtopia-lab, default_branch: main, stack: [typescript, react, vite], package_manager: npm,
+  - {name: lab, path: northlake-lab, default_branch: main, stack: [typescript, react, vite], package_manager: npm,
      commands: {build: "npm run build", test: "npm run test", lint: "npm run lint",
                 typecheck: "npm run typecheck", run: "npm run dev",
                 test_fast: "npm run test -- --changed"},   # iteration only; never a dod command
@@ -87,7 +87,7 @@ repos:
                path: ".claude/skills/story-review/SKILL.md", tracked: true}]}
 contracts:
   - {id: C1, title: "API surface change requires SDK regeneration",
-     when: {repo: api, paths: ["src/Scavtopia.Contracts/**", "src/Scavtopia.Api/**/*Controller.cs"]},
+     when: {repo: api, paths: ["src/Northlake.Contracts/**", "src/Northlake.Api/**/*Controller.cs"]},
      then: [{repo: lab, command: "npm run generate:api"}]}
 stack_packs:                 # the one opt-in switch for the stack expert packs; absent = off
   enabled: true
@@ -705,7 +705,7 @@ last_trained: 2026-08-20T11:00:00Z
 areas:
   - {id: ef-core, title: "EF Core mapping and migrations", level: 3,
      train_prompt: "tldrx expert train dotnet-stack --area ef-core --mode light",
-     evidence: [{kind: code, src: "api:src/Scavtopia.Infrastructure/Persistence/AppDbContext.cs:41", at: 2026-08-20,
+     evidence: [{kind: code, src: "api:src/Northlake.Infrastructure/Persistence/AppDbContext.cs:41", at: 2026-08-20,
                  cross: true, confidence: inferred},
                 {kind: run, src: "tldrx-work/260812-scores/04-build/log/S3.md:9", at: 2026-08-12},
                 {kind: doc, src: "https://learn.microsoft.com/ef/core/modeling/", at: 2026-06-02},
@@ -977,7 +977,7 @@ Recommended: B — the read pattern is a top-N per minute [src: api:src/leaderbo
 
 ## Q5 · Is per-tenant isolation required for rankings?
 <!-- id: Q5 | status: answered | area: multi-tenancy | asked_by: architect | asked_at: 2026-08-28T14:02:11Z -->
-Why asked: Place.TenantId is nullable [src: api:src/Scavtopia.Domain/Places/Place.cs:22]
+Why asked: Place.TenantId is nullable [src: api:src/Northlake.Domain/Places/Place.cs:22]
 
 - A) Yes, per tenant
 - B) No, global
@@ -1086,12 +1086,12 @@ section with genuinely nothing in it is written as `- none [src: absent:<what wa
 Stage: contracts · Expert: architect · Model: sonnet · Cost: $2.61 of $3.00 ceiling · 2026-08-28T14:31:40Z
 
 ## Findings
-- Hunt completion already emits a HuntCompleted domain event [src: api:src/Scavtopia.Domain/Hunts/Hunt.cs:184]
+- Hunt completion already emits a HuntCompleted domain event [src: api:src/Northlake.Domain/Hunts/Hunt.cs:184]
 - The lab SDK is generated, so a DTO change is a two-repo change [src: F003]
 
 ## Decisions
 - Leaderboard reads come from a materialised view refreshed on HuntCompleted [src: Q4]
-- No new auth policy; existing Auth0Only covers it [src: api:src/Scavtopia.Api/Program.cs:96]
+- No new auth policy; existing Auth0Only covers it [src: api:src/Northlake.Api/Program.cs:96]
 
 ## Unknowns
 - Retention period for historical rankings [src: absent:.tldrx/memory/facts.yml]

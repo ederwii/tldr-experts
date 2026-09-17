@@ -405,58 +405,78 @@ describe("the env.yml example in docs/spec.md", () => {
 describe("no public surface newly names a private workspace (#191)", () => {
   /**
    * A 2026-09-17 audit (#191) found two grep patterns — private-workspace names, never
-   * this repo's business to publish — sprinkled across the tree: 37 are real evidence
-   * citations in `src/**` JSDoc (a measurement, run id or byte figure attributed to the
-   * actual workspace; rephrasing THOSE is a separate call the issue explicitly left
-   * open), and exactly one (`src/core/dashboard/render.ts`, fixed alongside this test)
-   * was a purely illustrative example that copied the name instead of inventing one.
+   * this repo's business to publish — sprinkled across the tree. Most are real evidence
+   * citations (a measurement, run id or byte figure attributed to the actual workspace) —
+   * cited evidence, not decoration, and rephrasing THEM is #389's call, not this one.
+   * A second kind copied the name into a purely illustrative example instead of inventing
+   * one: `src/core/dashboard/render.ts`'s area-id comment, and `docs/spec.md`'s §2.1
+   * workspace.yml / §2.6 competencies / §2.13 questions / §2.14 handoff running example —
+   * both fixed alongside this test, the spec.md one renamed throughout so the example
+   * stays internally consistent (one neutral product name, not a patchwork).
    *
-   * This guards the second kind going forward: `src/**`, `templates/**`, `docs-site/**`
-   * and the top (unreleased) `CHANGELOG.md` heading must carry neither pattern in any
-   * file that doesn't already have a citation reason on file. `SRC_CITATION_FILES` is
-   * that reason list — paths only, never the citation text itself, so this test doesn't
-   * grow the very footprint #191 is about — and growing it is a deliberate act, same as
-   * `HISTORICAL` above: a NEW file, or the two already-clean surfaces (`templates/**`,
-   * `docs-site/**`), picking up either pattern fails here instead of accumulating.
-   * `test/fixtures/**` is deliberately NOT scanned: #191 found the one synthetic fixture
-   * literal did not, in fact, exist — both fixture families that match are real data
-   * copied from a real workspace, a materially different problem left for the issue.
+   * This guards the second kind going forward, on `src/**`, `docs/**`, `templates/**`,
+   * `docs-site/**` and the top (unreleased) `CHANGELOG.md` heading. `templates/**` and
+   * `docs-site/**` are blanket-clean today, so ANY hit there is new. `src/**` and `docs/**`
+   * carry real citations already, so each gets a COUNT allowlist below — path to current
+   * hit count, paths and counts only, never the citation text, so this test doesn't grow
+   * the very footprint #191 is about. The count can only go DOWN on its own: an existing
+   * file picking up one MORE occurrence of either pattern fails exactly like a brand-new
+   * file would, naming the file and both counts. Raising a count, or adding a file, is a
+   * deliberate act — edit the list in the same change that adds the citation, same as
+   * `HISTORICAL` above. `test/fixtures/**` is deliberately NOT scanned: #191 found the
+   * fixture hits there are real data copied from a real workspace, not a naming
+   * coincidence — a materially different problem, tracked separately in #389.
    */
-  const PRIVATE_WORKSPACE_NAME: { re: RegExp; why: string }[] = [
-    { re: /aparece-v2/i, why: "a private workspace name (#191)" },
-    { re: /scavtopia/i, why: "a private workspace name (#191)" },
-  ];
+  const PRIVATE_WORKSPACE_NAME = /aparece-v2|scavtopia/i;
+  const WHY = "a private workspace name (#191)";
 
-  /** `src/**` files already carrying a cited, real evidence occurrence — see the block comment above. */
-  const SRC_CITATION_FILES: ReadonlySet<string> = new Set([
-    "core/build/git.ts",
-    "core/build/preflight.ts",
-    "core/build/review.ts",
-    "core/build/worktrees.ts",
-    "core/dashboard/model.ts",
-    "core/drive/mandate.ts",
-    "core/experts/expertBundle.ts",
-    "core/experts/expertKnowledge.ts",
-    "core/experts/roleExperts.ts",
-    "core/experts/selectExperts.ts",
-    "core/experts/sharedCitations.ts",
-    "core/facilitator/prompt.ts",
-    "core/facilitator/seedInputs.ts",
-    "core/init/ambientFootprint.ts",
-    "core/init/planExperts.ts",
-    "core/run/closeRun.ts",
-    "core/run/operatorNote.ts",
-    "core/run/reopenStory.ts",
-    "core/run/ship.ts",
-    "core/schemas/validation.ts",
-    "core/seed/triageInventory.ts",
-    "core/training/claimCheck.ts",
-    "core/training/knowledgeFile.ts",
-    "core/training/knowledgeScope.ts",
-    "core/training/noEvidenceNote.ts",
-    "core/training/rescoreExperts.ts",
-    "core/training/selectFiles.ts",
-    "core/training/trainingPrompt.ts",
+  /**
+   * `src/**` files already carrying cited, real evidence occurrences, each mapped to its
+   * CURRENT total hit count for either pattern — see the block comment above.
+   */
+  const SRC_CITATION_COUNTS: ReadonlyMap<string, number> = new Map([
+    ["core/build/git.ts", 1],
+    ["core/build/preflight.ts", 1],
+    ["core/build/review.ts", 1],
+    ["core/build/worktrees.ts", 1],
+    ["core/dashboard/model.ts", 1],
+    ["core/drive/mandate.ts", 5],
+    ["core/experts/expertBundle.ts", 1],
+    ["core/experts/expertKnowledge.ts", 1],
+    ["core/experts/roleExperts.ts", 1],
+    ["core/experts/selectExperts.ts", 1],
+    ["core/experts/sharedCitations.ts", 1],
+    ["core/facilitator/prompt.ts", 1],
+    ["core/facilitator/seedInputs.ts", 1],
+    ["core/init/ambientFootprint.ts", 1],
+    ["core/init/planExperts.ts", 1],
+    ["core/run/closeRun.ts", 2],
+    ["core/run/operatorNote.ts", 1],
+    ["core/run/reopenStory.ts", 1],
+    ["core/run/ship.ts", 1],
+    ["core/schemas/validation.ts", 1],
+    ["core/seed/triageInventory.ts", 1],
+    ["core/training/claimCheck.ts", 2],
+    ["core/training/knowledgeFile.ts", 4],
+    ["core/training/knowledgeScope.ts", 1],
+    ["core/training/noEvidenceNote.ts", 1],
+    ["core/training/rescoreExperts.ts", 1],
+    ["core/training/selectFiles.ts", 1],
+    ["core/training/trainingPrompt.ts", 1],
+  ]);
+
+  /**
+   * Same idea for `docs/**`. `docs/spec.md`'s count is what remains AFTER this change
+   * renamed its illustrative running example — real citations only.
+   */
+  const DOCS_CITATION_COUNTS: ReadonlyMap<string, number> = new Map([
+    ["audits/2026-08-29/SCORECARD.md", 1],
+    ["audits/2026-08-29/experts-knowledge.md", 2],
+    ["audits/2026-08-29/token-economy-legacy.md", 2],
+    ["concept.md", 5],
+    ["dashboard-model.md", 1],
+    ["plans/v1.md", 1],
+    ["spec.md", 6],
   ]);
 
   /** `path:line: the whole line`, for every line of `text` matching `re` — undecorated, unlike `hits()` above. */
@@ -466,6 +486,11 @@ describe("no public surface newly names a private workspace (#191)", () => {
       .map((line, i) => ({ line, n: i + 1 }))
       .filter(({ line }) => re.test(line))
       .map(({ line, n }) => `${rel}:${n}: ${line.trim()}`);
+  }
+
+  /** Lines of `text` matching `re` — the same unit `git grep -c` counts, and what the counts above were measured with. */
+  function countHits(text: string, re: RegExp): number {
+    return text.split("\n").filter((line) => re.test(line)).length;
   }
 
   /** Every file under `root` whose name passes `filter`, read as text. */
@@ -495,18 +520,51 @@ describe("no public surface newly names a private workspace (#191)", () => {
     return lines.slice(start, end === -1 ? lines.length : end).join("\n");
   }
 
-  for (const { re, why } of PRIVATE_WORKSPACE_NAME) {
-    test(`no new occurrence of ${String(re)} in src/**, templates/**, docs-site/**, or the unreleased CHANGELOG`, () => {
-      const templateHits = walkTextFiles(join(FRAMEWORK_ROOT, "templates"), () => true).flatMap(({ rel, text }) =>
-        findHits(`templates/${rel}`, text, re),
-      );
-      const docsSiteHits = DOCS.flatMap(({ rel, text }) => findHits(`docs-site/${rel}`, text, re));
-      const srcHits = walkTextFiles(join(FRAMEWORK_ROOT, "src"), (name) => name.endsWith(".ts"))
-        .filter(({ rel }) => !SRC_CITATION_FILES.has(rel))
-        .flatMap(({ rel, text }) => findHits(`src/${rel}`, text, re));
-      const changelogHits = findHits("CHANGELOG.md (unreleased)", unreleasedChangelogSection(), re);
-      const offenders = [...templateHits, ...docsSiteHits, ...srcHits, ...changelogHits];
-      expect(offenders, `${why}\n${offenders.join("\n")}`).toEqual([]);
-    });
+  /** Files under `root` whose hit count exceeds what `allowed` says it was last set to. */
+  function ratchetOffenders(
+    root: string,
+    label: string,
+    filter: (name: string) => boolean,
+    allowed: ReadonlyMap<string, number>,
+  ): string[] {
+    const offenders: string[] = [];
+    for (const { rel, text } of walkTextFiles(root, filter)) {
+      const actual = countHits(text, PRIVATE_WORKSPACE_NAME);
+      if (actual === 0) continue;
+      const budget = allowed.get(rel) ?? 0;
+      if (actual > budget) {
+        offenders.push(
+          `${label}/${rel}: ${String(actual)} matching line(s), allowlisted for ${String(budget)} — ` +
+            `${budget === 0 ? "a NEW file" : "grew past its ratcheted count"}`,
+        );
+      }
+    }
+    return offenders;
   }
+
+  test("no new occurrence of a private-workspace name in src/**, docs/**, templates/**, docs-site/**, or the unreleased CHANGELOG", () => {
+    const templateHits = walkTextFiles(join(FRAMEWORK_ROOT, "templates"), () => true).flatMap(({ rel, text }) =>
+      findHits(`templates/${rel}`, text, PRIVATE_WORKSPACE_NAME),
+    );
+    const docsSiteHits = DOCS.flatMap(({ rel, text }) => findHits(`docs-site/${rel}`, text, PRIVATE_WORKSPACE_NAME));
+    const changelogHits = findHits(
+      "CHANGELOG.md (unreleased)",
+      unreleasedChangelogSection(),
+      PRIVATE_WORKSPACE_NAME,
+    );
+    const srcRatchet = ratchetOffenders(
+      join(FRAMEWORK_ROOT, "src"),
+      "src",
+      (name) => name.endsWith(".ts"),
+      SRC_CITATION_COUNTS,
+    );
+    const docsRatchet = ratchetOffenders(
+      join(FRAMEWORK_ROOT, "docs"),
+      "docs",
+      (name) => name.endsWith(".md"),
+      DOCS_CITATION_COUNTS,
+    );
+    const offenders = [...templateHits, ...docsSiteHits, ...changelogHits, ...srcRatchet, ...docsRatchet];
+    expect(offenders, `${WHY}\n${offenders.join("\n")}`).toEqual([]);
+  });
 });
