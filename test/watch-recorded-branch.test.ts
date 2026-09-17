@@ -6,7 +6,7 @@
  * On `260901-leaderboard-v2` (2026-09-02) the watch prompt told BOTH watchers,
  * verbatim:
  *
- * > "Not diffed: `epic/leaderboard-v2-api` does not resolve in scavtopia-workflows.
+ * > "Not diffed: `epic/leaderboard-v2-api` does not resolve in W2-workflows.
  * >  Treat this feature's code as UNSEEN — cite `absent:` rather than guessing at
  * >  what it emits."
  *

@@ -983,7 +983,7 @@ describe("separate ceilings per economy (#61)", () => {
 
   /**
    * `tldrx-work/260830-ordering-inventory/budget.yml`, copied VERBATIM on
-   * 2026-09-01 out of `~/aparece-v2` while that run sat mid-Build. It is the file
+   * 2026-09-01 out of workspace W1 while that run sat mid-Build. It is the file
    * this change is not allowed to move: every phase metered, no label, no new
    * key, and a phase sum of exactly 62.00 against a 62.00 ceiling — the boundary
    * case, where an arithmetic change of any kind would show.

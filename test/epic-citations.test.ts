@@ -1,7 +1,7 @@
 /**
  * gh #140 — a `file` src whose path lives ONLY on this run's unmerged epic branch.
  *
- * Live shape, run `260830-money-and-payments` (aparece-v2, closed 2026-09-03):
+ * Live shape, run `260830-money-and-payments` (workspace W1, closed 2026-09-03):
  * `retro.md` on `main` carried 96 `[src: src/Modules/Payments/…:28]` citations to
  * files that exist on `epic/money-and-payments` and nowhere else. The driver's
  * words: "cuatro de mis citas apuntaban a archivos que solo existen en el epic.

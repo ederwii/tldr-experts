@@ -8,7 +8,7 @@
  * of those citations against the `## Domain` bullets of `expert.md`, which name
  * folders of CODE. The two halves disagreed, and the citation lost.
  *
- * Measured on `~/scavtopia` at 0.8.0, four role experts, `--mode full`: $9.47
+ * Measured on workspace W2 at 0.8.0, four role experts, `--mode full`: $9.47
  * spent, one evidence row — and that row is `F088`, a fact token, the one
  * citation kind `outsideDomain` never inspects (`knowledgeFile.ts:313`). The
  * three `check.passed` records read `evidence_added: 0` beside a knowledge file
@@ -183,7 +183,7 @@ describe("the shipped role templates declare a domain that matches something", (
  * question afterwards: a file that validated, cost $1.61 and added zero evidence
  * rows was recorded as `check.passed` with `evidence_added: 0` and no reason
  * beside it, because the ledger writes `problems` only on the failure path
- * (`runTraining.ts`). Two of the three role experts measured on `~/scavtopia`
+ * (`runTraining.ts`). Two of the three role experts measured on workspace W2
  * have no record on disk of why they earned nothing; the third's survives only
  * because an unrelated error dragged the warnings into the rejection with it.
  *

@@ -275,7 +275,7 @@ describe("item 3 — open runs", () => {
   });
 
   /**
-   * #60. Verbatim from `tldrx status` on aparece-v2, 2026-09-01:
+   * #60. Verbatim from `tldrx status` on workspace W1, 2026-09-01:
    *
    *   [1] run 260830-ordering-inventory ("Deliver stages D5 and D6…") cannot start yet
    *       — it was proposed to follow money-and-payments

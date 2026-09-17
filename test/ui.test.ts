@@ -33,7 +33,7 @@ setDefaultTimeout(spawnTestTimeout());
 
 /** A fixed epoch, so every elapsed time in this file is a subtraction. */
 const T0 = 1_756_468_800_000;
-const ROOT = "/work/scavtopia";
+const ROOT = "/work/meridian";
 
 /** The events behind the frame in README § "What you see while it runs". */
 const SCRIPT: readonly (readonly [AgentEvent, number])[] = [

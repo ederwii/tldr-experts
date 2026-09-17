@@ -343,7 +343,7 @@ describe("the CLI", () => {
  * gh #32 — the help said `<usd>` was "the new ceiling"; `raiseBudget` adds it to
  * the one already there (`raiseBudget.ts:83`, `ceiling_usd + amount`). An operator
  * reading the help and typing the number they wanted as a ceiling over-raised:
- * measured live on the scavtopia leaderboard run, a "$5.40 new ceiling" command
+ * measured live on the workspace W2 leaderboard run, a "$5.40 new ceiling" command
  * would have set $8.00. The arithmetic is what live runs depend on, so the WORDS
  * move, not the code.
  */

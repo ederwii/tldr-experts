@@ -1,7 +1,7 @@
 /**
  * Nothing tldrx deletes may be the only copy of somebody's work (#129).
  *
- * Measured live on 2026-09-02, run `260830-money-and-payments` (aparece-v2): a
+ * Measured live on 2026-09-02, run `260830-money-and-payments` (workspace W1): a
  * story's DoD verification failed, the executor settled it `blocked`, and
  * `cleanUp` ran `git worktree remove --force` over a tree that still held the
  * developer's fix, uncommitted. The fix had reached no ref anywhere. It was gone.

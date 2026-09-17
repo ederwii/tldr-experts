@@ -28,6 +28,7 @@ import { join } from "node:path";
 import { FRAMEWORK_ROOT, PLUGIN_DIR } from "../src/core/paths.ts";
 import { HELP_ENTRIES, declaredFlags, subcommandsOf } from "../src/cli/helpText.ts";
 import { PLAN_SKILL_RELATIVE } from "../src/core/install/skillFile.ts";
+import { PATTERN_B_FRAGMENT } from "./public-surface-consistency.test.ts";
 
 const SKILL_MD = join(PLUGIN_DIR, ...PLAN_SKILL_RELATIVE.split("/"));
 const GUIDE = "docs/guide/05-seeds-and-triage.md";
@@ -156,7 +157,7 @@ describe("the skill names no private workspace and no chat product", () => {
   const FORBIDDEN: { re: RegExp; why: string }[] = [
     { re: /\baparece(?:-v2)?\b/i, why: "a private workspace name (#191)" },
     { re: /\bcodiks\b/i, why: "a private workspace name (#191)" },
-    { re: /\bscavtopia\b/i, why: "a private workspace name (#191)" },
+    { re: new RegExp(`\\b${PATTERN_B_FRAGMENT}\\b`, "i"), why: "a private workspace name (#191)" },
     { re: /\bwhatsapp(?:-agent)?\b/i, why: "a private workspace name (#191)" },
     { re: /\bslack\b/i, why: "a chat product" },
     { re: /\bpumble\b/i, why: "a chat product" },

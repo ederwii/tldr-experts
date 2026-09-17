@@ -3,7 +3,7 @@
  * do about it.
  *
  * Issue #103 was filed off a cold adversarial audit of a real host-attended run
- * (`260830-ordering-inventory`, aparece-v2, 2026-09-02). Every ledger surface in
+ * (`260830-ordering-inventory`, workspace W1, 2026-09-02). Every ledger surface in
  * that run reconciles to a perfect 0.00 delta at **$14.60** — `events.jsonl`
  * sum, `run.yml` `spent_usd`, the stage sums, the task sums, the `budget.yml`
  * phase sums — while the run's own watch gate note says the real figure was

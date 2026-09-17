@@ -402,6 +402,19 @@ describe("the env.yml example in docs/spec.md", () => {
   });
 });
 
+/**
+ * The two private-workspace name fragments #191 found leaking across the tree (see the
+ * describe block below). Exported so `test/plan-skill.test.ts` and `test/maintain-skill.test.ts`
+ * — which separately check that the shipped skill markdown never names either workspace —
+ * build their own regexes from these fragments instead of carrying a second literal copy of
+ * the names: #389 widened this guard's own scan to `test/**`, and two files each spelling out
+ * the same private name is exactly the footprint that scan exists to catch. This file's path is
+ * the guard's one exemption (by exact path, not by pattern) — everything else that matches
+ * either fragment, anywhere under `test/**`, is a failure.
+ */
+export const PATTERN_A_FRAGMENT = "aparece";
+export const PATTERN_B_FRAGMENT = "scavtopia";
+
 describe("no public surface names a private workspace (#191, #389)", () => {
   /**
    * A 2026-09-17 audit (#191) found two grep patterns — private-workspace names, never
@@ -412,18 +425,22 @@ describe("no public surface names a private workspace (#191, #389)", () => {
    * examples and left a COUNT-ratcheted allowlist standing over the real citations in
    * `src/**` and `docs/**`, with `test/fixtures/**` deliberately unscanned pending #389.
    *
-   * #389 closed both gaps: every remaining `src/**`/`docs/**` citation was rephrased to a
+   * #389 closed every remaining gap: every `src/**`/`docs/**` citation was rephrased to a
    * neutral label (a workspace id, e.g. "workspace W1", still naming the run/date/figure —
-   * the evidence sentence survives, only the name is gone), and every `test/fixtures/**`
-   * fixture carrying real bytes was replaced with synthetic content of the same shape.
-   * With nothing left to allowlist, this is now a BLANKET ban — no count, no allowlist, no
-   * exception — over `src/**`, `docs/**`, `templates/**`, `docs-site/**`, `test/fixtures/**`
-   * and the top (unreleased) `CHANGELOG.md` heading (released sections are history and stay
-   * out of reach). A single matching line anywhere in that surface fails the test, naming
-   * the file and line. Adding one back is a regression, not a case to allowlist.
+   * the evidence sentence survives, only the name is gone), every `test/fixtures/**` fixture
+   * carrying real bytes was replaced with synthetic content of the same shape, and every
+   * remaining `test/**` occurrence (comments, and test data — a fake path, id or repo slug)
+   * got the same treatment. With nothing left to allowlist, this is now a BLANKET ban — no
+   * count, no allowlist, no exception — over `src/**`, `docs/**`, `templates/**`,
+   * `docs-site/**`, `test/**` and the top (unreleased) `CHANGELOG.md` heading (released
+   * sections are history and stay out of reach). The one exemption is this file's own path,
+   * since the pattern below has to exist somewhere to be checked against. A single matching
+   * line anywhere else in that surface fails the test, naming the file and line. Adding one
+   * back is a regression, not a case to allowlist.
    */
-  const PRIVATE_WORKSPACE_NAME = /aparece-v2|scavtopia/i;
+  const PRIVATE_WORKSPACE_NAME = new RegExp(`${PATTERN_A_FRAGMENT}-v2|${PATTERN_B_FRAGMENT}`, "i");
   const WHY = "a private workspace name (#191, #389)";
+  const GUARD_FILE = "public-surface-consistency.test.ts";
 
   /** `path:line: the whole line`, for every line of `text` matching `re` — undecorated, unlike `hits()` above. */
   function findHits(rel: string, text: string, re: RegExp): string[] {
@@ -461,7 +478,7 @@ describe("no public surface names a private workspace (#191, #389)", () => {
     return lines.slice(start, end === -1 ? lines.length : end).join("\n");
   }
 
-  test("no occurrence of a private-workspace name in src/**, docs/**, templates/**, docs-site/**, test/fixtures/**, or the unreleased CHANGELOG", () => {
+  test("no occurrence of a private-workspace name in src/**, docs/**, templates/**, docs-site/**, test/** (this file excepted), or the unreleased CHANGELOG", () => {
     const srcHits = walkTextFiles(join(FRAMEWORK_ROOT, "src"), (name) => name.endsWith(".ts")).flatMap(
       ({ rel, text }) => findHits(`src/${rel}`, text, PRIVATE_WORKSPACE_NAME),
     );
@@ -472,15 +489,15 @@ describe("no public surface names a private workspace (#191, #389)", () => {
       findHits(`templates/${rel}`, text, PRIVATE_WORKSPACE_NAME),
     );
     const docsSiteHits = DOCS.flatMap(({ rel, text }) => findHits(`docs-site/${rel}`, text, PRIVATE_WORKSPACE_NAME));
-    const fixtureHits = walkTextFiles(join(FRAMEWORK_ROOT, "test", "fixtures"), () => true).flatMap(({ rel, text }) =>
-      findHits(`test/fixtures/${rel}`, text, PRIVATE_WORKSPACE_NAME),
-    );
+    const testHits = walkTextFiles(join(FRAMEWORK_ROOT, "test"), () => true)
+      .filter(({ rel }) => rel !== GUARD_FILE)
+      .flatMap(({ rel, text }) => findHits(`test/${rel}`, text, PRIVATE_WORKSPACE_NAME));
     const changelogHits = findHits(
       "CHANGELOG.md (unreleased)",
       unreleasedChangelogSection(),
       PRIVATE_WORKSPACE_NAME,
     );
-    const offenders = [...srcHits, ...docsHits, ...templateHits, ...docsSiteHits, ...fixtureHits, ...changelogHits];
+    const offenders = [...srcHits, ...docsHits, ...templateHits, ...docsSiteHits, ...testHits, ...changelogHits];
     expect(offenders, `${WHY}\n${offenders.join("\n")}`).toEqual([]);
   });
 });

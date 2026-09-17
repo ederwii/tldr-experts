@@ -134,20 +134,31 @@
   were #389's call (the owner decided 2026-09-17 to synthesize them, on its own branch) — see
   the next entry for that follow-through.
 - **The two `test/fixtures/**` families a real workspace's own bytes had leaked into are now
-  synthetic, and #191's guard is a blanket ban instead of a per-file allowlist (see #389).**
+  genuinely invented (not just a token renamed inside the same real paths and class names —
+  a first pass at this made that mistake, caught in pre-merge review), and #191's guard is a
+  blanket ban over `test/**` instead of a per-file allowlist over `src/**`/`docs/**` (see #389).**
   `test/fixtures/competencies/read-only-expert.yml` and its paired knowledge fixture — `git mv`'d
-  to `billing-api-header.md`, since the old filename itself carried the workspace's name — were
-  copied verbatim from a real workspace; the `aidlc-intent` fixture tree
-  (`ideation/feasibility`, `ideation/scope-definition`) carried a real pilot's own product name,
-  team and stack. All three are now invented content of the same shape and size class — same
-  evidence-row counts, same claim/answer counts `test/distill.test.ts` measures, same three
-  execution-claim citations `test/knowledge-value.test.ts` measures — so every test that reads
-  them keeps asserting the same behaviour against different bytes. With nothing left needing an
-  allowlist, `test/public-surface-consistency.test.ts` drops its `SRC_CITATION_COUNTS` and
-  `DOCS_CITATION_COUNTS` maps: the 37 `src/**` and 7 `docs/**` citations they exempted are each
-  rephrased to name the evidence — a workspace id, the run, the date, the figure — without the
-  workspace's own name, and the guard now refuses ANY occurrence across `src/**`, `docs/**`,
-  `templates/**`, `docs-site/**`, `test/fixtures/**` and the unreleased CHANGELOG heading.
+  again, to a name that no longer echoes the real one — were copied verbatim from a real
+  workspace, architecture and all; the `aidlc-intent` fixture tree (`ideation/feasibility`,
+  `ideation/scope-definition`) carried a real pilot's own product name, team and stack. All three
+  are now a different invented stack with invented module, file and class names throughout — a
+  token-normalised diff against the pre-#389 bytes is ~100% changed on every data-bearing line,
+  and grepping every distinctive identifier from the old files against the new ones returns zero
+  — while keeping the same shape and size class: same evidence-row counts, same claim/answer
+  counts `test/distill.test.ts` measures, same three execution-claim citations
+  `test/knowledge-value.test.ts` measures, so every test that reads them keeps asserting the same
+  behaviour against different bytes. A real absolute home-directory path in `docs/plans/v1.md` is
+  now home-relative. The 37 `src/**` and 7 `docs/**` citations #191's allowlist exempted, and 50
+  more the same audit had missed across 24 `test/**` files (evidence-comment citations and a
+  handful of test DATA — a fake root path, a fake GitHub repo slug — fed to the code under test),
+  are each rephrased to name the evidence — a workspace id, the run, the date, the figure —
+  without the workspace's own name; two of those files (`test/plan-skill.test.ts`,
+  `test/maintain-skill.test.ts`) carried their own copy of the private-workspace pattern for an
+  unrelated skill-content guard, and now import it from the one file still allowed to hold it.
+  With nothing left needing an allowlist, `test/public-surface-consistency.test.ts` drops its
+  `SRC_CITATION_COUNTS`/`DOCS_CITATION_COUNTS` maps and now refuses ANY occurrence across
+  `src/**`, `docs/**`, `templates/**`, `docs-site/**`, `test/**` (itself excepted, since the
+  pattern has to live somewhere to be checked against) and the unreleased CHANGELOG heading.
   Released CHANGELOG sections are history and stay out of the guard's reach.
 
 ## 0.34.0 — 2026-09-17

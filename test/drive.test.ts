@@ -417,7 +417,7 @@ describe("the mandate carries its own preflight (#84)", () => {
  *
  * The mandate used to license stopping four times and never once say "keep going",
  * and the runs it drove did exactly that: measured over the eight driven runs of
- * the aparece-v2 workspace, 26 `budget.raised` and 26 `question.answered` events,
+ * workspace W1, 26 `budget.raised` and 26 `question.answered` events,
  * and an owner who had to type "sigue con todas desatendido, no esperes por mi"
  * INSIDE an unattended run to restart a session the old text had correctly halted.
  *

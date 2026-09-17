@@ -119,7 +119,7 @@ interface FakeCommand extends CommandTransport {
 /** Answers the three `gh issue` shapes the provider actually uses. */
 function fakeGh(state = "OPEN"): FakeCommand {
   const calls: { cmd: string; args: readonly string[] }[] = [];
-  const URL_12 = "https://github.com/scavtopia/lab/issues/12";
+  const URL_12 = "https://github.com/meridian/lab/issues/12";
   return {
     calls,
     async run(cmd: string, args: readonly string[]): Promise<CommandResult> {
@@ -158,7 +158,7 @@ function fakeJira(statusName = "To Do"): FakeHttp {
 const JIRA_CREDS = { baseUrl: "https://acme.atlassian.net", email: "a@b.c", apiToken: "tok" } as const;
 
 function ghProvider(transport: CommandTransport) {
-  return createGithubProvider({ transport, repo: "scavtopia/lab" });
+  return createGithubProvider({ transport, repo: "meridian/lab" });
 }
 
 function jiraProvider(transport: HttpTransport) {
@@ -209,7 +209,7 @@ describe("guard rail — files are the source of truth", () => {
     const external = readExternal(after);
     expect(external.external).toEqual({
       provider: "github", key: "12",
-      url: "https://github.com/scavtopia/lab/issues/12", synced_at: NOW,
+      url: "https://github.com/meridian/lab/issues/12", synced_at: NOW,
     });
     // The remote is CLOSED. The story is still todo, and only external_status says so.
     expect(external.externalStatus).toBe("CLOSED");
@@ -307,18 +307,18 @@ describe("the github provider", () => {
     const created = await provider.write({ kind: "story", id: "S1", title: "S1 · T", body: "B" }, null);
     expect(gh.calls[0]).toEqual({
       cmd: "gh",
-      args: ["issue", "create", "--repo", "scavtopia/lab", "--title", "S1 · T", "--body", "B"],
+      args: ["issue", "create", "--repo", "meridian/lab", "--title", "S1 · T", "--body", "B"],
     });
-    expect(created).toEqual({ key: "12", url: "https://github.com/scavtopia/lab/issues/12" });
+    expect(created).toEqual({ key: "12", url: "https://github.com/meridian/lab/issues/12" });
 
     await provider.write({ kind: "story", id: "S1", title: "S1 · T", body: "B2" }, "12");
     expect(gh.calls[1]?.args).toEqual(
-      ["issue", "edit", "12", "--repo", "scavtopia/lab", "--title", "S1 · T", "--body", "B2"],
+      ["issue", "edit", "12", "--repo", "meridian/lab", "--title", "S1 · T", "--body", "B2"],
     );
 
     expect(await provider.readStatus("12")).toBe("OPEN");
     expect(gh.calls[2]?.args).toEqual(
-      ["issue", "view", "12", "--repo", "scavtopia/lab", "--json", "state,url,number"],
+      ["issue", "view", "12", "--repo", "meridian/lab", "--json", "state,url,number"],
     );
   });
 
@@ -427,12 +427,12 @@ describe("reading ticket_tool out of process.yml", () => {
     mkdirSync(join(fixture.root, ".tldrx"), { recursive: true });
     writeFileSync(
       join(fixture.root, ".tldrx", "process.yml"),
-      "schema_version: 0\nticket_tool: github\nproject_key: scavtopia/lab\nticket_sync: mirror-out\n",
+      "schema_version: 0\nticket_tool: github\nproject_key: meridian/lab\nticket_sync: mirror-out\n",
       "utf8",
     );
     const config = readTicketToolConfig(fixture.root);
     expect(config.kind).toBe("github");
-    expect(config.project).toBe("scavtopia/lab");
+    expect(config.project).toBe("meridian/lab");
     expect(config.sync).toBe("mirror-out");
   });
 
