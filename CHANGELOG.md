@@ -19,6 +19,8 @@
   120 orderings, so the drifted case still falls to the equality guard exactly as before —
   only the ORDER stopped being load-bearing for the shape guard.
 
+## 0.34.0 — 2026-09-17
+
 ### Fixed
 
 - **`budget show`, `run estimate` and the `budget-gate` hook now price a Build stage's
