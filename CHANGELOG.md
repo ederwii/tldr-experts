@@ -49,11 +49,15 @@
   #338).** `id` stays immutable (§7: nothing ever rewrites a fact's own `id`), so an owner
   decision (2026-09-17) settled how a fact's id is ever allowed to change: additively, never by
   rewriting or a bare documentation-only rule. `[src: <was_id>]` now resolves through
-  `resolveFact` to the fact that carries the alias — checked BEFORE the id's own row, so an old
-  citation is never silently redirected to a different fact that later reuses the same id
-  number as its own. `validateFactsFile` refuses a `was_id` that collides with another live fact
-  id or is claimed by more than one fact. The field is optional and additive: a facts.yml with
-  no `was_id` anywhere reads and resolves exactly as before.
+  `resolveFact` to the fact that carries the alias — but only when the cited id has no live row
+  of its own, so an old citation written before a renumber still resolves once its old id is
+  fully vacated. A cited id that is ITSELF a live fact is never silently shadowed by another
+  fact's `was_id`: `resolveFact` refuses, naming both the live holder and the `was_id` carrier,
+  because `readFacts` never validates and a hand-edited or merged facts.yml can carry exactly
+  the collision `validateFactsFile` refuses at write time. `validateFactsFile` itself refuses a
+  `was_id` that collides with another live fact id or is claimed by more than one fact. The
+  field is optional and additive: a facts.yml with no `was_id` anywhere reads and resolves
+  exactly as before.
 
 ## 0.34.0 — 2026-09-17
 

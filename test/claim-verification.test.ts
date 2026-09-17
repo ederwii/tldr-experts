@@ -161,12 +161,15 @@ facts:
     expect(resolve("F019")).toMatchObject({ ok: true, outcome: "ok" });
   });
 
-  test("an old id whose was_id belongs to a different fact resolves to THAT fact, never to a new occupant reusing the number", () => {
-    // F019 here is a brand-new, unrelated fact that happens to reuse the
-    // number 019 as its OWN id. F021 is the fact F019 actually renamed to
-    // (was_id: F019) and it is RETIRED. Citing F019 must resolve through the
-    // alias to F021 and report RETIRED — never silently OK off the new
-    // occupant's own live status.
+  test("an id that is itself a live fact is NEVER silently shadowed by another fact's was_id alias — refused, naming both (pre-merge review finding)", () => {
+    // F019 here is its OWN live fact — not a renamed-away id. F021 is a
+    // DIFFERENT, unrelated fact that happens to carry `was_id: F019` (the
+    // exact state `validateFactsFile` refuses at write time: "was_id F019
+    // collides with a live fact id"). `readFacts` never validates, so a
+    // hand-edited or merged facts.yml can carry this invalid state anyway —
+    // the resolver must not pick a side. Citing F019 must REFUSE, naming both
+    // the live holder (F019 itself) and the was_id carrier (F021), never
+    // silently resolve to F021 as `ok`.
     write(probe.root, ".tldrx/memory/facts.yml", `version: 1
 facts:
   - id: F019
@@ -179,6 +182,37 @@ facts:
     supersedes: null
     superseded_by: null
     retired: null
+  - id: F021
+    was_id: F019
+    fact: "Backend deploys run via deploy.yml."
+    area: deploy
+    repos: [api]
+    kind: answer
+    confidence: measured
+    source: {who: alan, when: "2026-08-14T10:11:00Z", run: 260814-envs, q: Q1}
+    supersedes: null
+    superseded_by: null
+    retired: null
+`);
+    clearSrcCaches();
+    expect(resolve("F019")).toMatchObject({
+      ok: false,
+      outcome: "refused",
+      message: expect.stringContaining("F019"),
+    });
+    expect(resolve("F019")).toMatchObject({
+      message: expect.stringContaining("F021"),
+    });
+  });
+
+  test("an id fully vacated by a renumber (no live row of its own) still resolves through its alias to a retired fact, and reports RETIRED", () => {
+    // Unlike the shadowing case above, F019 here has NO row of its own at
+    // all — the ordinary renumber shape. F021 (was_id: F019) is the fact it
+    // became, and it is now retired. Precedence is unchanged for this shape:
+    // no live holder of `id` means the alias still resolves, and the
+    // resolution reflects the ALIAS TARGET's own state.
+    write(probe.root, ".tldrx/memory/facts.yml", `version: 1
+facts:
   - id: F021
     was_id: F019
     fact: "Backend deploys run via deploy.yml."

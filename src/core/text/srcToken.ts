@@ -992,12 +992,23 @@ function resolveFact(id: string, ctx: SrcContext): SrcResolution {
     return unverified(`no ${PROJECT_FRAMEWORK_DIR}/memory/facts.yml to check ${id} against`);
   }
   // gh #338: an old id a fact's `was_id` claims as its alias resolves to THAT
-  // fact first — checked before `id`'s own row, so a citation written before a
-  // renumber is never silently redirected to a different, unrelated fact that
-  // later reused the same id number as its own. A fact with no `was_id` field
-  // (every row on disk before this existed) has no entry here, and `id` falls
-  // straight through to the checks below exactly as it always did.
+  // fact — but only when `id` has no live row of its own. `validateFactsFile`
+  // refuses a `was_id` that collides with a LIVE fact id at write time, but
+  // `readFacts` never validates (a hand-edited or merged facts.yml reaches
+  // this resolver unchecked), so the same collision can arrive here — and the
+  // fix for pre-review #338 (silently preferring the alias over `id`'s own
+  // live row) was itself the defect: it let a live fact be shadowed by
+  // whatever else claimed its id as a `was_id`, with no visible sign anything
+  // was wrong. A fact with no `was_id` field (every row on disk before this
+  // existed) has no entry in `aliases`, so a citation with no alias in play
+  // falls straight through to the checks below exactly as it always did.
   const aliasTarget = facts.aliases.get(id);
+  if (aliasTarget !== undefined && facts.live.has(id)) {
+    return refused(
+      `${id} is ambiguous in facts.yml — it is a live fact AND the was_id alias ${aliasTarget} claims ` +
+        `(invalid: same as validateFactsFile's \`was_id ${id} collides with a live fact id\`)`,
+    );
+  }
   const resolvedId = aliasTarget ?? id;
   if (facts.retired.has(resolvedId)) {
     const cite = aliasTarget !== undefined ? `${id} (now ${resolvedId})` : id;

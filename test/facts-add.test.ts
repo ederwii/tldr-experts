@@ -480,9 +480,9 @@ describe("validateFactsFile — was_id aliases an old id after a renumber (#338)
     // with ZERO facts is a pre-existing, out-of-scope defect measured while
     // writing this test — `emitFactsYaml` writes a bare `facts:` line for `[]`,
     // which every YAML parser round-trips as `facts: null`, and `save()`'s own
-    // re-validation then refuses to write at all. Filed as a draft issue
-    // (gh #338's implementer), not fixed here. One row sidesteps it and is the
-    // real-world shape anyway — `save()` is only ever called after `append()`.
+    // re-validation then refuses to write at all (see #383), not fixed here.
+    // One row sidesteps it and is the real-world shape anyway — `save()` is
+    // only ever called after `append()`.
     writeFileSync(path, `version: 1
 facts:
   - id: F001
