@@ -77,6 +77,18 @@
   field is optional and additive: a facts.yml with no `was_id` anywhere reads and resolves
   exactly as before.
 
+### Changed
+
+- **The fix list's on-disk door is now documented as the human escape hatch it was already
+  behaving as (see #269).** `parseFixlistFile` — the read path every settle-time question and a
+  hand edit both go through — validates shape only and never charges the `[src: …]` citation
+  the reviewer-envelope write path (`parseFixFindings`) requires for `refuted` and for an
+  unblocking `docs`/`style` finding (#255). That asymmetry predates #255 and was previously
+  unwritten, so the next reader could read it as an oversight and "fix" it; the owner settled it
+  (2026-09-17) as deliberate — a person editing the artefact by hand is trusted the way the
+  envelope's own reviewer is not — and `docs/spec.md` and a comment at `parseFixlistFile` now say
+  so, naming exactly what a hand edit bypasses.
+
 ## 0.34.0 — 2026-09-17
 
 ### Fixed
