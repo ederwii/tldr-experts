@@ -220,7 +220,7 @@ stage at `cursor`, or `done` when every phase is terminal.
 | `tasks[].id` / `.status` | `^t\d+$` / enum | y | One sub-agent invocation |
 | `tasks[].expert` | slug\|null | y | The STAGE's expert — `stages[].experts[0]`, the same value on every row of the stage. It is not who took THIS turn: a Build declares `experts: [developer]` and runs a reviewer under it too, which is what `role` exists to say |
 | `tasks[].role` | `developer`\|`reviewer` | n | **Additive.** WHICH TURN this row is, as against `expert`, which is the stage's. Until it existed every task row of a Build carried the stage's first expert, so a reviewer's turn — its money, its tokens, its span — was filed under `developer` and `run.yml` asserted something false about who did the work. Written by the executor that ran the turn, from the same role it spawned the agent under and emitted on `agent.spawned`. Absent means NOT RECORDED: every row written before this key, and every path that cannot say which role took the turn. A reader prints the absence; it never fills it in with `developer`, which is the guess the key was added to stop |
-| `tasks[].cost_usd` | number ≥0 \| `null` | y | `null` = **unmetered**: no provider-metered dollar figure ever reached this row. Four ways in, and they are not distinguished here — an in-session `--commit` turn nobody declared a cost for, a Codex turn (metered in tokens, never USD), a SPAWNED turn whose result document carried no `total_cost_usd` at all (including one that died before writing a result document), and a headless turn whose PARENT process died mid-spawn, SIGKILL-class, before any result line — its own or its parent's — could be read at all (`demoteStaleRunning`, gh #337). Contributes nothing to any sum, so `spent_usd` is then a LOWER BOUND, and every report says so. A `0` here is a CLAIM — a provider that reported zero, or a host that declared it with `--cost-usd 0` — never a stand-in for an absence |
+| `tasks[].cost_usd` | number ≥0 \| `null` | y | `null` = **unmetered**: no provider-metered dollar figure ever reached this row. Four ways in, and they are not distinguished here — an in-session `--commit` turn nobody declared a cost for, a Codex turn (metered in tokens, never USD), a SPAWNED turn whose result document carried no `total_cost_usd` at all (including one that died before writing a result document), and a headless or Build-executor turn whose PARENT process died mid-spawn, SIGKILL-class, before any result line — its own or its parent's — could be read at all (`demoteStaleRunning`, gh #337). Contributes nothing to any sum, so `spent_usd` is then a LOWER BOUND, and every report says so. A `0` here is a CLAIM — a provider that reported zero, or a host that declared it with `--cost-usd 0` — never a stand-in for an absence |
 | `tasks[].metered` | bool | n | **Additive.** `false` iff `cost_usd` is `null`; absent means metered. The two always travel together, and a `null` cost without it is a schema error. For a SPAWNED turn it is decided in one place (`spawnAgent.ts`'s `interpret`), from whether the result document actually carried a USD figure — never from the provider's name ALONE, which is what let a Claude turn read as metered whether or not a dollar figure ever came back. The `provider === "claude"` guard stays only to keep Codex's synthesized `total_cost_usd: 0` (`agentEvents.ts`'s `resolveCodexResultDoc`) from reading as a measurement. For an in-session turn it is whether a cost was DECLARED |
 | `tasks[].tokens` | number | n | **Additive.** What `tldrx next --commit --tokens <n>` declared, when the host knew |
 | `tasks[].input_tokens` / `.output_tokens` | number ≥0 | n | **Additive.** The PROVIDER's own token split for a turn this process watched, read off the result document's `usage`. Distinct from `tokens`, which is a HOST declaration for a turn nothing here metered. Written only when BOTH sides came back strictly positive, and only together: the parse that produces them defaults a missing side to `0`, so a HALF-reported split is exactly as unverifiable as an absent one. Absent therefore means "no positive split reached the ledger" — never a zero standing in for one. Together with `cost_usd` they are what makes a dollar figure checkable against a price table instead of a number nobody can falsify |
@@ -1545,8 +1545,8 @@ as an unmetered row — and `budget.spent_usd` read a confident `0.00` for money
 really have charged. `demoteStaleRunning` now reads `startedHeadless` (`run/lastStart.ts`, §5's own
 derivation of which mode opened a stage's last turn, already read by the Ctrl-C path below) and,
 for a stage whose last start was genuinely `headless` — never a `--prepare` bundle waiting for a
-human, and never a Build executor phase, both of which spent nothing and are excluded the same way
-`preparedRefusal` excludes them — appends one `tasks[]` row: `status: "failed"`,
+human, both of which spent nothing and are excluded the same way `preparedRefusal` excludes them —
+appends one `tasks[]` row: `status: "failed"`,
 `cost_usd: null, metered: false` (this is the fourth way a `cost_usd` reaches `null`: a SPAWNED
 turn whose own process died before it could read a result line at all, distinct from one whose
 result document merely carried no `total_cost_usd`) and
@@ -1557,6 +1557,22 @@ ever saw the turn finish. No new event is appended — the ledger's fix is the `
 `agent.result`'s late-arrival handling, which covers a different timing case (a relaunched
 invocation's result arriving after its slot closed) and never engages here, because no `agent.result`
 is ever appended for a turn whose parent never returned from the spawn.
+
+**The same recording now covers a Build-executor phase too, 2026-09-17 (#337's remaining scope).**
+The original fix above deliberately skipped every `executorFor(phase.id) !== null` stage, reasoning
+that `costView.ts`'s `storyLedger` (§2.16-adjacent) already accounted for it — true for
+`phaseCost.ts`'s per-story ceiling view, but that ledger has no `run.yml` task row to show for the
+turn, so `tallyOf`/`spendBasis` (and so `budget.spent_usd`) never saw it AT ALL, not even as
+unmetered: strictly worse than the headless case's pre-fix gap, since even `tldrx cost`'s per-story
+count and the run total disagreed on how many turns went unaccounted. A Build phase has no
+`--prepare` bundle of its own to protect — it is driven synchronously by this same process, start to
+finish — so every Build stage a dead lock finds `running` is orphaned by construction, and
+`openBuildTurns` (`build/orphanedTurns.ts`) — the story-keyed counterpart of the Ctrl-C path's
+`openAttempt`, joining `agent.spawned` against `agent.result` by `story`/`key` instead of by task id
+— names which of the (possibly several, fanned-out) story turns a result never closed. One
+`tasks[]` row per abandoned story, same shape as the headless row above, plus `role` when the
+open turn's `agent.spawned` named one (`"developer"` or `"reviewer"`) — absent, never guessed, on
+a turn whose role this event could not read.
 
 **`fact.conflict_raised` was added 2026-09-07 (#169).** The `tldrx answer` path runs the lexical duplicate check
 against the live facts before it appends (§2.5), and a hit RAISES rather than refuses: the answer is recorded, the
@@ -4959,9 +4975,12 @@ anyway. The path makes the collision impossible, the assertion makes it impossib
 group to kill — and a detached child never receives the terminal's Ctrl-C. So the CLI installs one handler
 (`src/cli/signals.ts`) and it does four things, in this order: **(1)** kill every spawned child's whole process tree,
 stopping the spend before anything else can fail; **(2)** record a PARTIAL `agent.result` on the attempt that was
-killed — the envelope's `cost_usd` is `0` because the schema requires a number, and the payload carries
-`cost_usd: null` with `stopped_by: "signal"`, because a turn cut in half has no knowable cost and writing `0` would
-be a claim; **(3)** demote the `running` stage back to `ready` and release the run's `.lock`; **(4)** exit `130`.
+killed — the envelope's `cost_usd` is `0` because the schema requires a number, and both the `run.yml` task row and
+the payload carry `cost_usd: null, metered: false` with `stopped_by: "signal"` on the payload besides, because a
+turn cut in half has no knowable cost and writing a bare `0` would be a claim (gh #355 — before 2026-09-17 the task
+row wrote `cost_usd: 0` with no `metered` key, which passed `RunFile.ts`'s validator silently and `tallyOf` read as
+a measured $0.00 rather than the unmetered lower bound every other unknown-cost turn in this codebase is); **(3)**
+demote the `running` stage back to `ready` and release the run's `.lock`; **(4)** exit `130`.
 A second signal during that exits immediately. A stage holding an uncommitted `--prepare` bundle is left `running` on
 purpose — that work is waiting for a human, not for a process. And a command that owns its own shutdown (`dashboard`,
 `watch`) keeps it: with no sub-agent to kill and no run to close, the handler stands aside.

@@ -32,6 +32,23 @@
   `test/install.test.ts`). The `bun test` preload `test/preload/tmpdirGuard.ts` now refuses,
   named, before any test runs, when the resolved `$TMPDIR` is inside a git work tree — opt out
   only with `TLDRX_ALLOW_TMPDIR_IN_WORKTREE=1`, once the isolation is verified some other way.
+- **A turn killed mid-flight by SIGINT/SIGTERM now banks its cost as absent, not a measured
+  `$0.00` (see #355).** `interrupt.ts`'s `recordPartialResult` wrote `cost_usd: 0` with no
+  `metered` key on both the task row and the `agent.result` payload — legal by `RunFile.ts`'s
+  validator, which only ever checked the converse (a `null` needs `metered: false`), so it
+  passed silently while `tallyOf` summed the row into the metered bucket as a real, measured
+  zero and `spendBasis` called the run's total complete. It now writes `cost_usd: null,
+  metered: false` on the row and the payload, the same idiom every other unknown-cost turn in
+  this codebase already uses, so a Ctrl-C mid-turn reads as a stated lower bound.
+- **A killed parent's abandoned Build-story turn now leaves a row in `run.yml`, not nothing (see
+  #337).** The headless half of this shipped earlier as the orphan case #337 was filed for; the
+  fix deliberately skipped every Build-executor phase, reasoning the per-story ceiling ledger
+  already covered it — true for `tldrx cost`'s per-story view, but that ledger has no `run.yml`
+  task row to show for it, so `tallyOf`/`spendBasis` (and so `budget.spent_usd`) never saw the
+  abandoned attempt at all, not even as unmetered. `demoteStaleRunning` now reads which of a
+  stuck Build stage's `agent.spawned` turns no `agent.result` ever answered
+  (`build/orphanedTurns.ts`) and records one `cost_usd: null, metered: false` row per abandoned
+  story, same as the headless case.
 
 ## 0.33.0 — 2026-09-17
 

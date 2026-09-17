@@ -62,6 +62,7 @@ import { setProgressCeiling, setProgressReadCap, setProgressTitle } from "../ui/
 import { acquireLock, releaseLock } from "./Lock.ts";
 import { onInterrupt, stopInFlightRun } from "./interrupt.ts";
 import { startedHeadless } from "../run/lastStart.ts";
+import { openBuildTurns } from "../build/orphanedTurns.ts";
 import { loadStageSpec, type StageSpec } from "./stageSpec.ts";
 import { blockingQuestionIds, countSkipInputs, evaluateSkipIf, SkipIfError } from "./skipIf.ts";
 import { materializeSeedSolution } from "./seedSolution.ts";
@@ -402,22 +403,32 @@ function preparedRefusal(store: RunStore, options: NextOptions, notes: string[])
  * Spec §5 resume path: "a `running` left by a crash is demoted to `ready` when
  * `.lock` holds a dead pid".
  *
- * That used to be the whole story, and for a `--prepare` bundle or a Build
- * executor's own bookkeeping it still is — nothing was spawned for either of
- * those, so nothing was spent. But a HEADLESS spawn holds this exact lock for
- * the whole of its `await spawnAgent(...)` (`runNext`'s main body, below), so a
- * dead pid here can mean a sub-agent turn a provider actually charged for, and
- * the pre-#337 code demoted the stage and said nothing else — no task row, no
- * event, not even an unmetered one. `spent_usd` read a confident `0.00` for
- * money that may have been spent, which is the one answer AGENTS.md §7 rules
- * out. This is the remaining half of #246 (its first half, the `interrupted`
- * waiting kind and `lastStart.ts`, already shipped).
+ * That used to be the whole story, and for a `--prepare` bundle it still is —
+ * nothing was spawned for one, so nothing was spent. But a HEADLESS spawn (this
+ * process's own expert turn, or a Build executor's fan-out spawn) holds this
+ * exact lock for the whole of its `await spawnAgent(...)`, so a dead pid here
+ * can mean a sub-agent turn a provider actually charged for, and the pre-#337
+ * code demoted the stage and said nothing else — no task row, no event, not
+ * even an unmetered one. `spent_usd` read a confident `0.00` for money that may
+ * have been spent, which is the one answer AGENTS.md §7 rules out. This is the
+ * remaining half of #246 (its first half, the `interrupted` waiting kind and
+ * `lastStart.ts`, already shipped).
  *
- * `startedHeadless` (`run/lastStart.ts`) is the one derivation of "which mode
- * opened this stage's last turn" — the same one `interrupt.ts`'s Ctrl-C path
- * reads — so a `--prepare` bundle and a Build executor phase (which re-prepares
- * its own `stage.started` between stories; `preparedRefusal` above carves out
- * the same exception) are left exactly as before: demoted, nothing invented.
+ * Two different questions decide WHICH turns were orphaned, because the two
+ * kinds of stage make the claim differently: an `executorFor(phase.id) ===
+ * null` stage is this process's own single turn, and `startedHeadless`
+ * (`run/lastStart.ts` — the same derivation `interrupt.ts`'s Ctrl-C path reads)
+ * says whether THAT turn was headless rather than a still-waiting `--prepare`
+ * bundle. A Build-executor phase has no bundle of its own to protect — it is
+ * driven synchronously by this same process start to finish — so every stage
+ * it left `running` under a dead pid is orphaned by construction, and
+ * `openBuildTurns` (`build/orphanedTurns.ts`) names WHICH of its (possibly
+ * several, fanned-out) story turns a result never closed. Originally this
+ * carve-out just skipped Build phases (shipped comment on #337: "already
+ * handled by `costView.ts`'s slot tracking" — true for `phaseCost.ts`'s
+ * per-story ceiling view, but that ledger has no `run.yml` task row to show for
+ * it, so `tallyOf`/`spendBasis` never saw the turn at all, not even as
+ * unmetered).
  */
 function demoteStaleRunning(store: RunStore, options: NextOptions, deadPid: number): readonly string[] {
   const stuck: string[] = [];
@@ -425,7 +436,7 @@ function demoteStaleRunning(store: RunStore, options: NextOptions, deadPid: numb
   // are the only trace of the turn this row has to describe.
   const orphaned: {
     phase: string; stage: string;
-    expert: string | null; model: string | null; started_at: string | null;
+    expert: string | null; role: string | null; model: string | null; started_at: string | null;
   }[] = [];
   store.mutate((run) => ({
     ...run,
@@ -434,11 +445,20 @@ function demoteStaleRunning(store: RunStore, options: NextOptions, deadPid: numb
       stages: phase.stages.map((stage) => {
         if (stage.status !== "running") return stage;
         stuck.push(`${phase.id}/${stage.id}`);
-        if (executorFor(phase.id) === null && startedHeadless(store.runDir, stage.id)) {
-          orphaned.push({
-            phase: phase.id, stage: stage.id,
-            expert: stage.expert, model: stage.model, started_at: stage.started_at,
-          });
+        if (executorFor(phase.id) === null) {
+          if (startedHeadless(store.runDir, stage.id)) {
+            orphaned.push({
+              phase: phase.id, stage: stage.id,
+              expert: stage.expert, role: null, model: stage.model, started_at: stage.started_at,
+            });
+          }
+        } else {
+          for (const turn of openBuildTurns(store.runDir, phase.id, stage.id)) {
+            orphaned.push({
+              phase: phase.id, stage: stage.id,
+              expert: null, role: turn.role, model: turn.model, started_at: turn.startedAt,
+            });
+          }
         }
         return { ...stage, status: "ready" as const };
       }),
@@ -449,6 +469,10 @@ function demoteStaleRunning(store: RunStore, options: NextOptions, deadPid: numb
       id: nextTaskId(store, turn.phase, turn.stage),
       status: "failed",
       expert: turn.expert,
+      // Written only when known — a Build turn's ROLE, never a guessed one
+      // (the same absent-means-not-recorded rule `recordExecutorTasks` follows
+      // for gh #234).
+      ...(turn.role === null ? {} : { role: turn.role }),
       model: turn.model,
       // Unknown, never zero: the sub-agent may have run to completion and cost
       // real money — the only thing that died is the process that would have
@@ -461,7 +485,15 @@ function demoteStaleRunning(store: RunStore, options: NextOptions, deadPid: numb
       error: "turn outlived its parent; no result line was read",
       session_id: null,
       started_at: turn.started_at,
-      ended_at: options.at,
+      // Ordinarily `options.at` (this invocation's own "now") is later than a
+      // turn it is only just discovering was orphaned. A Build turn's
+      // `started_at` comes off a REAL `agent.spawned` timestamp, though (a real
+      // kill, resumed by a test call carrying its own canned `at` — #347's own
+      // fixture), so a `< started_at` `ended_at` is possible and `RunFile.ts`'s
+      // validator refuses it outright (§7 — a row must not assert an impossible
+      // order). Never earlier than `started_at`: this row doesn't know when the
+      // turn actually ended, only that it was not before it began.
+      ended_at: turn.started_at !== null && turn.started_at > options.at ? turn.started_at : options.at,
       outputs: [],
     });
   }
