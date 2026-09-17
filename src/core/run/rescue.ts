@@ -91,6 +91,29 @@ export function unlockRun(options: RescueOptions): RescueOutcome {
   const path = lockPath(store.runDir);
 
   if (holder === null && !existsSync(path)) {
+    // No lock ever held this stage's `running` status, so `demoteStaleRunning`
+    // (`next`'s own rescue, gated on a DEAD-PID lock) never fires here — and this
+    // used to say "`tldrx next` demotes it" anyway, a claim #228 measured false.
+    // `unlock` is the rescue verb an operator reaches for, so it is the one that
+    // now does the demotion, rather than describing a move nothing makes. A
+    // `--prepare` bundle is the one case left alone below: it is a sub-agent turn
+    // already paid for, not ours to discard on an operator's behalf.
+    const cursor = store.cursorEntry();
+    if (cursor !== null && cursor.stage.status === "running" && !hasPreparedBundle(store.runDir, cursor.stage.id)) {
+      const demoted = demoteRunning(store);
+      store.append(event(options, store.runId, "run.unlocked", {
+        pid: null, was_alive: false, forced: false, demoted,
+      }));
+      store.save();
+      return {
+        code: EXIT_OK,
+        lines: [
+          `no .lock in ${PROJECT_WORK_DIR}/${store.runId} — nothing was holding it`,
+          `  demoted ${demoted.join(", ")} from running to ready`,
+          `next: tldrx next ${store.runId}`,
+        ],
+      };
+    }
     const stranded = strandedNote(store);
     return {
       code: EXIT_OK,
@@ -221,15 +244,17 @@ function demoteRunning(store: RunStore): readonly string[] {
 
 /**
  * A run with no lock can still be stuck — on an orphaned `--prepare` bundle, the
- * one cut `unlock` is NOT the answer to. Say so rather than leave the operator
- * running the one command that has just told them it did nothing.
+ * one cut `unlock` is NOT the answer to (`unlockRun`'s no-lock branch handles
+ * every OTHER stranded-`running` case itself, above, rather than merely
+ * describing it — issue #228 measured that description as a false promise:
+ * "`tldrx next` demotes it" when `next` only demotes a `running` stage behind a
+ * dead-pid lock). Say so rather than leave the operator running the one command
+ * that has just told them it did nothing.
  */
 function strandedNote(store: RunStore): readonly string[] {
   const entry = store.cursorEntry();
   if (entry === null || entry.stage.status !== "running") return [];
-  if (!hasPreparedBundle(store.runDir, entry.stage.id)) {
-    return [`  ${entry.phase.id}/${entry.stage.id} is running with nothing holding it — \`tldrx next\` demotes it`];
-  }
+  if (!hasPreparedBundle(store.runDir, entry.stage.id)) return [];
   return [
     `  ${entry.phase.id}/${entry.stage.id} is waiting on a --prepare bundle, not on a lock`,
     `  finish it with \`tldrx next --commit ${store.runId}\`, or bin it with \`tldrx next --discard-pending\``,

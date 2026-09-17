@@ -339,6 +339,22 @@ describe("§A.5 refusals", () => {
     expect(issue?.message).toContain("is not the stage at the cursor (01-what/what)");
     expect(kinds(report.issues)).toEqual(["gate"]);
   });
+
+  // Issue #144 F2: `at` was only checked non-empty, and check 8's `<` compared
+  // it against `stageStartedAt` as a raw STRING — `"2026-08-29" <
+  // "2026-08-29T09:00:00Z"` is true, so a bare, date-only `at` slipped past as
+  // if it were earlier than a same-day stage start, when it is not even a real
+  // instant to compare.
+  test("8 — `at` must be a real RFC3339 instant, not just a non-empty string", () => {
+    const fx = fixture();
+    const report = validateEvidence(note({ front: withFront("at", "at: 2026-08-29") }), fx.ctx, { gate: GATE });
+    expect(report.ok).toBe(false);
+    const issue = report.issues.find((i) => i.kind === "front-matter");
+    expect(issue?.message).toBe("`at` must be a valid RFC3339 timestamp, got `2026-08-29`");
+    // A note whose `at` cannot even be trusted as an instant never reaches
+    // check 8's comparison — one issue, not two for the same root cause.
+    expect(kinds(report.issues)).toEqual(["front-matter"]);
+  });
 });
 
 // ---------------------------------------------------------------------------

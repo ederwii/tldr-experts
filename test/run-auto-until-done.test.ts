@@ -201,7 +201,7 @@ function agentGateWorkspace(): Made {
   const gate = "02-how/beta";
   process.env.FAKE_CLAUDE_ALT_OUTPUTS = JSON.stringify({
     ".agent/beta/evidence.md": [
-      "---", "version: 1", `gate: ${gate}`, "role: agent", "by: fable", "at: 2026-08-28T22:14:03Z", "verdict: sign",
+      "---", "version: 1", `gate: ${gate}`, "role: agent", "by: fable", "at: 2026-09-12T09:05:00Z", "verdict: sign",
       'read: ["02-how/handoff.md"]', "citations: {sampled: 2, of: 4, resolved: 2, refuted: 0}",
       "touches: {audited: 3, outside_surface: 0, new_areas: []}", "diff_vs_stories: n-a", "caveats: []", "recommend: []",
       "---", "", `# Gate evidence — ${gate}`, "", "## Read", "- the handoff [src: 02-how/handoff.md:1]", "",

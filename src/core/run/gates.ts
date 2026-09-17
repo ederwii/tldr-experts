@@ -9,8 +9,8 @@
  * Both write through `RunStore`, so the cursor, phase statuses, run status and the
  * budget mirror stay derived rather than hand-maintained.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import type { TldrxEvent } from "../events/Event.ts";
 import { gateEvidenceRelPath } from "../text/evidence.ts";
 import { runChecks, type CheckOutcome } from "./checks.ts";
@@ -22,6 +22,8 @@ import { givenAwayLines } from "../budget/rebalance.ts";
 import { attributeGate } from "./gateAuthority.ts";
 import { closeRun, type RunCloseOutcome } from "./closeRun.ts";
 import { withRunOutcome } from "./runOutcome.ts";
+import { evidencePath } from "../facilitator/paths.ts";
+import { hasPreparedBundle } from "./prepared.ts";
 
 export class GateError extends Error {}
 
@@ -223,6 +225,40 @@ export interface RejectOutcome {
   readonly from: string;
   /** True when the rejection asked an unattended loop to carry on (#242). */
   readonly andContinue: boolean;
+  /**
+   * Run-relative path the stage's scratch evidence note (`.agent/<stage>/
+   * evidence.md`) was archived to, when there was one — null when the stage had
+   * none (issue #199).
+   */
+  readonly archivedEvidence: string | null;
+}
+
+/**
+ * Move a stale scratch evidence note out of the way of the next attempt (#199).
+ *
+ * `reject` sends a stage back to `ready` so the NEXT `next` re-runs it and writes
+ * different outputs, but nothing removed `.agent/<stage>/evidence.md` — so a note
+ * signed over the attempt being thrown away was still the first (and only) thing
+ * either signer found, and it still said `verdict: sign`. Renamed, not deleted:
+ * the note is a record of a real check somebody made, just not one this gate may
+ * still rest on. Its ABSENCE at the ordinary path is what makes the existing
+ * "no evidence note at …" fallthrough fire honestly on the re-run, rather than a
+ * second reader having to learn a new "superseded" state.
+ */
+function archiveEvidenceNote(runDir: string, stageId: string, at: string): string | null {
+  const path = evidencePath(runDir, stageId);
+  if (!existsSync(path)) return null;
+  // Unique, never overwriting (issue #144 F3): `at` is second-precision, and a
+  // stage rejected twice in the same second — a fast scripted loop, or two
+  // rejections issued with the same `--at` in a test — used to rename the
+  // second note ONTO the first, silently destroying the record `reject`'s own
+  // docs promise it never deletes. `-2`, `-3`, … until the name is free.
+  const base = `evidence.rejected-${at.replace(/:/g, "-")}`;
+  const dir = dirname(path);
+  let archived = join(dir, `${base}.md`);
+  for (let n = 2; existsSync(archived); n++) archived = join(dir, `${base}-${String(n)}.md`);
+  renameSync(path, archived);
+  return relative(runDir, archived);
 }
 
 /**
@@ -251,6 +287,13 @@ export function reject(store: RunStore, ctx: GateContext): RejectOutcome {
       ...stage,
       status: "ready",
       ended_at: null,
+      // Advanced to THIS moment, not cleared (issue #144 F1) — a rejection is
+      // itself a decision that the attempt being thrown away is done, so
+      // nothing dated before it (the just-thrown-away note included, however
+      // it is later pointed at — `approve --evidence <archived path>`) can be
+      // evidence for whatever the NEXT attempt produces. `next` advances it
+      // again, further still, the moment it actually re-runs the stage.
+      attempt_started_at: ctx.at,
       // `and_continue` is written on EVERY rejection, `true` or nothing at all: a
       // bare rejection must not inherit a previous one's answer through the spread
       // (#242), and `undefined` is what the emitter omits.
@@ -264,6 +307,7 @@ export function reject(store: RunStore, ctx: GateContext): RejectOutcome {
       } satisfies RunGate,
     })),
   );
+  const archivedEvidence = archiveEvidenceNote(store.runDir, entry.stage.id, ctx.at);
   store.append(event(ctx.at, store.runId, entry.stage.id, "gate.rejected", ctx.actor, {
     phase: entry.phase.id,
     note: ctx.note,
@@ -272,9 +316,16 @@ export function reject(store: RunStore, ctx: GateContext): RejectOutcome {
     // "was this rejection asking for another round" is a fact about the decision, and
     // the gate mapping is overwritten by the next `gate.requested` while the log is not.
     ...(ctx.andContinue === true ? { and_continue: true } : {}),
+    // Additive (#199): null when there was no scratch note to archive, so an event
+    // written before this exists still reads — an absent key, never a claim that
+    // nothing was ever signed.
+    ...(archivedEvidence === null ? {} : { archived_evidence: archivedEvidence }),
   }));
   store.save();
-  return { stage: entry.stage.id, phase: entry.phase.id, note: ctx.note, from, andContinue: ctx.andContinue === true };
+  return {
+    stage: entry.stage.id, phase: entry.phase.id, note: ctx.note, from,
+    andContinue: ctx.andContinue === true, archivedEvidence,
+  };
 }
 
 export interface RevokeOutcome {
@@ -301,6 +352,12 @@ export interface RevokeOutcome {
    * is still unspent (review of #314). Empty otherwise. Nothing is moved back.
    */
   readonly givenAway: readonly string[];
+  /**
+   * `<phase>/<stage>` of every later stage that was `running` with nothing
+   * holding it and was demoted to `ready` alongside going stale (issue #228).
+   * Empty when no later stage was mid-flight.
+   */
+  readonly demoted: readonly string[];
 }
 
 /**
@@ -321,6 +378,15 @@ export interface RevokeOutcome {
  *     stay on disk: they cost money, they are usually mostly right, and deleting
  *     a reviewer's work to make a flag true is worse than the flag. What changes
  *     is that nothing may treat them as current;
+ *   - a later stage that is `running` with NOTHING holding it also goes back to
+ *     `ready` (issue #228). Marking it `stale: true` and leaving `status:
+ *     running` untouched left a state no verb owned: `next` only demotes a
+ *     `running` stage behind a DEAD-PID lock, and a `--prepare` cycle releases
+ *     its lock on purpose, so a stage stranded by a revoke had no lock to go
+ *     stale and the cursor walked back into it mid-flight once the revoked stage
+ *     was re-approved. One HOLDING a `--prepare` bundle is different: that is a
+ *     sub-agent turn already paid for, not ours to discard silently, so revoke
+ *     refuses instead and names the stage;
  *   - no cost is refunded and no task is deleted. Money spent stays on the record
  *     (spec §5).
  *
@@ -365,9 +431,27 @@ export function revoke(store: RunStore, ctx: GateContext, target: string): Revok
   const signedBy = entry.stage.gate.by ?? "unknown";
   const signedAt = entry.stage.gate.at;
   const signedOver = entry.stage.gate.evidence ?? null;
-  const later = stagesAfter(store.run, entry.phase.id, entry.stage.id)
-    .filter((e) => e.stage.status !== "pending" || e.stage.tasks.length > 0)
-    .map((e) => `${e.phase.id}/${e.stage.id}`);
+  const laterEntries = stagesAfter(store.run, entry.phase.id, entry.stage.id)
+    .filter((e) => e.stage.status !== "pending" || e.stage.tasks.length > 0);
+  const later = laterEntries.map((e) => `${e.phase.id}/${e.stage.id}`);
+
+  // A later stage left `running` by a `--prepare` cycle is a sub-agent turn this
+  // run already paid for — refuse rather than silently discard it (issue #228).
+  // Every OTHER `running` later stage has nothing holding it (no lock: this
+  // process is the only writer here, and a normal `next` always releases its
+  // own) and goes back to `ready` below, alongside going stale.
+  const strandedRunning = laterEntries.filter((e) => e.stage.status === "running");
+  for (const e of strandedRunning) {
+    if (hasPreparedBundle(store.runDir, e.stage.id)) {
+      throw new GateError(
+        `cannot revoke ${entry.phase.id}/${entry.stage.id}: ${e.phase.id}/${e.stage.id} is running with a `
+          + "--prepare bundle waiting — finish it (`tldrx next --commit`) or discard it "
+          + "(`tldrx next --discard-pending`) before revoking an earlier stage",
+      );
+    }
+  }
+  const demoted = strandedRunning.map((e) => `${e.phase.id}/${e.stage.id}`);
+  const runningToReady = new Set(demoted);
 
   store.mutate((run) => {
     const reset = mapStage(run, entry.phase.id, entry.stage.id, (stage) => ({
@@ -375,6 +459,11 @@ export function revoke(store: RunStore, ctx: GateContext, target: string): Revok
       status: "ready",
       ended_at: null,
       stale: undefined,
+      // Advanced to THIS moment (issue #144 F1), for the same reason `reject`
+      // advances it: a revoke is itself a decision that whatever this stage
+      // signed is done, so nothing dated before it can be evidence for the
+      // re-approval that follows.
+      attempt_started_at: ctx.at,
       // `by: null` says nobody has signed this gate. An `executed_by` left beside
       // it would be a second, contradicting claim about the same fact, so the
       // attribution goes with the signature it described (#122) — and so does
@@ -397,9 +486,18 @@ export function revoke(store: RunStore, ctx: GateContext, target: string): Revok
       ...reset,
       phases: reset.phases.map((phase) => ({
         ...phase,
-        stages: phase.stages.map((stage) =>
-          stale.has(`${phase.id}/${stage.id}`) ? { ...stage, stale: true } : stage,
-        ),
+        stages: phase.stages.map((stage) => {
+          if (!stale.has(`${phase.id}/${stage.id}`)) return stage;
+          const demotedNow = runningToReady.has(`${phase.id}/${stage.id}`);
+          return {
+            ...stage,
+            stale: true,
+            // Same reasoning as the revoked stage above: a demoted stage is
+            // getting a fresh attempt too, so nothing dated before this revoke
+            // may sign over whatever it produces next (issue #144 F1).
+            ...(demotedNow ? { status: "ready" as const, attempt_started_at: ctx.at } : {}),
+          };
+        }),
       })),
       cursor: { phase: entry.phase.id, stage: entry.stage.id, task: null },
     };
@@ -416,11 +514,15 @@ export function revoke(store: RunStore, ctx: GateContext, target: string): Revok
     // stays shape-identical.
     ...(signedOver === null ? {} : { evidence: { ...signedOver } }),
     staled: later,
+    // Additive (#228): absent, not `[]`-by-convention, on every `gate.revoked`
+    // written before this existed — a reader tolerant of a missing key needs no
+    // second case for "the field exists and is empty".
+    ...(demoted.length === 0 ? {} : { demoted }),
   }));
   store.save();
   return {
     stage: entry.stage.id, phase: entry.phase.id, note: ctx.note,
-    signedBy, signedAt, signedOver, staled: later,
+    signedBy, signedAt, signedOver, staled: later, demoted,
     givenAway: givenAwayLines(store.events.read(), store.budget, store.run, store.runId, entry.phase.id),
   };
 }

@@ -186,6 +186,11 @@ function stage(s: RunStage): string {
   // Additive (§2.2): emitted only when true, so a run that never had a gate
   // revoked round-trips byte-for-byte through a save.
   if (s.stale === true) lines.push("        stale: true");
+  // Additive (issue #144 F1): emitted only when present, so a run written
+  // before this field existed round-trips byte-for-byte.
+  if (s.attempt_started_at !== undefined && s.attempt_started_at !== null) {
+    lines.push(`        attempt_started_at: ${yamlScalar(s.attempt_started_at)}`);
+  }
   if (s.tasks.length === 0) {
     lines.push("        tasks: []");
   } else {

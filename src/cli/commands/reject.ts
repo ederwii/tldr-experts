@@ -88,6 +88,16 @@ export const rejectCommand: Command = {
             + "points at it, and the withdrawn counts are on the `gate.revoked` event",
           );
         }
+        // A later stage caught mid-flight, with nothing holding it, went back to
+        // `ready` alongside going stale — said out loud, because `stale: true`
+        // with `status: running` left untouched was exactly the state #228 found
+        // no rescue verb owned.
+        if (outcome.demoted.length > 0) {
+          lines.push(
+            `${outcome.demoted.length} later stage(s) were running with nothing holding them — `
+              + `demoted to ready: ${outcome.demoted.join(", ")}`,
+          );
+        }
         lines.push(...outcome.givenAway);
         lines.push("nothing was deleted and no cost was refunded — `tldrx next` re-runs the stage with the note");
         process.stdout.write(`${lines.join("\n")}\n`);
@@ -103,10 +113,17 @@ export const rejectCommand: Command = {
       const loop = outcome.andContinue
         ? "an unattended `tldrx run auto --wait-gates` re-runs the stage instead of stopping (--and-continue)"
         : "an unattended `tldrx run auto --wait-gates` STOPS here — pass --and-continue to have it carry on instead";
+      // Said out loud when there was one to move: a stale evidence note left in
+      // place would still be the first (and only) thing the next signer finds
+      // (#199), so its absence from `.agent/` is a fact worth surfacing.
+      const archived = outcome.archivedEvidence === null
+        ? ""
+        : `archived the stale evidence note to ${outcome.archivedEvidence} — `
+          + "the re-run needs a fresh one before this gate can sign again\n";
       process.stdout.write(
         `rejected ${outcome.phase}/${outcome.stage}${came} — back to \`ready\`\n` +
           `note: ${outcome.note}\nthe note goes into the next prompt — \`tldrx next\` to re-run the stage\n` +
-          `${loop}\n`,
+          `${archived}${loop}\n`,
       );
       return EXIT_OK;
     } catch (error) {

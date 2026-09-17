@@ -217,6 +217,7 @@ stage at `cursor`, or `done` when every phase is terminal.
 | `gates_policy` | {stage: `human\|auto\|agent`} | n | **Who** closes each gate. Resolved from §2.4 `gates:` and `run new --gates` at creation and frozen here, so the run keeps the policy it was opened with. `tldrx run gates set <stage>:<policy> --note <text>` is the ONLY sanctioned way to move it afterwards — one stage, a required note, one `gate.policy_changed` event carrying actor, moment, note and old→new. Absent, or a stage it does not name ⇒ `human`. `agent` (§5) is the third value: every `auto` condition PLUS a §2.17 evidence note that signs |
 | `questions_policy` | {stage: `human\|recommended`} | n | **Additive** (gh #251). **Who** answers each stage's open questions when `run auto` parks on them. Resolved from `run new --questions` alone (there is no workflow-file half) and frozen here beside `gates_policy`; `tldrx run questions set <stage>:<policy> --note <text>` is the ONLY sanctioned way to move it afterwards — one stage, a required note, one `questions.policy_changed` event carrying actor, moment, note and old→new. Absent — every run.yml written before this key, and every run opened without the flag — or a stage it does not name ⇒ `human`, which is exactly the behaviour every run had: park, `question.raised`, wait for `tldrx answer`. `recommended` lets the loop take a block's own `Recommended:` option (§2.7) through `tldrx answer`'s own path, recorded as `source.decided_by: agent-default` (§2.5) with `alternatives` and `recommended_why` on the fact and one `question.auto_answered` (§2.18) to the owner; a block with no recommendation, a recommendation naming no option, or one tagged `irreversible: true` / `money: true` (§2.7) is escalated exactly as under `human` |
 | `stages[].stale` | bool | n | **Additive.** `true` when an EARLIER stage's gate was revoked after this one ran (§5). Its outputs stay on disk; nothing may treat them as current. Cleared when the stage runs again; emitted only when `true` |
+| `stages[].attempt_started_at` | RFC3339\|null | n | **Additive** (issue #144 F1). When the CURRENT attempt started — as against `.started_at`, which §0 forbids ever redefining and which is set ONCE, at the stage's first run, and never moves. `markRunning` overwrites this on every run; `reject` and `revoke` also advance it, to their own moment, when they send a stage back — closing the gap between "the decision to redo this" and the next actual run. What a §2.17 evidence note's `at:` is checked against, falling back to `.started_at` for a record written before this key existed. Absent means NOT RECORDED, never invented |
 | `tasks[].id` / `.status` | `^t\d+$` / enum | y | One sub-agent invocation |
 | `tasks[].expert` | slug\|null | y | The STAGE's expert — `stages[].experts[0]`, the same value on every row of the stage. It is not who took THIS turn: a Build declares `experts: [developer]` and runs a reviewer under it too, which is what `role` exists to say |
 | `tasks[].role` | `developer`\|`reviewer` | n | **Additive.** WHICH TURN this row is, as against `expert`, which is the stage's. Until it existed every task row of a Build carried the stage's first expert, so a reviewer's turn — its money, its tokens, its span — was filed under `developer` and `run.yml` asserted something false about who did the work. Written by the executor that ran the turn, from the same role it spawned the agent under and emitted on `agent.spawned`. Absent means NOT RECORDED: every row written before this key, and every path that cannot say which role took the turn. A reader prints the absence; it never fills it in with `developer`, which is the guess the key was added to stop |
@@ -2364,7 +2365,7 @@ recommend: []
 | `gate` | `<phase>/<stage>` | y | The gate this note is evidence for. A note naming another stage is refused — that is a note pasted from somewhere else |
 | `role` | `agent` | y | What KIND of signature this is. `by:` says who; a reader tells a person, the facilitator (`by: auto`) and an agent apart with one field each |
 | `by` | str | y | The actor |
-| `at` | RFC3339 | y | When it was written |
+| `at` | RFC3339 | y | When it was written. **Must be a real RFC3339 instant** (a bare date refuses — issue #144 F2) **and must not be before the CURRENT ATTEMPT's own start** — `RunStage.attempt_started_at`, which `markRunning` overwrites on every run, never the frozen `started_at` it stands beside (issue #144 F1: `started_at` is set once, at the stage's first run, and §7 forbids ever changing what it means). A note dated before its subject's current attempt started is describing a different attempt's outputs, however clean it otherwise parses. Falls back to `started_at` for a record written before `attempt_started_at` existed; skipped entirely when neither is set |
 | `verdict` | `sign\|sign-with-fixlist\|refuse` | y | **Only `sign` closes the gate.** The other two are the note saying a human decides |
 | `read` | str[] | y | The files actually opened |
 | `citations` | `{sampled, of, resolved, refuted}` | y | Whole numbers ≥ 0. The spot-check, and what it found |
@@ -2386,7 +2387,19 @@ cheaper one, so it cannot rest on a source nobody was able to verify.
 **Validation** (each with its own message): front matter present, parseable and complete · the four sections present, in
 order, each holding a list item · every list item sourced and resolving · `citations.sampled <= citations.of` and
 `resolved + refuted <= sampled` · not `sampled: 0` while `of > 0` — "I checked none of them" is not a check ·
-`verdict: sign` · `gate:` equal to the stage at the cursor.
+`verdict: sign` · `gate:` equal to the stage at the cursor · `at` a real RFC3339 instant (issue #144 F2) not before the
+CURRENT attempt's own start (issue #144 F1).
+
+**`tldrx reject` archives a stale note rather than leaving it for the next attempt** (issue #199). Sending a stage back
+to `ready` used to leave `.agent/<stage>/evidence.md` exactly where it was — still parsing, still saying `verdict: sign`
+— so the re-run's own signer, and a host's `gate template`, both found the PREVIOUS attempt's note before either wrote a
+new one, and a note that had signed could sign again over outputs it never saw. `reject` now renames it to
+`.agent/<stage>/evidence.rejected-<at>.md` in the same scratch directory — moved, not deleted, because it is still the
+record of a real check somebody made — so the ordinary "no evidence note at …" state is what the next attempt meets.
+Collision-safe (issue #144 F3): a second reject landing in the same clock second gets `-2`, `-3`, … rather than silently
+overwriting the first archive. `reject` also advances `stages[].attempt_started_at` (§2.2, issue #144 F1) to its own
+moment — otherwise `approve --evidence <path>` pointed straight at the just-archived note still signed, since nothing
+had yet moved the anchor past it.
 
 **`tldrx gate template`** writes the blank form, filling only what a tool can COUNT or already knows — `version`,
 `gate`, `role: agent`, `by` (the current actor, which becomes `gate.by` if the note is signed), `at`, `citations.of`,
@@ -3490,6 +3503,19 @@ treat them as current; running a stage again clears its own flag. No cost is ref
 is also the one verb allowed to target a run that has already FINISHED, because reopening one is its whole purpose.
 Before this, `approve()` moved the cursor in the same transaction that signed the gate and `reject` only ever looked at
 the cursor, so a fabricated handoff that auto-approved itself could not be undone at all (measured, 2026-08-29).
+
+**A later stage caught `running` by a revoke is demoted, or the revoke refuses (issue #228).** Marking a later stage
+`stale: true` while leaving its `status: running` untouched left a state no rescue verb owned: `tldrx next` only
+demotes a `running` stage behind a DEAD-PID `.lock` (`demoteStaleRunning`), and a revoke leaves no lock behind at all —
+so the cursor could walk back into that stage mid-flight once the revoked stage was re-approved. `revoke` now decides:
+a later `running` stage with nothing holding it (no `--prepare` bundle waiting) goes to `ready` alongside going stale,
+named in `demoted` on the outcome and on the `gate.revoked` event (additive; absent on every event written before this
+existed); one that IS holding a `--prepare` bundle is a sub-agent turn already paid for, so the revoke refuses instead,
+naming the stage and pointing at `next --commit` / `next --discard-pending`. The same measurement fixed `tldrx run
+unlock`'s stranded-run note, which used to say "`tldrx next` demotes it" for a `running` stage with no lock and no
+bundle — false, by the same fact above — so `unlock` now performs that demotion itself when it finds nothing holding
+the run, rather than describing a move `next` never makes. A revoke also advances `attempt_started_at` (issue #144
+F1) on the stage it revokes and on every stage it demotes, for the same reason `reject` does (issue #199).
 
 **Reopening a story.** `tldrx story reopen <id> --note "…"` gives ONE Build story another run of developer attempts.
 `reject --stage` is the STAGE-level move and cannot express this: a story that two reviewers refused is `blocked`,
@@ -4998,7 +5024,11 @@ purpose — that work is waiting for a human, not for a process. And a command t
 - **`tldrx run unlock [<run>] [--force]`** removes a `.lock` whose pid is dead, demotes any `running` stage back to
   `ready`, and appends `run.unlocked`. A LIVE holder needs `--force` — "the pid was recycled" and "a colleague is
   running the stage" look identical from here, and only one of them is safe. Without `--force` it exits `2` and names
-  the pid.
+  the pid. **With no `.lock` at all** (issue #228), a `running` cursor stage holding a `--prepare` bundle is left
+  alone and named ("waiting on a `--prepare` bundle, not on a lock" — finish it or discard it); one with nothing
+  holding it is demoted to `ready` right here, the same `run.unlocked` event appended with `pid: null`. This used to
+  only describe the second case ("`tldrx next` demotes it"), which was false — `next` demotes a `running` stage only
+  behind a dead-pid lock, never an absent one.
 - **`tldrx run cancel [<run>] --note <text> [--force]`** closes a run for good: every non-terminal stage becomes
   `cancelled`, the decision is recorded on the run itself (`cancelled: {by, at, note}` — optional and additive, §2.2)
   and `run.cancelled` is appended. It refuses while a live lock holds the run unless `--force`. The run-level field is

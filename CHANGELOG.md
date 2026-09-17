@@ -70,6 +70,50 @@
   `build/storyScan.ts` so `boundary.ts` — which `carriedRows.ts` already imports from — does not
   import it back), closing a divergence `carriedRows.ts` had documented as "somebody else's
   issue" since #171.
+- **An agent gate can no longer sign over evidence dated before the stage it is closing even
+  started (see #144).** A field evaluation of a delegated `watch` gate found its evidence note
+  timestamped 7h before its stage began, asserting facts already false by the time it signed,
+  with `refuted: 0` — the resolution half of that bug was #140; this is the remaining half
+  AGENTS.md §7 names: "a gate's evidence must not predate what it signs". `validateEvidence`
+  refuses a note whose `at:` is before the CURRENT attempt's own start — the new, additive
+  `RunStage.attempt_started_at`, which `markRunning` overwrites on every run, never the frozen
+  `started_at` it sits beside (§7: existing fields only grow, never change meaning; `started_at`
+  is set once, at the stage's first run, and stays that forever) — on both the engine's own
+  signer and `approve --as-agent`, one derivation, both doors. Two more holes pre-merge review
+  found in the same check: `at` was only confirmed non-empty, so a raw string compare read a
+  date-only `at` as earlier than a same-day, full-precision stage start; `at` is now confirmed a
+  real RFC3339 instant first, and the two timestamps are compared as instants, not strings. And
+  the full test gate caught the new check's own collateral: `tldrx learn`'s chapter 6 planted its
+  stand-in evidence note with a fixed past date, which the real wall clock had by now walked
+  past — its `at:` is stamped off `Date.now()` (with a 5-minute forward buffer, since the note is
+  written before the step that starts the stage it signs) rather than a date fixed at authoring
+  time.
+- **`tldrx reject` now archives a stage's scratch evidence note instead of leaving it for the
+  next attempt to sign over (see #199).** A reject sent a stage back to `ready` but never
+  touched `.agent/<stage>/evidence.md`, so a note that had already said `verdict: sign` over one
+  attempt's outputs was still the first (and only) thing either signer found after the stage
+  re-ran with different outputs — and could sign again over an attempt it never read. The note
+  is renamed to `evidence.rejected-<at>.md` in the same scratch directory (moved, not deleted:
+  it is still the record of a real check somebody made), so the re-run meets the ordinary "no
+  evidence note at …" state instead. `reject` also advances the stage's `attempt_started_at`
+  anchor to its own moment (see #144's entry above) — closing a gap pre-merge review found:
+  without it, `approve --evidence <path>` pointed straight at the just-archived note still
+  signed, since nothing yet had moved the anchor past it. Archiving is collision-safe too
+  (`-2`, `-3`, … suffixes): two rejections landing in the same clock second used to let the
+  second silently overwrite the first's archive.
+- **`reject --stage` (i.e. a revoke) no longer strands a later stage `running` with no verb that
+  owns it, and `run unlock`'s stranded-run note no longer promises a demotion `next` does not
+  make (see #228).** A revoke marked every later stage `stale: true` but left `status: running`
+  untouched; `next` only demotes a `running` stage behind a DEAD-PID lock, and a revoke leaves no
+  lock behind at all, so the cursor could walk back into that stranded stage mid-flight once the
+  revoked stage was re-approved. A later `running` stage with nothing holding it (no `--prepare`
+  bundle waiting) now goes back to `ready` alongside going stale, named on the outcome and on the
+  additive `gate.revoked` event; one holding a bundle is a sub-agent turn already paid for, so
+  the revoke refuses instead and names it. `run unlock` had the same false promise for a
+  lockless `running` stage ("`tldrx next` demotes it") — it now performs that demotion itself
+  when nothing is holding the run, rather than describing a move nothing makes. A revoke also
+  advances `attempt_started_at` (see #144, #199) on the stage it revokes and on every stage it
+  demotes, for the same reason `reject` does.
 
 ## 0.33.0 — 2026-09-17
 
