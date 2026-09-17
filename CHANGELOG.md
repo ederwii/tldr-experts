@@ -101,6 +101,19 @@
   signed, since nothing yet had moved the anchor past it. Archiving is collision-safe too
   (`-2`, `-3`, … suffixes): two rejections landing in the same clock second used to let the
   second silently overwrite the first's archive.
+- **`reject --stage` (i.e. a revoke) no longer strands a later stage `running` with no verb that
+  owns it, and `run unlock`'s stranded-run note no longer promises a demotion `next` does not
+  make (see #228).** A revoke marked every later stage `stale: true` but left `status: running`
+  untouched; `next` only demotes a `running` stage behind a DEAD-PID lock, and a revoke leaves no
+  lock behind at all, so the cursor could walk back into that stranded stage mid-flight once the
+  revoked stage was re-approved. A later `running` stage with nothing holding it (no `--prepare`
+  bundle waiting) now goes back to `ready` alongside going stale, named on the outcome and on the
+  additive `gate.revoked` event; one holding a bundle is a sub-agent turn already paid for, so
+  the revoke refuses instead and names it. `run unlock` had the same false promise for a
+  lockless `running` stage ("`tldrx next` demotes it") — it now performs that demotion itself
+  when nothing is holding the run, rather than describing a move nothing makes. A revoke also
+  advances `attempt_started_at` (see #144, #199) on the stage it revokes and on every stage it
+  demotes, for the same reason `reject` does.
 
 ## 0.33.0 — 2026-09-17
 

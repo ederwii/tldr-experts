@@ -88,6 +88,16 @@ export const rejectCommand: Command = {
             + "points at it, and the withdrawn counts are on the `gate.revoked` event",
           );
         }
+        // A later stage caught mid-flight, with nothing holding it, went back to
+        // `ready` alongside going stale — said out loud, because `stale: true`
+        // with `status: running` left untouched was exactly the state #228 found
+        // no rescue verb owned.
+        if (outcome.demoted.length > 0) {
+          lines.push(
+            `${outcome.demoted.length} later stage(s) were running with nothing holding them — `
+              + `demoted to ready: ${outcome.demoted.join(", ")}`,
+          );
+        }
         lines.push(...outcome.givenAway);
         lines.push("nothing was deleted and no cost was refunded — `tldrx next` re-runs the stage with the note");
         process.stdout.write(`${lines.join("\n")}\n`);

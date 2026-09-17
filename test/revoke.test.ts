@@ -9,7 +9,7 @@
  * is not a gate.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext } from "../src/core/facilitator/runNext.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
@@ -209,6 +209,84 @@ describe("M3 · what revoke refuses", () => {
     armFake(ws, ALPHA_OUTPUTS);
     await next(ws);
     expect(revoke(RunStore.open(ws.runDir), { ...ctx("bare"), root: ws.root }, "alpha").stage).toBe("alpha");
+  });
+});
+
+/**
+ * Issue #228: `reject --stage` (i.e. `revoke`) marked a later `running` stage
+ * `stale: true` and left its `status` untouched — a state no rescue verb owned,
+ * since `next` only demotes a `running` stage behind a DEAD-PID lock and a
+ * revoke leaves no lock behind at all.
+ *
+ * A completed stage's OWN spawn always leaves a `pending.json` behind — a
+ * headless turn writes exactly the same bookkeeping file a `--prepare` one does
+ * (`run/lastStart.ts`) and nothing ever removes it after a normal commit — so
+ * forcing a stage that has ALREADY run back to `running` also has to clear that
+ * leftover to represent a stage truly nothing is holding, rather than the
+ * unrelated fact that it ran once before.
+ */
+function forceRunning(ws: FacilitatorWorkspace, phaseId: string, stageId: string): void {
+  const store = RunStore.open(ws.runDir);
+  store.mutate((run) => ({
+    ...run,
+    phases: run.phases.map((p) => (p.id !== phaseId ? p : {
+      ...p,
+      stages: p.stages.map((s) => ({ ...s, status: "running" as const })),
+    })),
+  }));
+  store.save();
+  rmSync(join(ws.runDir, ".agent", stageId, "pending.json"), { force: true });
+}
+
+describe("M3 · revoke and a later stage stranded `running` (#228)", () => {
+  test("nothing holding it: goes back to `ready` alongside going stale", async () => {
+    const ws = workspace([ALPHA, BETA], { alpha: "auto", beta: "auto" });
+    armFake(ws, BOTH_OUTPUTS);
+    await next(ws);
+    await next(ws);
+    expect(RunStore.open(ws.runDir).run.phases[1]?.stages[0]?.status).toBe("done");
+
+    forceRunning(ws, "02-how", "beta");
+
+    const outcome = revoke(RunStore.open(ws.runDir), { ...ctx("start over"), root: ws.root }, "01-what/alpha");
+    expect(outcome.staled).toEqual(["02-how/beta"]);
+    expect(outcome.demoted).toEqual(["02-how/beta"]);
+
+    const store = RunStore.open(ws.runDir);
+    const beta = store.run.phases[1]?.stages[0];
+    expect(beta?.status).toBe("ready");
+    expect(beta?.stale).toBe(true);
+  });
+
+  test("holding a --prepare bundle: refuses and names it, writing nothing", async () => {
+    const ws = workspace([ALPHA, BETA], { alpha: "auto", beta: "auto" });
+    armFake(ws, BOTH_OUTPUTS);
+    await next(ws);
+    await next(ws);
+    forceRunning(ws, "02-how", "beta");
+    mkdirSync(join(ws.runDir, ".agent", "beta"), { recursive: true });
+    writeFileSync(join(ws.runDir, ".agent", "beta", "pending.json"), "{}", "utf8");
+
+    const before = readFileSync(join(ws.runDir, "run.yml"), "utf8");
+    expect(() => revoke(RunStore.open(ws.runDir), { ...ctx("start over"), root: ws.root }, "01-what/alpha"))
+      .toThrow(/02-how\/beta is running with a --prepare bundle waiting/);
+    expect(readFileSync(join(ws.runDir, "run.yml"), "utf8")).toBe(before);
+  });
+
+  test("the CLI names what it demoted", async () => {
+    const ws = workspace([ALPHA, BETA], { alpha: "auto", beta: "auto" });
+    armFake(ws, BOTH_OUTPUTS);
+    await next(ws);
+    await next(ws);
+    forceRunning(ws, "02-how", "beta");
+
+    const printed = capture();
+    const code = await rejectCommand.run([
+      "--root", ws.root, "--stage", "01-what/alpha", "--note", "start over",
+    ]);
+    const out = printed();
+    expect(code).toBe(0);
+    expect(out).toContain("were running with nothing holding them — demoted to ready: 02-how/beta");
   });
 });
 

@@ -789,6 +789,33 @@ describe("tldrx run unlock", () => {
     // The stage is NOT demoted: that would bin the bundle behind the operator's back.
     expect(RunStore.open(ws.runDir).run.phases[0]!.stages[0]!.status).toBe("running");
   });
+
+  /**
+   * Issue #228: no lock, no `--prepare` bundle, a `running` stage — the
+   * `strandedNote` used to say "`tldrx next` demotes it", which was false:
+   * `next` only demotes a `running` stage behind a DEAD-PID lock
+   * (`demoteStaleRunning`), never one with no lock at all. `unlock` is the
+   * rescue verb an operator actually reaches for, so it now does the
+   * demotion itself rather than describing a move nothing makes.
+   */
+  test("no lock and no --prepare bundle: unlock demotes the running stage itself", () => {
+    const ws = oneStage();
+    const store = RunStore.open(ws.runDir);
+    store.mutate((run) => withStageStatus(run, "alpha", "running"));
+    store.save();
+
+    const outcome = unlockRun(rescue(ws));
+    expect(outcome.code).toBe(0);
+    expect(outcome.lines.join("\n")).toContain("nothing was holding it");
+    expect(outcome.lines.join("\n")).toContain("demoted 01-what/alpha from running to ready");
+    // The false promise is gone, not just unreached.
+    expect(outcome.lines.join("\n")).not.toContain("`tldrx next` demotes it");
+    expect(RunStore.open(ws.runDir).run.phases[0]!.stages[0]!.status).toBe("ready");
+
+    const unlocked = EventLog.forRun(ws.runDir).read().filter((e) => e.type === "run.unlocked");
+    expect(unlocked).toHaveLength(1);
+    expect(unlocked[0]!.payload).toMatchObject({ pid: null, was_alive: false, forced: false, demoted: ["01-what/alpha"] });
+  });
 });
 
 describe("tldrx run cancel", () => {

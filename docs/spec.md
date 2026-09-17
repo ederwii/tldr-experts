@@ -3504,6 +3504,19 @@ is also the one verb allowed to target a run that has already FINISHED, because 
 Before this, `approve()` moved the cursor in the same transaction that signed the gate and `reject` only ever looked at
 the cursor, so a fabricated handoff that auto-approved itself could not be undone at all (measured, 2026-08-29).
 
+**A later stage caught `running` by a revoke is demoted, or the revoke refuses (issue #228).** Marking a later stage
+`stale: true` while leaving its `status: running` untouched left a state no rescue verb owned: `tldrx next` only
+demotes a `running` stage behind a DEAD-PID `.lock` (`demoteStaleRunning`), and a revoke leaves no lock behind at all —
+so the cursor could walk back into that stage mid-flight once the revoked stage was re-approved. `revoke` now decides:
+a later `running` stage with nothing holding it (no `--prepare` bundle waiting) goes to `ready` alongside going stale,
+named in `demoted` on the outcome and on the `gate.revoked` event (additive; absent on every event written before this
+existed); one that IS holding a `--prepare` bundle is a sub-agent turn already paid for, so the revoke refuses instead,
+naming the stage and pointing at `next --commit` / `next --discard-pending`. The same measurement fixed `tldrx run
+unlock`'s stranded-run note, which used to say "`tldrx next` demotes it" for a `running` stage with no lock and no
+bundle — false, by the same fact above — so `unlock` now performs that demotion itself when it finds nothing holding
+the run, rather than describing a move `next` never makes. A revoke also advances `attempt_started_at` (issue #144
+F1) on the stage it revokes and on every stage it demotes, for the same reason `reject` does (issue #199).
+
 **Reopening a story.** `tldrx story reopen <id> --note "…"` gives ONE Build story another run of developer attempts.
 `reject --stage` is the STAGE-level move and cannot express this: a story that two reviewers refused is `blocked`,
 which is terminal for the rest of the run, and an owner who has decided it ships anyway had no verb at all (measured
@@ -5011,7 +5024,11 @@ purpose — that work is waiting for a human, not for a process. And a command t
 - **`tldrx run unlock [<run>] [--force]`** removes a `.lock` whose pid is dead, demotes any `running` stage back to
   `ready`, and appends `run.unlocked`. A LIVE holder needs `--force` — "the pid was recycled" and "a colleague is
   running the stage" look identical from here, and only one of them is safe. Without `--force` it exits `2` and names
-  the pid.
+  the pid. **With no `.lock` at all** (issue #228), a `running` cursor stage holding a `--prepare` bundle is left
+  alone and named ("waiting on a `--prepare` bundle, not on a lock" — finish it or discard it); one with nothing
+  holding it is demoted to `ready` right here, the same `run.unlocked` event appended with `pid: null`. This used to
+  only describe the second case ("`tldrx next` demotes it"), which was false — `next` demotes a `running` stage only
+  behind a dead-pid lock, never an absent one.
 - **`tldrx run cancel [<run>] --note <text> [--force]`** closes a run for good: every non-terminal stage becomes
   `cancelled`, the decision is recorded on the run itself (`cancelled: {by, at, note}` — optional and additive, §2.2)
   and `run.cancelled` is appended. It refuses while a live lock holds the run unless `--force`. The run-level field is
