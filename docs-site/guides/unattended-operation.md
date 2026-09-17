@@ -598,10 +598,14 @@ Three policies, three different things happen when a stage finishes:
   recorded decision that an agent may close it.
 - **`auto`** — no signer and no note: seven measured conditions, and the gate closes only if
   all seven hold. Otherwise it falls to a person with the failing ones named, on the
-  `gate.requested` payload's `held_by` as well as on stdout. And it keeps the offer open:
-  under `--wait-gates` the seven are re-measured on every poll, so a gate held by an open
-  question closes itself as soon as the question is answered. Only `auto` — the run already
-  granted that authority — and your own `approve` or `reject` overrides it at any moment.
+  `gate.requested` payload's `held_by` as well as on stdout. And it keeps the offer open, two
+  ways: `tldrx next` itself re-measures an already-parked `auto` gate on EVERY call and closes
+  it the instant every condition holds — no flag required (gh #342) — and, under `--wait-gates`,
+  the same seven conditions are ALSO re-measured on every poll without waiting for a fresh
+  `next` call, which is what a rate-limit park or a budget park (below) needs to resume once
+  the provider's clock, or an operator's `tldrx budget raise`, clears them. Only `auto` — the
+  run already granted that authority — and your own `approve` or `reject` overrides it at any
+  moment.
 
   When the only thing refusing an `auto` gate is a **failed check** — a declared check, or
   `claim-sources` refusing a citation — the loop does what you would have typed: it records
@@ -617,8 +621,8 @@ Both wait flags may be given together — that is the shape of a fully unattende
 ### `--gates none` and `--wait-gates` are two different levers
 
 Opening the run and launching the engine are two separate commands, and dropping
-`--wait-gates` from the second one is the single most common way a zero-touch launch stops
-being zero-touch. The complete pair:
+`--wait-gates` from the second one is still worth avoiding on a zero-touch launch, even though
+gh #342 closed the sharpest edge of skipping it. The complete pair:
 
 ```bash
 tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.md \
@@ -627,15 +631,21 @@ tldrx run auto --run <id> --until-done=5 --wait-gates 4h --wait-answers 4h
 ```
 
 `--gates none` sets the **policy** — every gate may close itself, recorded once in `run.yml`.
-`--wait-gates` is what lets `run auto` actually **close** a gate that parked — without it the
-loop exits `awaiting human` on the first gate that parks on a question it then auto-answers
-under `--questions none` (measured, #342). The mechanism: the question does get answered —
-question-answering runs unconditionally — but re-signing the gate that was waiting on it only
-happens inside the `--wait-gates` poll loop. Skip that flag and the very next `next` call finds
-the stage already `awaiting_gate` and hands control to a person who has nothing left to decide.
-Launch `run auto` with `--wait-gates <duration>` on every run opened with `--gates none` —
-`--wait-answers <duration>`, its sibling for the open question itself, belongs beside it for the
-same reason.
+Before #342, a gate that parked on a question `--questions none` then auto-answered stayed
+`awaiting_gate` forever without `--wait-gates`: question-answering ran unconditionally, but
+re-signing the gate that was waiting on it happened only inside the `--wait-gates` poll loop, so
+the very next `next` call found the stage still `awaiting_gate` and handed control to a person
+with nothing left to decide (measured, #342). `tldrx next` now re-measures an already-parked
+`auto` gate on every call and closes it the moment every condition holds — `--wait-gates` or
+not — so that exact scenario resolves itself on the loop's own next iteration once
+`--wait-answers` has answered the question. `--wait-gates` still earns its place on every
+zero-touch launch for two things `next`'s own self-close cannot do alone: it is what lets the
+loop keep polling instead of exiting the moment ONE gate falls to a person for an unrelated
+reason, and it is the only door that resumes a rate-limit park or a budget park (below) — both
+gated by a condition (the provider's own clock, or the phase's remainder) that only clears
+between polls, not between one `next` call and the next. Launch `run auto` with
+`--wait-gates <duration>` on every run opened with `--gates none` — `--wait-answers <duration>`,
+its sibling for the open question itself, belongs beside it for the same reason.
 
 ## Retrying a stage that failed
 
@@ -693,7 +703,10 @@ carrying the exit it recovered from, the attempt and the bound, and `run.finishe
 over:
 
 - **A person's exit `4`.** An open question or a pending gate is yours; `--wait-answers` and
-  `--wait-gates` are the flags that wait for you.
+  `--wait-gates` are the flags that wait for you. That includes a Build stage `--wait-gates`
+  parked at a story boundary because the phase ran short of money mid-stage (gh #354) — it
+  resumes on its own once `tldrx budget raise --stage <id>` (or `--rebalance-finished`) actually
+  affords the next story, checked fresh on every poll, never a guess.
 - **Money.** A `budget.blocked` names `remaining_usd < estimate_usd`, and nothing in-process
   moves that ceiling — the stop line says the two figures, and `tldrx budget raise` is yours.
   A phase priced in `economy: host-tokens` is stopped by the same event but not by dollars, so

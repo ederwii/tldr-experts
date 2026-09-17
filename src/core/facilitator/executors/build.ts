@@ -196,6 +196,12 @@ const RATE_LIMIT_WARNING_PARK_UTILIZATION = 0.9;
  * threshold — recorded, not acted on.
  */
 const RATE_LIMIT_WARNING_LINE = "the provider warned its rate limit, but stayed below the park threshold — dispatch continues";
+/**
+ * gh #354: the operator line for a story a budget shortfall parked — modeled on
+ * `RATE_LIMIT_PARK_LINE`, one spelling, two doors (the serial loop and a wave's
+ * lanes).
+ */
+const BUDGET_PARK_LINE = "the stage can no longer afford the next story's developer, so the run parked before overspending it";
 /** gh #327: the operator line for a story requeued for its fix round — one spelling, three doors. */
 const FIX_ROUND_REQUEUED_LINE = "the reviewer signed with a fix list — requeued for its fix round, which spends no attempt";
 import { carriedReportFor, type CarriedReport } from "../../build/carriedRows.ts";
@@ -240,11 +246,11 @@ import {
 import { phaseCostToDate, storySpendToDate } from "../../build/phaseCost.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
 import {
-  capDeathReason, clampParallel, developerAttemptDivisor, developerCap, planOverStageAdvisory, waveLaneFunding,
-  reviewerCap, reviewerUnderfunded, round2, stageRemainderUsd, storyCeilingUsd,
+  budgetParkFor, capDeathReason, clampParallel, developerAttemptDivisor, developerCap, planOverStageAdvisory,
+  waveLaneFunding, reviewerCap, reviewerUnderfunded, round2, stageRemainderUsd, storyCeilingUsd,
   DEFAULT_PARALLEL, MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
   STORY_CAP_MULTIPLIER, STORY_CAP_FLOOR_USD,
-  type CapLever, type CapParts,
+  type BudgetParkReason, type CapLever, type CapParts,
 } from "../../build/caps.ts";
 import { shortBy, stageRaiseCommand } from "../../budget/budgetView.ts";
 import type { PlanStatus } from "../../schemas/planCommon.ts";
@@ -408,6 +414,9 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
     // stage had a story left to withhold. Here, because this is the one wrapper
     // every exit — finished, refused, failed — returns through.
     session.flushRateLimited();
+    // gh #354, the same reasoning: a budget shortfall belongs on the ledger
+    // whether or not this stage had a story left to withhold.
+    session.flushBudgetParked();
     const lines = await session.restoreForeignWorkAside();
     return withClaims(lines.length === 0 ? outcome : { ...outcome, lines: [...outcome.lines, ...lines] });
   };
@@ -443,6 +452,7 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
     // turn no longer takes that turn's money out of the ledger.
     try {
       session.flushRateLimited();
+      session.flushBudgetParked();
       await session.restoreForeignWorkAside();
     } catch {
       // Nothing to add: the original error is the one that matters.
@@ -834,6 +844,19 @@ class BuildSession {
    * once-per-stage write (or the reverse) when both arrive in one invocation.
    */
   private rateLimitWarnedBelow = false;
+  /**
+   * gh #354: modeled on `rateLimitPark` above — the phase can no longer afford
+   * even the FLOOR for the next story's developer, measured the first time a
+   * dispatch door asks (`budgetParkFor`, `build/caps.ts`), or null while it
+   * never has. One-way for the same reason a quota park is: nothing here raises
+   * `budget.yml`'s ceiling, so a remainder that was too short stays too short
+   * until an operator's `tldrx budget raise` — or `--rebalance-finished` — moves
+   * money into this phase and the stage is re-entered fresh (`runNext.ts`'s
+   * entry-level `budgetRefusal` measures THAT, off real disk, on the retry).
+   */
+  private budgetPark: BudgetParkReason | null = null;
+  /** The `budget.parked` event is written once per stage, not once per story. */
+  private budgetParked = false;
 
   constructor(
     private readonly ctx: ExecutorContext,
@@ -1519,6 +1542,21 @@ class BuildSession {
         this.parkForRateLimit(planned.story.id, i === 0 ? "not started" : "not requeued");
         return;
       }
+      // gh #354: modeled on the rate-limit park just above — a story boundary,
+      // not the whole-stage all-or-nothing entry refusal (`runNext.ts`'s
+      // `budgetRefusal`). The phase's remainder can no longer fund a turn worth
+      // attempting, of any size (`budgetParkFor`'s own `REVIEWER_FLOOR_USD`
+      // floor — never a per-story `developerFloorUsd`, which #277 deliberately
+      // lets exceed the whole stage): stop HERE, with everything before it
+      // settled, rather than dispatching underfunded or spending the stage
+      // past what the operator budgeted.
+      if (this.budgetPark === null) {
+        this.budgetPark = budgetParkFor(this.capParts, this.spent());
+      }
+      if (this.budgetPark !== null) {
+        this.parkForBudget(planned.story.id, i === 0 ? "not started" : "not requeued");
+        return;
+      }
       await this.settleHalf(await this.buildHalf(planned));
       const outcome = this.outcomes.get(planned.story.id);
       // The developer never ran, so the story is back where it started and its
@@ -1697,6 +1735,30 @@ class BuildSession {
           }
           // A story a PERSON finished spawns no developer (#279): nothing to fund.
           if (this.asIsFor(planned) !== null) break;
+          // gh #354, the same park per lane: once ANY lane has parked, every
+          // lane dispatches nothing more — the lanes already in flight finish
+          // and are settled by half B, exactly like the rate-limit park above.
+          if (this.budgetPark !== null) {
+            this.parkForBudget(id, "not started");
+            return;
+          }
+          // The NEW-park question is asked only when NOTHING is in flight:
+          // `waveLaneFunding` below computes a DIFFERENT, per-story
+          // `bound < floor` shortfall and, with a sibling lane still spending,
+          // returns `defer` instead — waiting is still right there, because a
+          // lane that finishes under its reservation can free the money this
+          // lane needs. With nothing in flight nothing will be freed by
+          // waiting, so this is the boundary: park here — on `budgetParkFor`'s
+          // OWN, coarser "can this stage fund any turn at all" question — rather
+          // than let `waveLaneFunding` dispatch this lane underfunded.
+          if (inFlight.size === 0) {
+            const park = budgetParkFor(this.capParts, this.spent());
+            if (park !== null) {
+              this.budgetPark = park;
+              this.parkForBudget(id, "not started");
+              return;
+            }
+          }
           // Decided and reserved with no `await` between them, so two lanes can
           // never both be funded off the same unreserved dollar.
           const funding = waveLaneFunding(this.capParts, this.spent(), {
@@ -1862,6 +1924,56 @@ class BuildSession {
   private rateLimitReason(frame: AgentRateLimit): string {
     return `${RATE_LIMIT_PARK_LINE}: ${rateLimitLine(frame)}`
       + (frame.resetsAt === null ? " — and it stated no reset instant, so nothing here knows when it clears" : "");
+  }
+
+  /**
+   * The line a story that was NOT started gets, and the event that records it
+   * (gh #354) — modeled on `parkForRateLimit`.
+   */
+  private parkForBudget(storyId: string, what: "not started" | "not requeued"): void {
+    const park = this.budgetPark;
+    if (park === null) return;
+    this.lines.push(`  · ${storyId}: ${what} — ${this.budgetParkReason(park)}`);
+    this.recordBudgetParked(storyId);
+  }
+
+  /**
+   * The park, on the ledger, ONCE per stage (gh #354) — modeled on
+   * `recordRateLimited`: `parked` is the first story the shortfall cost, and is
+   * ABSENT when nothing was left to park (the stage's last story) — the record
+   * still says the phase came up short, even though it withheld nothing.
+   */
+  private recordBudgetParked(parked: string | null): void {
+    const park = this.budgetPark;
+    if (park === null || this.budgetParked) return;
+    this.budgetParked = true;
+    this.ctx.emit("budget.parked", {
+      phase: this.ctx.phaseId,
+      remainder_usd: park.remainderUsd,
+      floor_usd: park.floorUsd,
+      ...(parked === null
+        ? { parked_absent: "nothing was left to park — the shortfall arrived on this stage's last story" }
+        : { parked }),
+    }, 0, "build");
+  }
+
+  /**
+   * Every exit from this executor writes the park if it never did (gh #354) —
+   * modeled on `flushRateLimited`, called from the SAME wrapper.
+   */
+  flushBudgetParked(): void {
+    this.recordBudgetParked(null);
+  }
+
+  /**
+   * The park, in one sentence, for the operator line AND for the handoff row —
+   * one derivation, so the two can never describe the same shortfall
+   * differently. Modeled on `rateLimitReason`.
+   */
+  private budgetParkReason(park: BudgetParkReason): string {
+    return `${BUDGET_PARK_LINE}: $${park.remainderUsd.toFixed(2)} left, `
+      + `$${park.floorUsd.toFixed(2)} is the least this stage can fund another turn with — `
+      + "`tldrx budget raise` (or `run auto --rebalance-finished`) before this stage can continue";
   }
 
   /**
@@ -4792,30 +4904,33 @@ class BuildSession {
           id: planned.story.id,
           rel: this.plan.implicit ? IMPLICIT_PLAN_REL : planned.rel,
           status: this.statusOf(planned),
-          // A wait IS a reason (#280); a quota park is one too (gh #298), and it
-          // covers EVERY story left unstarted after the warning — including the
-          // ones a wave's lanes never pulled, which get no operator line of their
-          // own. Without it the handoff said "no reason for it" over a reason
-          // this stage had printed, recorded and acted on: the audit record
-          // lying in the dangerous direction (AGENTS.md §7). The dependency wait
-          // wins where there is one — it is the more specific fact about THAT
-          // story. The residue below is the one there really is no reason for.
-          // The order is the order the loop itself takes its doors, so the
-          // audit record and the live report can never name different causes
-          // for the same withheld story (gh #298's review): a dependency wait is
-          // the most specific fact about THIS story; a cancel stops everything
-          // and is checked before the park at both spawn doors, so it wins over
-          // the park here too — a quota warning that was true is not why the run
-          // stopped once a person cancelled it. The residue is the one there
-          // really is no reason for.
+          // A wait IS a reason (#280); a quota park is one too (gh #298), and a
+          // budget park is a third (gh #354) — each covers EVERY story left
+          // unstarted after it fired, including the ones a wave's lanes never
+          // pulled, which get no operator line of their own. Without it the
+          // handoff said "no reason for it" over a reason this stage had
+          // printed, recorded and acted on: the audit record lying in the
+          // dangerous direction (AGENTS.md §7). The dependency wait wins where
+          // there is one — it is the more specific fact about THAT story. The
+          // residue below is the one there really is no reason for. The order
+          // is the order the loop itself takes its doors at BOTH spawn points,
+          // so the audit record and the live report can never name different
+          // causes for the same withheld story (gh #298's review): a dependency
+          // wait is the most specific fact about THIS story; a cancel stops
+          // everything and is checked first, so it wins over either park; a
+          // quota warning is checked before the budget park at both doors, so
+          // it wins when both are somehow true — neither park explains a story
+          // once a person cancelled the run.
           reason: wait !== undefined
             ? dependencyWaitReason(wait)
             : cancelled
               ? CANCELLED_UNDER_STAGE
               : this.rateLimitPark !== null
                 ? this.rateLimitReason(this.rateLimitPark)
-                : "this stage recorded no attempt and no reason for it — "
-                  + "nothing here says the work was done, and nothing says why it was not",
+                : this.budgetPark !== null
+                  ? this.budgetParkReason(this.budgetPark)
+                  : "this stage recorded no attempt and no reason for it — "
+                    + "nothing here says the work was done, and nothing says why it was not",
         });
       }
     }

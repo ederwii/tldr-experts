@@ -127,6 +127,32 @@
   to run one against either base tree it measures, as defense in depth for a story file that
   reached Build some other way. Neither door touches a story's own fresh worktree, where a
   generator legitimately runs once, by the developer.
+- **`tldrx next` now self-closes a parked `auto` gate the moment every condition it was held on
+  clears, `--wait-gates` or not (see #342).** Before this, the only door that ever re-measured an
+  already-`awaiting_gate` stage was `run auto --wait-gates`'s own poll (`waitForGate` →
+  `selfCloseAutoGate`); without that flag, `run auto` answering its own blocking questions (or a
+  person answering them by hand) left the gate `awaiting_gate` forever, and the next `next` call
+  reported it as terminal-for-this-call with a generic `gate pending: tldrx approve` — never
+  noticing the questions it was parked on had since been answered. `next` now re-runs the same
+  seven conditions (`reevaluateAutoGate`) on every `awaiting_gate` stage whose policy is `auto`
+  before giving up, and signs it through the same `approve` door a freshly-closed gate uses —
+  `human` and `agent` gates are untouched, and a verdict that still fails falls through to the
+  ordinary human-gate report exactly as before.
+- **The default Build budget gate now parks at a story boundary instead of stopping the stage
+  incomplete with no boundary the operator chose (see #354).** `runNext.ts`'s `budgetRefusal`
+  meters the phase ceiling exactly once, at stage entry — the Build executor itself never
+  re-checked the envelope between two dispatches of one headless run, so a phase that could
+  afford its entry estimate but ran short partway through kept dispatching until the money was
+  gone, and the only way the gate fired again was an all-or-nothing refusal on a RETRY of a
+  failed stage. Modeled directly on #298's rate-limit park: before starting a new story's
+  developer, the executor now checks whether the stage's remainder still covers that story's
+  floor and, if not, lets whatever is already running finish and settle, then stops — recording
+  one `budget.parked` event (mirroring `agent.rate_limited`'s shape) and naming the shortfall as
+  the reason in both the operator line and the handoff's `## Unknowns`. `run auto --wait-gates`
+  resumes the parked stage itself once an operator's `tldrx budget raise --stage` (or
+  `--rebalance-finished`) actually raises the STAGE's own `budget_usd` — checked fresh on every
+  poll against the phase's real remainder, never a clock — and `run status` names the park
+  instead of reading as a decision waiting on a person.
 
 ## 0.33.0 — 2026-09-17
 
