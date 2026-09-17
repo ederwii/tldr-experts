@@ -49,6 +49,27 @@
   stuck Build stage's `agent.spawned` turns no `agent.result` ever answered
   (`build/orphanedTurns.ts`) and records one `cost_usd: null, metered: false` row per abandoned
   story, same as the headless case.
+- **The boundary gate now diffs the branch Build actually cut under `branch_model: integration`,
+  instead of an epic file's unused per-epic `branch:` label (see #225).** `epicTargets` read
+  `03-plan/epics/*.md`'s own `branch:` as the ref to diff — right under `per-epic`, where Build
+  cuts exactly that name, and silently wrong under `integration`, where every epic's stories
+  merge into ONE recorded branch and the epic's `branch:` is never cut at all. A run with eight
+  such epics measured `boundary=n/a (nothing could be diffed: … does not resolve …)` and
+  auto-signed a +31,465/−237-line PR across 117 files with the condition having diffed nothing.
+  The branch now comes from `run.yml`'s `build.epic_branch`, through the same `recordedEpicBranch`
+  derivation `watch` and `ship` already use (#90) — the epic file supplies repos and stories,
+  never the ref. A run that recorded an epic branch and still cannot diff it now HOLDS the gate
+  instead of reading `n/a`; `n/a` stays reserved for a run that named no branch to diff at all.
+- **The boundary gate reads a run's stories through the same validated, all-phases walk `ship`
+  and carried-findings ownership already share, instead of its own `03-plan/`-only, schema-less
+  reader (see #189).** `boundary.ts`'s `storyTouches` was a third `stories/*.md` reader: it
+  looked only under `03-plan/` (missing a story filed under `04-build/`, the phase a carried fix
+  list's own story is written under), parsed front matter with no schema (taking a story a real
+  reader would report as unreadable), and dropped an unparseable file silently. It now calls the
+  shared `scanStories`/`phaseDirsOf` leaf (extracted from `build/carriedRows.ts` into
+  `build/storyScan.ts` so `boundary.ts` — which `carriedRows.ts` already imports from — does not
+  import it back), closing a divergence `carriedRows.ts` had documented as "somebody else's
+  issue" since #171.
 
 ## 0.33.0 — 2026-09-17
 

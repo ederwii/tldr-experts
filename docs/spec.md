@@ -3258,12 +3258,16 @@ design.
 **(7) `boundary`** was added on 2026-08-31 and is the other condition about the WORK rather than the artefact: was
 this the work we scoped? The **surface** is the union of every `file:`-kind `[src: …]` citation in
 `01-what/handoff.md` and `02-how/handoff.md` (§2.8's grammar, the same tokenizer) and every `touches:` entry of every
-story under `03-plan/stories/` — or of `04-build/implicit-plan.yml` when the scope skipped Plan (§2.13). A directory
-entry covers everything beneath it, which is how a story declares the files it is about to create and the forced
-companions (a lockfile, a generated client) that come with them. The **measurement** is
-`git diff --name-only <default_branch>...<epic_branch>`, once per repo the plan's epics name, through the Build
-phase's existing git seam: nothing is checked out, fetched or written. Every changed path outside the surface is
-NAMED — at most eight, then `+N more` — never reduced to a count, and the condition fails with
+story under `03-plan/stories/` (any phase directory, via the shared `scanStories`/`phaseDirsOf` walk, gh #189) — or of
+`04-build/implicit-plan.yml` when the scope skipped Plan (§2.13). A directory entry covers everything beneath it,
+which is how a story declares the files it is about to create and the forced companions (a lockfile, a generated
+client) that come with them. The **measurement** is `git diff --name-only <default_branch>...<epic_branch>`, once per
+repo the plan's epics name, through the Build phase's existing git seam: nothing is checked out, fetched or written.
+`<epic_branch>` is the branch `run.yml`'s `build.epic_branch` RECORDS Build actually cut, read through the same
+`recordedEpicBranch` derivation `watch` and `ship` use (§2.9, gh #90, gh #225) — never an epic file's own `branch:`,
+which under `branch_model: integration` is a label Build never cuts (every epic's stories merge into ONE recorded
+branch instead). Every changed path outside the surface is NAMED — at most eight, then `+N more` — never reduced to a
+count, and the condition fails with
 `work outside the declared surface is a boundary change — a human decides whether to widen the scope`. Measured
 2026-08-30 on run `260830-tenancy-identity-customers`: the host ran exactly this check by hand at every gate, because
 the framework ran it nowhere.
@@ -3272,9 +3276,13 @@ The condition deliberately does **not** judge whether the change was right, does
 on a path a story declared and did not touch — under-delivery is what the DoD and the reviewer are for. Paths with a
 `tldrx-work/`, `.tldrx/` or `.agent/` segment are excluded from BOTH sides (the `isStatePath` filter §2.13's implicit
 plan already applies): tldrx's own state is never a boundary question, and in a `root_is_repo: true` workspace it sits
-inside the product repo. It never refuses on an absence — outside Build, with no epic branch cut, with no repo on
-disk, with no plan, or on a run that declared no surface at all, it is measured as `n/a` **with the reason in the
-note**, because a condition that could not measure must not report that it measured zero.
+inside the product repo. It never refuses on an ABSENCE — outside Build, with no epic branch cut at all, with no repo
+on disk, with no plan, or on a run that declared no surface at all, it is measured as `n/a` **with the reason in the
+note**, because a condition that could not measure must not report that it measured zero. Since gh #225 that is no
+longer true of every "nothing could be diffed": a run whose `run.yml` RECORDS an epic branch — it genuinely cut one —
+and still cannot diff it (deleted, unfetched, whatever the reason) is a real failure to verify, not an absence, and
+the condition now HOLDS on it with `this run recorded an epic branch but nothing could be diffed — a human decides
+whether to trust the change`; `n/a` stays reserved for a run that named no branch to diff at all.
 
 **Since gh #331, (7) WARNS an `auto` gate and never holds it.** Measured in a hold-surface audit of two client
 workspaces: `boundary` was in 48 of 78 Build `held_by` values and the only reason on 6, and each of the 7
