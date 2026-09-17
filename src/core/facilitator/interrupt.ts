@@ -17,11 +17,14 @@
  *
  * Step 2 is the one that is easy to get wrong. The cost of a turn killed halfway
  * is UNKNOWN — the sub-agent never printed its total, and there is no honest
- * number to write. So the envelope carries `cost_usd: 0` (the schema requires a
- * number ≥ 0) and the payload carries `cost_usd: null` with `stopped_by:
- * "signal"`. A reader that sees the payload knows the attempt happened and knows
- * what it cost is not knowable; a reader that only sums the envelope is not
- * silently told it was free.
+ * number to write. So the EVENT ENVELOPE carries `cost_usd: 0` (the schema
+ * requires a number ≥ 0 there), but the task ROW in `run.yml` and the event
+ * PAYLOAD both carry `cost_usd: null` + `metered: false` (gh #355 — a `0` there
+ * used to pass silently and read as a measured $0.00 to `tallyOf`), with
+ * `stopped_by: "signal"` on the payload besides. A reader that sees the payload
+ * or the task row knows the attempt happened and knows its cost is not
+ * knowable; a reader that only sums the envelope is not silently told it was
+ * free.
  *
  * Everything here is SYNCHRONOUS and never throws. It runs inside a signal
  * handler, where an unhandled rejection is a hang and a throw is a lost run.
@@ -179,9 +182,17 @@ function recordPartialResult(
           status: "failed" as const,
           expert: stage.expert,
           model: stage.model,
-          // Not zero — unknown. run.yml has no null here, so the truth lives in
-          // `error` and in the event payload's `cost_usd: null`.
-          cost_usd: 0,
+          // Not zero — unknown (gh #355). `null` + `metered: false` is the same
+          // idiom every other unknown-cost turn in this codebase writes
+          // (`executors/build.ts`'s `cost === null ? { metered: false } : {}`,
+          // and `runNext.ts`'s orphaned-headless-turn row, gh #337) — the one
+          // spelling `tallyOf`/`spendBasisOf` (`budget/spentFigure.ts`,
+          // `budget/spendBasis.ts`) read as an honest LOWER BOUND rather than a
+          // measured `$0.00`. A `0` here used to pass `RunFile.ts`'s validator
+          // silently, because the validator's null↔metered:false rule has
+          // nothing to say about a zero.
+          cost_usd: null,
+          metered: false,
           error,
           session_id: null,
           started_at: stage.started_at,
@@ -199,7 +210,10 @@ function recordPartialResult(
     type: "agent.result",
     actor: context.actor,
     cost_usd: 0,
-    payload: { phase: phaseId, task: taskId, cost_usd: null, stopped_by: "signal", signal: context.signal },
+    // `metered: false` alongside the existing `cost_usd: null`, gh #355: a
+    // payload reader gets the named field every other unknown-cost payload
+    // carries, not just a null value it has to already know to key off.
+    payload: { phase: phaseId, task: taskId, cost_usd: null, metered: false, stopped_by: "signal", signal: context.signal },
   };
   const failure = EventLog.forRun(store.runDir).tryAppend(event);
   lines.push(failure === null
