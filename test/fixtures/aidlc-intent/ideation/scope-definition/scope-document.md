@@ -1,4 +1,4 @@
-# Scope Document — Scavtopia Scoring & Leaderboard (Phase 1)
+# Scope Document — Trailquest Scoring & Leaderboard (Phase 1)
 
 Defines the in/out boundary for the Phase 1 build, refining
 `../intent-capture/intent-statement.md` and respecting
