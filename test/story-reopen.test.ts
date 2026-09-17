@@ -29,6 +29,7 @@ import {
   AS_IS_JUDGED_MARK, AS_IS_MARK, AS_IS_NOT_AHEAD_MARK, AS_IS_REVIEW_ONLY_MARK, NO_DIFF_MARK,
 } from "../src/core/build/outcome.ts";
 import { approve, reject } from "../src/core/run/gates.ts";
+import { cancelRun } from "../src/core/run/rescue.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { loadRun, renderReplay } from "../src/core/replay/index.ts";
@@ -368,6 +369,41 @@ describe("what reopen refuses", () => {
     expect(said).toContain("04-build/build's gate is approved");
     expect(said).toContain("tldrx reject --stage 04-build/build");
     // Nothing written, nothing appended — the run decides before either file moves.
+    expect(story(ws, "S1")).toBe(before);
+    expect(events(ws).filter((e) => e.type === "story.reopened")).toHaveLength(beforeEvents);
+  });
+
+  /**
+   * Pre-merge review finding on #227 (2026-09-17, CONFIRMED): the guard above
+   * checked `store.run.status === "done"` only, so a `cancelled` run — the
+   * OTHER status `isFinished` (`RunFile.ts`) and `runNext.ts`'s own `advance()`
+   * both already treat as equally terminal — fell through it. `tldrx run
+   * cancel` never touches a story file either, so a `blocked` story on a
+   * cancelled run is the exact same "nothing will ever pick it up" trap #227
+   * exists to close, one status over.
+   */
+  test("a run that is `cancelled` — reject --stage is the only door (#227)", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "changes"] });
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: blocked");
+
+    const cancelled = cancelRun({
+      root: ws.root, runId: ws.runId, force: false, actor: "alan", at: "2026-08-29T10:30:00Z",
+      note: "abandoning this run",
+    });
+    expect(cancelled.code).toBe(0);
+    expect(RunStore.open(ws.runDir).run.status).toBe("cancelled");
+
+    const before = story(ws, "S1");
+    const beforeEvents = events(ws).filter((e) => e.type === "story.reopened").length;
+    const outcome = reopen(ws, "S1", WHY, { runId: ws.runId });
+    const said = outcome.lines.join("\n");
+
+    expect(outcome.code).toBe(1);
+    expect(said).toContain("S1 cannot be reopened");
+    expect(said).toContain("`cancelled`");
+    expect(said).toContain("tldrx reject --stage 04-build/build");
     expect(story(ws, "S1")).toBe(before);
     expect(events(ws).filter((e) => e.type === "story.reopened")).toHaveLength(beforeEvents);
   });

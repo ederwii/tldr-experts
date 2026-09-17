@@ -217,10 +217,11 @@ otras stories que mueve son las que esa story retenía por sí sola: reabrir una
 devuelve a `todo` cada dependiente cuyo único bloqueo era esa dependencia (y las que esperan
 detrás de ellas), cada una con su propio registro firmado y sin consumir intento; un
 dependiente que sigue retenido por cualquier otra cosa sigue `blocked`, y la salida dice por
-qué. El reopen también se niega cuando el RUN mismo ya cerró o su gate de Build está firmado,
-incluso para una story que nunca llegó a `done` — una story `blocked` puede sobrevivir a su
-run, y devolverla a `todo` ahí la dejaría sin nada que la despache; la negativa nombra la
-misma puerta `reject --stage`. Una story que ya está `done` se niega — deshacer trabajo terminado es una decisión
+qué. El reopen también se niega cuando el RUN está `done` o `cancelled`, o su gate de Build
+está firmado, incluso para una story que nunca llegó a `done` — una story `blocked` puede
+sobrevivir a su run de cualquiera de las dos formas (`tldrx run cancel` tampoco toca el
+archivo de una story), y devolverla a `todo` ahí la dejaría sin nada que la despache; la
+negativa nombra la misma puerta `reject --stage`. Una story que ya está `done` se niega — deshacer trabajo terminado es una decisión
 sobre la etapa —, pero un defecto concreto en ella abre una **ronda de arreglo**:
 `tldrx story reopen S11 --for-fix --note "which defect"`. No se consume ningún intento, el
 arreglo pasa el mismo DoD y el mismo revisor, no se tocan los criterios de aceptación, y

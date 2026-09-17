@@ -207,10 +207,11 @@ that story another run of attempts. The only other stories it moves are the ones
 alone was holding: reopening a `blocked` story releases, back to `todo`, every dependent whose
 only block was that dependency (and the ones behind them), each with its own signed record
 and no attempt consumed; a dependent still held by anything else stays `blocked`, and the
-output says why. The reopen also refuses when the RUN itself has already closed or its Build
-gate is signed, even for a story that never reached `done` — a `blocked` story can outlive
-its run, and writing it back to `todo` there would leave nothing to dispatch it; the refusal
-names the same `reject --stage` door. A story already `done` refuses
+output says why. The reopen also refuses when the RUN itself is `done` or `cancelled`, or its
+Build gate is signed, even for a story that never reached `done` — a `blocked` story can
+outlive its run either way (`tldrx run cancel` never touches a story file any more than
+closing the run does), and writing it back to `todo` there would leave nothing to dispatch
+it; the refusal names the same `reject --stage` door. A story already `done` refuses
 that — undoing finished work is a decision about the stage — but one named defect in it
 opens a **fix round**: `tldrx story reopen S11 --for-fix --note "which defect"`. No attempt
 is consumed, the fix passes the same definition of done and the same reviewer, the
