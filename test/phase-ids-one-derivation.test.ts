@@ -17,15 +17,16 @@
  * `map-citations.test.ts` gives about its own family: deleting a second copy does
  * not stop a third. A fourth list under a name this file never mentions would be
  * the same defect, so what is asserted is that only ONE file under `src/` writes
- * the ids out in order at all.
+ * the ids out as a list at all — in ANY order (#204).
  *
  * It takes BOTH describes to cover the failure, which was measured by mutating the
  * collapse in each direction rather than assumed. Re-declare `QUESTION_PHASES` as an
  * identical literal and only the shape guard reddens (`offenders` names the file);
  * re-declare it as a DRIFTED literal — `06-ship` for `05-watch` — and the shape guard
- * goes quiet, because the pattern is built from `PHASE_IDS` and a drifted list no
- * longer matches it, while the equality guard reddens instead. A copy is caught
- * before it drifts, and a drift is caught even where the copy hid.
+ * goes quiet, because the pattern is built from the five exact `PHASE_IDS` and a
+ * drifted list no longer matches any permutation of them, while the equality guard
+ * reddens instead. A copy is caught before it drifts (in whatever order it was
+ * copy-pasted, #204), and a drift is caught even where the copy hid.
  */
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
@@ -56,18 +57,45 @@ function sourceFilesUnder(dir: string, base = ""): readonly string[] {
 }
 
 /**
- * The ordered-list spelling, BUILT FROM `PHASE_IDS` rather than typed out — a
- * hand-written pattern here would be a fourth copy of the very thing being pinned.
+ * All orderings of `arr`, as arrays. Used below to build the list pattern from
+ * `PHASE_IDS` rather than typing a fifth, order-insensitive copy by hand.
+ */
+function permutations<T>(arr: readonly T[]): readonly T[][] {
+  if (arr.length <= 1) return [[...arr]];
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i++) {
+    const head = arr[i] as T;
+    const rest = [...arr.slice(0, i), ...arr.slice(i + 1)];
+    for (const tail of permutations(rest)) out.push([head, ...tail]);
+  }
+  return out;
+}
+
+/**
+ * The list spelling, BUILT FROM `PHASE_IDS` rather than typed out — a hand-written
+ * pattern here would be a fourth copy of the very thing being pinned.
  *
- * It matches the ids quoted (any of the three quote characters) and comma-separated
- * across any whitespace, so a literal wrapped over several lines still matches. It
- * deliberately does NOT match the ids used as path segments: `core/learn/chapters.ts`
- * spells all five inside `{runDir}/01-what/intent.md`-style keys and is not a second
- * list, which is why "the file contains all five ids" would be the wrong instrument.
+ * #204: a reordered duplicate of the same five ids used to slip past this guard,
+ * because the pattern matched only the one order `PHASE_IDS` itself is written in.
+ * It is now the alternation of all 5! = 120 orderings of the five ids — still built
+ * from `PHASE_IDS`, so a real drift (a wrong id, or a sixth/fourth id) still fails
+ * to match any of them, only the ORDER stopped mattering.
+ *
+ * Each id is matched quoted (any of the three quote characters), with the closing
+ * quote immediately after the id, and comma-separated across any whitespace, so a
+ * literal wrapped over several lines still matches. The immediate-closing-quote
+ * requirement is what keeps this from matching the ids used as path segments:
+ * `core/learn/chapters.ts` spells all five inside `{runDir}/01-what/intent.md`-style
+ * keys — `"01-what"` there is followed by `/intent.md`, not a closing quote — and is
+ * not a second list, which is why "the file contains all five ids, in some order"
+ * would be the wrong instrument on its own.
  */
 const Q = "[\"'`]";
+const idToken = (id: string) => `${Q}${id.replace(/-/g, "\\-")}${Q}`;
 const ORDERED_LIST = new RegExp(
-  PHASE_IDS.map((id) => `${Q}${id.replace(/-/g, "\\-")}${Q}`).join("\\s*,\\s*"),
+  permutations(PHASE_IDS)
+    .map((order) => order.map(idToken).join("\\s*,\\s*"))
+    .join("|"),
 );
 
 describe("the five phase ids are written out once (#187)", () => {
@@ -84,7 +112,7 @@ describe("the five phase ids are written out once (#187)", () => {
     expect(ORDERED_LIST.test(readFileSync(join(srcRoot, THE_ONE_LIST), "utf8"))).toBe(true);
   });
 
-  test("no other file under src/ writes the phase ids out as an ordered list", () => {
+  test("no other file under src/ writes the phase ids out as a list, in any order (#204)", () => {
     const offenders = files.filter(
       (file) => file !== THE_ONE_LIST && ORDERED_LIST.test(readFileSync(join(srcRoot, file), "utf8")),
     );
