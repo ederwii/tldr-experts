@@ -103,6 +103,18 @@ import { spentFigure } from "../budget/spentFigure.ts";
  * total was wrong before this wave and is wrong by exactly the same amount
  * after it. Bumping for a field that gained NEIGHBOURS would make the number
  * mean "something near here changed", which is what a changelog is for.
+ *
+ * **Still 3 after #245.** `ceilingUsd` stops falling back to the run.yml
+ * creation mirror only when `budget.yml` EXISTS but will not parse — it reads
+ * null instead, with the two new fields `ceilingBasis`/`ceilingReason` saying
+ * why. A run with no `budget.yml` at all keeps the mirror exactly as before:
+ * that run was never raised through a file it never had, so there is nothing
+ * for the mirror to disagree with, and it is not DAMAGED, only absent. `ceilingUsd`
+ * itself is not redefined: it was always "the live ceiling, from budget.yml,
+ * when that can be read" and still is — the fallback was never part of that
+ * meaning for a file that exists and lies. A consumer that read a damaged
+ * file's fallback figure as live was wrong before this wave; `ceilingBasis`/
+ * `ceilingReason` are additions, which is what never bumps this number.
  */
 export const DASHBOARD_MODEL_VERSION = 3;
 
@@ -783,6 +795,22 @@ export interface RunModel {
   readonly spentUsd: number | null;
   readonly ceilingUsd: number | null;
   /**
+   * Why `ceilingUsd` is what it is (#245). ADDITIVE — `DASHBOARD_MODEL_VERSION`
+   * does not move (§7).
+   *
+   * `"recorded"` means `budget.yml` EXISTS and parsed with a figure. `"mirror"`
+   * means there is no `budget.yml` at all, so `ceilingUsd` is run.yml's own
+   * frozen creation figure — unchanged since before #245, because a run that
+   * never had a `budget.yml` is not DAMAGED. `"absent"` means `budget.yml`
+   * EXISTS but would not parse; `ceilingUsd` is then null rather than the
+   * mirror (owner decision, #245: a raised run's mirror pairs a live spend with
+   * a ceiling that stopped moving, so the page used to be able to read `$X
+   * spent of $Y` with `Y < X` once that file was damaged).
+   */
+  readonly ceilingBasis: "recorded" | "mirror" | "absent";
+  /** The reason sentence for `ceilingBasis === "absent"`. Null otherwise. */
+  readonly ceilingReason: string | null;
+  /**
    * `host` when a host session drives the turns (`run.yml` `attended_by`), null
    * when the framework may spawn. Same wording `tldrx run status` prints.
    */
@@ -1235,9 +1263,13 @@ export function toRunModel(
     // (#236). This page renders the headline `of $X` (`render.ts`) beside the
     // budget panel's own `ceiling` row (`toBudgetModel`), and until #236 those
     // came from two files and could contradict each other on one page. Resolving
-    // it again here would be a second copy of the same derivation (§7); the
-    // fallback to the mirror when budget.yml will not parse lives there too.
+    // it again here would be a second copy of the same derivation (§7); a
+    // budget.yml that is missing or will not parse resolves to null there too,
+    // with `ceilingBasis`/`ceilingReason` carrying why (#245) — never a
+    // relabelled fallback to the mirror.
     ceilingUsd: doc.ceiling_usd,
+    ceilingBasis: doc.ceiling_basis,
+    ceilingReason: doc.ceiling_reason,
     attendedBy: doc.attended_by,
     unmeteredTasks,
     // `doc.spent_usd` is null only when the budget block could not be read; a

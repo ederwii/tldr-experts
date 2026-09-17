@@ -24,6 +24,13 @@ version is that `--max-usd` is the weakest of the four, because it ends a run on
 once a turn's cost is known and cannot stop a turn already in flight. Measured: a call
 with a $1.50 ceiling was killed after it had spent **$5.15**.
 
+`run.yml` keeps a mirror of the ceiling it was created with, but that mirror is not live:
+`budget raise` moves `budget.yml` only, so a raised run's mirror is stale by design. If
+`budget.yml` itself is missing or damaged, the dashboard and `tldrx replay` read the
+ceiling as **not recorded** — `$?`, with the reason named — rather than resurrecting that
+stale mirror as if it were current. A raised, then damaged, run would otherwise be able to
+show more spent than its own headline ceiling.
+
 ## 2. There are two economies, and they do not add up
 
 A turn can be paid for in two different ways, and tldrx refuses to pretend otherwise.

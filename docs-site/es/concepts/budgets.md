@@ -24,6 +24,13 @@ versión corta es que `--max-usd` es la más débil de las cuatro, porque termin
 run solo una vez que ya se conoce el costo de un turno, y no puede detener un turno que va
 en vuelo. Medido: una llamada con techo de $1.50 se mató después de haber gastado **$5.15**.
 
+`run.yml` guarda un espejo del techo con el que se creó el run, pero ese espejo no está
+vivo: `budget raise` mueve solo `budget.yml`, así que el espejo de un run que fue elevado
+queda desactualizado a propósito. Si `budget.yml` en sí falta o está dañado, el dashboard y
+`tldrx replay` leen el techo como **no registrado** — `$?`, con la razón nombrada — en vez
+de resucitar ese espejo desactualizado como si fuera el actual. Un run elevado y luego
+dañado podría, de otro modo, mostrar más gastado que su propio techo en el titular.
+
 ## 2. Hay dos economías, y no se suman
 
 Un turno se puede pagar de dos maneras distintas, y tldrx se niega a fingir lo contrario.

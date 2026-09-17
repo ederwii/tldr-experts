@@ -421,3 +421,50 @@ phases: []
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #245 — a budget.yml that EXISTS but will not parse never resurrects run.yml's
+// frozen creation ceiling as if it were live. Owner decision: "Null con razón".
+// A MISSING budget.yml is a different, unchanged case: not damaged, only absent.
+// ---------------------------------------------------------------------------
+
+describe("a damaged budget.yml nulls the ceiling instead of falling back to the mirror (#245)", () => {
+  test("an unparseable budget.yml: ceilingUsd null, basis absent, reason names the file", () => {
+    const { run } = modelOf({ budget: "ceiling_usd: [this is not yaml\n" });
+    expect(run.ceilingUsd).toBeNull();
+    expect(run.ceilingBasis).toBe("absent");
+    expect(run.ceilingReason).not.toBeNull();
+    expect(run.ceilingReason).toContain("budget.yml");
+    // The mirror in AUDITED_RUN is 62.0 — must never leak out relabelled.
+    expect(run.ceilingReason).not.toContain("62");
+  });
+
+  test("a MISSING budget.yml is not damaged — the mirror is kept, basis mirror", () => {
+    const { run } = modelOf({}); // no `budget` key written at all — no file at all
+    expect(run.ceilingUsd).toBe(62); // AUDITED_RUN's run.yml mirror
+    expect(run.ceilingBasis).toBe("mirror");
+    expect(run.ceilingReason).toBeNull();
+  });
+
+  test("the run-detail headline never prints the impossible pair, and falls back to $?", () => {
+    const { model } = modelOf({ budget: "not: [valid\n" });
+    const detail = text(dashRunView(model, RUN_ID, NOW_MS));
+    // run.yml's mirror is $62.00 — the pre-#245 bug printed that beside the live
+    // $14.60 spend. It must be gone, and the page must read $? instead.
+    expect(detail).not.toContain("$62.00");
+    expect(detail).toContain("$?");
+  });
+
+  test("the $? carries the reason as a title attribute, in the raw markup", () => {
+    const { model } = modelOf({ budget: "not: [valid\n" });
+    const raw = dashRunView(model, RUN_ID, NOW_MS);
+    expect(raw).toMatch(/title="[^"]*budget\.yml[^"]*"[^>]*>of \$\?/);
+  });
+
+  test("an intact budget.yml still reports the live ceiling, basis recorded", () => {
+    const { run } = modelOf({ budget: AUDITED_BUDGET });
+    expect(run.ceilingUsd).toBe(62);
+    expect(run.ceilingBasis).toBe("recorded");
+    expect(run.ceilingReason).toBeNull();
+  });
+});

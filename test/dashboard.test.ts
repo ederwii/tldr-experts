@@ -127,6 +127,8 @@ describe("the dashboard model", () => {
       "runs[].budget.phases[].spentUsd",
       "runs[].budget.warnAtPct",
       "runs[].build",
+      "runs[].ceilingBasis",
+      "runs[].ceilingReason",
       "runs[].ceilingUsd",
       "runs[].createdWith",
       "runs[].cursor",

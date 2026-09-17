@@ -188,6 +188,29 @@ export interface RunDocument {
   readonly updated_at: string | null;
   readonly cursor: RunCursor | null;
   readonly ceiling_usd: number | null;
+  /**
+   * Where `ceiling_usd` came from, and additive (#245).
+   *
+   * `"recorded"` means `budget.yml` EXISTS and parsed with a figure — the live
+   * ceiling, since #236. `"mirror"` means there is no `budget.yml` at all, so
+   * `ceiling_usd` is this run.yml document's own frozen creation figure — the
+   * pre-#236 behaviour, kept for the run that never had a `budget.yml` to begin
+   * with (most runs written before #85, and any economy that skips the file).
+   * `"absent"` means `budget.yml` EXISTS but would not parse — genuinely
+   * DAMAGED, as against merely missing — and `ceiling_usd` is null with
+   * `ceiling_reason` saying why (§7). Before #245 a damaged `budget.yml` fell
+   * back to the same frozen mirror as a missing one, so a run raised after
+   * creation and then damaged could print an impossible `$X spent of $Y` with
+   * `Y < X`; that fallback is gone for THIS case, not relabelled. A run that
+   * simply never had `budget.yml` was never raised through it either — there is
+   * nothing for the mirror to disagree with, and #245 leaves that path alone
+   * (measured: narrowing to "exists but unparseable" is what the owner's own
+   * word "damaged" names, and what `test/dashboard-hero.test.ts` /
+   * `test/dashboard-sources.test.ts` already pin for the missing case).
+   */
+  readonly ceiling_basis: "recorded" | "mirror" | "absent";
+  /** Why `ceiling_usd` is null. Null unless `ceiling_basis` is `"absent"`. */
+  readonly ceiling_reason: string | null;
   readonly spent_usd: number | null;
   /**
    * `run.yml`'s two framework stamps (#183), already resolved to
@@ -317,12 +340,16 @@ export function toRunDocument(input: unknown, fallbackId: string): RunDocument |
     cursor: cursor === null
       ? null
       : { phase: str(cursor.phase), stage: str(cursor.stage), task: nullableStr(cursor.task) },
-    // run.yml's mirror, which is the FALLBACK and not the answer: `loadRun.ts`
-    // overwrites this field with budget.yml's ceiling whenever that file parses
-    // (#236). This module only projects one already-parsed document and has no
-    // second file to consult, which is exactly why the resolution lives there.
-    // Do not read this value straight out of `toRunDocument` and call it live.
+    // run.yml's mirror — `loadRun.ts` always overwrites this trio with
+    // budget.yml's own reading: live when that file exists and parses, this
+    // same mirror when it does not exist at all, and null with a reason when it
+    // exists but is damaged (#245; #236 before it). This module only projects
+    // one already-parsed run.yml document and has no second file to consult,
+    // which is exactly why that resolution lives there. Do not read this value
+    // straight out of `toRunDocument` and call it live.
     ceiling_usd: num(budget?.ceiling_usd) ?? num(doc.budget_usd),
+    ceiling_basis: "mirror",
+    ceiling_reason: null,
     spent_usd: num(budget?.spent_usd),
     created_with: recordedVersion(nullableStr(doc.created_with) ?? undefined),
     last_written_by: recordedVersion(nullableStr(doc.last_written_by) ?? undefined),
