@@ -45,11 +45,18 @@
  * it does not fail on a path a story declared and did not touch. Under-delivery is
  * what the DoD and the reviewer are for; this is only about work nobody scoped.
  *
- * It also never refuses on an absence. No repo, no branch, no git, no plan — each
+ * It also never refuses on an ABSENCE. No repo, no branch, no git, no plan — each
  * comes back as `n/a` with the reason said out loud in the note, the way
  * `storiesCondition` reports `n/a` outside Build. A condition that cannot measure
  * must not pretend it measured zero, and it must not refuse a gate for a reason
  * that has nothing to do with the boundary.
+ *
+ * gh #225 draws the line that rule always meant: a run that named NO branch to
+ * diff at all (`epicTargets` returns nothing) is an absence, and stays `n/a`. A
+ * run whose `run.yml` RECORDS an epic branch — it genuinely cut one — and still
+ * cannot be diffed is not an absence, it is a failure to verify, and this
+ * condition now refuses on it (`BOUNDARY_UNVERIFIABLE`) rather than reading a
+ * measured zero out of a git error.
  *
  * That rule survived gh #92 unchanged, and deliberately. Watch REFUSES when
  * `.tldrx/workspace.yml` records a `default_branch` a repo cannot find, because
@@ -73,6 +80,9 @@ import { git } from "../build/git.ts";
 import { loadWorkspace, repoPath, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import { PROJECT_WORKSPACE_FILE } from "../paths.ts";
 import { BUILD_PHASE, PLAN_DIR } from "./buildProgress.ts";
+import { scanStories } from "../build/storyScan.ts";
+import { recordedEpicBranch, type RecordedBuild } from "../watch/recordedBranch.ts";
+import { isBranchModelKind } from "../plan/branchModel.ts";
 
 /**
  * The line a Build stage's auto gate is refused on when work landed outside the
@@ -91,6 +101,16 @@ export const OUTSIDE_SURFACE =
  */
 export const OUTSIDE_SURFACE_WARNING =
   "work outside the declared surface does not hold an auto gate — it is carried into the PR body for review";
+
+/**
+ * gh #225 — the line a gate is refused on when this run recorded an epic branch
+ * (`run.yml`'s `build.epic_branch` is non-empty) and yet nothing could be diffed.
+ * That is a genuine failure to verify, unlike "no plan named a branch at all" —
+ * which stays `n/a` (`evaluateBoundary`'s `targets.length === 0` case) — so it
+ * must never read as an absence and must never sign silently.
+ */
+export const BOUNDARY_UNVERIFIABLE =
+  "this run recorded an epic branch but nothing could be diffed — a human decides whether to trust the change";
 
 /**
  * The sensitive path classes (gh #331, review): a path in one of these that lands OUTSIDE
@@ -191,7 +211,6 @@ export const NAMED_PATHS = 8;
 /** The two handoffs whose citations declare what the run is ABOUT (design §A.4). */
 export const SURFACE_HANDOFFS: readonly string[] = ["01-what/handoff.md", "02-how/handoff.md"];
 
-const STORIES_DIR = "stories";
 const EPICS_DIR = "epics";
 
 export interface BoundarySurface {
@@ -301,27 +320,21 @@ export function unqualifiedCitedPaths(
   return out;
 }
 
-/** Every `<runDir>/03-plan/stories/*.md`, as `{story, repo, touches}`. Never throws. */
+/**
+ * Every story this run's plan declares, as `{story, repo, touches}` — the
+ * shared, validated walk (gh #189: `scanStories`/`phaseDirsOf`,
+ * `../build/storyScan.ts`), not a second reader. It used to read `03-plan/`
+ * ONLY, with front matter and no schema (`readFront`); a story under any other
+ * phase directory — where a fix list's story is written — was invisible, and a
+ * story that parsed as front matter but failed the schema was taken anyway.
+ * Never throws: `scanStories` reports an unreadable file, it does not throw.
+ */
 function storyTouches(
   runDir: string,
 ): readonly { story: string; repo: string; touches: readonly string[] }[] {
-  const dir = join(runDir, PLAN_DIR, STORIES_DIR);
-  if (!existsSync(dir)) return [];
-  const out: { story: string; repo: string; touches: readonly string[] }[] = [];
-  let names: string[];
-  try {
-    names = readdirSync(dir).filter((name) => name.endsWith(".md")).sort();
-  } catch {
-    return [];
-  }
-  for (const name of names) {
-    const front = readFront(join(dir, name));
-    if (front === null) continue;
-    const repo = typeof front.repo === "string" ? front.repo : "";
-    const id = typeof front.id === "string" && front.id !== "" ? front.id : name.replace(/\.md$/, "");
-    out.push({ story: id, repo, touches: stringList(front.touches) });
-  }
-  return out;
+  return scanStories(runDir).stories.map((row) => ({
+    story: row.story, repo: row.repo, touches: row.touches,
+  }));
 }
 
 /**
@@ -435,10 +448,27 @@ export function deriveSurface(runDir: string, workspace: WorkspaceContext): Boun
 /**
  * Every `{repo, branch, base}` the plan says Build worked on.
  *
- * The epic file is the authority on the branch, because `openStory` cuts and
- * adopts exactly `epic.branch` — reading it here means the diff is against the
- * ref the executor actually used, not one this file re-derived. A repo comes from
- * the epic's own `repos:`, falling back to the repos its stories name.
+ * gh #225: the epic file supplies REPOS and STORIES, never the ref. It used to
+ * be read as the authority on the branch too — "`openStory` cuts and adopts
+ * exactly `epic.branch`", true under `branch_model: per-epic` and false under
+ * `integration`, where every epic's stories merge into ONE recorded branch and
+ * the epic's own `branch:` stays an unused per-epic label. Reading that label
+ * measured `n/a` on every `integration` run with per-epic branch labels (the
+ * shape the shipped Plan stage writes) — the boundary condition diffed nothing
+ * and signed a +31k-line epic. The branch now comes from `run.yml`'s
+ * `build.epic_branch`, through `recordedEpicBranch` — the same derivation
+ * `watch` and `ship` use (gh #90) — so this reads the ref the executor actually
+ * cut, not one re-derived from a label that may never have been.
+ *
+ * `branch_model: per-epic` keeps the epic file's declared branch when nothing
+ * has been recorded YET (`recordedEpicBranch` only resolves a per-epic branch
+ * that already appears in the record): under that model Build cuts exactly the
+ * declared name, so using it before the record catches up is not a second
+ * derivation of the same fact, it is the same fact read one step earlier — and
+ * an honest `diffRepo` absence still names which ref did not resolve.
+ *
+ * A repo comes from the epic's own `repos:`, falling back to the repos its
+ * stories name.
  */
 export function epicTargets(runDir: string, workspace: WorkspaceContext): readonly EpicTarget[] {
   const out: EpicTarget[] = [];
@@ -458,6 +488,7 @@ export function epicTargets(runDir: string, workspace: WorkspaceContext): readon
     });
   };
 
+  const build = recordedBuild(runDir);
   const dir = join(runDir, PLAN_DIR, EPICS_DIR);
   if (existsSync(dir)) {
     let names: string[] = [];
@@ -470,7 +501,16 @@ export function epicTargets(runDir: string, workspace: WorkspaceContext): readon
       const front = readFront(join(dir, name));
       if (front === null) continue;
       const id = typeof front.id === "string" ? front.id : name.replace(/\.md$/, "");
-      const branch = typeof front.branch === "string" ? front.branch : "";
+      const declared = typeof front.branch === "string" ? front.branch : "";
+      const recorded = recordedEpicBranch(build, {
+        epicId: id,
+        epic: declared === "" ? null : { branch: declared },
+      });
+      // Under `integration`, `declared` is a label Build never cuts — only the
+      // record names the real branch. Under `per-epic`, `recorded.branch` and
+      // `declared` are the same string once Build has run; before that, the
+      // declaration is the only thing on record yet, and is used as-is.
+      const branch = recorded.kind === "recorded" ? recorded.branch : declared;
       const repos = stringList(front.repos);
       const fallback = storyTouches(runDir).map((story) => story.repo).filter((repo) => repo !== "");
       for (const repo of repos.length > 0 ? repos : [...new Set(fallback)]) push(id, repo, branch);
@@ -597,6 +637,15 @@ export async function evaluateBoundary(input: BoundaryInput): Promise<BoundaryVe
   const measured = repos.filter((repo) => repo.changed !== null);
   if (measured.length === 0) {
     const why = repos.map((repo) => repo.reason ?? "unavailable").join("; ");
+    // gh #225: a run that recorded an epic branch (`build.epic_branch` on
+    // `run.yml`) genuinely cut one — "nothing could be diffed" is then a real
+    // failure to verify, not an absence, and must not sign silently. `n/a`
+    // stays reserved for a run that named no branch to diff at all (this
+    // function's `targets.length === 0` return, above).
+    const recordedAny = (recordedBuild(input.runDir)?.epic_branch ?? []).some((branch) => branch !== "");
+    if (recordedAny) {
+      return { ok: false, detail: `nothing could be diffed even though this run recorded an epic branch: ${why}; ${BOUNDARY_UNVERIFIABLE}` };
+    }
     return { ok: true, detail: `n/a (nothing could be diffed: ${why})${excludedPart}` };
   }
 
@@ -677,4 +726,23 @@ function readFront(path: string): Record<string, unknown> | null {
 function stringList(value: unknown): readonly string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string");
+}
+
+/**
+ * `run.yml`'s `build:` block, read tolerantly — not `RunStore.open` (gh #225),
+ * for the same reason `storyScan.ts`'s `declaredPhases` reads it directly: that
+ * validates and, on a repaired parse, WRITES, and this can run while a gate is
+ * being evaluated, not a place to take a side effect on the run's own state. A
+ * missing or unreadable `run.yml`, or a `build:` block not yet written, is an
+ * absence — `undefined` — never a thrown error.
+ */
+function recordedBuild(runDir: string): RecordedBuild | undefined {
+  const doc = readYaml(join(runDir, "run.yml"));
+  const build = (doc as { build?: unknown } | null)?.build;
+  if (build === null || typeof build !== "object") return undefined;
+  const row = build as { epic_branch?: unknown; branch_model?: unknown };
+  return {
+    epic_branch: stringList(row.epic_branch),
+    branch_model: isBranchModelKind(row.branch_model) ? row.branch_model : undefined,
+  };
 }

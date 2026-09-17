@@ -32,12 +32,24 @@
  * record's — or the answer is `unrecorded`.
  */
 import type { BranchModelKind } from "../plan/branchModel.ts";
-import type { Feature } from "./features.ts";
 
 /** `run.yml`'s `build:` block — the shape `RunBuild` has, and nothing more. */
 export interface RecordedBuild {
   readonly epic_branch: readonly string[];
   readonly branch_model?: BranchModelKind;
+}
+
+/**
+ * The two fields `recordedEpicBranch` actually reads off an epic, structurally —
+ * not `Feature` (`./features.ts`), so a caller that has never built one (gh #225:
+ * `run/boundary.ts`'s `epicTargets`, which reads an epic file's front matter
+ * directly and has no story list, no title, none of `Feature`'s other fields) can
+ * still call this. `Feature` satisfies this shape as-is; watch's callers pass one
+ * unchanged.
+ */
+export interface RecordedBranchLookup {
+  readonly epicId: string;
+  readonly epic: { readonly branch: string } | null;
 }
 
 /**
@@ -56,7 +68,7 @@ const RUN_YML = "run.yml";
 
 export function recordedEpicBranch(
   build: RecordedBuild | undefined,
-  feature: Feature,
+  feature: RecordedBranchLookup,
 ): RecordedBranch {
   const recorded = (build?.epic_branch ?? []).filter((branch) => branch !== "");
   if (recorded.length === 0) {

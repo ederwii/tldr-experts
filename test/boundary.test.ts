@@ -14,16 +14,17 @@
  * because nothing in the framework asked.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { approve } from "../src/core/run/gates.ts";
-import { evaluateBoundary, deriveSurface, epicTargets, inSurface, normalisePath, unqualifiedCitedPaths, OUTSIDE_SURFACE, OUTSIDE_SURFACE_WARNING, SENSITIVE_OUTSIDE_SURFACE, sensitiveClassOf } from "../src/core/run/boundary.ts";
+import { evaluateBoundary, deriveSurface, epicTargets, inSurface, normalisePath, unqualifiedCitedPaths, OUTSIDE_SURFACE, OUTSIDE_SURFACE_WARNING, SENSITIVE_OUTSIDE_SURFACE, sensitiveClassOf, BOUNDARY_UNVERIFIABLE } from "../src/core/run/boundary.ts";
 import { warnedByNote } from "../src/core/run/autoGate.ts";
 import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
 import { loadWorkspace } from "../src/hooks/lib/workspace.ts";
-import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
+import { makeBuildWorkspace, storyMarkdown, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
 // Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
@@ -71,6 +72,22 @@ function write(ws: BuildWorkspace, rel: string, text: string): void {
   const path = join(ws.runDir, rel);
   mkdirSync(join(path, ".."), { recursive: true });
   writeFileSync(path, text, "utf8");
+}
+
+/** A real `git` call in a fixture repo — gh #225's tests need a REAL diff, not a fake one. */
+function gitc(cwd: string, args: readonly string[]): void {
+  execFileSync("git", ["-c", "user.name=tldrx", "-c", "user.email=tldrx@example.com", ...args], {
+    cwd, stdio: "ignore",
+  });
+}
+
+/** Record `run.yml`'s `build:` block the way `runNext`'s `claimEpicBranches` would, without running Build. */
+function recordBuild(ws: BuildWorkspace, epicBranch: readonly string[], branchModel: "integration" | "per-epic"): void {
+  appendFileSync(
+    join(ws.runDir, "run.yml"),
+    `build: {epic_branch: [${epicBranch.map((b) => `"${b}"`).join(", ")}], branch_model: ${branchModel}}\n`,
+    "utf8",
+  );
 }
 
 /** A run whose one story declares `src/in.ts` and nothing else. */
@@ -439,4 +456,105 @@ describe("the boundary condition against a real epic branch", () => {
     const said = outcome.lines.join("\n");
     expect(said).toContain("boundary=2 changed path(s), 0 outside the surface");
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// gh #225 — the branch to diff comes from `run.yml`, not the epic file's label
+// ---------------------------------------------------------------------------
+
+describe("gh #225 — epicTargets follows the recorded branch, not the epic file's label", () => {
+  test("under `branch_model: integration`, the gate diffs the branch Build actually cut", async () => {
+    // E1 declares `branch: epic/e1` (DECLARED) — a per-epic label that, under an
+    // integration plan, Build never cuts. The branch it DOES cut is recorded in
+    // run.yml, and that is the one with the real, unscoped change on it.
+    const ws = workspace(DECLARED);
+    const REAL_BRANCH = "epic/260910-integration-run";
+    gitc(ws.repoDir, ["checkout", "-q", "-b", REAL_BRANCH]);
+    mkdirSync(join(ws.repoDir, "platform"), { recursive: true });
+    writeFileSync(join(ws.repoDir, "platform", "Auth.cs"), "// nobody scoped this\n", "utf8");
+    gitc(ws.repoDir, ["add", "-A"]);
+    gitc(ws.repoDir, ["commit", "-q", "-m", "build: touch platform"]);
+    gitc(ws.repoDir, ["checkout", "-q", "main"]);
+    recordBuild(ws, [REAL_BRANCH], "integration");
+
+    const verdict = await evaluateBoundary({ root: ws.root, runDir: ws.runDir, phaseId: "04-build" });
+
+    // The stale label `epic/e1` never existed as a branch. A reader keyed on it
+    // could not resolve a diff and read the whole gate as an honest absence,
+    // signing a change nothing here declared (the +31k-line epic in gh #225).
+    expect(verdict.detail).not.toContain("does not resolve");
+    expect(verdict.ok).toBe(false);
+    expect(verdict.detail).toContain("platform/Auth.cs");
+  }, 60_000);
+
+  test("a recorded epic branch that cannot be diffed HOLDS the gate instead of reading n/a", async () => {
+    const ws = workspace(DECLARED);
+    // Build recorded a branch (so this run genuinely cut one), but it cannot be
+    // diffed now — deleted, unfetched, whatever the reason. Unlike "no plan named
+    // a branch at all", this is a real failure to verify, not an absence.
+    recordBuild(ws, ["epic/260910-gone"], "integration");
+
+    const verdict = await evaluateBoundary({ root: ws.root, runDir: ws.runDir, phaseId: "04-build" });
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.detail).toContain("epic/260910-gone");
+    expect(verdict.detail).toContain(BOUNDARY_UNVERIFIABLE);
+  }, 60_000);
+
+  test("`branch_model: per-epic` with nothing recorded yet keeps reading the epic file's own branch (guard)", () => {
+    const ws = workspace(DECLARED);
+    expect(epicTargets(ws.runDir, loadWorkspace(ws.root))).toMatchObject([
+      { epic: "E1", repo: "app", branch: "epic/e1", base: "main" },
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// gh #189 — boundary's story reader is the shared, validated leaf
+// ---------------------------------------------------------------------------
+
+describe("gh #189 — boundary reads stories through the shared scanStories leaf", () => {
+  test("a story filed under `04-build/stories/` is part of the surface, not just `03-plan/`", () => {
+    const ws = workspace(DECLARED);
+    // A carried-findings fix list writes its story under 04-build/ — per
+    // `carriedRows.ts`'s own doc comment on why `BUILD_PHASE` is first in
+    // `phaseDirsOf`. The old `03-plan/`-only walk could not see it.
+    write(ws, "04-build/stories/S2.md", storyMarkdown(
+      { id: "S2", epic: "E1", title: "Carried fix", touches: ["src/carried.ts"] },
+      "app",
+    ));
+
+    const surface = deriveSurface(ws.runDir, loadWorkspace(ws.root));
+
+    expect(surface.byRepo.get("app")).toContain("src/carried.ts");
+  });
+
+  test("a story file that fails schema validation is dropped, not half-read through front matter alone", () => {
+    const ws = workspace(DECLARED);
+    // `repo:` must match a workspace repo name pattern; this one does not. The
+    // old `readFront`-based reader has no schema and would take it anyway.
+    write(ws, "03-plan/stories/S2.md", [
+      "---",
+      "version: 1",
+      "id: S2",
+      "epic: E1",
+      'title: "Broken"',
+      "repo: Bad Repo!",
+      "status: todo",
+      "depends_on: []",
+      'touches: ["src/bad.ts"]',
+      "acceptance:",
+      '  - "x"',
+      "test_plan:",
+      '  - "x"',
+      "evidence: []",
+      "---",
+      "",
+    ].join("\n"));
+
+    const surface = deriveSurface(ws.runDir, loadWorkspace(ws.root));
+
+    expect(surface.byRepo.get("Bad Repo!")).toBeUndefined();
+    expect(surface.byRepo.get("app")).toEqual(["src/in.ts"]);
+  });
 });
