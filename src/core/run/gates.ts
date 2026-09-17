@@ -24,12 +24,12 @@ import { closeRun, type RunCloseOutcome } from "./closeRun.ts";
 import { withRunOutcome } from "./runOutcome.ts";
 import { evidencePath } from "../facilitator/paths.ts";
 import { hasPreparedBundle } from "./prepared.ts";
-import { candidateShasIn, latestFixlist, openFindings } from "../build/fixlist.ts";
+import { candidateShasIn, latestFixlist, openFindings, storyIdsNamedIn } from "../build/fixlist.ts";
 import { phaseDirsOf, scanStories } from "../build/storyScan.ts";
 import { repoDirOf } from "../build/git.ts";
 import { storyBranchOf } from "../plan/branchModel.ts";
 import { loadWorkspace } from "../../hooks/lib/workspace.ts";
-import { closeNoted } from "../build/resolutionVerify.ts";
+import { closeNoted, unverifiedBecause } from "../build/resolutionVerify.ts";
 
 export class GateError extends Error {}
 
@@ -156,6 +156,17 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
     }));
   }
 
+  // #344, owner decision "Sí cerrarlo": a human gate approval whose note names
+  // the commit that fixes an open fix-now finding closes that finding. Run
+  // after the checks passed and the gate's `store.mutate` above is queued, but
+  // BEFORE the `gate.approved` event below, so a candidate the note offered
+  // that matched nothing can ride on that same event rather than a second one
+  // (`FixlistNoteOutcome.unmatched`) — never stamped onto an unrelated
+  // finding's fix list (§7).
+  const fixlistNote = await closeNamedFixlistFindings(
+    store, ctx.root, entry.phase.id, entry.stage.id, ctx.actor, ctx.at, ctx.note,
+  );
+
   // `by` duplicates the envelope's `actor` on purpose: a reader of the event
   // stream asks "who signed this gate", and the answer belongs in the payload it
   // is reading, not in a field that also means "who ran the process". It is how
@@ -176,16 +187,14 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
     // a person who was not there.
     executed_by: attribution.executed_by,
     authority: attribution.authority,
+    // Additive (#344): only when the note offered a candidate commit that
+    // matched no story at all — never present on a gate whose note named
+    // nothing, or whose candidates all closed or were claimed against a story
+    // the note actually named.
+    ...(fixlistNote.unmatched.length === 0 ? {} : { fixlist_unmatched: fixlistNote.unmatched }),
   }));
   store.append(event(ctx.at, store.runId, entry.stage.id, "stage.done", ctx.actor, { phase: entry.phase.id }));
   store.save();
-
-  // #344, owner decision "Sí cerrarlo": a human gate approval whose note names
-  // the commit that fixes an open fix-now finding closes that finding. Run
-  // AFTER the gate itself is signed and saved, so a check failure above (which
-  // returns early) never touches a fixlist file, and never on a gate this
-  // function is about to refuse.
-  await closeNamedFixlistFindings(store, ctx.root, entry.phase.id, entry.stage.id, ctx.actor, ctx.at, ctx.note);
 
   const runDone = store.run.status === "done";
   let closed: RunCloseOutcome | null = null;
@@ -211,6 +220,20 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
   };
 }
 
+/** What `closeNamedFixlistFindings` measured, for `approve()`'s own event (#344). */
+export interface FixlistNoteOutcome {
+  /**
+   * A candidate sha the note named that is unreachable from EVERY story's own
+   * branch AND belongs to no story the note named either — one sentence each,
+   * recorded on the gate's own record (never stamped onto an unrelated
+   * finding's fix list — §7, a claim nobody made about THAT finding is not
+   * this finding's business).
+   */
+  readonly unmatched: readonly string[];
+}
+
+const NO_FIXLIST_NOTE_OUTCOME: FixlistNoteOutcome = { unmatched: [] };
+
 /**
  * A human gate approval whose NOTE names the commit that fixes an open fix-now
  * finding closes that finding (#344, owner decision "Sí cerrarlo") — reusing
@@ -219,21 +242,37 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
  * executor's own per-story check), never a looser one just because the claim
  * arrived in an approval note instead of the file.
  *
- * Scope, deliberately narrow — the safe direction only (§7):
- *   - A note with NO sha-looking token changes nothing, and nothing is even
- *     read: `candidateShasIn` is the same 7-40-hex grammar every other sha in
- *     the fix-list grammar is read with, applied to free text instead of one
- *     `Resolved:` line (#7, one implementation).
- *   - Only `fix-now` findings that are STILL OPEN are ever touched —
- *     `openFindings` is the one predicate that already answers "still blocks
- *     `done`" (`build/fixlist.ts`); a finding already closed, deferred, refuted
- *     or out-of-scope is not this gate's business and is never looked at.
- *   - Every open finding is tried against the note's own candidates through the
- *     story's own branch, exactly the reachability rule `verifyResolutions`
- *     runs at story-settle time; the leaf (`closeNoted`) writes `Resolved: yes
- *     <sha>` when one checks out and `claimed-unverified` with the reason when
- *     none does, so a note that named something wrong is recorded, never
- *     silently dropped and never silently closed.
+ * A finding is touched ONLY when the note is plainly about IT — one of two
+ * signals, either is enough (pre-merge review on #344, measured with two real
+ * repos: the first cut tried every candidate against every open finding in the
+ * whole run, so a note naming only story A's fixing sha left story B's
+ * UNMENTIONED finding rewritten `claimed-unverified — named <sha>, which is
+ * not a commit in repo B` — a claim about B nobody ever made, the dangerous
+ * direction §7 refuses):
+ *
+ *   (a) the note NAMES the finding's own story (`storyIdsNamedIn`, the same
+ *       `STORY_ID_RE` grammar a story id is validated with everywhere else,
+ *       scanned instead of matched whole — one derivation, #7), or
+ *   (b) a candidate sha is REACHABLE from that finding's own story branch —
+ *       the same rule `verifyResolutions` runs at story-settle time.
+ *
+ * Neither holding means the note is not about this story at all, and its
+ * fixlist is not even read. When (a) or (b) holds, every candidate is tried
+ * through `closeNoted` exactly as before: a reachable one closes the finding
+ * (`Resolved: yes <sha>`); when none does, the claim is recorded
+ * `claimed-unverified` with the reason — named (a) or reachable-attempted (b),
+ * it is still a claim the note made about THIS story, so recording it there
+ * (rather than dropping it) is the correct direction of §7, not the wrong one.
+ *
+ * A candidate that never closes anything AND belongs to no story the note
+ * named at all is not invented evidence against some unrelated finding — it is
+ * recorded once, on `FixlistNoteOutcome.unmatched`, for `approve()` to fold
+ * into the gate's own `gate.approved` event. Deliberately coarse: once the
+ * note names ANY story, every candidate is treated as spoken for by that
+ * association (the reasoning above already handles a wrong-for-this-story
+ * candidate the honest way, `claimed-unverified`) — `unmatched` only ever
+ * fires when the note named NO story at all and NOTHING it offered checked out
+ * anywhere.
  *
  * Walks every story this run has declared (`scanStories`/`phaseDirsOf`, the ONE
  * walk `run/ship.ts` also uses for the same reason — no second `readdirSync`
@@ -245,13 +284,16 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
  */
 export async function closeNamedFixlistFindings(
   store: RunStore, root: string, phaseId: string, stageId: string, actor: string, at: string, note: string,
-): Promise<void> {
+): Promise<FixlistNoteOutcome> {
   const candidates = candidateShasIn(note);
-  if (candidates.length === 0) return;
+  if (candidates.length === 0) return NO_FIXLIST_NOTE_OUTCOME;
+  const namedStoryIds = storyIdsNamedIn(note);
   const workspace = loadWorkspace(root);
   const stories = scanStories(store.runDir).stories;
   const seen = new Set<string>();
   const provenance = `${phaseId}/${stageId} gate approved by ${actor} at ${at}`;
+  const reachableAnywhere = new Set<string>();
+  let anyStoryNamed = false;
   for (const phase of phaseDirsOf(store.runDir)) {
     for (const story of stories) {
       if (seen.has(story.story)) continue;
@@ -271,11 +313,28 @@ export async function closeNamedFixlistFindings(
         continue;
       }
       const branch = storyBranchOf(store.runId, story.story);
+      const scope = { repoDir, branch, repo: story.repo };
+      const reachable: string[] = [];
+      for (const sha of candidates) {
+        if (await unverifiedBecause(scope, sha) === null) {
+          reachable.push(sha);
+          reachableAnywhere.add(sha);
+        }
+      }
+      const named = namedStoryIds.has(story.story);
+      // Neither signal: the note is not about this story at all — not even read.
+      if (reachable.length === 0 && !named) continue;
+      if (named) anyStoryNamed = true;
       const text = readFileSync(fixlist.path, "utf8");
-      const result = await closeNoted({ repoDir, branch, repo: story.repo }, open, text, candidates, provenance);
+      const result = await closeNoted(scope, open, text, candidates, provenance);
       if (result.text !== null) writeFileSync(fixlist.path, result.text, "utf8");
     }
   }
+  if (anyStoryNamed) return NO_FIXLIST_NOTE_OUTCOME;
+  const unmatched = candidates
+    .filter((sha) => !reachableAnywhere.has(sha))
+    .map((sha) => `\`${sha}\` is not reachable from any open story's branch, and the note named no story it belongs to`);
+  return { unmatched };
 }
 
 /**

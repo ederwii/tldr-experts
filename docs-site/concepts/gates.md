@@ -23,11 +23,15 @@ right now** — schema validation, the source checker, and any shell command you
 `workspace.yml` declared, run for real. If one fails, it exits `2` and names it. Only then
 does it record who signed, when, and your note verbatim in `run.yml`, and move the cursor.
 
-If your note names a commit — a 7-40 character sha — `approve` also checks it against every
-still-open `fix-now` finding on the run's fix lists. One reachable from that finding's story
-branch closes it (`Resolved: yes <sha>`), the same evidence rule a fix list's own claims are
-held to; one that does not check out is recorded `claimed-unverified`, never a silent close.
-A note naming no commit touches no fix list at all.
+If your note names a commit — a 7-40 character sha — `approve` checks it against every
+still-open `fix-now` finding the note is plainly ABOUT: one whose story id you named (`S3`),
+or one whose own branch the sha is reachable from. A reachable candidate closes it
+(`Resolved: yes <sha>`), the same evidence rule a fix list's own claims are held to; one that
+does not check out is recorded `claimed-unverified`, never a silent close. A finding your note
+never named and whose branch none of your candidates reach is not touched at all — its fix
+list is not even read. A note naming no commit touches no fix list at all, and a candidate
+that matches no story anywhere is recorded once on the gate's own event, never guessed onto
+an unrelated finding.
 
 `reject --note` sends the stage back to `ready`. Your note is not filed away: the next
 attempt gets it, with the previous failure, under `## Previous attempt` in its prompt, and

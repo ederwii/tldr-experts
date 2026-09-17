@@ -35,6 +35,7 @@ import { describeSrcFailure, diagnoseSrcToken, parseSrcToken, srcRule } from "..
 import { SRC_GRAMMAR_HEADING } from "../text/srcGrammarContract.ts";
 import { canonicalSha } from "./git.ts";
 import { STAGE_TUNING_DEFAULTS } from "../schemas/stageTuning.ts";
+import { STORY_ID_RE } from "../schemas/planCommon.ts";
 
 /** `04-build/fixlist/` — a sibling of `04-build/log/`, and tracked like it. */
 export const FIXLIST_DIR = "fixlist";
@@ -730,6 +731,30 @@ export function candidateShasIn(text: string): readonly string[] {
     seen.add(token);
     out.push(token);
   }
+  return out;
+}
+
+/**
+ * Every story id free text NAMES — `STORY_ID_RE`'s own grammar (`schemas/planCommon.ts`,
+ * "a story id like `S3`"), scanned word-bounded instead of matched whole (#344).
+ *
+ * One derivation, not a second id grammar: the scan pattern is BUILT from
+ * `STORY_ID_RE.source` (stripping the `^…$` anchors a whole-field validator
+ * needs and a free-text scan must not have), so a story-id shape change there
+ * changes what a gate-approval note may name without this file's own copy
+ * drifting from it.
+ *
+ * Used by `run/gates.ts` (#344): a gate-approval note that names a story's id
+ * scopes that story's open findings into the note's evidence even when none of
+ * the note's candidate shas happen to be reachable from that story's branch —
+ * the "the note is plainly about this story" signal a bare reachability check
+ * cannot give on its own.
+ */
+const STORY_ID_SCAN_RE = new RegExp(`(?<!\\w)${STORY_ID_RE.source.slice(1, -1)}(?!\\w)`, "g");
+
+export function storyIdsNamedIn(text: string): ReadonlySet<string> {
+  const out = new Set<string>();
+  for (const run of text.matchAll(STORY_ID_SCAN_RE)) out.add(run[0]);
   return out;
 }
 

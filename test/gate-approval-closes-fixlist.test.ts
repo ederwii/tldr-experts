@@ -333,4 +333,129 @@ describe("approve() closes a fix-list finding the note names, end to end (#344)"
     await closeNamedFixlistFindings(store, ws.root, "01-what", "gated", "alan", "2026-09-17T00:00:00Z", "looks good, approved");
     expect(readFileSync(fixlistPath, "utf8")).toBe(before);
   });
+
+  // Pre-merge review on #344 (950ed06), CONFIRMED with two real repos: the
+  // first cut passed the note's FULL candidate list to every open finding of
+  // every story, so a note naming only story A's fixing sha still stamped
+  // story B's unmentioned finding `claimed-unverified — named <sha>, which is
+  // not a commit in repo B`. Nobody claimed that sha fixed B (§7 — an audit
+  // record must not lie in the dangerous direction, and asserting a claim that
+  // was never made is exactly that). RED on 950ed06: `after` there reads a
+  // rewritten B, `Resolved: claimed-unverified …`, not `before`.
+  test("a note naming only story A's fixing sha closes A and leaves story B's fixlist byte-identical", async () => {
+    const ws = makeRunWorkspace({ files: gatedScope("true") });
+    open.push(ws);
+    const apiDir = join(ws.root, "api");
+    const labDir = join(ws.root, "lab");
+    initRepo(apiDir);
+    initRepo(labDir);
+
+    const created = await tldrx(ws.root, "run", "new", "twostory344", "--scope", "gated");
+    expect(created.code).toBe(0);
+    const runDir = onlyRunDir(ws.root);
+    const runId = runDir.split("/").pop() as string;
+
+    const run = (dir: string, ...args: string[]): string =>
+      execFileSync("git", args, { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    run(apiDir, "checkout", "-q", "-b", `story/${runId}/S1`);
+    writeFileSync(join(apiDir, "fix.txt"), "fixed\n", "utf8");
+    run(apiDir, "add", "-A");
+    run(apiDir, "commit", "-qm", "S1 fix");
+    const fixShaA = run(apiDir, "rev-parse", "HEAD");
+    run(apiDir, "checkout", "-q", "main");
+    // S2's own branch never receives this commit — reachable from nowhere B cares about.
+    run(labDir, "checkout", "-q", "-b", `story/${runId}/S2`);
+
+    mkdirSync(join(runDir, "01-what", "fixlist"), { recursive: true });
+    mkdirSync(join(runDir, "01-what", "stories"), { recursive: true });
+    writeFileSync(
+      join(runDir, "01-what", "stories", "S1.md"), storyMarkdown({ id: "S1", repo: "api" }, "api"), "utf8",
+    );
+    writeFileSync(
+      join(runDir, "01-what", "stories", "S2.md"), storyMarkdown({ id: "S2", repo: "lab" }, "lab"), "utf8",
+    );
+    const fixlistA = join(runDir, "01-what", "fixlist", "S1-1.md");
+    const beforeA = fixlistText([{ n: 1, disposition: "fix-now", resolved: "no" }]);
+    writeFileSync(fixlistA, beforeA, "utf8");
+    const fixlistB = join(runDir, "01-what", "fixlist", "S2-1.md");
+    const beforeB = fixlistText([{ n: 1, disposition: "fix-now", resolved: "no" }]);
+    writeFileSync(fixlistB, beforeB, "utf8");
+
+    const store = RunStore.open(runDir);
+    await closeNamedFixlistFindings(
+      store, ws.root, "01-what", "gated", "alan", "2026-09-17T00:00:00Z",
+      `S1 fix round landed and re-reviewed (${fixShaA}) — proceed to ship`,
+    );
+
+    const afterA = readFileSync(fixlistA, "utf8");
+    expect(afterA).toContain(`Resolved: yes ${fixShaA}`);
+    const reA = parseFixlistFile(afterA);
+    expect(isOpen(reA[0] as never)).toBe(false);
+
+    // Story S2's fixlist is BYTE-IDENTICAL: the note never named it and none
+    // of its candidates are reachable from S2's branch, so S2's file was never
+    // even read for a write, let alone rewritten.
+    expect(readFileSync(fixlistB, "utf8")).toBe(beforeB);
+  });
+
+  // RED on 950ed06: no `closeNamedFixlistFindings` call existed to read at all
+  // (the whole notion of an "unmatched" candidate was absent), and after this
+  // fix the fixlist file must ALSO stay untouched — the earlier bug would have
+  // stamped the lone open finding `claimed-unverified` over a sha that was
+  // never about it.
+  test("a candidate sha unreachable everywhere and naming no story is recorded once on the gate's own event, and touches no fixlist", async () => {
+    const ws = makeRunWorkspace({ files: gatedScope("true") });
+    open.push(ws);
+    const apiDir = join(ws.root, "api");
+    initRepo(apiDir);
+    // A real, unrelated commit that exists but is reachable from nothing the
+    // run declares — the shape of a sha copied from the wrong place, not a typo.
+    run1(apiDir, "checkout", "-q", "-b", "somewhere-else");
+    writeFileSync(join(apiDir, "unrelated.txt"), "x\n", "utf8");
+    run1(apiDir, "add", "-A");
+    run1(apiDir, "commit", "-qm", "unrelated");
+    const strayHead = run1(apiDir, "rev-parse", "HEAD");
+    run1(apiDir, "checkout", "-q", "main");
+
+    const created = await tldrx(ws.root, "run", "new", "unmatched344", "--scope", "gated");
+    expect(created.code).toBe(0);
+    const runDir = onlyRunDir(ws.root);
+
+    mkdirSync(join(runDir, "01-what", "fixlist"), { recursive: true });
+    mkdirSync(join(runDir, "01-what", "stories"), { recursive: true });
+    writeFileSync(
+      join(runDir, "01-what", "stories", "S1.md"), storyMarkdown({ id: "S1", repo: "api" }, "api"), "utf8",
+    );
+    const fixlistPath = join(runDir, "01-what", "fixlist", "S1-1.md");
+    const before = fixlistText([{ n: 1, disposition: "fix-now", resolved: "no" }]);
+    writeFileSync(fixlistPath, before, "utf8");
+    parkAtGate(runDir);
+
+    const approved = await tldrx(
+      ws.root, "approve", "--note", `looks unrelated to me, saw this go by somewhere: ${strayHead}`,
+    );
+    expect(approved.stderr).toBe("");
+    expect(approved.code).toBe(0);
+
+    // Untouched: the candidate matched no story by id or by reachability.
+    expect(readFileSync(fixlistPath, "utf8")).toBe(before);
+
+    const gateApproved = events(runDir).find((e) => e.type === "gate.approved");
+    expect(gateApproved).toBeDefined();
+    const payload = gateApproved?.payload as Record<string, unknown> | undefined;
+    expect(payload?.fixlist_unmatched).toEqual([
+      `\`${strayHead}\` is not reachable from any open story's branch, and the note named no story it belongs to`,
+    ]);
+  });
 });
+
+function run1(dir: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+
+function events(runDir: string): Record<string, unknown>[] {
+  return readFileSync(join(runDir, "events.jsonl"), "utf8")
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
