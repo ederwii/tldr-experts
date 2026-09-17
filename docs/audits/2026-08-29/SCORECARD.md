@@ -23,5 +23,5 @@ What del piloto anoche $2.60 · triage `--propose` $0.93 · verificación stream
 
 ## Lo que sigue (en este orden)
 1. **Mañana ≥ 06:33Z**: `scripts/release.sh 0.3.0 --tag alpha` → `npm publish --access public` → Trusted Publisher → re-run `publish.yml`.
-2. **Piloto real en `~/aparece-v2`** con el framework completo: `/tldrx` → contestar las 6 decisiones (`tldrx answer Qn … --run 260830-decisions-gate`) → build humano del run 0 → `tldrx run auto` en `catalog-sequence-dod` con gates auto. Es la primera vez que auto-gates, `run auto`, conocimiento-en-prompt y expertos de rol tocan `claude` real: saldrán bugs de contacto.
+2. **Piloto real en workspace W1** con el framework completo: `/tldrx` → contestar las 6 decisiones (`tldrx answer Qn … --run 260830-decisions-gate`) → build humano del run 0 → `tldrx run auto` en `catalog-sequence-dod` con gates auto. Es la primera vez que auto-gates, `run auto`, conocimiento-en-prompt y expertos de rol tocan `claude` real: saldrán bugs de contacto.
 3. Evals (la palanca de producto), capa de proveedor, stories en paralelo.

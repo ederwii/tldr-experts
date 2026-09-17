@@ -4,7 +4,7 @@
  * **Why this exists.** The gate fix in `knowledgeFile.ts` changes what the NEXT
  * training run earns. It cannot help the files a workspace already paid for:
  * `expert recompute` is arithmetic over the evidence rows in `competencies.yml`,
- * and for every expert the bug hit that array is `[]`. Measured on `~/scavtopia`
+ * and for every expert the bug hit that array is `[]`. Measured on workspace W2
  * at 0.8.0, four role experts trained `--mode full` for $9.47 and kept one row —
  * the knowledge files themselves are good, twenty sourced bullets among them, and
  * without a path from "file on disk" back to "evidence row" the cheapest recovery

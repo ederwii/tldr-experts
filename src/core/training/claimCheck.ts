@@ -6,11 +6,11 @@
  * a check on the CITATION. It says nothing about the CLAIM, and the two came apart
  * in the first real corpus this framework produced.
  *
- * Measured 2026-08-29 on `~/aparece-v2/.tldrx/experts/aparece-api/knowledge/aparece-api.md`,
+ * Measured 2026-08-29 on `W1/.tldrx/experts/aparece-api/knowledge/aparece-api.md`,
  * written by a real training run: its header asserts
  *
  *     `dotnet build` exit 0, 0 warnings, 0 errors — measured, exit code captured
- *     unpiped [src: aparece-v2:.tldrx/workspace.yml:19]
+ *     unpiped [src: W1:.tldrx/workspace.yml:19]
  *
  * and line 19 of that workspace.yml is `build: dotnet build` — the DECLARATION of
  * the command, not a result of running it. The same header claims "78/78 passed,

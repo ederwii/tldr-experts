@@ -6,7 +6,7 @@
  * story did not break the tree*. That claim is only meaningful if the tree was
  * unbroken to begin with, and until 2026-08-31 nothing checked.
  *
- * Measured live on `260829-scoring-leaderboard` (scavtopia): of the three
+ * Measured live on `260829-scoring-leaderboard` (workspace W2): of the three
  * commands `workspace.yml` declared, TWO already failed on pristine main — a bare
  * `dotnet test` ran two `Live`-trait tests that call paid Azure AI and that the
  * repo's own CI excludes, and `dotnet format --verify-no-changes` flagged 336

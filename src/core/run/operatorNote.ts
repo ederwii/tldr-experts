@@ -4,7 +4,7 @@
  *
  * ## The failure this exists for
  *
- * Measured on run `260829-scoring-leaderboard` (scavtopia, 2026-09-01). A host
+ * Measured on run `260829-scoring-leaderboard` (workspace W2, 2026-09-01). A host
  * performed an owner-delegated mechanical resync of eight story dod blocks and
  * was explicitly asked to note it in the run log. It could not, and said so:
  *

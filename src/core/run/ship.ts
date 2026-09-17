@@ -1131,7 +1131,7 @@ async function prepareRepo(
         ...(refused.length > shown.length ? [`    …and ${String(refused.length - shown.length)} more`] : []),
         `  \`${PROJECT_WORK_DIR}/\` and \`${PROJECT_FRAMEWORK_DIR}/\` are written LIVE into this checkout for the `
           + "length of a run, so the same paths arriving in a merge meet a dirty tree — measured on",
-        "  aparece-v2, 2026-09-02: a refused pull over 5 modified and ~40 untracked paths (gh #102).",
+        "  workspace W1, 2026-09-02: a refused pull over 5 modified and ~40 untracked paths (gh #102).",
         "  An epic under review carries feature code; the run's state belongs on the branch it was",
         `  written on, where \`tldrx approve\` now commits it. To take it back off the epic:`,
         `    git -C ${repo.dir} checkout ${base} -- ${remedyPaths(refused, excused)}`,

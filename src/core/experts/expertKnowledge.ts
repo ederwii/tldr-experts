@@ -39,7 +39,7 @@ export const KNOWLEDGE_DIRNAME = "knowledge";
  *
  * It was 64 KB PER EXPERT until wave N, which is how a nine-expert stage reached
  * a measured 83,523 B of expert block against 72,283 B of the declared inputs it
- * was actually asked to read (`~/aparece-v2`, 2026-08-29) — and, at the ceiling,
+ * was actually asked to read (workspace W1, 2026-08-29) — and, at the ceiling,
  * 576 KB from twelve experts, past the context window of the model the Watch
  * stage pins. A per-expert cap is not a cap: it scales with a number nobody set.
  *

@@ -46,7 +46,7 @@ export function result(
  * version ⇒ exit 1". Seven skeleton validators asked for `schema_version`
  * instead, and seven templates printed `schema_version: 0` — while `tldrx init`
  * had already been writing `version: 1` for real (measured 2026-08-29 against
- * `~/aparece-v2/.tldrx/`: `version: 1` in workspace.yml, process.yml, every
+ * workspace W1's `.tldrx/`: `version: 1` in workspace.yml, process.yml, every
  * competencies.yml, and every run.yml/budget.yml under `tldrx-work/`). So the
  * validators were rejecting the tool's own output and accepting only a spelling
  * nothing wrote. The spec wins.

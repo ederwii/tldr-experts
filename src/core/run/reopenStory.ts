@@ -8,7 +8,7 @@
  * automatic. This one is the opposite case: the machine read the run correctly and
  * a person disagrees with the outcome.
  *
- * Measured on `260830-tenancy-identity-customers` (`~/aparece-v2`). Story S3 is
+ * Measured on `260830-tenancy-identity-customers` (workspace W1). Story S3 is
  * `blocked` after two GENUINE `changes` verdicts — its headless developers ran,
  * committed nothing, and both reviewers correctly refused an empty diff. Neither
  * rescue applies and neither should: the verdicts are real and the attempts were

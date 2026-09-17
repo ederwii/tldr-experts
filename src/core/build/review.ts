@@ -202,7 +202,7 @@ export function parseReview(structured: unknown, fallback: string): Review {
  *
  * **What is deliberately NOT part of the guard: a non-empty `findings[]`.** It
  * looks like the obvious way to spell "the reviewer also judged the WORK", and
- * it is the wrong instrument. Measured across the nine `aparece-v2` runs on
+ * it is the wrong instrument. Measured across the nine workspace-W1 runs on
  * 2026-09-01: all 25 recorded review logs carry a non-empty `findings[]`, and
  * all 25 are `approve` — the one verdict whose own prompt line says "Empty on
  * `approve`". Reviewers use `findings[]` as a narrative evidence log whatever

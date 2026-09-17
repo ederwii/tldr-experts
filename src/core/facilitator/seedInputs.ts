@@ -18,7 +18,7 @@
  * **Wave N: one budget, inputs first.** Until 2026-08-29 the seed documents had
  * their own 64 KB budget and each loaded expert had its OWN 64 KB of trained
  * knowledge, so the two never competed and the asymmetry was measurable: on
- * `~/aparece-v2` the seed budget dropped `ADR-D013-DELIVERY-ZONE-GEOMETRY.md`
+ * workspace W1 the seed budget dropped `ADR-D013-DELIVERY-ZONE-GEOMETRY.md`
  * (5,863 B) whole — the sixth of the six decisions the run existed to settle —
  * while 70,923 B of expert knowledge nobody had asked for went in untouched. A
  * budget that can drop a DECLARED input while undeclared reference material

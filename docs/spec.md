@@ -456,7 +456,7 @@ appear in the prompt:
    (`expert <name> — NOT LOADED: no .tldrx/experts/<name>/ in this workspace`), not skipped in silence. This mattered
    because the SHIPPED stage files named `domain`, `stack`, `architect`, `delivery`, `operations` and `developer` and
    `tldrx init` seeded none but `product`. Measured 2026-08-29 on a fixture: the What stage's `experts: [product,
-   domain]` loaded one of the two and said nothing about the other; and on `~/aparece-v2`, a real workspace,
+   domain]` loaded one of the two and said nothing about the other; and on workspace W1, a real workspace,
    `architect`, `delivery`, `developer` and `operations` had no folder at all. Both halves of that gap are closed —
    `init` seeds the five **role experts** (below), and `domain`/`stack` are retired from the shipped lists. The two
    retired names are still ACCEPTED in a forked or older stage file: they are ignored with one note,
@@ -486,7 +486,7 @@ appear in the prompt:
    the repo rule still applies) but is marked `relevant: false` and earns **none** of the shared knowledge budget:
    its `expert.md` body only.
 
-   The repo half is conditional because measurement said so. On `~/aparece-v2` (`mode: single-repo`, 2026-08-29) a
+   The repo half is conditional because measurement said so. On workspace W1 (`mode: single-repo`, 2026-08-29) a
    What prompt loaded nine experts, **eight of them by `repos:` alone**; they contributed 52% of 159,575 bytes and
    not one had read a file the run cited. In a single-repo workspace `repos:` selects everybody, which is the same as
    selecting nobody — it just costs more. After the change the same prompt loads two experts and is 85,676 bytes.
@@ -895,7 +895,7 @@ those rows. Without it, the workspaces this command exists to rescue were left h
 
 **`--max-budget-usd` is a stop, not a cap — measured.** Pilot smoke, 2026-08-29,
 `tldrx expert train typescript-stack --area typescript --mode light --max-usd 1.5` over
-mobile + scavtopia-lab: the sub-agent was killed with `subtype: error_max_budget_usd`,
+mobile + W2-lab: the sub-agent was killed with `subtype: error_max_budget_usd`,
 `errors: ["Reached maximum budget ($1.5)"]` — after `total_cost_usd: 5.15325` on a single
 turn (`num_turns: 1`, 597 s, 105,698 cache-creation + 60,548 output tokens on a 1M-context
 model). The flag ends the run once a turn's cost is known; it cannot end a turn already in
@@ -3143,7 +3143,7 @@ it, the stability order below.
 This is a COST decision, not a layout one. A prompt cache keys on the longest PREFIX two calls share; a cache write
 is billed at 1.25x an input token and a cache read at 0.1x. The experts used to be emitted LAST, behind the
 declared inputs — so the largest and most stable section of the prompt sat behind the section that changes at every
-stage, and paid the write price every time. Measured 2026-08-29 on `~/aparece-v2`: 159,575 B, of which 52% was expert
+stage, and paid the write price every time. Measured 2026-08-29 on workspace W1: 159,575 B, of which 52% was expert
 bodies and knowledge and 45% declared inputs, in that order.
 
 **Measured 2026-08-29, two real `claude` 2.1.251 calls, back to back, same 40,715-byte prompt, `--model haiku`,
@@ -3167,7 +3167,7 @@ tokens, because the CLI's own system prompt, tool definitions and `CLAUDE.md` ar
 input; it is an `[assumption]` for sizing, never for billing.
 
 **One budget, inputs first.** Two independent ceilings are not a ceiling. The seed documents used to share 64 KB
-and EACH loaded expert had its own 64 KB of trained knowledge, so they never competed: on `~/aparece-v2` the seed
+and EACH loaded expert had its own 64 KB of trained knowledge, so they never competed: on workspace W1 the seed
 budget dropped `ADR-D013-DELIVERY-ZONE-GEOMETRY.md` (5,863 B) whole — the sixth of the six decisions the run existed
 to settle — while 70,923 B of unrequested expert knowledge went in untouched. There is now one allocation, in
 priority order:
@@ -4392,7 +4392,7 @@ verdict and the reason. One line on stdout and one `story.work_rescued` event (�
 gains a `## Uncommitted work rescued` section saying where the work is and that nothing reviewed or merged it. If the
 commit cannot be made, **the worktree is KEPT** and the log names its path — a tree holding the only copy of somebody's
 work is not the framework's to delete. Framework state (`tldrx-work/`, `.tldrx/`) is excluded by the same pathspec a
-story commit uses. Measured 2026-09-02 on run `260830-money-and-payments` (aparece-v2): a story's DoD failed, it
+story commit uses. Measured 2026-09-02 on run `260830-money-and-payments` (workspace W1): a story's DoD failed, it
 settled `blocked`, `git worktree remove --force` ran, and the developer's fix — uncommitted, inside — was gone. There
 was no branch, no stash and no reflog to recover it from, and `blocked` is precisely the state a human is going to want
 to inspect. Nothing is rescued on the ordinary path: a story that reaches `done` was committed before its DoD was even

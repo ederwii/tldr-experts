@@ -36,7 +36,7 @@
  *
  * The bound moved ONCE, from 120 to 140, and this is the reason: the text had four
  * instructions to STOP and not one to continue. Measured 2026-09-04 over the eight
- * runs of the aparece-v2 workspace — 26 `budget.raised`, 26 `question.answered`,
+ * runs of workspace W1 — 26 `budget.raised`, 26 `question.answered`,
  * and an owner who had to type "sigue con todas desatendido, no esperes por mi"
  * INSIDE an unattended run to restart a session the mandate had correctly halted.
  * A prompt that licenses stopping four times and never says "keep going" produces
@@ -55,7 +55,7 @@ export const MANDATE_MAX_LINES = 140;
  * Deliberately a SECOND constant rather than a bigger first one. The reporting
  * contract is ~23 lines of prompt paid once, and what it buys is a session that
  * stops writing prose on every turn for the rest of the run — measured on the
- * aparece-v2 workspace, 133,689 B of operator notes and 99,689 B of gate evidence
+ * workspace W1, 133,689 B of operator notes and 99,689 B of gate evidence
  * that no prompt ever reads back. Letting the standard mandate drift to fit it
  * would spend the skimmability budget of every run to pay for the terse one.
  */
@@ -235,8 +235,8 @@ function evidence(): readonly string[] {
  *
  * Unattended only, and it is the governing sentence of that mode: the framework
  * already refuses to spawn, so the ONLY thing that can end a run early is the
- * session deciding to. Measured over the eight driven runs of the aparece-v2
- * workspace on 2026-09-04, the old text contained four instructions to stop
+ * session deciding to. Measured over the eight driven runs of workspace W1
+ * on 2026-09-04, the old text contained four instructions to stop
  * (the preflight refusal, "do nothing yet", the budget "and wait", and the
  * four-item interrupt list) and zero instructions to continue — `grep -ic
  * "continue|keep going|proceed|do not stop|resume"` over this file returned 0.
@@ -269,7 +269,7 @@ function continuation(mode: DriveMode): readonly string[] {
  * Parking, in the shape an owner can answer in seconds — and WITHOUT the halt the
  * old text licensed.
  *
- * Two things were wrong here and both were measured on the aparece-v2 runs.
+ * Two things were wrong here and both were measured on the workspace-W1 runs.
  *
  * The first was the sentence "if the only safe version is `do nothing yet`, do
  * nothing yet and park it". It is true about the WRITE and was read as true about
@@ -325,7 +325,7 @@ function parking(): readonly string[] {
  * `--tldr` — the reporting contract, for a run whose trail nobody will read.
  *
  * It exists because of a measurement and a habit. The measurement, taken over the
- * ten runs of the aparece-v2 workspace on 2026-09-04: of ~4.0 MB the runs wrote,
+ * ten runs of workspace W1 on 2026-09-04: of ~4.0 MB the runs wrote,
  * 2.16 MB is trail, and the majority of that trail is never read by anything. All
  * 261 declared stage `inputs:` across those runs contain ZERO occurrences of
  * `handoff.md`, `retro.md` or `gate-evidence` — they are written at output-token

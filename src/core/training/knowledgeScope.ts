@@ -11,7 +11,7 @@
  *   - every `src` already on record in this expert's OTHER areas, so one reading
  *     cannot be sold twice by moving it to a second area.
  *
- * Measured 2026-08-29 on `~/aparece-v2`: 29% / 55% / 22% of the three trained
+ * Measured 2026-08-29 on workspace W1: 29% / 55% / 22% of the three trained
  * experts' citations were outside their own declared `## Domain`, and 16 files
  * were cited by two experts each. The domain declarations were right; nothing was
  * reading them.

@@ -611,7 +611,7 @@ export interface PlanModel {
  * that number reconciles perfectly against every other ledger surface and is
  * still nowhere near what the run cost, because the turns a host session paid
  * for contribute nothing to it. Measured on `260830-ordering-inventory`
- * (aparece-v2, audited 2026-09-02): `spent_usd`, the `events.jsonl` sum, the
+ * (workspace W1, audited 2026-09-02): `spent_usd`, the `events.jsonl` sum, the
  * stage sums, the task sums and the `budget.yml` phase sums all agree at
  * **$14.60** — over 34 turns of which **4** carried money. The run's own watch
  * gate note puts the real figure at "about 81 dollars". The framework was not
