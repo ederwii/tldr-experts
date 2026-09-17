@@ -136,6 +136,88 @@ describe("M1 · fact sources are looked up in facts.yml", () => {
   });
 });
 
+/**
+ * `was_id` (gh #338) — the owner's decision (2026-09-17) was an ADDITIVE alias,
+ * never a rewrite: a fact's `id` stays immutable, and a citation of the id it
+ * used to carry keeps resolving through the fact that now carries it.
+ */
+describe("M1 · was_id aliases an old id after a renumber (#338)", () => {
+  test("citing the old id resolves to the fact that carries it as was_id", () => {
+    write(probe.root, ".tldrx/memory/facts.yml", `version: 1
+facts:
+  - id: F021
+    was_id: F019
+    fact: "Backend deploys run via deploy.yml."
+    area: deploy
+    repos: [api]
+    kind: answer
+    confidence: measured
+    source: {who: alan, when: "2026-08-14T10:11:00Z", run: 260814-envs, q: Q1}
+    supersedes: null
+    superseded_by: null
+    retired: null
+`);
+    clearSrcCaches();
+    expect(resolve("F019")).toMatchObject({ ok: true, outcome: "ok" });
+  });
+
+  test("an old id whose was_id belongs to a different fact resolves to THAT fact, never to a new occupant reusing the number", () => {
+    // F019 here is a brand-new, unrelated fact that happens to reuse the
+    // number 019 as its OWN id. F021 is the fact F019 actually renamed to
+    // (was_id: F019) and it is RETIRED. Citing F019 must resolve through the
+    // alias to F021 and report RETIRED — never silently OK off the new
+    // occupant's own live status.
+    write(probe.root, ".tldrx/memory/facts.yml", `version: 1
+facts:
+  - id: F019
+    fact: "A brand new, unrelated fact that later reused the number 019."
+    area: deploy
+    repos: [api]
+    kind: answer
+    confidence: measured
+    source: {who: alan, when: "2026-09-01T00:00:00Z", run: 260901-x, q: Q9}
+    supersedes: null
+    superseded_by: null
+    retired: null
+  - id: F021
+    was_id: F019
+    fact: "Backend deploys run via deploy.yml."
+    area: deploy
+    repos: [api]
+    kind: answer
+    confidence: measured
+    source: {who: alan, when: "2026-08-14T10:11:00Z", run: 260814-envs, q: Q1}
+    supersedes: null
+    superseded_by: null
+    retired: {at: "2026-09-10T00:00:00Z", by: alan, reason: "no longer applies"}
+`);
+    clearSrcCaches();
+    expect(resolve("F019")).toMatchObject({
+      ok: false,
+      outcome: "refused",
+      message: expect.stringContaining("RETIRED"),
+    });
+  });
+
+  test("a retired id with no was_id alias pointing at it is refused BY NAME, same as any unknown fact", () => {
+    // Default beforeEach fixture: no was_id anywhere, F999 was never anyone's
+    // own id and nothing aliases it.
+    expect(resolve("F999")).toMatchObject({
+      ok: false,
+      outcome: "refused",
+      message: expect.stringContaining("no such fact F999"),
+    });
+  });
+
+  test("a facts.yml with no was_id anywhere reads and resolves exactly as before", () => {
+    // Guard: the default fixture (F019 live, F020 retired) never uses was_id.
+    expect(resolve("F019")).toMatchObject({ ok: true, outcome: "ok" });
+    expect(resolve("F020")).toMatchObject({
+      ok: false, outcome: "refused", message: expect.stringContaining("RETIRED"),
+    });
+  });
+});
+
 describe("M1 · answer sources must be a question this run asked", () => {
   test("a declared question resolves, from any phase of the run", () => {
     expect(resolve("Q4")).toMatchObject({ ok: true, outcome: "ok" });

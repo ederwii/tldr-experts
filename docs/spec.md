@@ -640,6 +640,7 @@ facts:
 | Field | Type | Req | Meaning |
 |---|---|---|---|
 | `id` | `^F\d{3,6}$` | y | Immutable; cited as `[src: F019]` |
+| `was_id` | fact id | n | **Additive** (gh #338). The id this fact was cited under before an id-change, if any — `id` stays immutable, so when a fact's id must change the old id becomes an alias on the row that replaces it, never a rewrite. `[src: <was_id>]` resolves to this fact. Absent means "never renumbered" |
 | `fact` | str ≤2000 | y | One assertion, present tense, no hedging |
 | `truncated` | bool\|absent | n | The text is the head of a longer answer, cut at the cap. Absent means "not known to be cut" |
 | `conflicts_with` | fact id[] | n | **Additive.** The live facts this one was DETECTED to contradict when it was recorded, written only when non-empty — an empty list is refused by the validator and the key is simply absent instead. Absent means "no contradiction was detected", never "checked and agreed": the check is LEXICAL (`conflictOf` — Jaccard ≥ 0.6 on ≥4-character tokens, within the same `area`, scoring the QUESTION's title against the whole of each candidate fact) and it cannot see two differently-titled answers that disagree in meaning. Written by the `tldrx answer` path, capture and `--supersede` alike; a supersession never scores itself against the head it replaces |
@@ -665,7 +666,11 @@ written before it existed still validates, and only a non-boolean value is an is
 and additive the same way, and only a value outside `owner\|driver` is an issue — absent is the honest state, not a
 defect. `conflicts_with` is optional and additive too, and refuses exactly two shapes: something that is not an array
 of strings, and an EMPTY array — `expected at least one fact id, or the key absent`, because a row that lists no
-conflict and a row that says it has none are the same row and must be written the same way.
+conflict and a row that says it has none are the same row and must be written the same way. `was_id` (gh #338) is
+optional and additive the same way: a fact id shape or absent are the only valid values, a `was_id` that equals
+another fact's LIVE id is refused (`collides with a live fact id`, since a bare `[src: …]` citing it would then be
+ambiguous between the fact that owns it and the fact aliasing it), and a `was_id` claimed by more than one fact is
+refused (`is already claimed by <id>`, since an alias with two owners could resolve either way).
 
 **A detected contradiction is RAISED, never refused.** When the `tldrx answer` path finds a live fact above the
 threshold, the answer is still recorded — with `conflicts_with` on the new row — and a question is minted in the

@@ -79,6 +79,16 @@ export function emitFact(fact: Fact, indent = "  "): string {
     : `, decided_by: ${yamlScalar(fact.source.decided_by)}`;
   const lines = [
     `${indent}- id: ${yamlScalar(fact.id)}`,
+  ];
+  // Written only when present (gh #338), same rule as `truncated` below: a
+  // `was_id: null` on every row that was never renumbered would be noise in a
+  // diff nobody asked for, and it would also read as "checked, never renamed"
+  // rather than "not stated". Emitted here so a `save()` after a load never
+  // silently drops an alias a row already carries — version-1 formats only
+  // grow (§7), which a write that forgets a field it read violates in effect
+  // even with the schema unchanged.
+  if (fact.was_id !== undefined) lines.push(`${inner}was_id: ${yamlScalar(fact.was_id)}`);
+  lines.push(
     `${inner}fact: ${yamlScalar(fact.fact)}`,
     `${inner}area: ${yamlScalar(fact.area)}`,
     `${inner}repos: ${inlineList(fact.repos)}`,
@@ -88,7 +98,7 @@ export function emitFact(fact: Fact, indent = "  "): string {
       `run: ${yamlScalar(fact.source.run)}, q: ${yamlScalar(fact.source.q)}${decidedBy}}`,
     `${inner}supersedes: ${yamlScalar(fact.supersedes)}`,
     `${inner}superseded_by: ${yamlScalar(fact.superseded_by)}`,
-  ];
+  );
   // Written only when it is true. A `truncated: false` on every row of a file
   // whose facts are all whole is noise in a diff nobody asked for.
   if (fact.truncated === true) lines.push(`${inner}truncated: true`);

@@ -402,6 +402,132 @@ describe("validateFactsFile — decided_by is a closed set", () => {
 });
 
 /**
+ * `validateFactsFile` — `was_id` (gh #338, owner decision 2026-09-17): an
+ * additive alias to the id a fact was cited under before an id-change, never
+ * a rewrite of the immutable `id`. A `was_id` must be citable-shaped, must not
+ * collide with another LIVE fact's own id (that id would be ambiguous between
+ * its owner and the fact aliasing it), and must not be claimed by more than
+ * one fact.
+ */
+describe("validateFactsFile — was_id aliases an old id after a renumber (#338)", () => {
+  function row(overrides: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: "F001", fact: "x", area: "billing", repos: [], kind: "observed", confidence: "measured",
+      source: { who: "alan", when: "2026-09-06T09:00:00Z", run: null, q: null },
+      supersedes: null, superseded_by: null, retired: null,
+      ...overrides,
+    };
+  }
+  function factsDoc(rows: Record<string, unknown>[]) {
+    return { version: 1, facts: rows };
+  }
+
+  test("a was_id shaped like a fact id, with nothing else on disk to collide with, is accepted", () => {
+    const outcome = validateFactsFile(factsDoc([row({ id: "F002", was_id: "F001" })]));
+    expect(outcome.ok).toBe(true);
+  });
+
+  test("a was_id colliding with a LIVE fact id is refused", () => {
+    const outcome = validateFactsFile(factsDoc([
+      row({ id: "F001" }),
+      row({ id: "F002", was_id: "F001" }),
+    ]));
+    expect(outcome.ok).toBe(false);
+    expect(outcome.issues).toContainEqual({
+      path: "facts.F002.was_id",
+      message: "was_id F001 collides with a live fact id",
+    });
+  });
+
+  test("a was_id colliding with a RETIRED fact id is accepted — that is exactly the renumber this field exists for", () => {
+    const outcome = validateFactsFile(factsDoc([
+      row({ id: "F001", retired: { at: "2026-09-10T00:00:00Z", by: "alan", reason: "renamed" } }),
+      row({ id: "F002", was_id: "F001" }),
+    ]));
+    expect(outcome.ok).toBe(true);
+  });
+
+  test("a was_id claimed by more than one fact is refused", () => {
+    const outcome = validateFactsFile(factsDoc([
+      row({ id: "F002", was_id: "F001" }),
+      row({ id: "F003", was_id: "F001" }),
+    ]));
+    expect(outcome.ok).toBe(false);
+    expect(outcome.issues).toContainEqual({
+      path: "facts.F003.was_id",
+      message: "was_id F001 is already claimed by F002",
+    });
+  });
+
+  test("a malformed was_id is refused, not silently ignored", () => {
+    const outcome = validateFactsFile(factsDoc([row({ id: "F002", was_id: "bogus" })]));
+    expect(outcome.ok).toBe(false);
+    expect(outcome.issues).toContainEqual({
+      path: "facts.F002.was_id",
+      message: expect.stringContaining("was_id must match"),
+    });
+  });
+
+  test("a facts row with no was_id at all still validates, exactly as before the field existed", () => {
+    const outcome = validateFactsFile(factsDoc([row({ id: "F001" })]));
+    expect(outcome.ok).toBe(true);
+  });
+
+  test("a facts.yml with no was_id anywhere is byte-stable through a load/save round trip", () => {
+    const ws = makeWorkspace();
+    const path = factsFileOf(ws);
+    // NOT the fixture's own (empty) facts.yml: `FactsStore.save()` on a store
+    // with ZERO facts is a pre-existing, out-of-scope defect measured while
+    // writing this test — `emitFactsYaml` writes a bare `facts:` line for `[]`,
+    // which every YAML parser round-trips as `facts: null`, and `save()`'s own
+    // re-validation then refuses to write at all. Filed as a draft issue
+    // (gh #338's implementer), not fixed here. One row sidesteps it and is the
+    // real-world shape anyway — `save()` is only ever called after `append()`.
+    writeFileSync(path, `version: 1
+facts:
+  - id: F001
+    fact: x
+    area: billing
+    repos: []
+    kind: observed
+    confidence: measured
+    source: {who: alan, when: "2026-09-06T09:00:00Z", run: null, q: null}
+    supersedes: null
+    superseded_by: null
+    retired: null
+`, "utf8");
+    const before = readFileSync(path, "utf8");
+    FactsStore.load(path).save(path);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("a was_id already on disk survives a load/save round trip instead of being silently dropped", () => {
+    const ws = makeWorkspace();
+    const path = factsFileOf(ws);
+    writeFileSync(path, `version: 1
+facts:
+  - id: F002
+    was_id: F001
+    fact: "x"
+    area: billing
+    repos: []
+    kind: observed
+    confidence: measured
+    source: {who: alan, when: "2026-09-06T09:00:00Z", run: null, q: null}
+    supersedes: null
+    superseded_by: null
+    retired: null
+`, "utf8");
+    const loaded = FactsStore.load(path);
+    expect(loaded.facts[0]?.was_id).toBe("F001");
+    loaded.save(path);
+    const reloaded = FactsStore.load(path);
+    expect(reloaded.facts[0]?.was_id).toBe("F001");
+    expect(readFileSync(path, "utf8")).toContain("was_id: F001");
+  });
+});
+
+/**
  * `--repo` is validated against `workspace.yml`, the same way `tldrx answer --repo`
  * already was (#186).
  *
