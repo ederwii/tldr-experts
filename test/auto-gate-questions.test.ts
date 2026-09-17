@@ -31,6 +31,7 @@ import { join } from "node:path";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 import { deliveredTo, writeNotifier, workspaceYamlWithNotify } from "./fixtures/facilitator/notifier.ts";
 import { runAuto, type AutoOptions } from "../src/core/facilitator/runAuto.ts";
+import { runNext } from "../src/core/facilitator/runNext.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import type { TldrxEvent } from "../src/core/events/Event.ts";
@@ -454,46 +455,34 @@ describe("the deferred gate notification is released by conditions, not by statu
     expect(gateRequested(ws)).toBeDefined();
   });
 
-  test("with nothing to close the gate, the deferred notification DOES go out, and agrees with itself", async () => {
-    const ws = workspace({ gates: { alpha: "auto", beta: "auto" }, questions: QUESTIONS });
-    const answering = answerWhenWaiting(ws);
-
-    // No `--wait-gates`: the answers clear the questions and nothing will sign the gate,
-    // so the deferred notification is the actionable one and must not be swallowed.
-    const outcome = await auto(ws, { waitAnswersMs: 20_000, notifyEveryMs: 40 });
-    await answering;
-    expect(outcome.code).toBe(4);
-
-    const sent = delivered(ws).filter((p) => p.kind === "gate.requested");
-    expect(sent.length).toBe(1);
-    const payload = sent[0] ?? {};
-    const detail = payload.detail as { holding?: unknown; held_by?: unknown };
-    // Self-coherent: the summary cannot name open questions while `holding` says none.
-    // Both halves are read at the same instant, after the answers landed.
-    expect(detail.holding).toBe("none");
-    expect(String(payload.summary)).not.toContain("questions=");
-    expect(detail.held_by).toBeUndefined();
-    expect(events(ws).some((e) => e.type === "gate.approved" && e.stage === "alpha")).toBe(false);
-  });
-
-  // gh #342 — measured on a live `run auto --run <id> --until-done=5` with no
-  // `--wait-gates`/`--wait-answers`: the loop answered the blocking questions itself
-  // (here, via `--wait-answers`) but nothing closes the gate they were the only thing
-  // holding, and the NEXT `next` call reports the stage as `awaiting_gate` with the
-  // generic `gate pending: tldrx approve` — never naming the flag that would have let
-  // the loop close it. The refusal now names the cure at the moment it is decided,
-  // not just the symptom.
-  test("gh #342 — with no --wait-gates, the stop names the flag that would have closed the gate", async () => {
+  // gh #342 (recommendation 1, closed): `next` itself now re-measures an
+  // `awaiting_gate` stage whose policy is `auto` and signs it the moment every
+  // condition holds — the very next call, `--wait-gates` or not. So with no
+  // `--wait-gates`, the deferred notification is still swallowed (nothing for a
+  // person to act on: the gate is about to close itself), and it DOES close
+  // itself, on this loop's own next iteration rather than needing a poll.
+  test("with no --wait-gates, the gate still closes itself — on the loop's own next call", async () => {
     const ws = workspace({ gates: { alpha: "auto", beta: "auto" }, questions: QUESTIONS });
     const answering = answerWhenWaiting(ws);
 
     const outcome = await auto(ws, { waitAnswersMs: 20_000, notifyEveryMs: 40 });
     await answering;
-    expect(outcome.code).toBe(4);
 
-    const line = outcome.lines.find((l) => l.includes("--wait-gates") && l.includes("alpha"));
-    expect(line).toBeDefined();
-    expect(String(line)).toContain("holds");
+    // Nothing was left `awaiting_gate` for a person: the loop ran clean through.
+    expect(outcome.code).toBe(0);
+    // The deferred `gate.requested` notification was swallowed — there was nothing
+    // left to ask a person about by the time it would have gone out.
+    expect(delivered(ws).some((p) => p.kind === "gate.requested")).toBe(false);
+    // The gate EVENT is still on the log (the audit trail), signed "auto" — closed
+    // by `next`'s own self-close (`trySelfCloseParkedAutoGate`, runNext.ts), not by
+    // `waitForGate`'s poll (nothing here passed `--wait-gates`).
+    const approved = events(ws).filter((e) => e.type === "gate.approved" && e.stage === "alpha");
+    expect(approved.length).toBe(1);
+    expect(approved[0]?.payload.by).toBe("auto");
+    expect(gateRequested(ws)).toBeDefined();
+    // The run reached `done` — nothing was left `awaiting_gate` for a person to
+    // find on the next `run status`.
+    expect(outcome.lines.some((line) => line.includes("run") && line.includes("is done"))).toBe(true);
   });
 
   test("a SECOND condition, failing only by the time the answers land, IS notified — and with the current words", async () => {
@@ -525,5 +514,95 @@ describe("the deferred gate notification is released by conditions, not by statu
     // Nothing signed it, and nothing could: the loop waited and gave up.
     expect(events(ws).some((e) => e.type === "gate.approved" && e.stage === "alpha")).toBe(false);
     expect(delivered(ws).some((p) => p.kind === "gate.timeout")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (h) gh #342 — a bare `next`, with no `run auto` loop at all, self-closes a
+// parked `auto` gate whose conditions have since cleared
+// ---------------------------------------------------------------------------
+
+/**
+ * The unit-level proof behind #342's recommendation (1): the fix lives in `next`
+ * itself (`runNext.ts`'s `trySelfCloseParkedAutoGate`), not in `run auto`'s loop —
+ * so it must hold for a bare `tldrx next`, called by hand or by any future caller
+ * that re-enters a parked stage outside `runAuto`. Nothing here ever starts a
+ * `run auto` loop.
+ */
+describe("gh #342 — a bare `next` self-closes a parked auto gate on its own", () => {
+  test("a stage parked on open questions self-closes on the very next `next`, once they are answered", async () => {
+    const ws = workspace({ gates: { alpha: "auto", beta: "auto" }, questions: QUESTIONS });
+
+    // One bare `next`: alpha runs, its gate is requested, and the open questions
+    // hold it — no `run auto` loop involved.
+    const first = await runNext({
+      root: ws.root, dryRun: false, mode: "headless", yolo: false, actor: "alan", at: "2026-08-29T09:00:00Z",
+    });
+    expect(first.code).toBe(4);
+    expect(RunStore.open(ws.runDir).run.cursor).toEqual({ phase: "01-what", stage: "alpha", task: null });
+    const requested = events(ws).find((e) => e.type === "gate.requested" && e.stage === "alpha");
+    expect(requested?.payload.held_by).toEqual(["questions"]);
+
+    // Answered directly on disk — the same bytes `tldrx answer` leaves, and
+    // exactly what a person (or `run auto --wait-answers`) would have written.
+    // No loop, no poll: this is the ONLY thing that changed since the gate parked.
+    writeFileSync(join(ws.runDir, "01-what", "questions.md"), ANSWERED, "utf8");
+
+    // A second bare `next`, on the SAME still-`awaiting_gate` stage.
+    const second = await runNext({
+      root: ws.root, dryRun: false, mode: "headless", yolo: false, actor: "alan", at: "2026-08-29T09:05:00Z",
+    });
+
+    expect(second.code).toBe(0);
+    expect(second.lines.some((line) => line.includes("self-closed on this call") && line.includes("gh #342")))
+      .toBe(true);
+    const store = RunStore.open(ws.runDir);
+    // The cursor moved past alpha — the gate closed and the stage advanced,
+    // exactly as an `approve` at the end of a fresh stage always has.
+    expect(store.run.cursor).toEqual({ phase: "02-how", stage: "beta", task: null });
+    const approved = events(ws).filter((e) => e.type === "gate.approved" && e.stage === "alpha");
+    expect(approved.length).toBe(1);
+    expect(approved[0]?.payload.by).toBe("auto");
+    expect(approved[0]?.actor).toBe("auto");
+  });
+
+  test("guard: a `human`-policy gate is never self-closed, whatever the conditions say", async () => {
+    const ws = workspace({ gates: { alpha: "human", beta: "human" }, questions: QUESTIONS });
+
+    const first = await runNext({
+      root: ws.root, dryRun: false, mode: "headless", yolo: false, actor: "alan", at: "2026-08-29T09:00:00Z",
+    });
+    expect(first.code).toBe(4);
+
+    writeFileSync(join(ws.runDir, "01-what", "questions.md"), ANSWERED, "utf8");
+
+    const second = await runNext({
+      root: ws.root, dryRun: false, mode: "headless", yolo: false, actor: "alan", at: "2026-08-29T09:05:00Z",
+    });
+    // Still parked — a `human` gate is never measured, let alone signed, by this path.
+    expect(second.code).toBe(4);
+    expect(second.lines.join("\n")).toContain("gate pending: tldrx approve");
+    expect(events(ws).some((e) => e.type === "gate.approved" && e.stage === "alpha")).toBe(false);
+    expect(RunStore.open(ws.runDir).run.cursor).toEqual({ phase: "01-what", stage: "alpha", task: null });
+  });
+
+  test("a gate still held by a NON-question condition stays parked — never a false self-close", async () => {
+    const ws = workspace({ gates: { alpha: "auto", beta: "auto" }, handoff: unverifiableHandoff() });
+
+    const first = await runNext({
+      root: ws.root, dryRun: false, mode: "headless", yolo: false, actor: "alan", at: "2026-08-29T09:00:00Z",
+    });
+    expect(first.code).toBe(4);
+    const requested = events(ws).find((e) => e.type === "gate.requested" && e.stage === "alpha");
+    expect(requested?.payload.held_by).toEqual(["claim-sources"]);
+
+    // Nothing on disk changed the handoff — the condition that held the gate
+    // still holds.
+    const second = await runNext({
+      root: ws.root, dryRun: false, mode: "headless", yolo: false, actor: "alan", at: "2026-08-29T09:05:00Z",
+    });
+    expect(second.code).toBe(4);
+    expect(events(ws).some((e) => e.type === "gate.approved" && e.stage === "alpha")).toBe(false);
+    expect(RunStore.open(ws.runDir).run.cursor).toEqual({ phase: "01-what", stage: "alpha", task: null });
   });
 });

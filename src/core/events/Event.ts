@@ -250,7 +250,7 @@ export const EVENT_TYPES = [
   "input.truncated",
   "operator_note",
   "check.passed", "check.failed",
-  "budget.warned", "budget.blocked", "budget.raised", "budget.granted",
+  "budget.warned", "budget.blocked", "budget.raised", "budget.granted", "budget.parked",
   "fact.added", "fact.retired", "fact.superseded", "fact.conflict_raised", "doc.superseded",
   "notify.sent", "notify.failed",
   "map.refreshed",

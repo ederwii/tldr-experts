@@ -53,10 +53,11 @@ import { RunStore } from "../run/RunStore.ts";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import {
   AUTO_GATE_ACTOR, AUTO_GATE_CHECK_RETRIES, AUTO_GATE_RETRY_ACTOR, AUTO_GATE_RETRY_NOTE_PREFIX,
-  RATE_LIMIT_RESUME_ACTOR, RATE_LIMIT_RESUME_NOTE_PREFIX, checkRetryVerdict, heldBy, reevaluateAutoGate,
-  type AutoGateVerdict,
+  BUDGET_RESUME_ACTOR, BUDGET_RESUME_NOTE_PREFIX, RATE_LIMIT_RESUME_ACTOR, RATE_LIMIT_RESUME_NOTE_PREFIX,
+  checkRetryVerdict, heldBy, reevaluateAutoGate, type AutoGateVerdict,
 } from "../run/autoGate.ts";
 import { currentRateLimitPark, type RateLimitPark } from "../run/rateLimitPark.ts";
+import { currentBudgetPark, type BudgetPark } from "../run/budgetPark.ts";
 import { rateLimitLine } from "./agentEvents.ts";
 import { withWorkspaceLock, workspaceRootOfRunDir } from "../lock/workspaceLock.ts";
 import { flatten, isAttendedByHost, isFinished, type RunFile } from "../run/RunFile.ts";
@@ -1066,11 +1067,17 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
        *
        * What decides is the gate's CONDITIONS, re-measured now through the same
        * `reevaluateAutoGate` the poll uses, plus the policy that will act on them. An
-       * `auto` gate whose seven conditions all hold, with a `--wait-gates` that will sign
-       * it, is not a decision anybody has to take — nothing is sent, and the run says so on
-       * stdout rather than leaving a silence (§7). Anything else — a second condition still
-       * holding, or no `--wait-gates` to close it — is the actionable notification #203
-       * promised, worded from THIS measurement.
+       * `auto` gate whose seven conditions all hold is not a decision anybody has to
+       * take — nothing is sent, and the run says so on stdout rather than leaving a
+       * silence (§7). A second condition still holding IS the actionable notification
+       * #203 promised, worded from THIS measurement.
+       *
+       * gh #342 closed the other half of this: `next` itself (`runNext.ts`'s
+       * `trySelfCloseParkedAutoGate`) now re-measures an `awaiting_gate` stage whose
+       * policy is `auto` and signs it the moment every condition holds — on the VERY
+       * NEXT call, `--wait-gates` or not. So a verdict that `ok`s here needs no flag
+       * named and no notification: the gate closes itself whether this loop's next
+       * iteration reaches it (no `--wait-gates`) or `waitForGate`'s poll does.
        */
       const settleDeferredGate = async (): Promise<void> => {
         const parked = pendingGate(runDir);
@@ -1080,26 +1087,11 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
           policy: parked.policy,
           at: options.at,
         });
-        if (verdict !== null && verdict.ok && options.waitGatesMs !== undefined) {
+        if (verdict !== null && verdict.ok) {
           deferredGate = null;
           say(`not asking for a signature on ${parked.stage} — every auto-gate condition `
-            + "holds and --wait-gates signs it on the next poll");
+            + "holds and `next` closes it on the next call (gh #342)");
           return;
-        }
-        // gh #342: every condition holds RIGHT NOW — the questions that were the only
-        // thing failing this `auto` gate are the ones this call just answered — but
-        // nothing will act on that without `--wait-gates`: the only thing that ever
-        // signs a parked `auto` gate is `selfCloseAutoGate`, reached only from
-        // `waitForGate`'s poll. The next `next` call sees a stage still `awaiting_gate`
-        // and reports it as terminal for this call (`runNext.ts`), with a generic
-        // `gate pending: tldrx approve` that never says the gate would have closed
-        // itself. Naming the flag HERE, at the moment the gap is decided, costs nothing
-        // and needs no new trust boundary — closing the gap itself is `next`'s to fix
-        // (recommendation (1) on the issue) and out of scope here.
-        if (verdict !== null && verdict.ok && options.waitGatesMs === undefined) {
-          say(`${parked.stage}'s auto gate now holds on every condition, but nothing will sign it — `
-            + "pass --wait-gates <duration> (with --wait-answers) so an all-auto run does not stop "
-            + "for a person on a gate it can close itself (#342)");
         }
         // `why` is empty on a verdict that passed and sentences on one that did not,
         // which is exactly what `gateHeld` carries — one shape, two readings of the one
@@ -1249,6 +1241,35 @@ async function runAutoOnce(options: AutoOptions, supervision: Supervision | unde
                       ? " with no stated reset instant"
                       : ` that cleared at ${new Date(waited.park.resetsAt * 1000).toISOString()}`)
                     + `; resuming the stage automatically (signed "${RATE_LIMIT_RESUME_ACTOR}")`);
+                } else {
+                  // The gate moved between the measurement and the write — a person signed it,
+                  // either way. Their decision stands; the next iteration reads it.
+                  say(`not resuming ${gate.stage} — its gate changed before the automatic resume `
+                    + "could be recorded, and whatever changed it stands");
+                }
+                continue;
+              }
+              if (waited.resolution === "budget-parked") {
+                // gh #354: the gate is held by `stories` alone, because the phase's
+                // own money ran short of the next story's developer floor, and the
+                // phase's CURRENT remainder now covers it (an operator's `tldrx
+                // budget raise`, or `--rebalance-finished`'s own move, landed since
+                // the park). Resumed the same door — `reject --and-continue`,
+                // signed by the loop — but under a DIFFERENT actor
+                // (`BUDGET_RESUME_ACTOR`), so this never spends #231's bound or
+                // #367's.
+                const recorded = rejectForRetry(runDir, gate.stageId, {
+                  root: options.root,
+                  at: at(),
+                  note: `${BUDGET_RESUME_NOTE_PREFIX} $${waited.park.remainderUsd.toFixed(2)} was left, `
+                    + `$${waited.park.floorUsd.toFixed(2)} was the floor.`,
+                  actor: BUDGET_RESUME_ACTOR,
+                });
+                if (recorded) {
+                  say(`waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — the auto gate on `
+                    + `${gate.stage} was held by a budget park; the phase can now afford the `
+                    + `$${waited.park.floorUsd.toFixed(2)} floor it was short of — resuming the stage `
+                    + `automatically (signed "${BUDGET_RESUME_ACTOR}")`);
                 } else {
                   // The gate moved between the measurement and the write — a person signed it,
                   // either way. Their decision stands; the next iteration reads it.
@@ -1512,6 +1533,18 @@ type GateWaited =
     readonly resolution: "rate-limited";
     readonly ms: number;
     readonly park: RateLimitPark;
+  }
+  | {
+    /**
+     * gh #354: an `auto` gate held by `stories` alone, because the phase's own
+     * money ran short of the next story's developer floor — resumed on the
+     * phase's CURRENT remainder, never a clock: an operator's `tldrx budget
+     * raise` (or `--rebalance-finished`'s own move) is what makes each resume
+     * different, checked fresh on every poll rather than waited out.
+     */
+    readonly resolution: "budget-parked";
+    readonly ms: number;
+    readonly park: BudgetPark;
   };
 
 /**
@@ -1554,6 +1587,49 @@ function rateLimitParkFor(verdict: AutoGateVerdict, runDir: string, stageId: str
   const held = heldBy(verdict);
   if (held.length !== 1 || held[0] !== "stories") return null;
   return currentRateLimitPark(runDir, stageId);
+}
+
+/**
+ * The budget park behind THIS refusal, or null when the refusal is not one
+ * (gh #354) — modeled on `rateLimitParkFor`, and mutually exclusive with it in
+ * practice: `noteRateLimit`/`budgetParkFor` (`executors/build.ts`) never both
+ * park the SAME story boundary in one invocation, because a story either
+ * dispatches or it does not, and the first door to refuse it wins.
+ */
+function budgetParkFor(verdict: AutoGateVerdict, runDir: string, stageId: string): BudgetPark | null {
+  const held = heldBy(verdict);
+  if (held.length !== 1 || held[0] !== "stories") return null;
+  return currentBudgetPark(runDir, stageId);
+}
+
+/**
+ * Is the phase's CURRENT remainder enough to afford `park`'s own floor (gh #354)?
+ *
+ * A money question, never a clock: re-reads `budget.yml` fresh on every poll
+ * (an operator's `tldrx budget raise`, or a `run auto --rebalance-finished` move,
+ * both land on disk outside this process), and the answer can only ever be as
+ * fresh as this read. No floor, no backoff, no "resume anyway after N minutes" —
+ * unlike a rate limit's clock, a stage that is still short stays short until
+ * somebody moves money into it, and re-checking cheaply is the whole design (one
+ * `RunStore.open` per poll, the same cost `pendingGate` already pays).
+ */
+function budgetReadyToResume(park: BudgetPark, runDir: string): boolean {
+  try {
+    const store = RunStore.open(runDir);
+    const entry = store.cursorEntry();
+    // The STAGE's own `budget_usd`/`cost_usd` (run.yml) — the SAME basis
+    // `budgetParkFor` (`build/caps.ts`) parked against, off `CapParts.budgetUsd`
+    // and the executor's real spend. NOT the phase's `ceiling_usd` (budget.yml,
+    // `remaining()`): per-story and reviewer caps are derived from the stage's
+    // own figure, and raising only the phase ceiling moves no spawn ceiling at
+    // all (`tldrx budget raise`'s own `stageRaiseLines`) — so a resume gated on
+    // the phase ceiling would fire the instant ANY unrelated raise landed,
+    // whether or not it reached this stage.
+    if (entry === null) return false;
+    return Math.max(round2(entry.stage.budget_usd - entry.stage.cost_usd), 0) >= park.floorUsd;
+  } catch {
+    return false;
+  }
 }
 
 async function waitForGate(
@@ -1602,12 +1678,22 @@ async function waitForGate(
     if (park !== null && rateLimitReadyToResume(park, started)) {
       return { resolution: "rate-limited", ms: Date.now() - started, park };
     }
+    // gh #354 — the same reasoning, for a refusal held by `stories` alone because
+    // the STAGE'S OWN MONEY ran short. Checked after the rate-limit park (the
+    // two are mutually exclusive per invocation — see `budgetParkFor`'s own
+    // docstring) and, like it, before #231's checks-retry path.
+    const budgetPark = park === null && measured !== null && measured.verdict !== null && !measured.verdict.ok
+      ? budgetParkFor(measured.verdict, runDir, stageId)
+      : null;
+    if (budgetPark !== null && budgetReadyToResume(budgetPark, runDir)) {
+      return { resolution: "budget-parked", ms: Date.now() - started, park: budgetPark };
+    }
     // gh #231 — the refusal is measured already; ask whether a re-run may answer it. Only
     // an `auto` policy ever has a verdict here (`autoGateVerdict` is null for `human` and
-    // `agent`), so a person's gate never reaches this line. A rate-limit park (above) is
-    // never routed here: `stories` is not a retryable condition, so this would only ever
-    // report it as withheld and never act on it.
-    if (park === null && measured !== null && measured.verdict !== null && !measured.verdict.ok) {
+    // `agent`), so a person's gate never reaches this line. A rate-limit park or a budget
+    // park (both above) is never routed here: `stories` is not a retryable condition, so
+    // this would only ever report it as withheld and never act on it.
+    if (park === null && budgetPark === null && measured !== null && measured.verdict !== null && !measured.verdict.ok) {
       const decision = checkRetryVerdict(measured.verdict);
       let withheld: string | null = null;
       if (decision.retry) {

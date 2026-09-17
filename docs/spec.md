@@ -1279,7 +1279,7 @@ Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `agent.rate_limited` `question.asked` `question.answered`
 `gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `gate.policy_changed` `questions.policy_changed` `story.reopened` `story.base_fastforwarded` `story.base_updated` `story.conflict_turn` `story.review_retried` `story.work_rescued`
 `story.touches_widened` `plan.fix_round` `epic.released` `epic.resumed` `worktree.foreign_work_aside` `worktree.foreign_work_restored` `result.unreadable` `input.truncated` `operator_note` `check.passed` `check.failed` `budget.warned`
-`budget.blocked` `budget.raised` `budget.granted` `fact.added` `fact.retired` `fact.superseded` `fact.conflict_raised` `doc.superseded` `notify.sent` `notify.failed` `map.refreshed` `ticket.synced` `error`. Closed set: an
+`budget.blocked` `budget.raised` `budget.granted` `budget.parked` `fact.added` `fact.retired` `fact.superseded` `fact.conflict_raised` `doc.superseded` `notify.sent` `notify.failed` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
 
 **This list is the enum, and a test says so.** It is `EVENT_TYPES` (`src/core/events/Event.ts`), in that order, and
@@ -1594,6 +1594,33 @@ fact from "replaced $0". `stage` on the envelope is `null` and `cost_usd` is `0`
 and spends nothing. It is appended BEFORE the save, like `budget.raised`, so a grant that fails validation leaves no
 event claiming it happened; and it is the ONLY record that an authorization changed — `budget.yml` holds the current
 amount and this log holds the sequence that produced it.
+
+**`budget.parked` was added 2026-09-17 (gh #354), modeled directly on `agent.rate_limited` (#298).**
+`runNext.ts`'s `budgetRefusal` meters the phase's remaining-work estimate exactly ONCE, at Build stage entry — the
+executor itself never re-checks the envelope between two dispatches of one headless `runAll`, so a phase that could
+afford its entry estimate but ran short partway through kept dispatching until the money was gone, and the only way
+the gate fired again was an all-or-nothing refusal on a RETRY of a failed stage, with the stage left incomplete at no
+boundary the operator chose. The Build executor now checks, before starting a NEW story's developer (both the serial
+loop and a wave's lanes — the same two doors `agent.rate_limited` already checks at), whether the stage's remainder
+still covers that story's developer FLOOR (`budgetParkFor`, `build/caps.ts` — the same predicate `waveLaneFunding`
+already computed but, with nothing in flight to free money by finishing, used to dispatch anyway); when it does not,
+the executor stops there — stories already running finish and are settled, and only the next story is withheld. Its
+payload carries `phase`, `remainder_usd` (what the stage had left), `floor_usd` (what it fell short of) and `parked`
+(the story withheld), which becomes `parked_absent: "nothing was left to park — the shortfall arrived on this
+stage's last story"` when the shortfall landed with nothing left to withhold — the same absent-with-reason shape
+`agent.rate_limited` uses for its own one-story-wave case. Written ONCE per stage, the first time a dispatch is
+withheld this way, whether or not anything was withheld (the flush half, `flushBudgetParked`, mirrors
+`flushRateLimited`). It changes no outcome for stories already running; every story it withholds carries it as its
+REASON in `handoff.md`'s `## Unknowns`, through the same ordered derivation `agent.rate_limited` extended
+(dependency wait → cancel → rate-limit park → budget park → residue). Unlike a rate-limit park, `run auto
+--wait-gates` resumes it on the phase's CURRENT remainder rather than a clock — `budgetReadyToResume` (`runAuto.ts`)
+re-reads the STAGE's own `budget_usd`/`cost_usd` (run.yml, the same figure `budgetParkFor` parked against — NOT the
+phase's `ceiling_usd` in `budget.yml`, which caps no spawn on its own) fresh on every poll, and resumes through the
+same `reject --and-continue` door #298's park uses, signed a THIRD actor (`run auto (budget)`,
+`BUDGET_RESUME_ACTOR`) so neither automatic-retry bound can spend the other's. `tldrx run status` names this on a
+stage held only by unfinished stories that a budget park explains: "parked by a budget shortfall (…) — resumes
+automatically once the phase can afford it" instead of "held by: stories" — never read as a decision waiting on a
+person.
 
 **A `check: "dod"` result carries `exit_code` OR `refused` — never both, and never a fabricated code (2026-09-06,
 #165).** Both `check.passed` and `check.failed` for a Definition-of-Done command carry `phase`, `check: "dod"`,
@@ -2978,7 +3005,12 @@ next(run, dry_run):
   r = load_validate(run.yml); b = load_validate(budget.yml)
   if r.status in {done, cancelled}: exit 0
   st = resolve(r.cursor)                           # the stage the cursor points at
-  if st.status == awaiting_gate: exit 4 "gate pending: tldrx approve"
+  if st.status == awaiting_gate:                    # gh #342 — before giving up, an `auto`-policy gate gets one
+     if gates_policy(st) == auto:                    # more chance: the seven conditions it parked on may have
+        v = reevaluate_auto_gate(st)                 # cleared since (an open question answered, say) — re-measured
+        if v.ok: approve(st, actor=auto, note=v.note); exit 0   # off disk, through the SAME `approve` a freshly-closed
+                                                       # gate uses. `human`/`agent` policies are never measured here.
+     exit 4 "gate pending: tldrx approve"
   if st.status == awaiting_answer: exit 4 if unanswered_blocking(questions.md) else st.status = ready   # `advisory:` blocks do not hold it (§2.7)
   sy = load_validate(.tldrx/stages/<st.id>/stage.yml)
   if sy.skip_if holds: append(stage.skipped)

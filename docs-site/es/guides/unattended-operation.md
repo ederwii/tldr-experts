@@ -616,10 +616,14 @@ Tres políticas, tres cosas distintas al terminar una etapa:
   ya es tu decisión registrada de que un agente puede cerrarla.
 - **`auto`** — sin firmante y sin nota: siete condiciones medidas, y la compuerta cierra solo
   si se cumplen las siete. Si no, cae hacia una persona con las que fallaron nombradas, tanto
-  en `held_by` de la carga `gate.requested` como en stdout. Y la oferta sigue en pie: con
-  `--wait-gates` las siete se vuelven a medir en cada consulta, así que una compuerta retenida
-  por una pregunta abierta se cierra sola apenas se responde la pregunta. Solo `auto` — el run
-  ya concedió esa autoridad — y tu propio `approve` o `reject` la anula en cualquier momento.
+  en `held_by` de la carga `gate.requested` como en stdout. Y la oferta sigue en pie, de dos
+  formas: `tldrx next` vuelve a medir por su cuenta una compuerta `auto` ya retenida EN CADA
+  llamada y la cierra en cuanto se cumplen las siete condiciones — sin necesitar ninguna
+  bandera (gh #342) — y, con `--wait-gates`, las mismas siete se vuelven a medir en cada
+  consulta sin esperar una llamada nueva a `next`, que es lo que necesita un párking por
+  límite de tasa o un párking por presupuesto (más abajo) para reanudarse en cuanto el reloj
+  del proveedor, o un `tldrx budget raise` del operador, los despeje. Solo `auto` — el run ya
+  concedió esa autoridad — y tu propio `approve` o `reject` la anula en cualquier momento.
 
   Cuando lo único que rechaza una compuerta `auto` es un **check fallido** — un check
   declarado, o `claim-sources` rechazando una cita — el bucle hace lo que habrías tecleado tú:
@@ -636,8 +640,8 @@ desatendido: `--wait-answers 4h --wait-gates 4h`.
 ### `--gates none` y `--wait-gates` son dos palancas distintas
 
 Abrir el run y lanzar el motor son dos comandos separados, y omitir `--wait-gates` del
-segundo es la forma más común de que un lanzamiento zero-touch deje de serlo. El par
-completo:
+segundo sigue sin convenir en un lanzamiento zero-touch, aunque gh #342 cerró el borde más
+filoso de saltárselo. El par completo:
 
 ```bash
 tldrx run new login-timeout --scope bugfix --seed .tldrx/seeds/01-login-timeout.md \
@@ -646,16 +650,23 @@ tldrx run auto --run <id> --until-done=5 --wait-gates 4h --wait-answers 4h
 ```
 
 `--gates none` fija la **política** — cualquier compuerta puede cerrarse sola, registrado una
-vez en `run.yml`. `--wait-gates` es lo que deja que `run auto` de verdad **cierre** una
-compuerta que se quedó retenida — sin esa bandera el bucle sale `awaiting human` en la primera
-compuerta que queda retenida por una pregunta que él mismo responde bajo `--questions none`
-(medido, #342). El mecanismo: la pregunta sí se responde — el bucle contesta preguntas sin
-condición — pero volver a firmar la compuerta que esperaba esa respuesta solo ocurre dentro del
-bucle de sondeo de `--wait-gates`. Sin esa bandera, la siguiente llamada a `next` encuentra la
-etapa ya en `awaiting_gate` y le entrega el control a una persona que no tiene nada que decidir.
-Lanza `run auto` con `--wait-gates <duración>` en todo run abierto con `--gates none` —
-`--wait-answers <duración>`, su hermana para la pregunta abierta en sí, va a su lado por la
-misma razón.
+vez en `run.yml`. Antes de #342, una compuerta que quedaba retenida por una pregunta que
+`--questions none` respondía sola se quedaba `awaiting_gate` para siempre sin `--wait-gates`:
+el bucle contesta preguntas sin condición, pero volver a firmar la compuerta que esperaba esa
+respuesta solo ocurría dentro del bucle de sondeo de `--wait-gates`, así que la siguiente
+llamada a `next` encontraba la etapa todavía en `awaiting_gate` y le entregaba el control a una
+persona sin nada que decidir (medido, #342). `tldrx next` ahora vuelve a medir una compuerta
+`auto` ya retenida en cada llamada y la cierra en cuanto se cumplen las siete condiciones —
+con `--wait-gates` o sin ella — así que ese caso exacto se resuelve solo en la siguiente
+iteración del propio bucle una vez que `--wait-answers` respondió la pregunta. `--wait-gates`
+sigue ganándose su lugar en todo lanzamiento zero-touch por dos cosas que el auto-cierre de
+`next` no puede hacer solo: es lo que deja que el bucle siga sondeando en vez de salir en
+cuanto UNA compuerta cae hacia una persona por una razón sin relación, y es la única puerta que
+reanuda un párking por límite de tasa o un párking por presupuesto (más abajo) — ambos
+condicionados por algo (el reloj del proveedor, o el remanente de la fase) que solo se despeja
+entre sondeos, no entre una llamada a `next` y la siguiente. Lanza `run auto` con
+`--wait-gates <duración>` en todo run abierto con `--gates none` — `--wait-answers <duración>`,
+su hermana para la pregunta abierta en sí, va a su lado por la misma razón.
 
 ## Reintentar una etapa que falló
 
@@ -716,7 +727,11 @@ y `run.finished` / `run.failed` llegan a tu hook una sola vez, desde el último 
 cosas sobre las que nunca relanza:
 
 - **Una salida `4`, que es de una persona.** Una pregunta abierta o una compuerta pendiente
-  son tuyas; `--wait-answers` y `--wait-gates` son las banderas que te esperan.
+  son tuyas; `--wait-answers` y `--wait-gates` son las banderas que te esperan. Eso incluye una
+  etapa Build que `--wait-gates` dejó retenida en un límite de historia porque la fase se quedó
+  corta de dinero a mitad de etapa (gh #354) — se reanuda sola en cuanto `tldrx budget raise
+  --stage <id>` (o `--rebalance-finished`) de verdad alcanza para la siguiente historia,
+  comprobado de nuevo en cada sondeo, nunca por adivinanza.
 - **Dinero.** Un `budget.blocked` nombra `remaining_usd < estimate_usd`, y nada dentro del
   proceso mueve ese techo — la línea de parada dice las dos cifras, y `tldrx budget raise` es
   tuyo. Una fase tasada en `economy: host-tokens` la detiene el mismo evento pero no por

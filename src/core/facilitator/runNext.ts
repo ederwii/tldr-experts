@@ -23,8 +23,8 @@ import { isAttendedByHost, isTerminal, type GateType, type RunFile, type RunPhas
 import { runChecks, runPrecondition, type CheckOutcome, type PreconditionOutcome } from "../run/checks.ts";
 import { approve } from "../run/gates.ts";
 import {
-  AUTO_GATE_ACTOR, AUTO_GATE_RETRY_ACTOR, RATE_LIMIT_RESUME_ACTOR, evaluateAutoGate, heldBy, unreadableHeadings,
-  warningLinesOf,
+  AUTO_GATE_ACTOR, AUTO_GATE_RETRY_ACTOR, RATE_LIMIT_RESUME_ACTOR, evaluateAutoGate, heldBy, reevaluateAutoGate,
+  unreadableHeadings, warningLinesOf, type AutoGateVerdict,
 } from "../run/autoGate.ts";
 import {
   describeAgentFallthroughs, evaluateAgentGate, type AgentGateInput, type AgentGateVerdict,
@@ -509,6 +509,69 @@ function demoteStaleRunning(store: RunStore, options: NextOptions, deadPid: numb
   ];
 }
 
+/**
+ * gh #342: re-measure an ALREADY-PARKED `auto` gate and sign it, when every one
+ * of the seven conditions now holds — never for `human`/`agent`, and never a
+ * verdict that still fails.
+ *
+ * Null (never a `NextOutcome`) on every door this must not take: a non-`auto`
+ * policy, a verdict `reevaluateAutoGate` could not measure, a verdict that still
+ * fails, or an `approve` this call raced and lost (a person's own `approve` or
+ * `reject` landing between the measurement and this write always wins — the
+ * gate has since moved, and the caller's ordinary `awaiting_gate` report, read
+ * fresh, is what tells the truth about it). The caller falls through to that
+ * report unchanged in every one of those cases, so this is purely additive: a
+ * `next` that never reaches this function behaves exactly as it always has.
+ */
+async function trySelfCloseParkedAutoGate(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  stageId: string,
+  notes: string[],
+): Promise<NextOutcome | null> {
+  if (gatePolicyFor(store.run.gates_policy, stageId) !== "auto") return null;
+  let verdict: AutoGateVerdict | null;
+  try {
+    verdict = await reevaluateAutoGate({
+      root: options.root,
+      runDir: store.runDir,
+      run: store.run,
+      budget: store.budget,
+      stageId,
+    });
+  } catch {
+    return null;
+  }
+  if (verdict === null || !verdict.ok) return null;
+  try {
+    // The SAME door a person and the facilitator use to close a freshly
+    // requested gate, a few hundred lines below: `approve` re-runs the checks
+    // off disk, records `by`/`at`/`note`, appends `gate.approved` + `stage.done`
+    // and advances the cursor. A refusal there (a concurrent approve/reject
+    // that moved the gate first) is a refusal here, and the caller reports the
+    // gate exactly as it would have without this function existing.
+    const approved = await approve(store, {
+      root: options.root,
+      actor: AUTO_GATE_ACTOR,
+      at: nowish(options),
+      note: verdict.note,
+    });
+    if (!approved.ok) return null;
+    return out(EXIT_OK, [
+      ...notes,
+      `${phaseId}/${stageId}'s auto gate self-closed on this call — every condition it was `
+        + "parked on now holds (gh #342)",
+      `  ${verdict.note}`,
+      approved.advancedTo === null
+        ? `run ${store.runId} is finished`
+        : `cursor → ${approved.advancedTo.phase}/${approved.advancedTo.stage} (ready)`,
+    ]);
+  } catch {
+    return null;
+  }
+}
+
 async function advance(store: RunStore, options: NextOptions, notes: string[]): Promise<NextOutcome> {
   for (let step = 0; step < MAX_CURSOR_STEPS; step++) {
     if (store.run.status === "done" || store.run.status === "cancelled") {
@@ -548,6 +611,20 @@ async function advance(store: RunStore, options: NextOptions, notes: string[]): 
     }
 
     if (entry.stage.status === "awaiting_gate") {
+      // gh #342: a parked `auto` gate whose only blockers were open questions
+      // (or any other condition) that have SINCE cleared used to sit
+      // `awaiting_gate` forever without `--wait-gates` — the only door that ever
+      // re-ran the seven conditions on an already-pending gate was
+      // `waitForGate` → `selfCloseAutoGate` (`runAuto.ts`), reached only from
+      // the poll loop. `next` itself is the one caller nothing has to opt into:
+      // re-measure with the SAME `reevaluateAutoGate` the poll uses, and close
+      // it through the SAME `approve` door a freshly-requested auto gate closes
+      // through a few hundred lines below — one implementation of "how an auto
+      // gate closes", not a second one here. A `human` or `agent` policy is
+      // never measured: this is `auto`'s own authority, kept open instead of
+      // expiring the instant the gate was first handed over.
+      const closed = await trySelfCloseParkedAutoGate(store, options, phaseId, stageId, notes);
+      if (closed !== null) return closed;
       return out(EXIT_AWAITING_HUMAN, [...notes, `gate pending: tldrx approve`, `  at ${phaseId}/${stageId}`]);
     }
 

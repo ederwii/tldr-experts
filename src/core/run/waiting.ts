@@ -31,6 +31,7 @@ import { hasPreparedBundle } from "./prepared.ts";
 import { startedHeadless } from "./lastStart.ts";
 import { heldByNote } from "./autoGate.ts";
 import { currentRateLimitPark } from "./rateLimitPark.ts";
+import { currentBudgetPark } from "./budgetPark.ts";
 
 /**
  * Every kind, as a VALUE — so a reader can enumerate them.
@@ -251,6 +252,22 @@ export function waitingFor(run: WaitingRun, runDir: string): Waiting {
               + (park.resetsAt === null
                 ? " — it stated no reset instant, so nothing here knows when it resumes"
                 : `, resumes automatically at ${new Date(park.resetsAt * 1000).toISOString()}`),
+            questions: open,
+          };
+        }
+        // gh #354: the same reasoning, for a stage parked because the phase's
+        // own money ran short — `run auto` resumes THIS one itself too
+        // (`runAuto.ts`'s `waitForGate`), on the phase's remainder rather than a
+        // clock. Never read as a decision waiting on a person (AGENTS.md's #354
+        // requirement: a park is never a human stop).
+        const budgetPark = currentBudgetPark(runDir, entry.stage.id);
+        if (budgetPark !== null) {
+          return {
+            kind: "gate",
+            message: `gate on ${entry.phase.id}/${entry.stage.id} — parked by a budget shortfall `
+              + `($${budgetPark.remainderUsd.toFixed(2)} left, $${budgetPark.floorUsd.toFixed(2)} needed) `
+              + "— resumes automatically once the phase can afford it (`tldrx budget raise`, "
+              + "or `run auto --rebalance-finished`)",
             questions: open,
           };
         }

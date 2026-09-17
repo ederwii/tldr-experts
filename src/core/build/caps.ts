@@ -476,6 +476,53 @@ export function reviewerUnderfunded(parts: CapParts, spentUsd: number): boolean 
   return left !== null && left < REVIEWER_FLOOR_USD;
 }
 
+/** What a story-boundary budget park (gh #354) names, for the operator line and the ledger. */
+export interface BudgetParkReason {
+  /** What the stage still has, right now — `stageRemainderUsd`'s own figure. */
+  readonly remainderUsd: number;
+  /** The least the stage must hold to fund ANOTHER turn at all — see `budgetParkFor`. */
+  readonly floorUsd: number;
+}
+
+/**
+ * Is there too little left in the stage to fund ANOTHER turn at all (gh #354)?
+ * Modeled on `reviewerUnderfunded`'s own shape, and on its own THRESHOLD too —
+ * deliberately `REVIEWER_FLOOR_USD`, not `developerFloorUsd`.
+ *
+ * `developerFloorUsd` is the wrong number to park on: gh #277 clamps a priced
+ * story's floor to the STAGE's own `budget_usd` on purpose ("the ceiling may
+ * exceed the stage — the stage's own budget gate is what stops a stage that
+ * runs out, and it meters real spend rather than a guess"), so a story priced
+ * near or above the whole stage — an intended, TESTED shape
+ * (`test/build-executor.test.ts`'s "leaderboard-v2" case: a $3.85 stage funding
+ * a $6.30 ceiling) — would make this park fire on nearly every dispatch. A
+ * park is not "this story's ideal cap exceeds what is left"; it is "this stage
+ * cannot fund a turn worth attempting, of ANY size" — the exact question
+ * `reviewerUnderfunded` already asks and answers against the SAME fixed floor,
+ * because a developer turn is never worth less than what a reviewer needs to
+ * read its diff.
+ *
+ * `waveLaneFunding` computes a DIFFERENT, per-story `bound < floor` predicate
+ * but, with nothing in flight to free money by finishing, dispatches anyway —
+ * a deliberate choice for THAT function (its own docstring: "never spawned
+ * under a turn's floor"). This is a separate, earlier, coarser question a
+ * caller asks BEFORE deciding whether to call `waveLaneFunding` (or, in the
+ * serial path, before calling `buildHalf`) at all: is the stage now so short
+ * that the next story should not be STARTED, full stop. Callers park a story
+ * on this rather than dispatch it underfunded (see `BuildSession`'s
+ * `budgetPark` field and the two call sites in `executors/build.ts`, gh #354).
+ *
+ * `null` — never a park — when the stage carries no budget figure to subtract
+ * from (`stageRemainderUsd`'s own null case) or when the remainder still
+ * covers the floor.
+ */
+export function budgetParkFor(parts: CapParts, spentUsd: number): BudgetParkReason | null {
+  const remainderUsd = stageRemainderUsd(parts, spentUsd);
+  if (remainderUsd === null) return null;
+  if (remainderUsd >= REVIEWER_FLOOR_USD) return null;
+  return { remainderUsd, floorUsd: REVIEWER_FLOOR_USD };
+}
+
 /**
  * What the Plan priced this story at, scaled to fit the stage — or null when it
  * priced nothing, so the uniform share applies.

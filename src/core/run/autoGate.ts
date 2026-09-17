@@ -177,6 +177,16 @@ export const AUTO_GATE_RETRY_ACTOR = "run auto";
 export const RATE_LIMIT_RESUME_ACTOR = "run auto (rate-limit)";
 
 /**
+ * Who signs the resume a budget park's money-based wait writes (gh #354) — a
+ * THIRD actor, distinct from both the checks-retry bound and the rate-limit
+ * one, for the same reason `RATE_LIMIT_RESUME_ACTOR` is distinct from
+ * `AUTO_GATE_RETRY_ACTOR`: a budget resume is gated by the phase's CURRENT
+ * remainder (`budgetReadyToResume`, `runAuto.ts`), never by a count, and must
+ * never spend either unrelated bound.
+ */
+export const BUDGET_RESUME_ACTOR = "run auto (budget)";
+
+/**
  * How many times `run auto --wait-gates` re-runs ONE stage on its own because its `auto`
  * gate was refused only by failed checks (gh #231). Counted per stage over the run's whole
  * event log, so a relaunched loop cannot reset it.
@@ -198,6 +208,14 @@ export const AUTO_GATE_RETRY_NOTE_PREFIX = "run auto re-ran this stage: its auto
  */
 export const RATE_LIMIT_RESUME_NOTE_PREFIX = "run auto resumed this stage: its auto gate was held by an unfinished "
   + "story a rate-limit warning parked, and the provider's own clock has since cleared it.";
+
+/**
+ * The head of the note a budget timed-by-money resume writes (gh #354) — the
+ * sibling of `RATE_LIMIT_RESUME_NOTE_PREFIX` for a resume gated by the phase's
+ * remainder rather than a clock.
+ */
+export const BUDGET_RESUME_NOTE_PREFIX = "run auto resumed this stage: its auto gate was held by an unfinished "
+  + "story a budget shortfall parked, and the phase can now afford it.";
 
 /** The conditions a re-run with the findings in its prompt can plausibly fix. */
 const RETRYABLE_CONDITIONS: ReadonlySet<string> = new Set(["checks", "claim-sources"]);
