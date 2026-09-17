@@ -118,6 +118,10 @@ interface NoteOverrides {
   readonly by?: string;
   /** Replace the `Verdict` section's bullets — the easy way to break one. */
   readonly verdictBullets?: readonly string[];
+  /** The front matter's `at:` — every `next()` in this file runs the stage at
+   * `2026-08-29T09:00:00Z`, so the default here is just after it (issue #144:
+   * evidence must not predate what it signs). Overridable for the stale case. */
+  readonly at?: string;
 }
 
 function note(o: NoteOverrides = {}): string {
@@ -127,7 +131,7 @@ function note(o: NoteOverrides = {}): string {
     `gate: ${o.gate ?? GATE}`,
     "role: agent",
     `by: ${o.by ?? "fable"}`,
-    "at: 2026-08-28T22:14:03Z",
+    `at: ${o.at ?? "2026-08-29T09:05:00Z"}`,
     `verdict: ${o.verdict ?? "sign"}`,
     'read: ["01-what/handoff.md", "01-what/intent.md"]',
     "citations: {sampled: 2, of: 4, resolved: 2, refuted: 0}",
@@ -586,6 +590,27 @@ describe("the four fallthroughs, one at a time", () => {
 
     expect(outcome.code).toBe(4);
     expect(outcome.lines.join("\n")).toContain("refusal: verdict is `sign-with-fixlist`");
+  });
+
+  // Issue #144: a delegated gate signed on stale evidence, measured in the field
+  // — `05-watch/gate-evidence/watch.md` predated its stage by 7h and still said
+  // `refuted: 0`. `at` is self-reported, but a note whose own claimed time is
+  // before its stage even started cannot describe this attempt's outputs.
+  test("5 — evidence dated before the stage started falls to a person, named as stale", async () => {
+    const ws = workspace();
+    writeNote(ws.runDir, "alpha", note({ at: "2026-08-27T00:00:00Z" }));
+
+    const outcome = await next(ws);
+
+    expect(outcome.code).toBe(4);
+    const said = outcome.lines.join("\n");
+    expect(said).toContain("evidence: the evidence note has 1 problem(s)");
+    expect(said).toContain(
+      "`at: 2026-08-27T00:00:00Z` is before 01-what/alpha started (2026-08-29T09:00:00Z) — "
+        + "evidence must not predate what it signs",
+    );
+    expect(stageOf(ws.runDir)?.gate.status).toBe("pending");
+    expect(stageOf(ws.runDir)?.gate.evidence).toBeUndefined();
   });
 });
 

@@ -161,7 +161,18 @@ function readAgentEvidence(root: string, store: RunStore, override: string | und
   }
   const text = readFileSync(path, "utf8");
   const gate = `${entry.phase.id}/${entry.stage.id}`;
-  const validation = validateEvidence(text, toSrcContext(loadWorkspace(root), store.runDir, { epicRefs: true }), { gate });
+  // The CURRENT attempt's start, not the stage's frozen first one (issue #144
+  // F1) — `attempt_started_at` is additive, so a record written before it
+  // existed falls back to `started_at`. This is also what closes the
+  // `--evidence <path>` loophole: pointed at an archived
+  // `evidence.rejected-*.md`, its `at:` predates the moment `reject` advanced
+  // this anchor, so it refuses here exactly as a stale note in the ordinary
+  // path does.
+  const validation = validateEvidence(
+    text,
+    toSrcContext(loadWorkspace(root), store.runDir, { epicRefs: true }),
+    { gate, stageStartedAt: entry.stage.attempt_started_at ?? entry.stage.started_at },
+  );
 
   // `verdict` is the ONE kind that means "a person decides" rather than "this
   // note is broken". Reported on its own, at its own exit, because the operator's

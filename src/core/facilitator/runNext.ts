@@ -3167,6 +3167,10 @@ function markRunning(store: RunStore, phaseId: string, stageId: string, at: stri
     ...stage,
     status: "running",
     started_at: stage.started_at ?? at,
+    // Unlike `started_at`, overwritten on EVERY run — this IS the current
+    // attempt's start, not the stage's first one (issue #144 F1). A gate
+    // evidence note's `at:` is checked against this, never the frozen field.
+    attempt_started_at: at,
     ended_at: null,
     // Running again is what un-stales a stage: the flag says "produced from a
     // decision that was later withdrawn", and this turn is the redo.

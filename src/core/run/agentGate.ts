@@ -133,7 +133,13 @@ export async function evaluateAgentGate(input: AgentGateInput): Promise<AgentGat
     return verdict(auto.conditions, fallthroughs, agentNote(auto.conditions, null), null, null, text, null);
   }
 
-  const evidence = validateEvidence(text, input.srcCtx, { gate: input.gate });
+  const evidence = validateEvidence(text, input.srcCtx, {
+    gate: input.gate,
+    // The CURRENT attempt's start, not the stage's frozen first one (issue
+    // #144 F1) — `attempt_started_at` is additive, so a record written before
+    // it existed falls back to `started_at`.
+    stageStartedAt: input.stage.attempt_started_at ?? input.stage.started_at,
+  });
   // `verdict` is the kind that means "a person decides"; every other kind means
   // "this note is broken". Two different things for the operator to do, so two
   // different triggers and never one message covering both.

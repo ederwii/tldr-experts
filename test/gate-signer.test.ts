@@ -81,7 +81,7 @@ function note(o: { verdict?: string; verdictBullets?: readonly string[] } = {}):
     `gate: ${GATE}`,
     "role: agent",
     "by: fable",
-    "at: 2026-08-28T22:14:03Z",
+    "at: 2026-08-29T09:05:00Z",
     `verdict: ${o.verdict ?? "sign"}`,
     'read: ["01-what/handoff.md", "01-what/intent.md"]',
     "citations: {sampled: 2, of: 4, resolved: 2, refuted: 0}",

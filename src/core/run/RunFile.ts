@@ -364,6 +364,24 @@ export interface RunStage {
    * current. `run status` says so; `next` re-runs the stage and clears the flag.
    */
   readonly stale?: boolean;
+  /**
+   * When the CURRENT attempt started — issue #144 F1. `started_at` is set once,
+   * at the stage's FIRST run, and §7 forbids ever changing what an existing
+   * field means, so it cannot become "this attempt's start" without silently
+   * reinterpreting every `started_at` already on disk. This is the new, ADDITIVE
+   * field instead: `markRunning` overwrites it on EVERY run (unlike
+   * `started_at`, which it only fills once), and `reject`/`revoke` advance it to
+   * their OWN moment when they send a stage back — closing the gap between "the
+   * decision to redo this" and "the next actual run", the exact window a stale
+   * evidence note (or one pointed at by `approve --evidence`) could otherwise
+   * still sign over (measured: a note dated between the old attempt's start and
+   * the new one's, or an archived `evidence.rejected-*.md`, both used to pass).
+   *
+   * Absent means NOT RECORDED: every `run.yml` written before this existed, and
+   * a reader falls back to `started_at` for those — never invented, and never a
+   * SECOND meaning grafted onto the field it stands in for.
+   */
+  readonly attempt_started_at?: string | null;
 }
 
 export interface RunPhase {
@@ -1034,6 +1052,10 @@ export function validateRunFile(input: unknown): ValidationResult {
       requireArray(stage.outputs, `${path}.outputs`, issues);
       if (stage.stale !== undefined && typeof stage.stale !== "boolean") {
         issues.push({ path: `${path}.stale`, message: "expected true or false" });
+      }
+      if (stage.attempt_started_at !== undefined && stage.attempt_started_at !== null
+        && typeof stage.attempt_started_at !== "string") {
+        issues.push({ path: `${path}.attempt_started_at`, message: "expected a string or null" });
       }
       checkOrder(stage.started_at, stage.ended_at, path, issues);
       if (cursor !== null && cursor.phase === phaseId && cursor.stage === stageId) cursorResolves = true;

@@ -109,7 +109,7 @@ function next(ws: { root: string }, overrides: Partial<NextOptions> = {}): Promi
 function note(): string {
   return [
     "---", "version: 1", `gate: ${GATE}`, "role: agent", `by: ${OWNER}`,
-    "at: 2026-09-02T08:14:03Z", "verdict: sign",
+    "at: 2026-09-02T09:05:00Z", "verdict: sign",
     'read: ["01-what/handoff.md", "01-what/intent.md"]',
     "citations: {sampled: 2, of: 4, resolved: 2, refuted: 0}",
     "touches: {audited: 3, outside_surface: 0, new_areas: []}",

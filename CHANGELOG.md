@@ -70,6 +70,24 @@
   `build/storyScan.ts` so `boundary.ts` — which `carriedRows.ts` already imports from — does not
   import it back), closing a divergence `carriedRows.ts` had documented as "somebody else's
   issue" since #171.
+- **An agent gate can no longer sign over evidence dated before the stage it is closing even
+  started (see #144).** A field evaluation of a delegated `watch` gate found its evidence note
+  timestamped 7h before its stage began, asserting facts already false by the time it signed,
+  with `refuted: 0` — the resolution half of that bug was #140; this is the remaining half
+  AGENTS.md §7 names: "a gate's evidence must not predate what it signs". `validateEvidence`
+  refuses a note whose `at:` is before the CURRENT attempt's own start — the new, additive
+  `RunStage.attempt_started_at`, which `markRunning` overwrites on every run, never the frozen
+  `started_at` it sits beside (§7: existing fields only grow, never change meaning; `started_at`
+  is set once, at the stage's first run, and stays that forever) — on both the engine's own
+  signer and `approve --as-agent`, one derivation, both doors. Two more holes pre-merge review
+  found in the same check: `at` was only confirmed non-empty, so a raw string compare read a
+  date-only `at` as earlier than a same-day, full-precision stage start; `at` is now confirmed a
+  real RFC3339 instant first, and the two timestamps are compared as instants, not strings. And
+  the full test gate caught the new check's own collateral: `tldrx learn`'s chapter 6 planted its
+  stand-in evidence note with a fixed past date, which the real wall clock had by now walked
+  past — its `at:` is stamped off `Date.now()` (with a 5-minute forward buffer, since the note is
+  written before the step that starts the stage it signs) rather than a date fixed at authoring
+  time.
 
 ## 0.33.0 — 2026-09-17
 

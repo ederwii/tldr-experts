@@ -1018,15 +1018,26 @@ const CHAPTER_5: Chapter = {
  * over a citation nothing could check, unlike a handoff, because an agent gate is
  * strictly stronger than an auto gate and never a cheaper one
  * (`core/text/evidence.ts`).
+ *
+ * `at:` is stamped off the REAL clock, not a fixed date (issue #144): this
+ * chapter runs the real `tldrx` CLI against the real wall clock, so a note
+ * pinned to a past date is one that will eventually predate the stage it signs
+ * — which is exactly the class of bug `at` not before `started_at` now refuses.
+ * Measured 2026-09-17: a fixed `at: 2026-09-01T10:30:00Z` had already gone
+ * stale. A five-minute forward buffer, not bare `nowRfc3339()`, because this
+ * note is written by `prepare()` — BEFORE step 1's `next {run}` sets the Watch
+ * stage's own `started_at` a moment later — so the bare "now" would itself be a
+ * few seconds earlier than what it has to be after.
  */
 function evidenceNote(): string {
+  const at = new Date(Date.now() + 5 * 60_000).toISOString().slice(0, 19) + "Z";
   return [
     "---",
     "version: 1",
     "gate: 05-watch/watch",
     "role: agent",
     "by: operations",
-    "at: 2026-09-01T10:30:00Z",
+    `at: ${at}`,
     "verdict: sign",
     "read: [\"05-watch/handoff.md\", \"src/pricing.ts\", \"package.json\"]",
     "citations: {sampled: 1, of: 1, resolved: 1, refuted: 0}",

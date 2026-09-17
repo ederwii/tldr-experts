@@ -26,6 +26,7 @@
  * verb, and it calls `validateEvidence` before it records anything.
  */
 import { parseFrontMatter } from "../schemas/frontMatter.ts";
+import { isRfc3339 } from "../../hooks/lib/actor.ts";
 import {
   missingSections, parseHandoff, validateSections, type Handoff,
 } from "./handoff.ts";
@@ -143,7 +144,8 @@ export type EvidenceIssueKind =
   | "arithmetic"
   | "sampling"
   | "verdict"
-  | "gate";
+  | "gate"
+  | "stale";
 
 export interface EvidenceIssue {
   readonly kind: EvidenceIssueKind;
@@ -170,6 +172,16 @@ export interface EvidenceValidation {
 export interface EvidenceExpectation {
   /** `<phase>/<stage>` at the cursor, e.g. `03-plan/plan`. */
   readonly gate: string;
+  /**
+   * The anchor a note's `at:` must not be before (issue #144). Callers pass the
+   * CURRENT attempt's own start — `RunStage.attempt_started_at`, falling back to
+   * the frozen `started_at` only for a record written before that field existed
+   * (issue #144 F1: `started_at` is set once, at the stage's FIRST run, and
+   * never moves; anchoring on it let a note re-dated between a reject and the
+   * next attempt's start sign over an attempt it never saw). `undefined` or
+   * `null` skips the check — never invented when a caller has no stage to ask.
+   */
+  readonly stageStartedAt?: string | null;
 }
 
 // --- parsing -----------------------------------------------------------------
@@ -215,6 +227,15 @@ export function parseEvidence(text: string): EvidenceNote {
   const role = requireEnum(doc.role, EVIDENCE_ROLES, "role", issues);
   const by = requireText(doc.by, "by", issues);
   const at = requireText(doc.at, "at", issues);
+  // A bare date parses as text and is non-empty, so `requireText` alone lets a
+  // date-only `at:` through — and `"2026-08-29" < "2026-08-29T09:00:00Z"` is
+  // true as a raw string, which used to let check 8 below sign over it as if
+  // it were EARLIER than a same-day stage start (issue #144 F2). Skipped when
+  // `at` is already empty: that is `requireText`'s own issue, not a second one
+  // for the same root cause.
+  if (at !== "" && !isRfc3339(at)) {
+    issues.push(front(0, `\`at\` must be a valid RFC3339 timestamp, got \`${at}\``));
+  }
   const verdict = requireEnum(doc.verdict, EVIDENCE_VERDICTS, "verdict", issues);
   const read = requireStrings(doc.read, "read", issues);
   const citations = requireCitations(doc.citations, issues);
@@ -341,6 +362,27 @@ export function validateEvidence(
         line: 0,
         message: `\`gate: ${front.gate}\` is not the stage at the cursor (${expected.gate}) — `
           + "this note is evidence for a different gate",
+      });
+    }
+    // 8 — the note predates the stage it is signing (issue #144, AGENTS.md §7: "a
+    // gate's evidence must not predate what it signs"). Measured in the field: a
+    // delegated gate closed over content timestamped 7h before its stage even
+    // started, asserting facts already false by the time it signed. `at` is
+    // self-reported, but a note whose OWN claimed time is before the stage began
+    // cannot be describing this attempt's outputs, however clean it otherwise
+    // parses. Skipped, never invented, when the caller has no stage to ask.
+    //
+    // Compared as INSTANTS (`Date.parse`), not as raw strings (issue #144 F2):
+    // `front.at` is already confirmed RFC3339 above, so this only ever compares
+    // two real timestamps, never a lexicographic accident between two different
+    // precisions or offsets.
+    if (expected.stageStartedAt !== undefined && expected.stageStartedAt !== null
+      && Date.parse(front.at) < Date.parse(expected.stageStartedAt)) {
+      issues.push({
+        kind: "stale",
+        line: 0,
+        message: `\`at: ${front.at}\` is before ${expected.gate} started (${expected.stageStartedAt}) — `
+          + "evidence must not predate what it signs",
       });
     }
   }
