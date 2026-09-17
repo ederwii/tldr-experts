@@ -121,9 +121,12 @@ notify:                      # optional: the ONE command a run may tell a person
 | `mcp_servers[].{name,transport,status,checked_at}` | str / str / `connected\|auth_required\|failed` / RFC3339 | n | Cached parse of `claude mcp list` (slow: runs health checks) — used only to *suggest* `process.yml ticket_tool`, never to act |
 
 **Validation.** `name` unique; `path` exists, relative, inside root; enums as above; commands non-empty when non-null
-and free of `&& ; | > \`` (single argv, auditable) — a rule about `commands`, not about `init`'s own output: it holds
-both when `tldrx init` emits the file and whenever `.tldrx/workspace.yml` is loaded back, hand-edited or not
-(gh #181); contract repos resolve; ≤64 repos, ≤128 contracts.
+and free of a BARE `&& ; | > \`` (single argv, auditable) — a metacharacter inside a quoted token, like the
+`sh -c "npm run test | tee out.txt"` form `docs/guide/09-troubleshooting.md` documents for a command that needs a
+shell, is an argument, not the rule; a bare one is refused. This is a rule about `commands`, not about `init`'s own
+output: it holds both when `tldrx init` emits the file and whenever `.tldrx/workspace.yml` is loaded back,
+hand-edited or not — the same reading in both places, never stricter at one than the other (gh #181, and its
+same-day follow-up); contract repos resolve; ≤64 repos, ≤128 contracts.
 `repos[].overlays`, `repos[].skills`, `repos[].command_probes`, `repos[].commands.test_fast`,
 `repos[].commands.<slot>_scoped`, `repos[].commands.tool_restore`, `stack_packs`, `notify` and
 `probe_in_worktree` are

@@ -394,6 +394,16 @@ describe("workspace.yml: `commands` is free of shell metacharacters on LOAD too,
     expect(validate("workspace", withCommand("npm run lint")).ok).toBe(true);
   });
 
+  test("the rule is quote-aware: a metacharacter INSIDE a quoted token is fine, matching the DoD gate's own splitter (follow-up)", () => {
+    // docs/guide/09-troubleshooting.md:567's documented workaround, declared
+    // verbatim — src/hooks/lib/story.ts's `splitArgv` already accepts this at
+    // run time; load-time validation must not be stricter than the executor.
+    expect(validate("workspace", withCommand('sh -c "npm run test | tee out.txt"')).ok).toBe(true);
+    // A BARE pipe is still refused, naming it.
+    const text = issueText("workspace", withCommand("npm run test | tee out.txt"));
+    expect(text).toContain("`|`");
+  });
+
   test("`null`, `\"\"` (both spell \"unavailable\", spec §2.1) and an absent `commands` block are untouched", () => {
     expect(validate("workspace", withCommand(null)).ok).toBe(true);
     expect(validate("workspace", withCommand("")).ok).toBe(true);

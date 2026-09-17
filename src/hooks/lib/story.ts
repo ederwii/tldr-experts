@@ -12,6 +12,7 @@
 import { runtime } from "../../core/runtime/index.ts";
 import { parseDodBlock } from "../../core/schemas/story.ts";
 import { isScopedTemplate, PATHS_PLACEHOLDER } from "../../core/schemas/commandAllowlist.ts";
+import { tokenizeArgv } from "../../core/detect/argvSplit.ts";
 
 export interface StoryFacts {
   readonly setsDone: boolean;
@@ -113,25 +114,12 @@ const META_RE = /[|&;<>$`(){}*?~\\]/;
 export function splitArgv(command: string): readonly string[] | null {
   if (/[\n\r]/.test(command)) return null;
   const argv: string[] = [];
-  for (const match of command.matchAll(TOKEN_RE)) {
-    if (match[1] !== undefined || match[2] !== undefined) {
-      argv.push(match[1] ?? match[2] ?? "");
-      continue;
-    }
-    const bare = match[3] ?? "";
-    if (META_RE.test(bare)) return null;
-    argv.push(bare);
+  for (const token of tokenizeArgv(command)) {
+    if (!token.quoted && META_RE.test(token.text)) return null;
+    argv.push(token.text);
   }
   return argv.length === 0 ? null : argv;
 }
-
-/**
- * The ONE tokenizer: a double-quoted word, a single-quoted word, or a bare word.
- * `splitArgv` and `unquotedShellSeparator` both read a line through it, so the
- * two can never disagree about whether a `;` sits inside quotes. (`matchAll`
- * clones a `/g` pattern per call; sharing the constant carries no `lastIndex`.)
- */
-const TOKEN_RE = /"([^"]*)"|'([^']*)'|([^\s"']+)/g;
 
 /**
  * The SUBSET of `META_RE` that splits a line into more than one command: a
@@ -156,9 +144,9 @@ const SEPARATOR_RE = /\|\||&&|2>&1|>>|\$\((?!\()|[|&;<>`]/;
  */
 export function unquotedShellSeparator(command: string): string | null {
   if (/[\n\r]/.test(command)) return "\n";
-  for (const match of command.matchAll(TOKEN_RE)) {
-    if (match[1] !== undefined || match[2] !== undefined) continue;
-    const found = SEPARATOR_RE.exec(match[3] ?? "");
+  for (const token of tokenizeArgv(command)) {
+    if (token.quoted) continue;
+    const found = SEPARATOR_RE.exec(token.text);
     if (found !== null) return found[0];
   }
   return null;

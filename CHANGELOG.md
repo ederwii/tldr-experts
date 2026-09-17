@@ -29,6 +29,19 @@
   both enforcement points always shared, so the two can never drift on what counts as a
   metacharacter. `null` and `""` both still mean "unavailable" (the shipped
   `templates/workspace.yml` skeleton's own convention) and carry nothing to check.
+- **The rule above is quote-aware, so it never refuses a command the DoD gate would actually
+  run (follow-up to #181, same day).** The first cut of the load-time check scanned the whole
+  command string, so `sh -c "npm run test | tee out.txt"` — the exact workaround
+  `docs/guide/09-troubleshooting.md` documents for a command that needs a shell — failed to
+  LOAD even though `src/hooks/lib/story.ts`'s own `splitArgv` already runs it fine (a quoted
+  token is one literal argument, never a shell operator). Load-time validation stricter than
+  the executor it exists to describe would have broken every workspace that followed that
+  documented advice. The tokenizer that already told the two apart lived only in `story.ts`;
+  it is now `src/core/detect/argvSplit.ts`, and both `story.ts`'s `splitArgv`/
+  `unquotedShellSeparator` and `commands.ts`'s `isSingleArgvCommand`/`singleArgvViolation`
+  read a command through it — one derivation of "quoted vs bare" for the whole codebase, each
+  caller still applying its own banned-character set (the gate's fifteen, spec §2.1's five)
+  unchanged.
 
 ## 0.34.0 — 2026-09-17
 
