@@ -247,12 +247,9 @@ export interface NextOutcome {
   readonly signatureFreshness?: "measured" | "cached";
 }
 
-const EXIT_OK = 0;
-const EXIT_USAGE = 1;
-const EXIT_REFUSED = 2;
-const EXIT_NOT_FOUND = 3;
-const EXIT_AWAITING_HUMAN = 4;
-const EXIT_AGENT_FAILED = 5;
+import {
+  EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED as EXIT_REFUSED, EXIT_NOT_FOUND, EXIT_AWAITING_HUMAN, EXIT_AGENT_FAILED,
+} from "../../cli/exitCodes.ts";
 
 /** Guard against a cursor that will not settle; §2.2 caps a run at 40 stages. */
 const MAX_CURSOR_STEPS = 64;
@@ -3953,9 +3950,7 @@ function phaseMoney(store: RunStore, phaseId: string): Money | null {
   return { spentUsd: phase.spent_usd, ceilingUsd: phase.ceiling_usd };
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
+import { round2 } from "../build/caps.ts";
 
 /**
  * `input_tokens`/`output_tokens` for a run.yml task row — written together or

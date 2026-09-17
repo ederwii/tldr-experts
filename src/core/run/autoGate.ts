@@ -794,6 +794,4 @@ function openQuestions(path: string): { blocking: readonly string[]; advisory: r
   }
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
+import { round2 } from "../build/caps.ts";

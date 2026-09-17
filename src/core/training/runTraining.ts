@@ -65,12 +65,10 @@ import { MAX_PAYLOAD_BYTES, TrainingLog, type TrainingEvent } from "./trainingLo
 
 export type { TrainingRunMode } from "./Training.ts";
 
-/** Spec §3 codes, as `tldrx next` uses them. */
-const EXIT_OK = 0;
-const EXIT_USAGE = 1;
-const EXIT_GATE_REFUSED = 2;
-const EXIT_NOT_FOUND = 3;
-const EXIT_AGENT_FAILED = 5;
+import {
+  /* Spec §3 codes, as `tldrx next` uses them. */
+  EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_AGENT_FAILED,
+} from "../../cli/exitCodes.ts";
 
 /** `[assumption]` — no stage.yml governs a training run, so it borrows the
  * facilitator's default: 30 minutes for one sub-agent. */
@@ -1032,6 +1030,4 @@ function sum(tasks: readonly TrainingTask[]): number {
   return round2(tasks.reduce((total, task) => total + task.costUsd, 0));
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
+import { round2 } from "../build/caps.ts";

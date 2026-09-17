@@ -41,11 +41,10 @@ export type TriageMode = "headless" | "prepare" | "commit";
 /** The bundle stage id — `<out>/.agent/propose/`. */
 export const PROPOSE_STAGE = "propose";
 
-/** Spec §3 codes. */
-const EXIT_OK = 0;
-const EXIT_USAGE = 1;
-const EXIT_REFUSED = 2;
-const EXIT_AGENT_FAILED = 5;
+import {
+  /* Spec §3 codes. */
+  EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED as EXIT_REFUSED, EXIT_AGENT_FAILED,
+} from "../../cli/exitCodes.ts";
 
 /** `[assumption]` — one cheap pass. `low` because this is sorting, not designing. */
 export const DEFAULT_TRIAGE_EFFORT: EffortLevel = "low";
@@ -392,6 +391,4 @@ function display(root: string, dir: string): string {
   return rel === "" || rel.startsWith("..") ? dir : rel.split("\\").join("/");
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
+import { round2 } from "../build/caps.ts";

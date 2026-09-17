@@ -722,6 +722,4 @@ function floor2(n: number): number {
   return Math.floor(n * 100) / 100;
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
+import { round2 } from "../build/caps.ts";

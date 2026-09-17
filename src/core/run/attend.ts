@@ -34,9 +34,7 @@ export interface AttendOutcome {
   readonly lines: readonly string[];
 }
 
-const EXIT_OK = 0;
-const EXIT_REFUSED = 2;
-const EXIT_NOT_FOUND = 3;
+import { EXIT_OK, EXIT_GATE_REFUSED as EXIT_REFUSED, EXIT_NOT_FOUND } from "../../cli/exitCodes.ts";
 
 export function attendRun(options: AttendOptions): AttendOutcome {
   const resolution = RunStore.resolve(options.root, options.runId);
