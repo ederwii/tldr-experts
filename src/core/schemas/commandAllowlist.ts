@@ -148,3 +148,107 @@ export function scopedOnlyDodMessage(command: string): string {
     + "story's own paths, not a command of its own. Name the repo's full command instead — the gate "
     + "substitutes the template itself, and runs the full command once on the epic head.";
 }
+
+/**
+ * Whether `command` is a MUTATING GENERATOR — a command that writes new files or
+ * state as a side effect of running it (a migration-add, a scaffold, an
+ * un-verified format) — rather than a pure verification command (build/test/lint)
+ * (gh #362).
+ *
+ * Measured live, tldrx 0.31.1: a `.NET` story's ```dod block declared, among
+ * ordinary `dotnet build`/`dotnet test` lines, `dotnet ef migrations add …`. The
+ * base-tree pre-flight (`dodRunner.ts`'s `measureBaseCommand`) ran it against the
+ * UNTOUCHED base tree as a routine MEASUREMENT and wrote a migration triple into
+ * pristine main as a side effect of asking a question — it only failed to reach
+ * `main` because `dotnet-ef` was not yet restored in that environment.
+ *
+ * A generator is unsafe wherever a dod command is expected to be RE-RUNNABLE:
+ * the base pre-flight measures it against the untouched tree before any story
+ * exists, and `dod-gate` re-runs every dod command again when a story claims
+ * `status: done` (spec §2.13) — a generator run a second time either collides
+ * with what its first run already wrote or silently duplicates it, so neither
+ * re-run means what a dod re-run is supposed to mean. Unlike `tool_restore:` or
+ * `test_fast` (above), there is no RESERVED SLOT KEY a generator lives under — a
+ * team names its migration-add slot whatever it likes — so detection is BY NAME,
+ * the issue's own wording: the command TEXT, not the `commands:` key it is
+ * declared under.
+ *
+ * Two doors read this one derivation (§7): `validateStoryDod` (`story.ts`)
+ * refuses it at Plan time, so the plan is never written this way, and
+ * `measureBaseCommand` (`dodRunner.ts`) refuses to RUN one against either base
+ * tree it measures, as defense in depth for a story file that reached Build
+ * some other way (hand-edited, or written before this rule existed). Neither
+ * door touches a story's own fresh worktree: that is where a generator is
+ * legitimately RUN, once, by the developer — this rule is about re-running it as
+ * a MEASUREMENT, not about whether it may run at all.
+ *
+ * Conservative by design: false negatives (a generator this misses) cost what
+ * they always cost; false positives would refuse an ordinary build/test command
+ * that happens to share a word, which is why every pattern below matches a whole
+ * ARGV TOKEN (or an adjacent pair of them), never a substring — `npm run
+ * format:check` does not contain the token `format`, so it is untouched.
+ */
+const GENERATOR_TOKEN_PAIRS: readonly (readonly [string, readonly string[]])[] = [
+  // `dotnet ef migrations add`, `prisma migrate dev`-shaped, a generic ORM
+  // CLI's "migrations|migration|migrate add|new|create|dev": every one of
+  // these WRITES a new migration file rather than applying existing ones —
+  // `migrate deploy`/`migrations remove`/`migrate status` are a DIFFERENT
+  // pair and untouched.
+  ["migrations", ["add", "new", "create"]],
+  ["migration", ["add", "new", "create"]],
+  ["migrate", ["add", "new", "create", "dev"]],
+];
+
+function generatorTokenPairMatch(argv: readonly string[]): boolean {
+  for (let i = 0; i + 1 < argv.length; i++) {
+    const head = (argv[i] ?? "").toLowerCase();
+    const tail = (argv[i + 1] ?? "").toLowerCase();
+    for (const [first, seconds] of GENERATOR_TOKEN_PAIRS) {
+      if (head === first && seconds.includes(tail)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * A flag that turns a formatter's rewrite into a pure check — no generator
+ * either spells it out.
+ *
+ * `--verify`/`--verify-no-changes` (`dotnet format`) was the issue's own
+ * example; review on gh #362 measured (`bun -e`) that the set was too narrow —
+ * `--check` is the STANDARD idempotent verify flag for prettier, black,
+ * rustfmt and gofmt, so `npm run format -- --check` (an ordinary, common dod
+ * line) was refused as a generator, a new stall class the issue never
+ * intended. `--dry-run`/`--diff` are the same shape from other formatters
+ * (gofmt, terraform fmt).
+ */
+const VERIFY_ONLY_FLAG_RE = /^--(verify(-no-changes)?|check|dry-run|diff)$/i;
+
+export function isGeneratorCommand(command: string): boolean {
+  const argv = command.trim().split(/\s+/).filter((token) => token !== "");
+  if (generatorTokenPairMatch(argv)) return true;
+  // A bare `scaffold` verb, anywhere as its own token: `dotnet scaffold`, `rails
+  // generate scaffold …`, `nest generate --type scaffold` all write files.
+  if (argv.some((token) => token.toLowerCase() === "scaffold")) return true;
+  // A `format` token with NO verify-only flag rewrites files in place; the SAME
+  // command WITH `--verify`/`--verify-no-changes` only checks, and is a pure
+  // verification command like any other.
+  if (
+    argv.some((token) => token.toLowerCase() === "format")
+    && !argv.some((token) => VERIFY_ONLY_FLAG_RE.test(token))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** The refusal when a dod line names a mutating generator command (gh #362). */
+export function generatorDodMessage(command: string): string {
+  return `\`${command}\` looks like a GENERATOR — a command that writes new files or state as a side `
+    + "effect of running it (a migration-add, a scaffold, an un-verified format) — and a Definition of "
+    + "Done may not name it: the base-tree pre-flight measures every dod command against the untouched "
+    + "base tree before any story is dispatched, and `dod-gate` re-runs it again when the story claims "
+    + "`status: done` — running a generator twice either collides with what it already wrote or silently "
+    + "duplicates it. Run it once, as the developer, then name a verification command (a build or a test "
+    + "that proves what it generated) in the dod block instead.";
+}

@@ -114,6 +114,19 @@
   when nothing is holding the run, rather than describing a move nothing makes. A revoke also
   advances `attempt_started_at` (see #144, #199) on the stage it revokes and on every stage it
   demotes, for the same reason `reject` does.
+- **A mutating generator command in a story's dod block can no longer be run by the base-tree
+  pre-flight as a routine measurement (see #362).** Measured live, tldrx 0.31.1: a `.NET`
+  story's dod block declared `dotnet ef migrations add …` beside ordinary build/test commands,
+  and the base-tree probe ran it against the UNTOUCHED base tree — a DELTA-gate measurement is
+  not supposed to mutate the tree it is measuring, and it would have written a migration triple
+  into pristine `main` as a side effect of asking a question. `isGeneratorCommand`
+  (`schemas/commandAllowlist.ts`) detects a generator BY NAME — the command text, not a
+  workspace-declared slot key, since a team names its migration-add slot whatever it likes — and
+  two doors read that one derivation: `validateStoryDod` now refuses a generator command at Plan
+  time, so a plan is never written this way, and `dodRunner.ts`'s `measureBaseCommand` refuses
+  to run one against either base tree it measures, as defense in depth for a story file that
+  reached Build some other way. Neither door touches a story's own fresh worktree, where a
+  generator legitimately runs once, by the developer.
 
 ## 0.33.0 — 2026-09-17
 
