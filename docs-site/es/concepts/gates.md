@@ -26,6 +26,17 @@ cualquier comando de shell que tu `workspace.yml` haya declarado, corrido de ver
 alguna falla, sale con `2` y te dice cuál. Solo entonces registra quién firmó, cuándo y tu
 nota tal cual en `run.yml`, y adelanta el cursor.
 
+Si tu nota nombra un commit — un sha de 7 a 40 caracteres — `approve` lo revisa contra cada
+hallazgo `fix-now` todavía abierto del que la nota habla claramente: uno cuyo id de historia
+nombraste (`S3`), o uno cuya propia rama alcanza el sha. Un candidato alcanzable lo cierra
+(`Resolved: yes <sha>`), con la misma regla de evidencia que se le exige a un `Resolved: yes`
+escrito en el archivo; uno que no se verifica se registra como `claimed-unverified`, nunca un
+cierre silencioso. Un hallazgo que tu nota nunca nombró y cuya rama ninguno de tus candidatos
+alcanza no se toca en absoluto — ni siquiera se lee su lista de arreglos. Una nota que no
+nombra ningún commit no toca ninguna lista de arreglos, y un candidato que no coincide con
+ninguna historia se registra una sola vez en el propio evento de la compuerta, nunca se le
+adivina un hallazgo ajeno.
+
 `reject --note` regresa la etapa a `ready`. Tu nota no se va al archivero: el siguiente
 intento la recibe, junto con la falla anterior, bajo `## Previous attempt` en su prompt, y
 los archivos que ya había escrito se le incluyen completos, para que el intento 2 edite en

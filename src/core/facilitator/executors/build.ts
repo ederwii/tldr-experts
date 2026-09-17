@@ -63,7 +63,7 @@ import {
 } from "../pending.ts";
 import {
   abortOpenMerge, addWorktree, commitsBetween, ensureBranch, firstLine, fullShaOf, git, GitError, headSha, leftoverMerge,
-  markerGuardVerdict, removeWorktree, repoDirOf, reviewDiffCommand, reviewDiffRange, shaReachability, uncountedCount,
+  markerGuardVerdict, removeWorktree, repoDirOf, reviewDiffCommand, reviewDiffRange, uncountedCount,
 } from "../../build/git.ts";
 import { BaseGateFailure, baseRefusalLines, refusalFreshness } from "../../build/preflight.ts";
 import {
@@ -143,12 +143,19 @@ import {
   type AsIsSettlement, type DodResult, type RescuedWork, type StoryOutcome,
 } from "../../build/outcome.ts";
 import {
-  CLAIMED_UNVERIFIED, FIXLIST_SETTLED_MARK, canonicalizeResolutions, fixlistRel, fixlistRetroLines, latestFixlist, markUnverified,
+  CLAIMED_UNVERIFIED, FIXLIST_SETTLED_MARK, fixlistRel, fixlistRetroLines, latestFixlist,
   openFindings, openFixlist, readFixlistAt, renderFixlistSection, writeFixlist, AUTO_CLOSED_MARK, autoCloseShown,
   CLOSED_ON_EPIC,
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
 import { sweepFixlistAgainstEpic, type SweepOutcome } from "../../build/fixlistSweep.ts";
+// Extracted #344: one derivation of "does a `Resolved:` claim check out against
+// git" for both this executor's per-story check and `run/gates.ts`'s
+// gate-approval close. Re-exported below so anything that imported the (former)
+// private method's shape from this module — there was nothing to break, it was
+// private, but the house rule (AGENTS.md §12) is to keep the door open anyway.
+import { verifyResolutions, unverifiedBecause, type ResolutionScope } from "../../build/resolutionVerify.ts";
+export { verifyResolutions, unverifiedBecause, type ResolutionScope };
 import { renderBuildHandoff, type EpicSummaryRow, type NotStartedStory } from "../../build/handoff.ts";
 import {
   asidePayload, FOREIGN_ASIDE_EVENT, FOREIGN_RESTORED_EVENT, namePaths, notRestoredLine, pendingAsides,
@@ -3192,7 +3199,7 @@ class BuildSession {
         + "heading, if the file was truncated) so it reads as one of `fix-now`, `defer-with-log`, "
         + "`refuted` or `out-of-scope`, then run the Build stage again";
     }
-    const { findings, refused } = await this.verifyResolutions(story, fixlist);
+    const { findings, refused } = await this.verifyStoryResolutions(story, fixlist);
     const open = openFindings(findings);
     const firstOpen = open[0];
     if (firstOpen === undefined) return null;
@@ -3223,71 +3230,34 @@ class BuildSession {
    *
    * Deliberately one-directional. This can only ever move a finding from closed to
    * open; nothing here closes one, and a `no` is never touched.
+   *
+   * The check itself — `shaReachability`, the "why" sentences, the file rewrite —
+   * moved to `build/resolutionVerify.ts` (#344), because `run/gates.ts`'s
+   * gate-approval close asks the identical question about a sha named in an
+   * approval note instead of one already on the file, and a second copy of it
+   * there is exactly what §7 refuses. This wrapper is only what stays
+   * executor-shaped: reading the file, and folding the leaf's report into
+   * `this.lines`.
    */
-  private async verifyResolutions(
+  private async verifyStoryResolutions(
     story: FixlistScope,
     fixlist: FixlistOnDisk,
   ): Promise<{ findings: readonly FixFinding[]; refused: readonly string[] }> {
     const id = story.planned.story.id;
-    const findings: FixFinding[] = [];
-    const refused: string[] = [];
-    let text: string | null = null;
-    for (const finding of fixlist.findings) {
-      // EVERY claim, not only the ones that gate `done`. A `defer-with-log`
-      // finding marked resolved over a fix that does not exist is a smaller
-      // problem and the same lie, and the record is what is being fixed here.
-      // A claim whose sha was refused on SHAPE (#163) is downgraded here like any
-      // other, and with the sentence `readResolvedSha` already wrote — not a
-      // second phrasing of it (§7). It is asked FIRST because `unverifiedBecause`
-      // cannot tell this case from a bare `Resolved: yes`: both arrive with
-      // `resolvedSha: null`, and answering "named no commit to point at" over a
-      // line that named 41 characters put the file and this report — the one a
-      // human reads first — at odds about the same event.
-      const why = finding.resolved
-        ? finding.resolvedShaRefusal ?? await this.unverifiedBecause(story, finding.resolvedSha)
-        : null;
-      if (why === null) {
-        findings.push(finding);
-        continue;
-      }
-      findings.push({ ...finding, resolved: false, resolvedSha: null, resolvedShaRefusal: null });
-      refused.push(`#${String(finding.n)} — ${why}`);
-      text = markUnverified(text ?? readFileSync(fixlist.path, "utf8"), finding.n, why);
+    const result = await verifyResolutions(
+      { repoDir: story.repoDir, branch: story.branch, repo: story.planned.story.repo },
+      fixlist,
+      readFileSync(fixlist.path, "utf8"),
+    );
+    for (const { n, why } of result.refused) {
       this.lines.push(
-        `  · ${id}: fix-list finding #${String(finding.n)} claimed \`Resolved: yes\` and `
+        `  · ${id}: fix-list finding #${String(n)} claimed \`Resolved: yes\` and `
         + `${why} — recorded as \`${CLAIMED_UNVERIFIED}\`, and it still blocks \`done\``,
       );
     }
-    // Records never lie (#130 follow-up): a claim that DID check out may still
-    // name a truncated sha — git resolves 39 hex characters exactly as happily as
-    // 7, and a later reader cannot tell that apart from a deliberate abbreviation
-    // of a DIFFERENT commit. `canonicalizeResolutions` owns both the git
-    // resolution and the text edit; this call site only routes its answer into
-    // the same single write below.
-    const canonicalized = await canonicalizeResolutions(
-      story.repoDir,
-      findings,
-      text ?? readFileSync(fixlist.path, "utf8"),
-    );
-    if (canonicalized.lines.length > 0) {
-      text = canonicalized.text;
-      for (const line of canonicalized.lines) this.lines.push(`  · ${id}: ${line}`);
-    }
-    if (text !== null) writeFileSync(fixlist.path, text, "utf8");
-    return { findings: canonicalized.findings, refused };
-  }
-
-  /** Why a `Resolved: yes` does not check out, or null when it does. */
-  private async unverifiedBecause(story: FixlistScope, sha: string | null): Promise<string | null> {
-    if (sha === null) return "named no commit to point at";
-    switch (await shaReachability(story.repoDir, sha, story.branch)) {
-      case "reachable":
-        return null;
-      case "absent":
-        return `named \`${sha}\`, which is not a commit in repo ${story.planned.story.repo}`;
-      default:
-        return `named \`${sha}\`, which is not reachable from \`${story.branch}\``;
-    }
+    for (const line of result.canonicalizedLines) this.lines.push(`  · ${id}: ${line}`);
+    if (result.text !== null) writeFileSync(fixlist.path, result.text, "utf8");
+    return { findings: result.findings, refused: result.refused.map(({ n, why }) => `#${String(n)} — ${why}`) };
   }
 
   private narrowFixlist(storyId: string, review: Review): Review {
