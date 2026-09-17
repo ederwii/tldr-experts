@@ -60,6 +60,16 @@
   advance" line now also names any `story.reopened` a run already carries that this fix
   cannot retroactively undo, so a run an older binary left in this state is not silent about
   it either.
+- **A `budget.yml` that exists but will not parse no longer resurrects `run.yml`'s frozen
+  creation ceiling as a live one (see #245).** Since #236 the dashboard headline and
+  `tldrx replay` read the run's ceiling from `budget.yml`, falling back to run.yml's mirror —
+  a value `budget raise` never moves — whenever that file could not be read. On a run raised
+  after creation and then damaged, that fallback printed #236's own symptom again: `$X spent
+  of $Y ceiling` with `Y < X`. Owner decision ("Null con razón"): a DAMAGED `budget.yml` nulls
+  the ceiling instead, with an additive `ceilingBasis`/`ceilingReason` on the loaded run and
+  dashboard model naming why, and every renderer falls back to the same `$?` it already prints
+  for an unreadable spend. A run with no `budget.yml` at all is a different, unchanged case —
+  it was never raised through a file it never had, so the mirror is kept exactly as before.
 
 ### Added
 

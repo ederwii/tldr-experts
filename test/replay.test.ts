@@ -1,10 +1,11 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
-import { listRuns, loadRun, renderReplay } from "../src/core/replay/index.ts";
+import { rmSync, writeFileSync } from "node:fs";
+import { BUDGET_FILE, listRuns, loadRun, renderReplay, runDir } from "../src/core/replay/index.ts";
 import { NO_REASON_RECORDED, STAGE_FAILED_MARKER } from "../src/core/replay/renderReplay.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { EXIT_NOT_FOUND, EXIT_OK } from "../src/cli/exitCodes.ts";
-import { VIEWS_FIXTURE, VIEWS_RUN } from "./fixtures/views/tempViews.ts";
+import { VIEWS_FIXTURE, VIEWS_RUN, makeViewsWorkspace } from "./fixtures/views/tempViews.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
 // Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
@@ -33,6 +34,8 @@ describe("loadRun", () => {
     expect(loaded.run.status).toBe("awaiting_gate");
     expect(loaded.run.cursor).toEqual({ phase: "02-how", stage: "how", task: null });
     expect(loaded.run.ceiling_usd).toBe(25);
+    expect(loaded.run.ceiling_basis).toBe("recorded");
+    expect(loaded.run.ceiling_reason).toBeNull();
     expect(loaded.run.phases.map((phase) => phase.id)).toEqual(["01-what", "02-how"]);
     expect(loaded.budget?.on_exceed).toBe("warn");
   });
@@ -47,6 +50,58 @@ describe("loadRun", () => {
 
   test("listRuns finds the fixture run", () => {
     expect(listRuns(VIEWS_FIXTURE)).toEqual([VIEWS_RUN]);
+  });
+});
+
+/**
+ * #245, owner decision "Null con razón": a DAMAGED `budget.yml` — one that
+ * EXISTS but will not parse — must never resurrect `run.yml`'s frozen creation
+ * mirror as if it were live. The fixture's mirror is `ceiling_usd: 25.0` — the
+ * same figure `budget.yml` itself carries — so a regression that restores the
+ * fallback would still pass a bare `toBe(25)` on the ceiling; the tests below
+ * also pin `ceiling_basis` and `ceiling_reason`, which only the fallback's
+ * removal can satisfy.
+ *
+ * A run with NO `budget.yml` at all is a DIFFERENT case, deliberately left
+ * alone (§ below): it was never raised through a file it never had, so there
+ * is nothing for the mirror to disagree with, and `test/dashboard-hero.test.ts`
+ * / `test/dashboard-sources.test.ts` already pin the mirror fallback for it.
+ */
+describe("loadRun — damaged budget.yml (#245)", () => {
+  test("an unparseable budget.yml nulls the ceiling with basis absent and a reason naming the file", () => {
+    const views = makeViewsWorkspace();
+    try {
+      writeFileSync(join(runDir(views.root, VIEWS_RUN), BUDGET_FILE), "ceiling_usd: [this is not yaml\n");
+      const damaged = loadRun(views.root, VIEWS_RUN)!;
+      expect(damaged.run.ceiling_usd).toBeNull();
+      expect(damaged.run.ceiling_basis).toBe("absent");
+      expect(damaged.run.ceiling_reason).not.toBeNull();
+      expect(damaged.run.ceiling_reason).toContain(BUDGET_FILE);
+      // The frozen mirror must never surface as a relabelled live figure.
+      expect(damaged.run.ceiling_reason).not.toContain("25");
+      // The replay headline falls back to the SAME `$?` it already prints for an
+      // unreadable spend — never `$5.01 spent of $25.00 ceiling` (the mirror).
+      const narrative = renderReplay(damaged);
+      expect(narrative).toContain("$5.01 spent of $? ceiling");
+      expect(narrative).not.toContain("$25.00 ceiling");
+    } finally {
+      views.dispose();
+    }
+  });
+
+  test("a MISSING budget.yml is not damaged — the mirror is kept, exactly as before #245", () => {
+    const views = makeViewsWorkspace();
+    try {
+      rmSync(join(runDir(views.root, VIEWS_RUN), BUDGET_FILE));
+      const undamaged = loadRun(views.root, VIEWS_RUN)!;
+      expect(undamaged.run.ceiling_usd).toBe(25);
+      expect(undamaged.run.ceiling_basis).toBe("mirror");
+      expect(undamaged.run.ceiling_reason).toBeNull();
+      const narrative = renderReplay(undamaged);
+      expect(narrative).toContain("$5.01 spent of $25.00 ceiling");
+    } finally {
+      views.dispose();
+    }
   });
 });
 

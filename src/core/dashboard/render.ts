@@ -952,6 +952,17 @@ export function dashBudgetMeter(run: RunModel, verbose: boolean): string {
  * in words — the same claim the bar was making, minus the picture. One function
  * for both screens, so they cannot disagree about which currency is in force.
  */
+/**
+ * A `title` attribute naming WHY `ceilingUsd` is null (#245), or "" when it
+ * isn't. `dashUsd` already turns the null into `$?`; a reader still deserves to
+ * know it is "budget.yml is missing", not "this run has no ceiling".
+ */
+function ceilingTitle(run: RunModel): string {
+  return run.ceilingBasis === "absent" && run.ceilingReason !== null
+    ? ` title="${dashEscape(run.ceilingReason)}"`
+    : "";
+}
+
 export function dashSpendText(run: RunModel): string {
   const budget = run.budget;
   if (budget !== null && budget.economy === "host-tokens") {
@@ -966,8 +977,12 @@ export function dashSpendText(run: RunModel): string {
   // on a run that had finished 30 stories in-session. The bar beside it is still
   // drawn from the raw figure — a lower bound is still the only fraction there
   // is to draw, and `dashEconomyRow` under it says why it is short.
+  //
+  // `ceilingUsd` is null and `dashUsd` already renders that as `$?` (#245) when
+  // `ceilingBasis === "absent"` — budget.yml is missing or would not parse, and
+  // the reason goes in the `title` rather than being invented as a figure.
   return `<span class="num">${dashText(run.spentFigure)}</span> `
-    + `<span class="faint">of ${dashText(dashUsd(run.ceilingUsd))}</span>`;
+    + `<span class="faint"${ceilingTitle(run)}>of ${dashText(dashUsd(run.ceilingUsd))}</span>`;
 }
 
 /**
@@ -1767,7 +1782,7 @@ const TEMPLATE_FUNCTIONS = [
   dashMain, dashNoWorkspace,
   dashRunsView, dashUnreadable, dashFirstLine, dashRunRow, dashMeter,
   dashRunView, dashGateSigner, dashSignature, dashGateEvidence, dashKv, dashEconomies,
-  dashBudgetMeter, dashSpendText, dashBudgetSection, dashBudgetBlocks, dashNotesSection, dashStoryArcs,
+  dashBudgetMeter, dashSpendText, ceilingTitle, dashBudgetSection, dashBudgetBlocks, dashNotesSection, dashStoryArcs,
   dashPreflightSection,
   dashPathSection, dashHandoffsSection, dashPanelId, dashQuestion,
   dashPlanSection, dashBuildBranches,
@@ -1862,7 +1877,9 @@ export function dashHeroSpend(run: RunModel): string {
     // `spend.basis`, which is `absent` on exactly the run that shows `$0.00`, and
     // a chip is a thing a reader can miss while reading the number they came for.
     : `<span class="now__usd">${dashText(run.spentFigure)}</span> `
-      + `<span class="faint">of ${dashText(dashUsd(run.ceilingUsd))}</span>`;
+      // `ceilingUsd` null renders `$?` (#245); `ceilingTitle` carries the reason
+      // (budget.yml missing/unreadable) rather than a chip nobody asked to hover.
+      + `<span class="faint"${ceilingTitle(run)}>of ${dashText(dashUsd(run.ceilingUsd))}</span>`;
   const marker = !bound
     ? ""
     : `<span class="bound" title="${dashEscape(spend.reason)}">lower bound</span>`;

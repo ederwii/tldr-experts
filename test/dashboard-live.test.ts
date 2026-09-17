@@ -524,6 +524,17 @@ describe("the live client, and the static page that must not carry it", () => {
    * turn whose process died, and this fixture holds no such run — the delta is
    * the renderer learning a word, not the page saying one. `DASHBOARD_MODEL_VERSION`
    * stays 3.
+   *
+   * **+240 for #245**, MEASURED as a character diff of the two rendered pages:
+   * `,"ceilingBasis":"recorded","ceilingReason":null` in the run's serialised
+   * model (this fixture's `budget.yml` parses, so the live figure — nothing
+   * printed changes), plus the new `ceilingTitle` function definition and its
+   * two call-site edits (`dashSpendText`, `dashHeroSpend`) crossing into the
+   * page through `Function.prototype.toString()`, same as every prior delta
+   * here. `ceilingTitle` returns `""` on this fixture's recorded ceiling, so no
+   * `title` attribute appears and no rendered TEXT changes — only two additive
+   * model fields and the closure-free function that reads them cross over.
+   * `DASHBOARD_MODEL_VERSION` stays 3.
    */
   test("--static is byte-identical to the export main renders without the live layer", () => {
     const temp = makeViewsWorkspace();
@@ -537,9 +548,9 @@ describe("the live client, and the static page that must not carry it", () => {
       };
       const html = renderDashboard(model);
       expect(model.live, "the static model is not a live one").toBe(false);
-      expect(Buffer.byteLength(html, "utf8")).toBe(122_100);
+      expect(Buffer.byteLength(html, "utf8")).toBe(122_340);
       expect(createHash("sha256").update(html, "utf8").digest("hex"))
-        .toBe("ef9ff7ba4c2216202f1a366676edbdd2340da1303e11db50544319f275bd8b22");
+        .toBe("7ecc2ef21dd1892f53ecafbc6a64b1d45cbc2c14ad5a12fc6316d3c5e5b90876");
     } finally {
       temp.dispose();
     }

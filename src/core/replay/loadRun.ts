@@ -131,13 +131,23 @@ export function loadRunResult(root: string, id: string): RunLoad {
   // A broken budget.yml must not cost the run either: the views treat a missing
   // budget as `null` already, so an unreadable one becomes the same null rather
   // than an exception thrown through a page that was rendering fine.
+  //
+  // `budgetDamagedReason` is set ONLY when the file EXISTS and its parse threw —
+  // a run with no `budget.yml` at all is not damaged, it simply never had one
+  // (every run written before #85, and any economy that skips the file), and
+  // §245 leaves that case alone. The reason is named here, at the one place that
+  // both checks existence and attempts the parse, because a null `budget` alone
+  // loses the WHY (§7) — and the ceiling resolution below needs it to say which.
   const budgetPath = join(dir, BUDGET_FILE);
+  const budgetExists = existsSync(budgetPath);
   let budget: BudgetDocument | null = null;
-  if (existsSync(budgetPath)) {
+  let budgetDamagedReason: string | null = null;
+  if (budgetExists) {
     try {
       budget = toBudgetDocument(parseYamlRepairing(readFileSync(budgetPath, "utf8")).doc);
-    } catch {
-      budget = null;
+    } catch (error) {
+      budgetDamagedReason =
+        `${BUDGET_FILE} could not be parsed: ${error instanceof Error ? error.message : String(error)}`;
     }
   }
 
@@ -153,16 +163,31 @@ export function loadRunResult(root: string, id: string): RunLoad {
   // ceiling` — measured through the CLI on a run raised $10 → $30. "A replay
   // narrates the document" does not rescue it: the document itself is mixed.
   //
-  // The mirror is still the fallback, and only as one: a budget.yml that is
-  // missing or will not parse leaves the creation ceiling as the only figure on
-  // disk, and showing that beats showing nothing on a page whose whole job is to
-  // render a run whose files may be damaged. That fallback path can still pair a
-  // frozen ceiling with a live spend on a RAISED run — filed as #245 with the
-  // measurement, because what a degraded view should SAY is a judgement call and
-  // not a missing line here.
-  const withLiveCeiling = budget?.ceiling_usd === null || budget?.ceiling_usd === undefined
-    ? run
-    : { ...run, ceiling_usd: budget.ceiling_usd };
+  // Owner decision on #245 (2026-09-17): "Null con razón" — a DAMAGED budget.yml
+  // no longer falls back to the frozen creation mirror. That fallback used to
+  // pair a live `spent_usd` with a ceiling that stopped moving at `run new`,
+  // printing the same impossible `$X spent of $Y ceiling` (Y < X) that #236
+  // fixed for the ordinary case — narrower (it also needs a raise) but the same
+  // lie. A budget.yml that EXISTS but will not parse gives a null ceiling with
+  // `ceiling_basis: "absent"` and a reason naming the file and why, so every
+  // renderer falls back to the `$?` it already prints for a spend it cannot
+  // read. A budget.yml that is simply MISSING is not "damaged" — the mirror is
+  // the only figure that was ever going to exist for that run, so it is kept
+  // (`ceiling_basis: "mirror"`), exactly as before #245.
+  //
+  // Deviation, measured: the issue's own "What" section says "missing or does
+  // not parse"; narrowed here to "exists but does not parse" because (a) the
+  // owner's decision names a DAMAGED file, (b) the issue's own reproduction
+  // damages an existing budget.yml rather than deleting it, and (c)
+  // `test/dashboard-hero.test.ts` and `test/dashboard-sources.test.ts` already
+  // pin the mirror fallback for a run with no budget.yml at all — nulling that
+  // case reddened both on the full suite (measured, `bun test`, 2026-09-17).
+  const withLiveCeiling = budgetExists
+    ? (budget?.ceiling_usd === null || budget?.ceiling_usd === undefined
+      ? { ...run, ceiling_usd: null, ceiling_basis: "absent" as const,
+          ceiling_reason: budgetDamagedReason ?? `${BUDGET_FILE} does not record a ceiling` }
+      : { ...run, ceiling_usd: budget.ceiling_usd, ceiling_basis: "recorded" as const, ceiling_reason: null })
+    : { ...run, ceiling_basis: "mirror" as const, ceiling_reason: null };
 
   const { events, error, skipped, mtime } = readEvents(dir);
   return {
