@@ -38,9 +38,6 @@
   decomposition precedent exists to avoid. `settleRequeue` now holds that shape once, taking the
   fields that actually vary (`dod`, `reason`, `askedNoDiff`) as data; both call sites are
   unchanged in behavior — `test/build-golden.test.ts` stays byte-identical.
-
-### Changed
-
 - **AGENTS.md §11 now names the negated-closing-verb trap and widens its own verification
   grep to catch it.** Measured 2026-09-16: commit `d8f90f9`'s sentence `reported not fixed:
   #359` auto-closed #359 anyway — GitHub's closing-keyword parser matches `fixed` (any
@@ -57,11 +54,20 @@
   job fails.** This is an INSTRUMENT change, not a fix for the still-undiagnosed #237 flake
   (interrupted-merge case expects a SIGTERM exit of 143, sometimes sees 0 after ~92s): every
   #237 data point so far recorded the same second wall on top of the first — "no merge.log is
-  available from the CI sandbox" — because the sandbox `test/merge-wave.test.ts:104` plants
-  via `mkdtempSync(tmpdir())` was discarded with the runner. The `bun test` step's `TMPDIR` now
-  points at `${{ runner.temp }}/mw` instead of the OS default, and a new `if: failure()` step
-  uploads that directory (`actions/upload-artifact@v4`, `retention-days: 14`) so the next red
-  leaves a `merge.log` and lock state an agent can actually read (see #237, closes #373).
+  available from the CI sandbox" — because the sandbox that file plants was discarded with
+  the runner. The `bun test` step's `TMPDIR` now points at `${{ runner.temp }}/mw` instead of
+  the OS default, and a new `if: failure()` step uploads a scoped subset of it on failure
+  (`actions/upload-artifact@v4`, `retention-days: 14`). Review caught a second wall in the
+  first cut (closes #372's own class of bug, an instrument that cannot observe the thing):
+  `afterEach` `rmSync`s every sandbox unconditionally, pass or fail, INSIDE the bun process,
+  before that upload step ever runs — so the artifact would have been empty on the exact run
+  it exists for. `test/merge-wave.test.ts` now mkdtemps its sandboxes under the recognisable
+  `mw-sandbox-` prefix and skips its own cleanup when `MERGE_WAVE_KEEP_SANDBOX` is set (the
+  decision lives in one small, unit-tested function, `keepSandbox`/`cleanupSandbox` in
+  `test/fixtures/mergeWaveSandbox.ts` — local runs stay hermetic and self-cleaning per §8
+  unless that var is set); ci.yml sets it on the `bun test` step and scopes the upload's
+  `path:` to exactly that prefix, so the next red leaves a `merge.log` and lock state an
+  agent can actually read (see #237, closes #373).
 
 ## 0.32.0 — 2026-09-16
 

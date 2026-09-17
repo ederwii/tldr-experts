@@ -23,6 +23,7 @@ import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { foreignWaveLogPath } from "./fixtures/foreignWaveLog.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+import { cleanupSandbox, SANDBOX_PREFIX } from "./fixtures/mergeWaveSandbox.ts";
 
 // Each invocation runs a real `bun install`, a real `bun test` and a real merge, and the
 // serialisation test deliberately runs two of them. #43's budget, with a bigger base.
@@ -96,12 +97,17 @@ type Sandbox = { dir: string; main: string; originGit: string; git: (...a: strin
 let open: Sandbox[] = [];
 
 afterEach(() => {
-  for (const sb of open) rmSync(sb.dir, { recursive: true, force: true });
+  // #373: CI sets MERGE_WAVE_KEEP_SANDBOX so a failed run's sandbox survives past this
+  // process for ci.yml's upload-artifact step to pick up. Local runs stay hermetic and
+  // self-cleaning (§8) unless a human sets it too, to inspect a failure by hand.
+  // `cleanupSandbox` (test/fixtures/mergeWaveSandbox.ts) is the ONE place that decides and
+  // acts — unit-tested directly in test/ci-workflow.test.ts without needing a git sandbox.
+  for (const sb of open) cleanupSandbox(sb.dir);
   open = [];
 });
 
 function sandbox(): Sandbox {
-  const dir = mkdtempSync(join(tmpdir(), "tldrx-mergewave-"));
+  const dir = mkdtempSync(join(tmpdir(), SANDBOX_PREFIX));
   const main = join(dir, "main");
   const originGit = join(dir, "origin.git");
   const run = (cwd: string, ...args: string[]) =>

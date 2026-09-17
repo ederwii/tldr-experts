@@ -27,27 +27,36 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       # test/merge-wave.test.ts plants its sandboxes under `tmpdir()` (mkdtempSync,
-      # merge-wave.test.ts:104); pointing TMPDIR at a path under `runner.temp` instead of
-      # the OS default makes that sandbox nameable so the failure step below can find it
-      # (#373, see #237 — every red on the interrupted-merge case so far had no merge.log
-      # to diagnose from because nothing captured this directory before the runner tore
-      # down). The directory must exist first: mkdtempSync requires its parent to.
+      # merge-wave.test.ts:110, prefix `mw-sandbox-` from test/fixtures/mergeWaveSandbox.ts);
+      # pointing TMPDIR at a path under `runner.temp` instead of the OS default makes that
+      # sandbox nameable so the failure step below can find it (#373, see #237 — every red
+      # on the interrupted-merge case so far had no merge.log to diagnose from because
+      # nothing captured this directory before the runner tore down). The directory must
+      # exist first: mkdtempSync requires its parent to. MERGE_WAVE_KEEP_SANDBOX tells that
+      # file's `afterEach` to skip its own cleanup — reviewed fix for #373: an unconditional
+      # `rmSync` ran inside this same process before this step ever gets a turn, so without
+      # it the upload below would be empty on the one run it exists for.
       - run: mkdir -p "${{ runner.temp }}/mw"
       - run: bun test
         env:
           TMPDIR: ${{ runner.temp }}/mw
+          MERGE_WAVE_KEEP_SANDBOX: "1"
       # Not wrapped in an `if`: this step used to swallow the build's exit code and
       # report "no build script yet", so a red build passed CI. It exists now.
       - run: bun run build
       # Instrument only (#373, see #237): gives a future red on
       # test/merge-wave.test.ts's interrupted-merge case (or its sibling) a merge.log and
       # lock-state to diagnose from, instead of "no merge.log is available from the CI
-      # sandbox" every prior #237 data point recorded. Does not touch merge-wave.sh,
-      # merge-guard.sh, or merge-wave.test.ts, and does not name #237's mechanism.
+      # sandbox" every prior #237 data point recorded. Does not touch merge-wave.sh or
+      # merge-guard.sh, and does not name #237's mechanism. Scoped to the `mw-sandbox-*`
+      # prefix, not the whole `${{ runner.temp }}/mw` directory: ~85 other test files also
+      # mkdtemp-and-self-clean under the same shared TMPDIR, so an unscoped upload would
+      # mostly hold their (self-cleaned, so usually absent) leftovers rather than this
+      # file's sandbox — scoping keeps the artifact honest about what it actually is.
       - name: Upload merge-wave sandbox on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: merge-wave-sandbox
-          path: ${{ runner.temp }}/mw
+          path: ${{ runner.temp }}/mw/mw-sandbox-*
           retention-days: 14
