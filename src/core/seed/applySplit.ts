@@ -32,9 +32,7 @@ import {
   type SplitFile, type SplitQuestion, type SplitRun,
 } from "./splitFile.ts";
 
-const EXIT_OK = 0;
-const EXIT_USAGE = 1;
-const EXIT_NOT_FOUND = 3;
+import { EXIT_OK, EXIT_USAGE, EXIT_NOT_FOUND } from "../../cli/exitCodes.ts";
 
 export interface ApplyOptions {
   readonly root: string;

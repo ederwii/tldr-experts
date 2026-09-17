@@ -793,6 +793,80 @@ describe("the brake", () => {
     });
   });
 
+  /**
+   * gh #333, follow-up to #214: the brake resolves ALL FOUR of the stage's own
+   * calibrations through `spec.tuning` (`stageRemainingWork`), but `budget show`,
+   * `run estimate` and the `budget-gate` hook still default `reviewer_share`,
+   * `story_cap_multiplier` and `story_cap_floor_usd` — only `attempts` was fixed
+   * by #214. `story_cap_multiplier: 1` is the knob measured to diverge (2.3x, the
+   * issue's own fixture): a priced story's developer ceiling is `max(price *
+   * multiplier, floor)`, and the shipped multiplier (3) prices roughly 3x what a
+   * multiplier of 1 ("take the plan's price literally") actually costs.
+   */
+  describe("story_cap_multiplier: 1 (gh #333) — every reader prices the stage's own multiplier", () => {
+    function multiplierOne(): BuildWorkspace {
+      const made = makeBuildWorkspace({ ...PLAN, budgetUsd: 60, perAgentMaxUsd: 60, storyCapMultiplier: 1 });
+      open.push(made);
+      process.env.PATH = made.binDir;
+      process.env.FAKE_BUILD_STATE = made.statePath;
+      writeFileSync(join(made.planDir, "budget.yml"), [
+        "version: 1",
+        `run: "${made.runId}"`,
+        "ceiling_usd: 60.00",
+        "spent_usd: 0.00",
+        "per_phase_usd:",
+        "  S1: 2.00",
+        "  S2: 2.50",
+        "  S3: 4.50",
+        "",
+      ].join("\n"), "utf8");
+      settle(made, "S1", "done");
+      settle(made, "S2", "done");
+      // Between the tuned $10.75 (multiplier: 1) and the defaulted $24.25
+      // (multiplier: 3, what the three readers quote today) — so a reader still
+      // defaulting the knob BLOCKS here and one resolving it like the brake does
+      // does not.
+      starve(made, 15.0);
+      return made;
+    }
+
+    test("control: the brake itself does NOT refuse — $10.75 of work fits in $15.00", async () => {
+      const outcome = await next(multiplierOne());
+      expect(outcome.code).not.toBe(2);
+      expect(outcome.lines.join("\n")).not.toContain("refusing to start stage");
+    });
+
+    test("`budget show` quotes the same $10.75 and does not say BLOCKED", () => {
+      const ws = multiplierOne();
+      const store = RunStore.open(ws.runDir);
+      const view = buildBudgetView(store.run, store.budget, store.runDir, ws.root);
+      const phase = view.phases.find((p) => p.id === "04-build");
+      expect(phase?.next_estimate_usd).toBe(10.75);
+      expect(phase?.blocked).toBe(false);
+      expect(renderBudget(view)).not.toContain("is BLOCKED");
+    });
+
+    test("`run estimate` prices the same $10.75", () => {
+      const ws = multiplierOne();
+      expect(estimateNextStage(ws.root, ws.runId).remaining.usd).toBe(10.75);
+    });
+
+    test("the budget-gate hook allows the `tldrx next` the brake allows", () => {
+      const ws = multiplierOne();
+      const run = spawnSync(process.execPath, [join(FRAMEWORK_ROOT, "src", "hooks", "budget-gate.ts")], {
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse", tool_name: "Bash", cwd: ws.root,
+          tool_input: { command: "tldrx next" },
+        }),
+        encoding: "utf8",
+        env: { ...process.env, USER: "alan", TMPDIR: ws.root },
+      });
+      expect(run.status).toBe(0);
+      expect(run.stdout).not.toContain("permissionDecision");
+      expect(run.stdout).toBe("");
+    });
+  });
+
   test("a stage whose phase cannot afford the FIRST attempt is refused exactly as before", async () => {
     // Nothing settled, so remaining work is the whole plan and the old wording
     // (`the stage estimate is …`) is what an operator would have seen anyway.

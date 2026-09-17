@@ -4,6 +4,40 @@
 
 ### Fixed
 
+- **`budget show`, `run estimate` and the `budget-gate` hook now price a Build stage's
+  `reviewer_share`, `story_cap_multiplier` and `story_cap_floor_usd` the same way `tldrx next`'s
+  brake does, instead of the shipped defaults (see #333).** #214 fixed exactly one of the four
+  `stage.yml` calibrations `remainingWork` takes — `attempts` — leaving these three still
+  defaulted by the three readers while the brake resolved all four through `spec.tuning`.
+  Measured against the Build fixture (three stories priced 2.00/2.50/4.50, two done, stage
+  ceiling $60): a stage that writes `story_cap_multiplier: 1` ("take the plan's price
+  literally") was quoted $24.25 by `budget show`/`run estimate`/the hook against the $10.75 the
+  brake would actually price and dispatch — 2.3x — with the phase ceiling able to sit between
+  the two, so `budget show` said BLOCKED and the hook denied a `tldrx next` the brake itself
+  allows. `buildStageDefaults` (`core/run/workflowPreset.ts`) now resolves and returns the
+  stage's full `StageTuning`, not just `attempts` and `timeout_s`, by re-reading the same
+  `stage.yml` `facilitator/stageSpec.ts`'s `overlay` already reads — tolerant exactly as before,
+  so an unreadable stage file still falls back to the shipped defaults. `run estimate` already
+  held the full tuning via `loadStageSpec`; it was just not forwarding three of the four fields
+  to `remainingWork`.
+- **`round2` and the spec §3 exit-code table are each defined in exactly one place, with a shape
+  test refusing a second copy (see #174).** `round2` (`Math.round(n * 100) / 100`) was
+  independently restated in nine files; the spec §3 exit codes (`cli/exitCodes.ts`) were
+  independently restated, under a mix of matching and diverging names (`EXIT_REFUSED` for
+  `EXIT_GATE_REFUSED`, `EXIT_AWAITING` for `EXIT_AWAITING_HUMAN`), in fourteen more — wider than
+  the issue's own grep found, which only named `runNext.ts`/`runAuto.ts`; the broader set was
+  measured here (`grep -rlE '^const EXIT_[A-Z_]+\s*=\s*[0-9]+;' src/`) and folded into the same
+  fix rather than filed separately, since it is the identical defect the issue is about. Every
+  local copy now imports the canonical one (`core/build/caps.ts`'s exported `round2`,
+  `cli/exitCodes.ts`'s table, aliased where a file's own name differed) instead of restating it.
+  Mechanism this was hiding: a golden-guard mutation of `cli/exitCodes.ts` left
+  `test/build-golden.test.ts` byte-identical, because the Build path never read that file's
+  constants at all — it read `runNext.ts`'s and `runAuto.ts`'s own private copies. The new
+  `test/round2-exitcodes-one-derivation.test.ts` asserts, on the SHAPE (a local, unexported
+  `function round2(`/`const EXIT_*` declaration) rather than on the measured names, that no file
+  under `src/` besides the two canonical ones defines either — on the precedent of
+  `test/phase-ids-one-derivation.test.ts` (#187): deleting today's copies does not stop a third
+  one from coming back under a name this file never mentions.
 - **`merge-wave.sh --status` now says why it could not look instead of answering `idle` (see
   #332).** AGENTS.md §2 calls this command the authoritative instrument for "is a wave alive" —
   the reference-transaction guard and the merge lock exist precisely so nobody has to `ps` plus

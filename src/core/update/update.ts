@@ -75,9 +75,10 @@ export interface UpdateOutcome {
   readonly lines: readonly string[];
 }
 
-const EXIT_OK = 0;
-/** Spec §3: a real check ran and something is wrong. */
-const EXIT_FAILED = 1;
+import {
+  /* Spec §3: a real check ran and something is wrong. */
+  EXIT_OK, EXIT_FAILED,
+} from "../../cli/exitCodes.ts";
 
 export async function updateRun(options: UpdateOptions): Promise<UpdateOutcome> {
   const command = `${NPM_BIN} ${INSTALL_ARGS.join(" ")}`;

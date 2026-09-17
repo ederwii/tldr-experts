@@ -95,6 +95,12 @@ export interface BuildWorkspaceOptions {
    */
   readonly attempts?: number;
   /**
+   * `story_cap_multiplier:` in the STAGE yaml (gh #333) — what a story's PLANNED
+   * price is multiplied by to get the developer's ceiling. Omitted ⇒ the key is
+   * ABSENT, same shape as `attempts` above.
+   */
+  readonly storyCapMultiplier?: number;
+  /**
    * `--gates <stages|all|none>` — which stages a HUMAN must sign. `"none"` makes
    * the build stage `auto`, which is the only way to exercise the auto gate's
    * own conditions end to end.
@@ -197,6 +203,7 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
     ...(options.reviewer === undefined ? {} : { reviewer: options.reviewer }),
     ...(options.reviewerByStakes === undefined ? {} : { reviewerByStakes: options.reviewerByStakes }),
     ...(options.attempts === undefined ? {} : { attempts: options.attempts }),
+    ...(options.storyCapMultiplier === undefined ? {} : { storyCapMultiplier: options.storyCapMultiplier }),
   }));
   write(root, ".tldrx/stages/build/stage.md", "# Build\n\n## Role\nThe wave executor runs this stage.\n");
   for (const [rel, content] of Object.entries(options.files ?? {})) write(root, rel, content);
@@ -341,6 +348,8 @@ interface ReviewerYaml {
   readonly reviewer?: { readonly model?: string; readonly effort?: string };
   readonly reviewerByStakes?: Readonly<Record<string, { readonly model?: string; readonly effort?: string }>>;
   readonly attempts?: number;
+  /** `story_cap_multiplier:` in the STAGE yaml (gh #333). */
+  readonly storyCapMultiplier?: number;
 }
 
 /** `{model: opus, effort: high}` — flow style, so a caller can nest it anywhere. */
@@ -360,6 +369,7 @@ function stageYaml(budgetUsd: number, stackExperts = false, reviewer: ReviewerYa
       ...Object.entries(reviewer.reviewerByStakes).map(([k, v]) => `  ${k}: ${overrideFlow(v)}`),
     ]),
     ...(reviewer.attempts === undefined ? [] : [`attempts: ${String(reviewer.attempts)}`]),
+    ...(reviewer.storyCapMultiplier === undefined ? [] : [`story_cap_multiplier: ${String(reviewer.storyCapMultiplier)}`]),
   ];
   return `${blocks.length === 0 ? "" : `${blocks.join("\n")}\n`}version: 1
 id: build

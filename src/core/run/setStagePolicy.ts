@@ -70,10 +70,10 @@ export interface StagePolicyVerb<P extends string> {
   readonly whereToRead: (runId: string) => string;
 }
 
-const EXIT_OK = 0;
-/** Spec §3: every refusal here is a refusal to act. */
-const EXIT_REFUSED = 2;
-const EXIT_NOT_FOUND = 3;
+import {
+  /* Spec §3: every refusal here is a refusal to act. */
+  EXIT_OK, EXIT_GATE_REFUSED as EXIT_REFUSED, EXIT_NOT_FOUND,
+} from "../../cli/exitCodes.ts";
 
 export function setStagePolicy<P extends string>(
   options: SetStagePolicyOptions,

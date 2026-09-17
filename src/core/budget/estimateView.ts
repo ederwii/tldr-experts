@@ -223,10 +223,17 @@ export function estimateNextStage(root: string, runId?: string): StageEstimate {
     maxUsd: null,
     economy,
     attended: isAttendedByHost(store.run),
-    // The stage's own `attempts:` (gh #214) — the brake passes it, and a report
-    // that priced the shipped 2 quoted an `attempts: 1` stage a second developer
-    // turn and a second reviewer that will never be dispatched.
+    // The stage's own tuning (gh #214, gh #333) — the brake passes all four, and
+    // a report that defaulted them quoted an `attempts: 1` stage a second
+    // developer turn and a second reviewer that will never be dispatched, and
+    // (gh #333) a `story_cap_multiplier`/`story_cap_floor_usd` the stage never
+    // asked for. `spec.tuning` already carries the full resolved `StageTuning`
+    // (`loadStageSpec`, `facilitator/stageSpec.ts overlay`) — it was just not
+    // being forwarded past `attempts`.
     attempts: spec.tuning.attempts,
+    reviewerShare: spec.tuning.reviewerShare,
+    storyCapMultiplier: spec.tuning.storyCapMultiplier,
+    storyCapFloorUsd: spec.tuning.storyCapFloorUsd,
   });
 
   return {

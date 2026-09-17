@@ -227,12 +227,9 @@ export interface AutoOptions {
   readonly onLine?: (line: string) => void;
 }
 
-const EXIT_OK = 0;
-const EXIT_USAGE = 1;
-const EXIT_REFUSED = 2;
-const EXIT_NOT_FOUND = 3;
-const EXIT_AWAITING_HUMAN = 4;
-const EXIT_AGENT_FAILED = 5;
+import {
+  EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED as EXIT_REFUSED, EXIT_NOT_FOUND, EXIT_AWAITING_HUMAN, EXIT_AGENT_FAILED,
+} from "../../cli/exitCodes.ts";
 
 /**
  * The largest `--retry-failed` this loop accepts, and the one place the number lives —
@@ -2143,6 +2140,4 @@ function readEvents(log: EventLog): readonly TldrxEvent[] {
   }
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
+import { round2 } from "../build/caps.ts";

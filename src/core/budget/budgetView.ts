@@ -128,10 +128,10 @@ export interface BudgetView {
  * behaviour, exactly: with no run directory to read stories from, every estimate
  * is the stage's declared `budget_usd` and every field below is what it was.
  *
- * `root` (gh #214) is the workspace the run lives in, so the next stage's own
- * `attempts:` can be resolved (`buildStageDefaults`, tolerant) — the same value
- * `tldrx next`'s brake prices the remaining work with. Absent ⇒ the shipped
- * default, which is what this page quoted before.
+ * `root` (gh #214, gh #333) is the workspace the run lives in, so the next
+ * stage's own tuning can be resolved (`buildStageDefaults`, tolerant) — the SAME
+ * four values `tldrx next`'s brake prices the remaining work with. Absent ⇒ the
+ * shipped defaults, which is what this page quoted before.
  */
 export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string, root?: string): BudgetView {
   const tally = runTally(run);
@@ -139,9 +139,10 @@ export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string
     const runPhase = run.phases.find((p) => p.id === phase.id);
     const next = runPhase === undefined ? null : nextStageOf(runPhase.stages);
     const staticEstimate = next?.budget_usd ?? 0;
-    const attempts = root === undefined || next === null
-      ? STAGE_TUNING_DEFAULTS.attempts
-      : buildStageDefaults(root, run.scope, next.id).attempts;
+    const tuning = root === undefined || next === null
+      ? STAGE_TUNING_DEFAULTS
+      : buildStageDefaults(root, run.scope, next.id);
+    const attempts = tuning.attempts;
     const work = runDir === undefined || next === null
       ? null
       : remainingWork({
@@ -153,11 +154,16 @@ export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string
         maxUsd: null,
         economy: economyFor(budget, phase.id),
         attended: isAttendedByHost(run),
-        // The stage's own `attempts:` (gh #214), resolved the way the brake
-        // resolves it. Asked with the shipped 2 this page quoted an `attempts: 1`
-        // stage a second developer turn and a second reviewer nobody dispatches,
-        // and said BLOCKED where `tldrx next` runs.
+        // The stage's own tuning (gh #214, gh #333), resolved the way the brake
+        // resolves it. Asked with the shipped defaults this page quoted an
+        // `attempts: 1` stage a second developer turn and a second reviewer
+        // nobody dispatches, and defaulted `reviewer_share`,
+        // `story_cap_multiplier` and `story_cap_floor_usd` even when the stage
+        // declared its own — both said BLOCKED where `tldrx next` runs.
         attempts,
+        reviewerShare: tuning.reviewerShare,
+        storyCapMultiplier: tuning.storyCapMultiplier,
+        storyCapFloorUsd: tuning.storyCapFloorUsd,
       });
     const estimate = work === null ? staticEstimate : work.usd;
     const decision = wouldExceed(budget, phase.id, estimate, attempts);

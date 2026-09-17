@@ -128,10 +128,12 @@ await runHook("budget-gate", async () => {
   const attended = isAttendedByHostView(view);
   const stage = cursorStage(view);
   const declared = stage?.budget_usd ?? stageBudgetFromLibrary(root, view.cursor.stage);
-  // The cursor stage's own `attempts:` (gh #214), resolved the way `tldrx next`'s
-  // brake resolves it. TOLERANT — an unreadable preset gives the shipped default —
-  // and already on a PreToolUse path: `dod-gate` resolves the same function.
-  const attempts = buildStageDefaults(root, view.scope, view.cursor.stage).attempts;
+  // The cursor stage's own tuning (gh #214, gh #333), resolved the way `tldrx
+  // next`'s brake resolves it. TOLERANT — an unreadable preset gives the shipped
+  // defaults — and already on a PreToolUse path: `dod-gate` resolves the same
+  // function.
+  const tuning = buildStageDefaults(root, view.scope, view.cursor.stage);
+  const attempts = tuning.attempts;
   // Not the stage's price — what is LEFT to dispatch under it. On a Build stage
   // whose plan is on disk this shrinks as stories settle; everywhere else it IS
   // the declared price and this hook behaves exactly as it did (design §E.2).
@@ -147,6 +149,13 @@ await runHook("budget-gate", async () => {
     economy: economyFor(budget, view.cursor.phase),
     attended,
     attempts,
+    // gh #333: `reviewer_share`, `story_cap_multiplier` and `story_cap_floor_usd`
+    // used to be defaulted here even when the stage declared its own, which
+    // over-priced (or under-priced) exactly the way `attempts` did before #214 —
+    // denying a `tldrx next` the brake itself allows.
+    reviewerShare: tuning.reviewerShare,
+    storyCapMultiplier: tuning.storyCapMultiplier,
+    storyCapFloorUsd: tuning.storyCapFloorUsd,
   });
   const estimate = estimateFor(command, work === null ? null : work.usd);
   if (estimate <= 0) return; // nothing declared to spend; nothing to refuse

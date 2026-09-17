@@ -34,10 +34,9 @@ export interface RescueOutcome {
   readonly lines: readonly string[];
 }
 
-const EXIT_OK = 0;
-const EXIT_USAGE = 1;
-const EXIT_REFUSED = 2;
-const EXIT_NOT_FOUND = 3;
+import {
+  EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED as EXIT_REFUSED, EXIT_NOT_FOUND,
+} from "../../cli/exitCodes.ts";
 
 function resolve(options: RescueOptions): { store: RunStore } | RescueOutcome {
   const resolution = RunStore.resolve(options.root, options.runId);

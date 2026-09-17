@@ -754,6 +754,4 @@ export function floorOverrun(ctx: ExecutorContext, features: number): string | n
   );
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
+import { round2 } from "../../build/caps.ts";

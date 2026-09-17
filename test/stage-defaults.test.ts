@@ -456,10 +456,15 @@ describe("everything that prints `of N` reads the stage, not the constant", () =
       .toBe(STAGE_TUNING_DEFAULTS.attempts);
   });
 
-  test("`buildStageDefaults` is tolerant: an unknown scope gives the shipped pair", () => {
+  // gh #333 widened `buildStageDefaults`'s return from `{attempts, timeoutS}` to
+  // the full `StageTuning` plus `timeoutS`, so `budget show`, `run estimate` and
+  // the `budget-gate` hook can resolve `reviewer_share`, `story_cap_multiplier`
+  // and `story_cap_floor_usd` the same TOLERANT way they already resolved
+  // `attempts` — this is the shape that widening changed.
+  test("`buildStageDefaults` is tolerant: an unknown scope gives the shipped tuning", () => {
     const ws = workspace();
     expect(buildStageDefaults(ws.root, "no-such-scope"))
-      .toEqual({ attempts: STAGE_TUNING_DEFAULTS.attempts, timeoutS: DEFAULT_TIMEOUT_S });
+      .toEqual({ ...STAGE_TUNING_DEFAULTS, timeoutS: DEFAULT_TIMEOUT_S });
   });
 });
 

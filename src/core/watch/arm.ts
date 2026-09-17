@@ -42,13 +42,17 @@ import { loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { cardChecklist, checklistOk, nothingToCheck, renderChecklist } from "./signalChecklist.ts";
 import { loadCards } from "./watchViews.ts";
 
-/** Spec §3 codes, spelled here so `core/` does not import the CLI's table. */
-const EXIT_OK = 0;
-const EXIT_FAILED = 1;
-const EXIT_REFUSED = 2;
-const EXIT_NOT_FOUND = 3;
-/** The PR is still open and a person has to merge it. That is code 4's meaning. */
-const EXIT_AWAITING = 4;
+/**
+ * Spec §3 codes. Used to be spelled out here "so `core/` does not import the
+ * CLI's table" — but `core/learn/runLearn.ts` already did (gh #174), so that
+ * boundary was never actually held, and restating the table is the ONE
+ * derivation this exists to have (AGENTS.md §7). The PR-still-open case is
+ * code 4's meaning here, same as everywhere else in the table.
+ */
+import {
+  EXIT_OK, EXIT_FAILED, EXIT_GATE_REFUSED as EXIT_REFUSED, EXIT_NOT_FOUND,
+  EXIT_AWAITING_HUMAN as EXIT_AWAITING,
+} from "../../cli/exitCodes.ts";
 
 /** How often to ask, when the caller does not say. A minute is polite to `gh`. */
 export const DEFAULT_INTERVAL_S = 60;

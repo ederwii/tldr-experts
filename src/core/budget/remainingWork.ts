@@ -82,7 +82,7 @@ import { join } from "node:path";
 import { buildProgress, BUILD_PHASE, PLAN_DIR } from "../run/buildProgress.ts";
 import { loadPlanPrices } from "../build/plan.ts";
 import { looksLikeReviewerError } from "../build/review.ts";
-import { REVIEWER_FLOOR_USD } from "../build/caps.ts";
+import { REVIEWER_FLOOR_USD, round2 } from "../build/caps.ts";
 import { DEFAULT_ECONOMY, type Economy } from "./RunBudget.ts";
 import { STAGE_TUNING_DEFAULTS } from "../schemas/stageTuning.ts";
 
@@ -560,6 +560,3 @@ function reviewEventErrored(payload: Record<string, unknown>): boolean {
   return typeof payload.detail === "string" && looksLikeReviewerError(payload.detail);
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}

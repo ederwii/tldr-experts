@@ -70,11 +70,10 @@ export interface NoteOutcome {
   readonly lines: readonly string[];
 }
 
-const EXIT_OK = 0;
-/** Spec §3: `1` usage/schema, `2` refused, `3` not found. */
-const EXIT_USAGE = 1;
-const EXIT_REFUSED = 2;
-const EXIT_NOT_FOUND = 3;
+import {
+  /* Spec §3: `1` usage/schema, `2` refused, `3` not found. */
+  EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED as EXIT_REFUSED, EXIT_NOT_FOUND,
+} from "../../cli/exitCodes.ts";
 
 export function addOperatorNote(options: NoteOptions): NoteOutcome {
   const text = options.note.trim();
