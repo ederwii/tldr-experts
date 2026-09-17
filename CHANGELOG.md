@@ -98,6 +98,21 @@
   (2026-09-17) as deliberate — a person editing the artefact by hand is trusted the way the
   envelope's own reviewer is not — and `docs/spec.md` and a comment at `parseFixlistFile` now say
   so, naming exactly what a hand edit bypasses.
+- **Two illustrative examples stop naming a private workspace, and a guard now catches the
+  next one (see #191).** An audit for private-workspace leakage across the public surface found
+  two purely illustrative hits with no measurement attached — an area-id string in
+  `src/core/dashboard/render.ts`'s dashboard-layout comment, and `docs/spec.md`'s running
+  workspace.yml / competencies / questions / handoff example (§2.1, §2.6, §2.13, §2.14) — that
+  had copied a real workspace's name instead of inventing one; both now use one neutral,
+  internally-consistent placeholder. `test/public-surface-consistency.test.ts` gained a guard
+  over `src/**`, `docs/**`, `templates/**`, `docs-site/**` and the top (unreleased) CHANGELOG
+  heading: `templates/**` and `docs-site/**` fail on any occurrence, and `src/**`/`docs/**` —
+  which still carry real measurement citations naming a real workspace, cited evidence rather
+  than decoration — fail on a NEW one, via a per-file hit-count allowlist that can only be
+  lowered, never silently raised. Those citations, and the two `test/fixtures/**` families this
+  same audit found are real workspace data rather than a synthetic name that merely coincides,
+  are #389's call (the owner decided 2026-09-17 to synthesize them, on its own branch) and are
+  untouched here.
 
 ## 0.34.0 — 2026-09-17
 
