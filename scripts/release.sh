@@ -17,8 +17,8 @@
 # commit was the ref hook, which aborts the commit and leaves the edits dirty.
 # Exit codes: 1 a precondition or the gate refused (nothing pushed, the undo is printed) · 14 gave up waiting for a merge wave in flight (#304)
 # 14 and not 1 because nothing was edited and there is nothing to undo; not the wave's own 6
-# because the two scripts' codes are read in the same logs and docs — merge-wave.sh owns 1–13,
-# so the next free number keeps a bare "exit 14" unambiguous across both.
+# because the two scripts' codes are read in the same logs and docs — merge-wave.sh owns 1–13
+# and 15, release.sh owns 14 — so a bare "exit 14" stays unambiguous across both.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 V="${1:?usage: scripts/release.sh <version> [--tag alpha|beta|stable]}"; TAG="alpha"

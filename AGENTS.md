@@ -56,7 +56,7 @@ sells: measured over asserted, refused over guessed, named over silent.
   queued behind the wave the first line names (#304). A THIRD possible answer, `unknown:
   <reason>`, is not one of those three and does not share their exit 0: when `--status` could
   not even LOOK — the `merge-lock.sh` sibling is missing, or cwd is not inside a git repository
-  — it says so and exits **14**, never `idle`, because a caller polling stdout must not read
+  — it says so and exits **15**, never `idle`, because a caller polling stdout must not read
   "could not check" as "nothing is happening" (S1). "Is it alive?" is that command, never `ps`
   plus a marker's mtime.
   And the release waits on the WAVE (#304): `scripts/release.sh` polls `merge-wave.lock` with

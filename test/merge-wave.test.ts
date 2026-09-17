@@ -1912,25 +1912,25 @@ describe("`merge-wave.sh --status` answers \"is it alive, and where is it?\" in 
     expect(r.stdout.trim()).toMatch(/^release holder=\d+ version=0\.9\.9 phase=\? started=2026-09-14T00:00:00Z$/);
   });
 
-  test("cwd outside any git repository: `unknown:`, exit 14 — it never looked, so it must not say `idle` (S1)", () => {
+  test("cwd outside any git repository: `unknown:`, exit 15 — it never looked, so it must not say `idle` (S1)", () => {
     const outside = mkdtempSync(join(tmpdir(), "mw-status-non-repo-"));
     try {
       const r = spawnSync("bash", [MERGE_WAVE, "--status"], { cwd: outside, encoding: "utf8" });
-      expect(r.status).toBe(14);
+      expect(r.status).toBe(15);
       expect((r.stdout ?? "").trim()).toMatch(/^unknown:/);
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
   });
 
-  test("the `merge-lock.sh` sibling missing: `unknown:`, exit 14 — it never looked, so it must not say `idle` (S1)", () => {
+  test("the `merge-lock.sh` sibling missing: `unknown:`, exit 15 — it never looked, so it must not say `idle` (S1)", () => {
     const sb = sandbox();
     const scratch = mkdtempSync(join(tmpdir(), "mw-status-no-sibling-"));
     try {
       copyFileSync(MERGE_WAVE, join(scratch, "merge-wave.sh"));
       chmodSync(join(scratch, "merge-wave.sh"), 0o755);
       const r = spawnSync("bash", [join(scratch, "merge-wave.sh"), "--status"], { cwd: sb.main, encoding: "utf8" });
-      expect(r.status).toBe(14);
+      expect(r.status).toBe(15);
       expect((r.stdout ?? "").trim()).toMatch(/^unknown:/);
     } finally {
       rmSync(scratch, { recursive: true, force: true });

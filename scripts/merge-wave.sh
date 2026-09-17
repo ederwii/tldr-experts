@@ -10,7 +10,7 @@
 #   — the same fact `cat .RELEASE-IN-PROGRESS` shows as its `phase:` line (#304).
 #   Exit 0 either way; a lock or marker whose owner is dead reads as idle. When it could not
 #   even LOOK — the merge-lock.sh sibling is missing, or cwd is not inside a git repository —
-#   it prints `unknown: <reason>` and exits 14, never `idle`/0: a caller polling stdout must
+#   it prints `unknown: <reason>` and exits 15, never `idle`/0: a caller polling stdout must
 #   not read "could not check" as "nothing is happening" (S1).
 #
 # Concurrency (#44). The merge, the gates and the push all happen in ONE shared checkout,
@@ -45,7 +45,7 @@
 #             11 the ref-transaction hook aborted the merge — NOT a conflict (#115)
 #             12 the merged CHANGELOG has two unreleased headings, or one at or below the last release — by its top dated heading (#299) or by package.json (#304)
 #             13 gave up waiting for a release in flight (#299)
-#             14 --status could not look — the merge-lock.sh sibling is missing, or cwd is not inside a git repository
+#             15 --status could not look — the merge-lock.sh sibling is missing, or cwd is not inside a git repository (14 is release.sh's own code)
 # One code per condition, deliberately: this table is its own namespace and has nothing to do
 # with `src/cli/exitCodes.ts`'s families (where 2 is a gate refusal). Here 2 is already "merge
 # conflict", so the review refusal took the next free code rather than making 2 ambiguous.
@@ -76,10 +76,10 @@ set -u
 # more temp directory for every poll (#299).
 if [ "${1:-}" = "--status" ]; then
   LIB="$(cd "$(dirname "$0")" && pwd)/merge-lock.sh"
-  [ -f "$LIB" ] || { echo "unknown: $LIB is missing — could not look"; exit 14; }
+  [ -f "$LIB" ] || { echo "unknown: $LIB is missing — could not look"; exit 15; }
   # shellcheck source=scripts/merge-lock.sh
   . "$LIB"
-  mw_lock_paths || { echo "unknown: not inside a git repository — could not look"; exit 14; }
+  mw_lock_paths || { echo "unknown: not inside a git repository — could not look"; exit 15; }
   o="$(mw_owner_of)"
   if [ -d "$MW_LOCK" ] && ! mw_dead_owner "$o"; then
     echo "holder=${o%% *} branch=$(cat "$MW_LOCK/branch" 2>/dev/null || echo '?') phase=$(cat "$MW_LOCK/phase" 2>/dev/null || echo '?') started=$(cat "$MW_LOCK/started" 2>/dev/null || echo '?')"
