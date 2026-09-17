@@ -9,7 +9,7 @@
  * Both write through `RunStore`, so the cursor, phase statuses, run status and the
  * budget mirror stay derived rather than hand-maintained.
  */
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import type { TldrxEvent } from "../events/Event.ts";
 import { gateEvidenceRelPath } from "../text/evidence.ts";
@@ -24,6 +24,12 @@ import { closeRun, type RunCloseOutcome } from "./closeRun.ts";
 import { withRunOutcome } from "./runOutcome.ts";
 import { evidencePath } from "../facilitator/paths.ts";
 import { hasPreparedBundle } from "./prepared.ts";
+import { candidateShasIn, latestFixlist, openFindings } from "../build/fixlist.ts";
+import { phaseDirsOf, scanStories } from "../build/storyScan.ts";
+import { repoDirOf } from "../build/git.ts";
+import { storyBranchOf } from "../plan/branchModel.ts";
+import { loadWorkspace } from "../../hooks/lib/workspace.ts";
+import { closeNoted } from "../build/resolutionVerify.ts";
 
 export class GateError extends Error {}
 
@@ -174,6 +180,13 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
   store.append(event(ctx.at, store.runId, entry.stage.id, "stage.done", ctx.actor, { phase: entry.phase.id }));
   store.save();
 
+  // #344, owner decision "Sí cerrarlo": a human gate approval whose note names
+  // the commit that fixes an open fix-now finding closes that finding. Run
+  // AFTER the gate itself is signed and saved, so a check failure above (which
+  // returns early) never touches a fixlist file, and never on a gate this
+  // function is about to refuse.
+  await closeNamedFixlistFindings(store, ctx.root, entry.phase.id, entry.stage.id, ctx.actor, ctx.at, ctx.note);
+
   const runDone = store.run.status === "done";
   let closed: RunCloseOutcome | null = null;
   if (runDone) {
@@ -196,6 +209,73 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
     evidencePath: evidence === null ? null : evidence.path,
     closed,
   };
+}
+
+/**
+ * A human gate approval whose NOTE names the commit that fixes an open fix-now
+ * finding closes that finding (#344, owner decision "Sí cerrarlo") — reusing
+ * the same evidence rule every other `Resolved: yes` is held to
+ * (`../build/resolutionVerify.ts`'s `unverifiedBecause`, shared with the Build
+ * executor's own per-story check), never a looser one just because the claim
+ * arrived in an approval note instead of the file.
+ *
+ * Scope, deliberately narrow — the safe direction only (§7):
+ *   - A note with NO sha-looking token changes nothing, and nothing is even
+ *     read: `candidateShasIn` is the same 7-40-hex grammar every other sha in
+ *     the fix-list grammar is read with, applied to free text instead of one
+ *     `Resolved:` line (#7, one implementation).
+ *   - Only `fix-now` findings that are STILL OPEN are ever touched —
+ *     `openFindings` is the one predicate that already answers "still blocks
+ *     `done`" (`build/fixlist.ts`); a finding already closed, deferred, refuted
+ *     or out-of-scope is not this gate's business and is never looked at.
+ *   - Every open finding is tried against the note's own candidates through the
+ *     story's own branch, exactly the reachability rule `verifyResolutions`
+ *     runs at story-settle time; the leaf (`closeNoted`) writes `Resolved: yes
+ *     <sha>` when one checks out and `claimed-unverified` with the reason when
+ *     none does, so a note that named something wrong is recorded, never
+ *     silently dropped and never silently closed.
+ *
+ * Walks every story this run has declared (`scanStories`/`phaseDirsOf`, the ONE
+ * walk `run/ship.ts` also uses for the same reason — no second `readdirSync`
+ * over `stories/`, gh #189), first-phase-directory-wins per story id, the same
+ * tie-break `run/ship.ts`'s `openFixFindings` uses so two readers of one story
+ * cannot end up looking at two different fix lists. A repo `workspace.yml`
+ * does not declare is skipped, not guessed at — nothing can be verified against
+ * a repo that cannot be resolved, so nothing there is touched either.
+ */
+export async function closeNamedFixlistFindings(
+  store: RunStore, root: string, phaseId: string, stageId: string, actor: string, at: string, note: string,
+): Promise<void> {
+  const candidates = candidateShasIn(note);
+  if (candidates.length === 0) return;
+  const workspace = loadWorkspace(root);
+  const stories = scanStories(store.runDir).stories;
+  const seen = new Set<string>();
+  const provenance = `${phaseId}/${stageId} gate approved by ${actor} at ${at}`;
+  for (const phase of phaseDirsOf(store.runDir)) {
+    for (const story of stories) {
+      if (seen.has(story.story)) continue;
+      const fixlist = latestFixlist(store.runDir, phase, story.story);
+      if (fixlist === null) continue;
+      seen.add(story.story);
+      // A round the parse could not fully read is not a round this may act on
+      // (gh #218's correctness half): a dropped heading could hide a live
+      // `fix-now` finding a note's sha was never meant to touch.
+      if (fixlist.unreadable.length > 0) continue;
+      const open = openFindings(fixlist.findings);
+      if (open.length === 0) continue;
+      let repoDir: string;
+      try {
+        repoDir = repoDirOf(workspace, story.repo);
+      } catch {
+        continue;
+      }
+      const branch = storyBranchOf(store.runId, story.story);
+      const text = readFileSync(fixlist.path, "utf8");
+      const result = await closeNoted({ repoDir, branch, repo: story.repo }, open, text, candidates, provenance);
+      if (result.text !== null) writeFileSync(fixlist.path, result.text, "utf8");
+    }
+  }
 }
 
 /**

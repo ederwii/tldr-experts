@@ -309,6 +309,15 @@ export const FIXLIST_SETTLED_MARK = "every finding is routed away from `fix-now`
  */
 export const AUTO_CLOSED_MARK = "auto-closed: the fix-round reviewer approved this commit with this finding in its prompt";
 
+/**
+ * The provenance words a gate-approval close writes after its sha (#344, owner
+ * decision "Sí cerrarlo": a human gate approval whose note names the commit that
+ * fixes an open finding closes it). A sibling of `AUTO_CLOSED_MARK` — same line,
+ * same writer (`autoCloseShown`), different evidence: no reviewer prompt showed
+ * this finding, a human named the commit in the note they signed the gate with.
+ */
+export const GATE_APPROVED_MARK = "auto-closed: a human approved the gate with this commit named in the note";
+
 // --- the envelope ----------------------------------------------------------
 
 export interface ParsedFixlist {
@@ -693,6 +702,37 @@ export const SHA_FULL_LEN = 40;
  * seen, and then refused by name.
  */
 const HEX_RUN_RE = /(?<!\w)[0-9a-fA-F]+(?!\w)/g;
+
+/**
+ * Every sha-looking token in free text — 7 to 40 hex characters, word-bounded —
+ * lowercased and deduplicated, in the order they first appear (#344).
+ *
+ * The SAME grammar `readResolvedSha` reads a `Resolved:` line's tail with —
+ * `HEX_RUN_RE`, `SHA_ABBREV_MIN`, `SHA_FULL_LEN` — one implementation of "what
+ * is a candidate sha" for both (§7). Deliberately NOT `readResolvedSha`'s
+ * stricter sibling: that reader REFUSES a whole line over one over-long run,
+ * because a `Resolved:` line names at most one commit and an ambiguous line
+ * must not silently pick one. Free text — a human gate-approval note — can
+ * legitimately carry several genuine shas beside ordinary prose, so an
+ * over-long run here is simply not a candidate: skipped, not a refusal, and
+ * every run that IS in range is kept rather than stopping at the first.
+ *
+ * Used by `run/gates.ts` (#344) to read a gate-approval note for the commit(s)
+ * it claims fixed an open fix-list finding.
+ */
+export function candidateShasIn(text: string): readonly string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const run of text.matchAll(HEX_RUN_RE)) {
+    const token = run[0].toLowerCase();
+    if (token.length < SHA_ABBREV_MIN || token.length > SHA_FULL_LEN) continue;
+    if (seen.has(token)) continue;
+    seen.add(token);
+    out.push(token);
+  }
+  return out;
+}
+
 export interface ResolvedShaRead {
   /** The accepted token, lowercased — 7 to 40 hex — or null. */
   readonly sha: string | null;
@@ -1077,12 +1117,20 @@ export function markSwept(text: string, n: number, mark: SweepMark): string {
  * `claimed-unverified` on the very next read.
  *
  * Text in, text out, no I/O: the caller owns the file.
+ *
+ * `mark` defaults to `AUTO_CLOSED_MARK` — the fix-round reviewer's own
+ * provenance sentence, byte-identical to every call site before #344. A caller
+ * closing on different evidence (a human gate approval naming the commit in its
+ * note, `GATE_APPROVED_MARK`) passes its own marker rather than this writer
+ * asserting a reviewer prompt that, for that caller, never existed — one writer
+ * for both, never two copies of the line-rewrite (§7).
  */
 export function autoCloseShown(
   text: string,
   shown: readonly FixFinding[],
   sha: string,
   provenance: string,
+  mark: string = AUTO_CLOSED_MARK,
 ): { text: string; closed: readonly number[] } {
   const current = parseFixlistFile(text);
   const closable = new Set(
@@ -1100,7 +1148,7 @@ export function autoCloseShown(
     }
     if (at === null || !closable.has(at) || closed.has(at) || !RESOLVED_RE.test(line)) return line;
     closed.add(at);
-    return `Resolved: yes ${sha} — ${AUTO_CLOSED_MARK} (${provenance})`;
+    return `Resolved: yes ${sha} — ${mark} (${provenance})`;
   }).join("\n");
   return { text: body, closed: [...closed].sort((a, b) => a - b) };
 }

@@ -73,6 +73,19 @@
 
 ### Added
 
+- **A human gate approval whose note names the commit that fixes an open `fix-now` fix-list
+  finding now closes that finding (see #344, owner decision "Sí cerrarlo").** Before this,
+  `tldrx approve --note "…"` never read the note back against a run's fix lists, so a Build gate
+  approved over a note like "S3 fix round landed and re-reviewed (`71bfe1e`)" left the fixlist
+  file itself saying `Resolved: no` — the honour-system gap #269's on-disk escape hatch left
+  standing — and `run.yml`'s own outcome kept reporting the story `blocked` on a defect the gate
+  had already verified fixed. `approve` now reads its note for sha-looking tokens and holds each
+  one to the exact evidence rule a file-written `Resolved: yes` is held to (extracted to
+  `src/core/build/resolutionVerify.ts` so the Build executor's own per-story check and this gate
+  path share one derivation, never two): a candidate reachable from the finding's story branch
+  closes it, `Resolved: yes <sha>`; one that does not check out is recorded
+  `claimed-unverified`, never a silent close. A note naming no commit touches no fix list at
+  all.
 - **A fact can carry a `was_id` alias to the id it was cited under before an id-change (see
   #338).** `id` stays immutable (§7: nothing ever rewrites a fact's own `id`), so an owner
   decision (2026-09-17) settled how a fact's id is ever allowed to change: additively, never by

@@ -4855,6 +4855,18 @@ them does not parse, and the finding it belongs to is dropped rather than half-r
   `could not be measured — <git's reason>` on both surfaces, never as "no later commit changed this":
   an empty answer and an unanswered question are different facts (§7). `Swept:` and `yes-on-epic` are additive; a fix list written before they existed reads exactly
   as it did, with `swept` absent.
+- **A human gate approval whose NOTE names the commit that fixes an open `fix-now` finding closes that
+  finding (#344, owner decision "Sí cerrarlo").** `tldrx approve --note "…"` reads its own note for
+  sha-looking tokens (7-40 hex, word-bounded — the same grammar `Resolved: yes <sha>` is read with) and,
+  for every still-open `fix-now` finding across the run's stories, tries each candidate against that
+  story's own branch through the IDENTICAL evidence rule a file-written claim is held to: reachable
+  closes it, `Resolved: yes <sha>`, on the same writer an auto-closed fix round uses; unreachable is
+  recorded `claimed-unverified` with the reason, never a silent close and never a silently dropped note.
+  A note naming no commit changes nothing, and a finding that is not `fix-now`, or not open, is never a
+  candidate. This is the honour-system gap #269's on-disk escape hatch left standing: a human approving a
+  Build gate with a note like "S3 fix round landed and re-reviewed (`71bfe1e`)" used to leave the fixlist
+  file itself saying `Resolved: no`, so `run.yml`'s own outcome kept reporting a story `blocked` on a
+  defect the gate had already verified fixed.
 - **A `Resolved:` sha that VERIFIES is rewritten to the canonical 40-hex object id (2026-09-06).** The same
   `rev-parse --verify <sha>^{commit}` that checks the claim already knows the full id, and the record was keeping the
   abbreviation instead — so `Resolved: yes (9f2c1ab)` named a PREFIX, which is a different thing from a commit: a
