@@ -1,6 +1,23 @@
 # Changelog
 
-## 0.34.0 — 2026-09-17
+## 0.35.0 — unreleased
+
+### Fixed
+
+- **The phase-id shape guard (`test/phase-ids-one-derivation.test.ts`, #187) now catches a
+  reordered duplicate, not just an identical or drifted one (see #204).** The guard's
+  `ORDERED_LIST` pattern was built from `PHASE_IDS` by joining the five ids in the one order
+  `PHASE_IDS` itself is written in, so a fourth copy that wrote the same five ids out in a
+  DIFFERENT order — `["01-what","02-how","04-build","03-plan","05-watch"]` — matched neither
+  guard: not the shape guard (wrong order) nor the equality guard (nothing there compares an
+  unrelated inline literal to `QUESTION_PHASES`). Planting exactly that array in an unrelated
+  file left the suite green, 5 pass / 0 fail — confirmed here before the fix, reproducing the
+  issue's own finding. The pattern is now the alternation of all 5! = 120 orderings of the same
+  five exact `PHASE_IDS` (still derived from `PHASE_IDS`, never hand-typed), each id still
+  requiring its closing quote immediately after it so ordinary path-segment strings like
+  `01-what/intent.md` keep not matching. A real drift (a wrong id) still matches none of the
+  120 orderings, so the drifted case still falls to the equality guard exactly as before —
+  only the ORDER stopped being load-bearing for the shape guard.
 
 ### Fixed
 
