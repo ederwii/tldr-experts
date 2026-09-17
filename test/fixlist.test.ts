@@ -736,6 +736,23 @@ describe("parseFixFindings", () => {
     expect(parseFixFindings([]).problems[0]).toContain("`fixlist` is empty");
     expect(parseFixFindings(undefined).problems[0]).toContain("missing or is not an array");
   });
+
+  // gh #269 — a GUARD, not a proof: it pins the documented asymmetry
+  // (docs/spec.md, the fixlist section) rather than demonstrating the owner's
+  // design decision is correct. `parseFixlistFile` is the on-disk door a host
+  // hand-edits; it validates shape only, never a citation, so a `refuted`
+  // finding that `parseFixFindings` (the envelope door, above) would refuse
+  // reads back clean here.
+  test("parseFixlistFile — the on-disk door — accepts a hand-edited `refuted` finding with no citation", () => {
+    const text = renderFixlist({
+      storyId: "S1", title: "t", round: 1, attempt: 1, maxAttempts: 2,
+      diff: "d", commit: "c", summary: "",
+      findings: [finding({ disposition: "refuted", where: "", detail: "no citation here" })],
+    });
+    const read = parseFixlistFile(text);
+    expect(read).toHaveLength(1);
+    expect(read[0]?.disposition).toBe("refuted");
+  });
 });
 
 describe("the artifact round-trips", () => {

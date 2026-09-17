@@ -939,6 +939,11 @@ function parseFixlistDocument(text: string): FixlistParse {
  * story over a typo. See `unreadableFindings`/`fixlistFullyParsed` for what this
  * silence drops — a settle-time reader must consult one of those before reading
  * a `findings` list with nothing `fix-now` in it as "this round is spent".
+ *
+ * gh #269 — this validates SHAPE only, never a `[src: …]` citation: a hand edit
+ * pays none of the cost `parseFixFindings` (the envelope door) charges `refuted`
+ * or an unblocking `docs`/`style` finding — a documented escape hatch, not an
+ * oversight (docs/spec.md, the fix-list section, "the on-disk door").
  */
 export function parseFixlistFile(text: string): readonly FixFinding[] {
   return parseFixlistDocument(text).findings;

@@ -4801,6 +4801,15 @@ them does not parse, and the finding it belongs to is dropped rather than half-r
   Reading a fix list ALREADY ON DISK is tolerant (§7 — `version: 1` formats only grow): a file written before `Kind:`
   existed, or one whose `Kind:` this cannot narrow to the enum, reads as **not stated** — and not stated holds the
   story, like anything else unclassified.
+- **The on-disk door is a documented human escape hatch (#269, owner decision 2026-09-17):** the file is a sanctioned,
+  hand-editable artefact, and `parseFixlistFile` — the read path every settle-time question goes through — validates
+  SHAPE only. It never calls the citation check above: a host may hand-edit `Disposition:` to `refuted`, or to
+  `fix-now` on a `docs`/`style` finding and back, without paying the `[src: …]` citation the CLI write path
+  (`parseFixFindings`, the reviewer envelope) charges for the same move. What a hand edit bypasses, precisely: the
+  citation requirement itself, and the provenance the write path records alongside it (`Normalised-from:` on a
+  `docs`/`style` finding routed by that rule) — a hand edit writes neither, and nothing here reconstructs them. This
+  is deliberate asymmetry, not an unenforced rule: a person looking at the evidence themselves is trusted the way the
+  envelope's own reviewer is not.
 - **A disposition ROUTES a finding; `Resolved:` CLOSES it.** Two questions, two fields. `defer-with-log` findings are
   appended to `retro.md`'s `## Build feedback` as they are written — the existing second writer with its existing
   verbatim dedup — so a deferred defect reaches the owner through a channel that already exists.
