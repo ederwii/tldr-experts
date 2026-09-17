@@ -552,7 +552,7 @@ describe("the CLI end to end", () => {
 /**
  * The gap wave I closed: the shipped stage files have always named `product`,
  * `architect`, `delivery`, `developer` and `operations`, and `init` seeded only
- * the first. Measured 2026-08-29 on `~/aparece-v2`, whose `.tldrx/experts/` held
+ * the first. Measured 2026-08-29 on workspace W1, whose `.tldrx/experts/` held
  * `product`, `dotnet-stack` and seven domain experts: four of the five stage
  * names resolved to nothing on every run.
  */

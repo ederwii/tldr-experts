@@ -1,6 +1,6 @@
 # Auditoría — economía de tokens y legacy (2026-08-29, main 4c0e070, solo lectura)
 
-**Medición real:** `tldrx next --prepare` sobre copia de `~/aparece-v2`, run `260830-decisions-gate`, stage `01-what/what`. Precios asumidos: Opus 5 $5/$25 por MTok, Sonnet 5 $2/$10, Haiku 4.5 $1/$5; cache write 1.25×, read 0.1×. Tokens ≈ bytes/3.6.
+**Medición real:** `tldrx next --prepare` sobre copia de workspace W1, run `260830-decisions-gate`, stage `01-what/what`. Precios asumidos: Opus 5 $5/$25 por MTok, Sonnet 5 $2/$10, Haiku 4.5 $1/$5; cache write 1.25×, read 0.1×. Tokens ≈ bytes/3.6.
 
 ## A. Flujo de tokens — un stage (MEDIDO: prompt.md = 159.575 B ≈ 44.3k tok)
 | Sección | Bytes | % | Regla |
@@ -9,7 +9,7 @@
 | `## Inputs` (16 ficheros) | 72.283 | 45% | declarados enteros; seeds comparten 64 KB (`seedInputs.ts:25`), tope 20 inputs (`:91`) |
 | 9 bloques de expert | 83.523 | 52% | `expert.md` + 64 KB de knowledge POR EXPERTO (`expertKnowledge.ts:42`) |
 
-- Experts: 1 stage + 1 stack + 7 domain; 8 de 9 entraron solo por `repo aparece-v2`, no por path (`selectExperts.ts:178-179`).
+- Experts: 1 stage + 1 stack + 7 domain; 8 de 9 entraron solo por `repo W1`, no por path (`selectExperts.ts:178-179`).
 - `{{facts}}`/`{{conventions}}` se calculan (`prompt.ts:152-177`) y se tiran: solo `watch/stage.md` usa placeholders.
 - Handoffs previos: solo si `stage.yml inputs:` los nombra. Orden final (`prompt.ts:61-74`): stage → Inputs (volátil) → Previous attempt → experts (estable) — experts al FINAL.
 - El sub-agente: `Read, Write, Edit, Glob, Grep` (`spawnAgent.ts:27`) + `Bash(<cmd>)`; el prompt dice "ONLY ones you may read" (`prompt.ts:109`) pero nada lo impone. Solo acotan `timeout_s` y `--max-budget-usd` (stop-after-turn; medido $5,15 vs $1,50, `spec.md:513-520, 717-725`). No hay contador de lecturas.

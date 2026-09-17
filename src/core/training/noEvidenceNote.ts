@@ -11,7 +11,7 @@
  * reach the terminal — but the terminal is not a record, which is the argument
  * the failure path already accepted.
  *
- * Measured on `~/scavtopia` at 0.8.0: `architect` ($1.61) and `operations`
+ * Measured on workspace W2 at 0.8.0: `architect` ($1.61) and `operations`
  * ($1.63) both read `check.passed`, `evidence_added: 0`, with no reason on disk.
  * `developer` ($5.02 over four turns) is the only one whose reason survives, and
  * only by accident — an unrelated `error` failed its check and dragged the 13

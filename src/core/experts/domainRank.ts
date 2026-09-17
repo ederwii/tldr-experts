@@ -26,7 +26,7 @@ export const GRAPHIFY_OUT_DIRNAME = "graphify-out";
 export const GRAPH_FILE = "graph.json";
 
 /**
- * `[assumption]` — 64 MB. The aparece graph is 4.9 MB; this is the size at which
+ * `[assumption]` — 64 MB. The workspace-W1 graph is 4.9 MB; this is the size at which
  * "parse it on every stage" stops being free, and the honest answer is to rank
  * without it rather than to spend a second of every prepare on it.
  */

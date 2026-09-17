@@ -240,8 +240,8 @@ as a list of things to decide.
 
 | Question | Answer | Where |
 |---|---|---|
-| 1. Repo name/location and license | A new repo outside scavtopia; MIT | v0.1 addendum § Decisions taken; the name is settled in § Naming and again in the v0.2 addendum (brand `tldr-experts`, CLI `tldrx`) |
-| 2. Pilot: scavtopia, or a smaller single-repo project | Dogfood on scavtopia, with the leaderboard ideation pack **distilled** as the phase-1 input | v0.1 addendum § Decisions taken and § Pilot import without the noise |
+| 1. Repo name/location and license | A new repo outside workspace W2; MIT | v0.1 addendum § Decisions taken; the name is settled in § Naming and again in the v0.2 addendum (brand `tldr-experts`, CLI `tldrx`) |
+| 2. Pilot: workspace W2, or a smaller single-repo project | Dogfood on workspace W2, with the leaderboard ideation pack **distilled** as the phase-1 input | v0.1 addendum § Decisions taken and § Pilot import without the noise |
 | 3. Experts files-only in v0, training deferred to v1.1 | Accepted then; **overtaken** — `tldrx expert train` runs, and a level moves only on derived evidence | v0.1 addendum § Decisions taken; `CHANGELOG.md` 0.3.0 § Added |
 | 4. Harness language | TypeScript on Bun; **since widened** — Bun builds, Node ≥ 20 or Bun runs, behind `src/core/runtime/` | v0.1 addendum § Decisions taken; `CHANGELOG.md` 0.2.0 |
 | 5. Terminal-only for v0, chat bridge later | Confirmed. Terminal and the Claude Code skill both ship; no chat bridge yet | v0.1 addendum § Decisions taken; `docs/ROADMAP.md` |
@@ -281,8 +281,8 @@ that proves each one open beside it.
 # v0.1 addendum — decisions (2026-08-28) and additions
 
 ## Decisions taken
-- New repo outside scavtopia. License TBD (MIT suggested). Harness: TypeScript on Bun.
-- Pilot: dogfood on scavtopia; phase-1 input = the leaderboard ideation pack, **distilled**.
+- New repo outside workspace W2. License TBD (MIT suggested). Harness: TypeScript on Bun.
+- Pilot: dogfood on workspace W2; phase-1 input = the leaderboard ideation pack, **distilled**.
 - Experts are files-only in v0; training/star chart in v1.1.
 - Terminal-only in v0; chat bridge (Pumble) as a later channel adapter.
 
@@ -318,7 +318,7 @@ claims without a source are dropped, not imported. The What-phase handoff then l
   SDK in mobile + lab") live in `map/workspace.md` and are enforced at Plan time (a story
   touching a contract auto-spawns the dependent stories).
 - Stories carry a `repo:` field; worktrees/epic branches are created **per repo**.
-- Recommendation: the root should itself be a git repo (docs-only is fine — scavtopia already
+- Recommendation: the root should itself be a git repo (docs-only is fine — workspace W2 already
   does this) so `.tldrx/` and `tldrx-work/` are versioned and Claude Code memory keys correctly.
 - A repo that is also used standalone just runs `init` in its own folder; nothing is
   injected into sub-repos by the root install.

@@ -3,7 +3,7 @@
  * it happened (issue #46).
  *
  * The failure this exists for, measured on run `260829-scoring-leaderboard`
- * (scavtopia, 2026-09-01): a host performed an owner-delegated mechanical resync
+ * (workspace W2, 2026-09-01): a host performed an owner-delegated mechanical resync
  * of eight story dod blocks and was told to note it in the run log. It could not.
  * `events.jsonl` is append-only and tool-owned, so the only carriers available
  * were a FUTURE gate note (late, and keyed to the wrong moment) or a `reject`

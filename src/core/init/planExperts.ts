@@ -8,7 +8,7 @@
  *    They are unconditional because `stages/<stage>/stage.yml` names them, and until
  *    wave I `init` seeded only `product` — so on every real workspace four of the
  *    five printed `expert <name> — NOT LOADED` and the stage ran with no body for
- *    that role at all (measured 2026-08-29 on `~/aparece-v2`). Their subject is
+ *    that role at all (measured 2026-08-29 on workspace W1). Their subject is
  *    the workflow rather than a folder, so their bodies ship as editable files
  *    under `templates/experts/<role>.md` instead of being generated from
  *    detection, which knows nothing about them.

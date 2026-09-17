@@ -3,7 +3,7 @@
  * do about it.
  *
  * Issue #103 was filed off a cold adversarial audit of a real host-attended run
- * (`260830-ordering-inventory`, aparece-v2, 2026-09-02). Every ledger surface in
+ * (`260830-ordering-inventory`, workspace W1, 2026-09-02). Every ledger surface in
  * that run reconciles to a perfect 0.00 delta at **$14.60** — `events.jsonl`
  * sum, `run.yml` `spent_usd`, the stage sums, the task sums, the `budget.yml`
  * phase sums — while the run's own watch gate note says the real figure was
@@ -84,7 +84,7 @@ run: ${RUN_ID}
 title: "Check/Order aggregates and idempotent creation"
 scope: feature
 workflow: feature
-repos: [aparece]
+repos: [workspace-w1]
 created_at: 2026-09-01T00:44:28Z
 updated_at: 2026-09-02T14:14:00Z
 status: awaiting_gate
@@ -207,7 +207,7 @@ run: ${RUN_ID}
 title: "A host run that declared its tokens"
 scope: feature
 workflow: feature
-repos: [aparece]
+repos: [workspace-w1]
 status: awaiting_gate
 attended_by: host
 cursor: {phase: 01-what, stage: what, task: null}
@@ -239,7 +239,7 @@ run: ${RUN_ID}
 title: "An ordinary metered run"
 scope: feature
 workflow: feature
-repos: [aparece]
+repos: [workspace-w1]
 status: awaiting_gate
 cursor: {phase: 01-what, stage: what, task: null}
 budget: {ceiling_usd: 25.0, spent_usd: 2.40, per_agent_max_usd: 3.0}
@@ -268,7 +268,7 @@ run: ${RUN_ID}
 title: "A Codex Build stage: no host tokens, a full provider split"
 scope: feature
 workflow: feature
-repos: [aparece]
+repos: [workspace-w1]
 status: awaiting_gate
 attended_by: host
 cursor: {phase: 01-what, stage: what, task: null}
@@ -301,7 +301,7 @@ run: ${RUN_ID}
 title: "A Codex Build stage: no host tokens anywhere, only a provider split"
 scope: feature
 workflow: feature
-repos: [aparece]
+repos: [workspace-w1]
 status: awaiting_gate
 attended_by: host
 cursor: {phase: 01-what, stage: what, task: null}
@@ -401,7 +401,7 @@ run: ${RUN_ID}
 title: "No cursor"
 scope: feature
 workflow: feature
-repos: [aparece]
+repos: [workspace-w1]
 status: running
 budget: {ceiling_usd: 25.0, spent_usd: 0.0, per_agent_max_usd: 3.0}
 phases: []

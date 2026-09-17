@@ -12,7 +12,7 @@ export const MAX_FACTS = 5000;
  * Spec §2.5: `fact` is one assertion, ≤2000 chars.
  *
  * It was 300, and 300 lost the sentence that mattered. `captureAnswers` writes a
- * fact as `"<question> — <answer>"`, so on the aparece run of 2026-08-30 every
+ * fact as `"<question> — <answer>"`, so on the workspace-W1 run of 2026-08-30 every
  * one of the six answers was cut mid-clause and four of them lost the very words
  * — "Accepts ADR-D009 as written." — that name the document the answer settles.
  * The developer downstream never saw them.

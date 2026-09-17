@@ -29,7 +29,7 @@
  *     src` — a warning, and no second row for one reading.
  *
  * And `## Sources` earns nothing at all. Measured 2026-08-29: it was 41 of 107
- * bullets in `aparece-platform` and 18 of 56 in `aparece-platform-abstractions`,
+ * bullets in `core-platform` and 18 of 56 in `core-platform-abstractions`,
  * every one of them re-citing a source the file had already cited above. A section
  * whose whole job is to repeat the citations is not a second body of evidence.
  */
@@ -314,7 +314,7 @@ export function parseKnowledgeFile(
   }
 
   // Prose carries claims too, and the corpus proves it: the one dangerous line in
-  // the whole aparece sample is a HEADER paragraph, not a bullet, and its tokens
+  // the whole workspace-W1 sample is a HEADER paragraph, not a bullet, and its tokens
   // sit mid-line where a line-anchored parser never looks.
   issues.push(...proseExecutionIssues(text));
 
@@ -326,7 +326,7 @@ export function parseKnowledgeFile(
  *
  * `minesRunRecord` is the gh #154 arm. `roleTraining.ts` already says what the
  * runs pass is for — the run record "IS a role's domain" — and this is the line
- * that has to agree with it. Measured before the fix, on `~/scavtopia` at 0.8.0:
+ * that has to agree with it. Measured before the fix, on workspace W2 at 0.8.0:
  * four role experts trained `--mode full` for $9.47 and earned ONE evidence row,
  * because every citation `mineRuns` handed them read `tldrx-work/…` and every
  * `## Domain` a role template ships names `.tldrx/…` instead. Three of those runs
@@ -370,7 +370,7 @@ function outsideDomain(
  *
  * What it cost, measured 2026-09-02: a $2.10 full training whose 13 code
  * citations every one read `outside domain`, because the `## Domain` bullets were
- * written WORKSPACE-relative (`Scavtopia.Workflows/src/…`) while a citation
+ * written WORKSPACE-relative (`W2.Workflows/src/…`) while a citation
  * arrives repo-relative with the repo as a `repo:` prefix. The domain was right;
  * its spelling was one segment long. Nothing said so — and the only hint that did
  * fire pointed at a different expert, which reads as "you picked the wrong
@@ -442,11 +442,12 @@ const INLINE_TOKEN_RE = /\[src: ([^\]]*)\]/g;
 /**
  * Execution claims in PROSE, found paragraph by paragraph.
  *
- * Measured 2026-08-29 — the header of the real `aparece-api.md`:
+ * Measured 2026-08-29 — the header of the training-run fixture (synthesised for
+ * #389; same shape, `test/fixtures/knowledge/ledger-api-header.md`):
  *
- *     Gate state at training time: `dotnet build` exit 0, 0 warnings, 0 errors — measured, exit code captured
- *     unpiped [src: aparece-v2:.tldrx/workspace.yml:19]. `scripts/test.sh …`
- *     → 78/78 passed, exit 0 — measured [src: aparece-v2:scripts/test.sh:105]. …
+ *     Gate state at training time: `pytest` exit 0, 0 warnings, 0 errors — measured, exit code captured
+ *     unpiped [src: meridian-holdings:.tldrx/workspace.yml:19]. `scripts/test.sh …`
+ *     → 78/78 passed, exit 0 — measured [src: meridian-holdings:scripts/test.sh:105]. …
  *
  * Three claims of a measurement, three citations to declarations, and not one of
  * them visible to a bullet-level check: they are not bullets, and their tokens are

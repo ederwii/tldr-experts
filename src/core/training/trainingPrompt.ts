@@ -239,7 +239,7 @@ export function writeTargetRule(target: string): readonly string[] {
  * because stating it flatly did not work.
  *
  * Measured 2026-08-30, a real `expert train dotnet-stack --area dotnet --mode
- * light` on `~/scavtopia`: $1.69 spent, one knowledge file written, and the file
+ * light` on workspace W2: $1.69 spent, one knowledge file written, and the file
  * refused on TWO bullets that asserted an execution and cited a file line. The
  * prompt did carry the rule — one paragraph, no example — and the trainer still
  * did not know what a conforming line looked like. A rule whose whole cost is a

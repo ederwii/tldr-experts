@@ -5,7 +5,7 @@
  * `operations` in its `experts:` lists. Until wave I, `tldrx init` seeded only the
  * first of those (plus `<lang>-stack` and one domain expert per detected source
  * folder — `src/core/init/planExperts.ts`), so on every real workspace four of the
- * five resolved to nothing: measured 2026-08-29 on `~/aparece-v2`, whose
+ * five resolved to nothing: measured 2026-08-29 on workspace W1, whose
  * `.tldrx/experts/` held `product`, `dotnet-stack` and seven domain experts and
  * not one of `architect`, `delivery`, `developer`, `operations`.
  *

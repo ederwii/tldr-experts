@@ -738,7 +738,7 @@ describe("run new --seed", () => {
 
 describe("a `Status:` line is read however the document writes it", () => {
   test("a bulleted status is a status — the form every ADR in the wild uses", () => {
-    // Measured 2026-08-29 on `~/aparece-v2`: thirteen ADRs, every one writing its
+    // Measured 2026-08-29 on workspace W1: thirteen ADRs, every one writing its
     // status as a bullet, and the inventory said `adrStatus: null` for all of them.
     expect(statusOf("# ADR-1\n\n- Status: proposed — owner decision pending\n")).toBe("proposed");
     expect(statusOf("* **Status:** Accepted\n")).toBe("accepted");

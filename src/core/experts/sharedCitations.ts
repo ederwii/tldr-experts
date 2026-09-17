@@ -1,7 +1,7 @@
 /**
  * Two experts, one line, two different sentences about it.
  *
- * Measured 2026-08-29 on `~/aparece-v2`: 16 files were cited by two trained
+ * Measured 2026-08-29 on workspace W1: 16 files were cited by two trained
  * experts each. That is not wrong on its own — a file on a boundary really does
  * belong to two domains — but nothing anywhere compared what the two SAID about
  * it, and a stage that loads both gets two claims about one line with no signal

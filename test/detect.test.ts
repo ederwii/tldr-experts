@@ -20,7 +20,7 @@ const runner = new SpawnCommandRunner();
 
 describe("repo slugs", () => {
   test("a directory name becomes a `^[a-z0-9-]{1,32}$` key", () => {
-    expect(repoSlug("Scavtopia.Workflows")).toBe("scavtopia-workflows");
+    expect(repoSlug("Meridian.Holdings")).toBe("meridian-holdings");
     expect(repoSlug("my repo!!")).toBe("my-repo");
     expect(repoSlug("---")).toBe("repo");
     expect(repoSlug("a".repeat(40))).toHaveLength(32);

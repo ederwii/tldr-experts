@@ -456,7 +456,7 @@ appear in the prompt:
    (`expert <name> — NOT LOADED: no .tldrx/experts/<name>/ in this workspace`), not skipped in silence. This mattered
    because the SHIPPED stage files named `domain`, `stack`, `architect`, `delivery`, `operations` and `developer` and
    `tldrx init` seeded none but `product`. Measured 2026-08-29 on a fixture: the What stage's `experts: [product,
-   domain]` loaded one of the two and said nothing about the other; and on `~/aparece-v2`, a real workspace,
+   domain]` loaded one of the two and said nothing about the other; and on workspace W1, a real workspace,
    `architect`, `delivery`, `developer` and `operations` had no folder at all. Both halves of that gap are closed —
    `init` seeds the five **role experts** (below), and `domain`/`stack` are retired from the shipped lists. The two
    retired names are still ACCEPTED in a forked or older stage file: they are ignored with one note,
@@ -486,7 +486,7 @@ appear in the prompt:
    the repo rule still applies) but is marked `relevant: false` and earns **none** of the shared knowledge budget:
    its `expert.md` body only.
 
-   The repo half is conditional because measurement said so. On `~/aparece-v2` (`mode: single-repo`, 2026-08-29) a
+   The repo half is conditional because measurement said so. On workspace W1 (`mode: single-repo`, 2026-08-29) a
    What prompt loaded nine experts, **eight of them by `repos:` alone**; they contributed 52% of 159,575 bytes and
    not one had read a file the run cited. In a single-repo workspace `repos:` selects everybody, which is the same as
    selecting nobody — it just costs more. After the change the same prompt loads two experts and is 85,676 bytes.
@@ -686,7 +686,7 @@ sentence naming the raise is printed by `tldrx answer` and by nothing else, so o
 read off `questions.md` and the ledger rather than off the context the hook posts back.
 
 **The cap was 300 until 2026-08-30.** `captureAnswers` writes a fact as `"<question> — <answer>"`, so 300 cut a real
-answer mid-clause: on the aparece run every one of six was cut, and four lost the very words — "Accepts ADR-D009 as
+answer mid-clause: on the workspace-W1 run every one of six was cut, and four lost the very words — "Accepts ADR-D009 as
 written." — naming the document the answer settles, which is what the Build phase downstream matches on. 2000 is still
 a cap (a fact is one assertion, not a document) and the bound only moved outwards, so every file already on disk stays
 valid. When it still cuts, it cuts visibly: the text ends ` …` and the row carries `truncated: true`. The whole answer
@@ -750,7 +750,7 @@ of finding, and it is the only shape of evidence weighted above its kind. `confi
 a hypothesis with a citation attached is half a row.
 
 **Why the top two rungs are gated on a measurement.** Reading a file is evidence that code SAYS something; running a
-command is evidence that it DOES it. Measured 2026-08-29 on a real workspace: `aparece-api` held 15 `code` + 2 `test`
+command is evidence that it DOES it. Measured 2026-08-29 on a real workspace: `ledger-api` held 15 `code` + 2 `test`
 rows, every one written the same afternoon by one reading session, nothing ever executed — and the ladder as it then
 stood computed **5/5**, the top of the chart, for an expert that had never run a thing in the repo it spoke for. So
 level 4 now requires at least one `run` row — a command actually executed, cited with the §2.8 `cmd` production
@@ -853,7 +853,7 @@ And `## Sources` derives **no** evidence at all. It is a recap — one line per 
 it buys a second row for one reading. Measured 2026-08-29 on a real corpus: it was 41 of 107 bullets in one trained
 file and 18 of 56 in another, every one of them re-citing something cited above.
 
-**Why the execution rule exists, measured.** The header of a real `knowledge/aparece-api.md` asserts ``dotnet build``
+**Why the execution rule exists, measured.** The header of a real `knowledge/ledger-api.md` asserts ``dotnet build``
 exit 0, "measured, exit code captured unpiped", citing `.tldrx/workspace.yml:19` — the line that DECLARES
 `build: dotnet build`. It claims "78/78 passed, exit 0" citing a line of the test script. Every citation resolves.
 None of them is evidence that anything ran. The rule is applied to prose paragraphs as well as bullets, because that
@@ -895,7 +895,7 @@ those rows. Without it, the workspaces this command exists to rescue were left h
 
 **`--max-budget-usd` is a stop, not a cap — measured.** Pilot smoke, 2026-08-29,
 `tldrx expert train typescript-stack --area typescript --mode light --max-usd 1.5` over
-mobile + scavtopia-lab: the sub-agent was killed with `subtype: error_max_budget_usd`,
+mobile + W2-lab: the sub-agent was killed with `subtype: error_max_budget_usd`,
 `errors: ["Reached maximum budget ($1.5)"]` — after `total_cost_usd: 5.15325` on a single
 turn (`num_turns: 1`, 597 s, 105,698 cache-creation + 60,548 output tokens on a 1M-context
 model). The flag ends the run once a turn's cost is known; it cannot end a turn already in
@@ -914,7 +914,7 @@ that comes out of the same share.
 
 *Measured, and the only cost figures this framework quotes about training:* a full run costs
 **$1.21–$1.60 end to end on a mid model** — two ledger lines off `training.jsonl` on
-`aparece-platform` ($1.21 platform, $1.29 abstractions,
+`core-platform` ($1.21 platform, $1.29 abstractions,
 `docs/audits/2026-08-29/experts-knowledge.md` §E) and the top of the band the owner reports in #96.
 One sub-agent pass is therefore ~$0.70 on a mid model, ~$1.76 on a premium tier (opus lists at 2.5x
 sonnet, `core/budget/modelPrices.ts`) and ~$0.35 on haiku.
@@ -3143,7 +3143,7 @@ it, the stability order below.
 This is a COST decision, not a layout one. A prompt cache keys on the longest PREFIX two calls share; a cache write
 is billed at 1.25x an input token and a cache read at 0.1x. The experts used to be emitted LAST, behind the
 declared inputs — so the largest and most stable section of the prompt sat behind the section that changes at every
-stage, and paid the write price every time. Measured 2026-08-29 on `~/aparece-v2`: 159,575 B, of which 52% was expert
+stage, and paid the write price every time. Measured 2026-08-29 on workspace W1: 159,575 B, of which 52% was expert
 bodies and knowledge and 45% declared inputs, in that order.
 
 **Measured 2026-08-29, two real `claude` 2.1.251 calls, back to back, same 40,715-byte prompt, `--model haiku`,
@@ -3167,7 +3167,7 @@ tokens, because the CLI's own system prompt, tool definitions and `CLAUDE.md` ar
 input; it is an `[assumption]` for sizing, never for billing.
 
 **One budget, inputs first.** Two independent ceilings are not a ceiling. The seed documents used to share 64 KB
-and EACH loaded expert had its own 64 KB of trained knowledge, so they never competed: on `~/aparece-v2` the seed
+and EACH loaded expert had its own 64 KB of trained knowledge, so they never competed: on workspace W1 the seed
 budget dropped `ADR-D013-DELIVERY-ZONE-GEOMETRY.md` (5,863 B) whole — the sixth of the six decisions the run existed
 to settle — while 70,923 B of unrequested expert knowledge went in untouched. There is now one allocation, in
 priority order:
@@ -4392,7 +4392,7 @@ verdict and the reason. One line on stdout and one `story.work_rescued` event (�
 gains a `## Uncommitted work rescued` section saying where the work is and that nothing reviewed or merged it. If the
 commit cannot be made, **the worktree is KEPT** and the log names its path — a tree holding the only copy of somebody's
 work is not the framework's to delete. Framework state (`tldrx-work/`, `.tldrx/`) is excluded by the same pathspec a
-story commit uses. Measured 2026-09-02 on run `260830-money-and-payments` (aparece-v2): a story's DoD failed, it
+story commit uses. Measured 2026-09-02 on run `260830-money-and-payments` (workspace W1): a story's DoD failed, it
 settled `blocked`, `git worktree remove --force` ran, and the developer's fix — uncommitted, inside — was gone. There
 was no branch, no stash and no reflog to recover it from, and `blocked` is precisely the state a human is going to want
 to inspect. Nothing is rescued on the ordinary path: a story that reaches `done` was committed before its DoD was even
@@ -4418,14 +4418,14 @@ already wrote, into `04-build/implicit-plan.yml`:
 | `budget_usd` | the Build stage's own ceiling, as scaled into `run.yml` |
 | `branch` | `epic/<run-id slugged into `EPIC_BRANCH_RE`>` |
 
-**The plan carries the work FORWARD.** Measured on the aparece run: the What handoff's Decisions and its success
+**The plan carries the work FORWARD.** Measured on the workspace-W1 run: the What handoff's Decisions and its success
 metrics describe what the WHAT stage had to produce — "one `questions.md` block per decision", "the question count
 matches the decision count". Copied straight into Build they would tell a developer to write a file the run already
 has. So:
 
 - **Bullets whose subject is the What's own deliverable are dropped** from `goal` and `acceptance`, on five LITERAL
   signals — `questions.md`, `### Q`, any `01-what/` path, a question id (`Q1`, `Q1–Q6`), and the run's-questions
-  vocabulary (`every question …`, `each question's …`). Measured on the aparece run: the first two caught three of six
+  vocabulary (`every question …`, `each question's …`). Measured on the workspace-W1 run: the first two caught three of six
   bullets and left three criteria about `01-what/questions.md`'s contents that never name the file; the other three
   signals are exactly what those three say instead. **Every dropped bullet is written into `notes:`** with the signal
   that fired and its opening 90 characters — a filter whose mistakes are invisible is a filter nobody can correct,
@@ -4434,7 +4434,7 @@ has. So:
 - **The answers become the work, and they are the ONLY thing in `goal`.** Every live fact in
   `.tldrx/memory/facts.yml` whose `source.run` is THIS run is an answer a human gave at one of its gates. Each one adds
   `Apply <the whole answer> to the touched files [src: F<n>; 01-what/questions.md:<line of the [Answer]: slot>]`, and
-  with any such fact present the What's Decisions move out of `goal` into `context:`. Measured on the aparece run of
+  with any such fact present the What's Decisions move out of `goal` into `context:`. Measured on the workspace-W1 run of
   2026-08-30: those bullets read "Out of scope: selecting an answer on the owner's behalf … every relevant ADR is
   status `proposed`", which is the opposite of the job the answers had just created, and they were the story's whole
   stated goal. `context:` is rendered in the developer prompt under `## Context (from the What stage)`, after the
@@ -4449,7 +4449,7 @@ has. So:
   that file's ADR id (`ADR-D008`, or the bare `D008`) or its `decision <n>` — a claim anyone can re-check by reading
   the two strings. **Every fact is matched against the full `[Answer]:` behind it as well as its own text**, read from
   `01-what/questions.md` by the fact's `source.q` or by the question block's footer `fact:` id. `captureAnswers`
-  builds a fact as `"<question> — <answer>"` and cuts at §2.5's cap, so on the aparece run four of six lost the very
+  builds a fact as `"<question> — <answer>"` and cuts at §2.5's cap, so on the workspace-W1 run four of six lost the very
   clause naming the ADR they settle: 2 of 6 mapped on the stored text, 6 of 6 with the answer. Both halves are
   matched, never the answer alone — a fact carrying a key its answer does not must keep matching on it — and the
   concatenation is unconditional: gating it on "the stored text hit the cap" tied the mapping to the cap's exact
@@ -4462,7 +4462,7 @@ has. So:
   anything left over — an unmapped file, an unmapped fact, or no mapping at all — it also (or only) gets the generic
   `apply every listed fact; leave a one-line note per file saying which fact changed it [src: F<n>…]`. `notes:` names
   every derived pair, every unmapped file and every unmapped fact, so a partial mapping is visible rather than implied.
-- **A document a fact settles joins `touches`, even when the What never cited it.** Measured on the aparece run of
+- **A document a fact settles joins `touches`, even when the What never cited it.** Measured on the workspace-W1 run of
   2026-08-30: F010 decided ADR-D013 and the handoff never named the file, so `touches` left it out — and the developer
   prompt says "A change outside `touches` is a plan deviation", so the run's one story could not do the thing the run
   was for; the plan's own `notes:` said "F010 settle no touched document". The search is the SAME mapping rule read
@@ -4472,7 +4472,7 @@ has. So:
   `added <path> to touches: settled by F<n> (its text mentions \`<key>\`)`, and the acceptance grep then lists it like
   any other mapped document.
 - **tldrx's own state never reaches `touches`.** A handoff cites `tldrx-work/…`, `.tldrx/…` and `.agent/…` as
-  EVIDENCE, and `touches` is built from what the handoff cites — so on the aparece run of 2026-08-30 three of thirteen
+  EVIDENCE, and `touches` is built from what the handoff cites — so on the workspace-W1 run of 2026-08-30 three of thirteen
   touched paths were `run.yml`, a triage `split.yml` and an agent bundle's `prompt.md`, handed to a sub-agent that is
   told a change outside `touches` is a plan deviation. Any path with `tldrx-work`, `.tldrx` or `.agent` as one of its
   segments is dropped, with `excluded <path> from touches: tldrx state is never story-writable` written into `notes:`.

@@ -39,7 +39,7 @@ export const KNOWLEDGE_DIRNAME = "knowledge";
  *
  * It was 64 KB PER EXPERT until wave N, which is how a nine-expert stage reached
  * a measured 83,523 B of expert block against 72,283 B of the declared inputs it
- * was actually asked to read (`~/aparece-v2`, 2026-08-29) — and, at the ceiling,
+ * was actually asked to read (workspace W1, 2026-08-29) — and, at the ceiling,
  * 576 KB from twelve experts, past the context window of the model the Watch
  * stage pins. A per-expert cap is not a cap: it scales with a number nobody set.
  *
@@ -226,7 +226,7 @@ export function truncateAtHeading(text: string, limit: number): string {
  *
  * The recap section is excluded for the same reason §2.6 stopped deriving
  * evidence from it (`knowledgeFile.ts`): measured 2026-08-29, it was 41 of 107
- * bullets in `aparece-platform` and 18 of 56 in `aparece-platform-abstractions`,
+ * bullets in `core-platform` and 18 of 56 in `core-platform-abstractions`,
  * and every one of them re-cited a source already cited above. Counting them made
  * "12 findings" mean "8 findings and 4 restatements of them", and that number is
  * what a truncation notice and a star chart are read off.

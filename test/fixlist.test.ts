@@ -947,7 +947,7 @@ describe("structured findings are stringified, never dropped (#36)", () => {
 /**
  * `Resolved: yes` is a CLAIM, and it carries its evidence or it is not one (#130).
  *
- * Measured live on 2026-09-02, run `260830-money-and-payments` (aparece-v2), the
+ * Measured live on 2026-09-02, run `260830-money-and-payments` (workspace W1), the
  * same incident as #129: `04-build/fixlist/S4-1.md` ended with **Resolved: yes**
  * and a `result.json` describing the fix in detail — while the code did not
  * contain it. The worktree holding the fix had been pruned before anything

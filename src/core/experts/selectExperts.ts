@@ -182,7 +182,7 @@ function hasExpert(root: string, name: string): boolean {
  * 1. **A repo match is only evidence in a workspace that has more than one
  *    repo.** In a single-repo workspace every domain expert shares the run's
  *    repo, so `repos:` selects everybody and selects nothing. Measured
- *    2026-08-29 on `~/aparece-v2` (`mode: single-repo`): eight of the nine
+ *    2026-08-29 on workspace W1 (`mode: single-repo`): eight of the nine
  *    experts a What prompt loaded were there by repo alone, they contributed
  *    52% of a 159,575-byte prompt, and not one of them had read a file the run
  *    cited. `workspaceRepoCount` is what decides; when a caller does not say,

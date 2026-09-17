@@ -179,7 +179,7 @@ describe("the surface a run declares", () => {
 
   /**
    * A handoff cites the run's own state as EVIDENCE — measured 13 touched paths
-   * on the aparece run of 2026-08-30, three of them `run.yml`, a `.tldrx/`
+   * on the workspace-W1 run of 2026-08-30, three of them `run.yml`, a `.tldrx/`
    * split file and a `.agent/` prompt. None of those is a boundary question.
    */
   test("tldrx's own state never reaches the surface, from either source", () => {

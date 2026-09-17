@@ -139,9 +139,10 @@ describe("stars above 3 are earned by running something (spec §2.6)", () => {
     });
   }
 
-  test("a real read-only expert file computes 3, not 5", () => {
-    // The fixture is a verbatim copy of a user's competencies.yml (2026-08-29):
-    // 15 `code` + 2 `test` rows, all from one reading session, all distinct srcs.
+  test("a read-only expert file computes 3, not 5", () => {
+    // The fixture is synthesised (#389) with the same shape as the real competencies.yml
+    // that made the case for the run gate (2026-08-29): 15 `code` + 2 `test` rows, all
+    // from one reading session, all distinct srcs.
     const path = join(FRAMEWORK_ROOT, "test", "fixtures", "competencies", "read-only-expert.yml");
     const doc = parseYaml(readFileSync(path, "utf8")) as { areas: { evidence: unknown }[] };
     const rows = readEvidenceRows(doc.areas[0]!.evidence);

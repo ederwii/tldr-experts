@@ -70,7 +70,7 @@ export const DEFAULT_FULL_TRAIN_USD = 3.0;
  * What a full training run has actually COST, end to end, on a mid model.
  *
  * Measured, not assumed: `docs/audits/2026-08-29/experts-knowledge.md` section E
- * reads two lines straight off `training.jsonl` on `aparece-platform` — $1.21
+ * reads two lines straight off `training.jsonl` on `core-platform` — $1.21
  * (platform, 15k output tokens) and $1.29 (abstractions). The top of the band is
  * the $1.60 the owner reports for full runs in #96. Every number this framework
  * quotes about the cost of training comes from here, so the figure and its

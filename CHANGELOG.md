@@ -131,8 +131,57 @@
   than decoration — fail on a NEW one, via a per-file hit-count allowlist that can only be
   lowered, never silently raised. Those citations, and the two `test/fixtures/**` families this
   same audit found are real workspace data rather than a synthetic name that merely coincides,
-  are #389's call (the owner decided 2026-09-17 to synthesize them, on its own branch) and are
-  untouched here.
+  were #389's call (the owner decided 2026-09-17 to synthesize them, on its own branch) — see
+  the next entry for that follow-through.
+- **The two `test/fixtures/**` families a real workspace's own bytes had leaked into are now
+  genuinely invented (not just a token renamed inside the same real paths and class names —
+  a first pass at this made that mistake, caught in pre-merge review), and #191's guard is a
+  blanket ban over `test/**` instead of a per-file allowlist over `src/**`/`docs/**` (see #389).**
+  `test/fixtures/competencies/read-only-expert.yml` and its paired knowledge fixture — `git mv`'d
+  again, to a name that no longer echoes the real one — were copied verbatim from a real
+  workspace, architecture and all; the `aidlc-intent` fixture tree (`ideation/feasibility`,
+  `ideation/scope-definition`) carried a real pilot's own product name, team and stack. All three
+  are now a different invented stack with invented module, file and class names throughout — a
+  token-normalised diff against the pre-#389 bytes is ~100% changed on every data-bearing line,
+  and grepping every distinctive identifier from the old files against the new ones returns zero
+  — while keeping the same shape and size class: same evidence-row counts, same claim/answer
+  counts `test/distill.test.ts` measures, same three execution-claim citations
+  `test/knowledge-value.test.ts` measures, so every test that reads them keeps asserting the same
+  behaviour against different bytes. A real absolute home-directory path in `docs/plans/v1.md` is
+  now home-relative. The 37 `src/**` and 7 `docs/**` citations #191's allowlist exempted, and 50
+  more the same audit had missed across 24 `test/**` files (evidence-comment citations and a
+  handful of test DATA — a fake root path, a fake GitHub repo slug — fed to the code under test),
+  are each rephrased to name the evidence — a workspace id, the run, the date, the figure —
+  without the workspace's own name; two of those files (`test/plan-skill.test.ts`,
+  `test/maintain-skill.test.ts`) carried their own copy of the private-workspace pattern for an
+  unrelated skill-content guard, and now import it from the one file still allowed to hold it.
+  With nothing left needing an allowlist, `test/public-surface-consistency.test.ts` drops its
+  `SRC_CITATION_COUNTS`/`DOCS_CITATION_COUNTS` maps and now refuses ANY occurrence — in file
+  CONTENT and tracked file names — across `src/**`, `docs/**`, `templates/**`, `docs-site/**`,
+  `test/**` (itself excepted, since the pattern has to live somewhere to be checked against) and
+  the unreleased CHANGELOG heading. Released CHANGELOG sections are history and stay out of the
+  guard's reach.
+- **The private-workspace guard matched one literal spelling per name, so the same four
+  workspaces kept leaking in every OTHER shape (see #389, #191).** `git grep` measured what the
+  regex could not see: a hyphenated repo slug (`<word>-api`, `<word>-platform`,
+  `<word>-platform-abstractions`, a knowledge-file name), the bare word used as an English
+  project name with no fixed noun after it ("the `<word>` run", "The `<word>` graph", "the whole
+  `<word>` sample" — an open-ended list, so disambiguated by the article "the" up to two words
+  earlier instead), the same bare word as DATA inside a `repos: [<word>]` list literal, the
+  capitalised word as a bare product name mid-sentence, and two OTHER private workspace names
+  this guard never scanned for at all — already banned for the skill markdown by
+  `test/maintain-skill.test.ts`, but leaking in `src/core/run/ship.ts` and
+  `test/ship-policy.test.ts` as a `dev/<name>` branch in a real PR citation, now `dev/W3`. A real
+  GitHub `owner/repo` remote (`test/interview.test.ts`, `test/process-answers.test.ts`, 17
+  occurrences) is now an invented `acme/billing-api`, keeping every `parseGithubRemote` shape
+  (https, ssh, scp-style, `.git` suffix, trailing slash, the negative cases) exercising the same
+  parse. Eight sub-patterns now cover all of it, engineered so the bare lowercase word — an
+  ordinary Spanish verb ("it appears") used constantly and legitimately in `docs-site/es/**` and
+  Spanish audit prose — is never matched on its own; a new false-positive control test asserts
+  two genuine Spanish sentences survive. A commit message from the previous
+  pass on this branch had leaked one such identifier itself (rewritten, since the sha had not
+  reached `main`) and carried its own review record, which is stale the moment a sha changes and
+  was dropped rather than rewritten.
 
 ## 0.34.0 — 2026-09-17
 

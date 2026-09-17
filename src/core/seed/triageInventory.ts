@@ -165,7 +165,7 @@ export function headings(text: string, level: 1 | 2): readonly string[] {
  * `Status: accepted`, `**Status:** Superseded by ADR-7`, `status : proposed`,
  * and — since wave J — `- Status: proposed — owner decision pending`.
  *
- * The leading list marker is not a nicety. Measured 2026-08-29 on `~/aparece-v2`:
+ * The leading list marker is not a nicety. Measured 2026-08-29 on workspace W1:
  * thirteen ADRs, every one of them writing its status as a bullet in the header
  * block, and the inventory reported `adrStatus: null` for all thirteen. A field
  * whose whole job is "is this document still current" answered "no idea" for the

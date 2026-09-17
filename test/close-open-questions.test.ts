@@ -4,13 +4,13 @@
  * ## The measurement that produced this file
  *
  * The issue was filed INFERRED, from the driver of run `260830-money-and-payments`
- * (aparece-v2) at close: *"D7.6 nunca recibió respuesta ni disparó su default"* —
+ * (workspace W1) at close: *"D7.6 nunca recibió respuesta ni disparó su default"* —
  * a fail-open on a money path. Three things were then measured against that run
  * and against this repo, and all three refute the mechanism the report assumes:
  *
  * 1. **`D7.6` was never a question.** The §2.7 heading grammar is
  *    `^## (Q\d{1,6}) · ` (`src/core/text/questions.ts:89`). `D7.6` is a
- *    Definition-of-Done criterion in the aparece-v2 handoff package
+ *    Definition-of-Done criterion in the workspace W1 handoff package
  *    (`docs/domain-design/docs/12-DEFINITION-OF-DONE.md:118-125`), cited as such
  *    throughout the run. The run's `questions.md` files hold exactly three blocks
  *    — `Q1`, `Q2` (`01-what`) and `Q3` (`02-how`) — and every one is

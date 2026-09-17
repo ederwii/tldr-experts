@@ -657,7 +657,7 @@ describe("the build executor picks a reopened story back up", () => {
 /**
  * A DONE story reopened for ONE NAMED DEFECT (#58, owner decision 2026-09-01).
  *
- * Measured on `260829-scoring-leaderboard` (scavtopia, 2026-09-01). S11's
+ * Measured on `260829-scoring-leaderboard` (workspace W2, 2026-09-01). S11's
  * adversarial review found a real defect — `linkEmail` succeeds, `setDisplayName`
  * fails, the account is permanently linked and the score is never claimable, and
  * every retry fails the same way. It was accepted, small and well understood. The

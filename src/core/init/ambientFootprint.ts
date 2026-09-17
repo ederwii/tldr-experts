@@ -50,7 +50,7 @@ export const GITIGNORE_IGNORES = [
   //
   // `**` and not `*`: the depth these appear at is wherever the framework happens
   // to save a yaml file, and the patterns that named one level missed
-  // `tldrx-work/<run>/04-build/preflight.yml.bak` — measured on aparece-v2
+  // `tldrx-work/<run>/04-build/preflight.yml.bak` — measured on workspace W1
   // 2026-09-02, where `git check-ignore` matched it against the block's OWN
   // `!tldrx-work/**` re-include and it was swept into a rescue commit (gh #102).
   "tldrx-work/**/*.bak",

@@ -109,7 +109,7 @@ export interface SelectOptions {
    * they are a HARD boundary: a file outside them is never scored and never
    * inlined, however well it greps.
    *
-   * The alternative was measured. On `~/aparece-v2` the grep alone put 29-55% of
+   * The alternative was measured. On workspace W1 the grep alone put 29-55% of
    * each expert's citations outside its own declared domain — knowledge filed
    * under the wrong name, written at full price, and then warned about on the way
    * back in (`knowledgeFile.ts`, `outside domain`). Bounding the INPUT is cheaper

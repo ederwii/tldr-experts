@@ -108,7 +108,7 @@ afterEach(() => {
 });
 
 /**
- * The aparece seed, to scale.
+ * The workspace-W1 seed, to scale.
  *
  * Thirteen documents totalling 72,787 B, the last of them a 5,863-byte ADR — the
  * exact shape that the old 64 KB seed budget dropped whole on 2026-08-29 while

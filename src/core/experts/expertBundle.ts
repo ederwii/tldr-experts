@@ -114,7 +114,7 @@ export interface LoadBundlesInput extends SelectExpertsInput {
  *
  * An expert with a relevance score of zero — nothing it declares intersects
  * anything this stage cites — gets NO knowledge at all, only its `expert.md`
- * body. That is the measured problem this exists for: on `~/aparece-v2`, eight of
+ * body. That is the measured problem this exists for: on workspace W1, eight of
  * nine experts loaded because they shared a repo with the run, and 52% of a
  * 159,575-byte prompt was their knowledge.
  */

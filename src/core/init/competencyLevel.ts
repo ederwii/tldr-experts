@@ -28,7 +28,7 @@
  * Tuesday; it fades. One continuous factor, floored at 0.25 so a year-old reading
  * is worth a quarter of a fresh one rather than nothing, replaces both.
  *
- * **Why a `run` row is required above 3.** Measured 2026-08-29: `aparece-api`
+ * **Why a `run` row is required above 3.** Measured 2026-08-29: `ledger-api`
  * held 15 `code` + 2 `test` rows, all written the same afternoon by one reading
  * session, and computed 5/5 — the top of the ladder for an expert that had never
  * executed a single command in the repo it claimed to know. Reading is evidence

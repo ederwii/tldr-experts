@@ -790,7 +790,7 @@ export interface PathCommit {
  * checkout that is not its own: the run's close, in the operator's live tree
  * (gh #102). `commitAll`'s `git add -A` would sweep whatever the operator had in
  * flight into the framework's commit, which is exactly the move that turned a
- * refused pull into a divergent fork on aparece-v2.
+ * refused pull into a divergent fork on workspace W1.
  *
  * Two git behaviours carry it, both MEASURED rather than assumed (2026-09-02):
  *

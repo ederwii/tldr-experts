@@ -7,11 +7,12 @@
  * outside the expert's own domain, and a ladder that rewarded breadth of files
  * over depth of finding.
  *
- * The corpus is real. `test/fixtures/knowledge/aparece-api-header.md` is the
- * verbatim first 18 lines of a knowledge file a real training run wrote, header
- * and all, and the first thing asserted below is that this framework now refuses
- * it. A rule written against invented input is a rule that has never met the
- * failure it exists for.
+ * The rule was cut against a real corpus. `test/fixtures/knowledge/ledger-api-header.md`
+ * (#389: synthesised, same shape — same three execution claims, same citation structure
+ * as the verbatim header a real training run once wrote) is the first thing asserted
+ * below to be refused. A rule written against invented input is a rule that has never
+ * met the failure it exists for — this fixture is what stood in for that failure when
+ * the rule was written, and now stands in for it again without the workspace's own bytes.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -125,17 +126,18 @@ function messages(issues: readonly { readonly message: string }[]): string {
 // --- O1: a citation must sustain the claim ----------------------------------
 
 describe("an execution claim needs a command, not a file line", () => {
-  const REAL_HEADER = readFileSync(
-    join(FRAMEWORK_ROOT, "test", "fixtures", "knowledge", "aparece-api-header.md"),
+  const EXECUTION_CLAIM_HEADER = readFileSync(
+    join(FRAMEWORK_ROOT, "test", "fixtures", "knowledge", "ledger-api-header.md"),
     "utf8",
   );
 
-  test("the REAL aparece-api header is refused — three claims, three declarations cited", () => {
-    // Verbatim from a knowledge file a real `tldrx expert train` wrote. It asserts
-    // `dotnet build` exit 0 citing workspace.yml:19, which is the line that
-    // DECLARES `build: dotnet build`, and "78/78 passed, exit 0" citing a line of
-    // the test script. Every citation resolves; none of them is evidence anything ran.
-    const issues = proseExecutionIssues(REAL_HEADER);
+  test("the ledger-api header is refused — three claims, three declarations cited", () => {
+    // Synthesised for #389, same shape as the knowledge file a real `tldrx expert
+    // train` once wrote. It asserts `pytest` exit 0 citing workspace.yml:19, which
+    // is the line that DECLARES the build command, and "78/78 passed, exit 0"
+    // citing a line of the test script. Every citation resolves; none of them is
+    // evidence anything ran.
+    const issues = proseExecutionIssues(EXECUTION_CLAIM_HEADER);
     expect(issues).toHaveLength(3);
     for (const issue of issues) {
       expect(issue.severity).toBe("error");
@@ -147,7 +149,7 @@ describe("an execution claim needs a command, not a file line", () => {
 
   test("the same header inside a knowledge file rejects the file whole", () => {
     const ws = workspace();
-    const parsed = parseKnowledgeFile(`${REAL_HEADER}\n${knowledgeMd()}`, ctxOf(ws), LIGHT_SHAPE);
+    const parsed = parseKnowledgeFile(`${EXECUTION_CLAIM_HEADER}\n${knowledgeMd()}`, ctxOf(ws), LIGHT_SHAPE);
     expect(parsed.ok).toBe(false);
     expect(messages(parsed.issues)).toContain(EXECUTION_CLAIM_REFUSAL);
   });
@@ -184,10 +186,10 @@ describe("an execution claim needs a command, not a file line", () => {
   });
 
   test("the corpus's OTHER spelling of the label — `*measured* —` — is a label too", () => {
-    // All 56 bullets of the real `aparece-platform-abstractions.md` are written
+    // All 56 bullets of the real `core-platform-abstractions.md` are written
     // `- *measured* — <claim> [src: …]`, and 38 of them were refused by the first
     // cut of this rule for obeying §2.3's "say which of measured/inferred/assumed".
-    const leading = "- *measured* — The assembly depends on nothing else in Aparece [src: a:b.cs:1]";
+    const leading = "- *measured* — The assembly depends on nothing else in CorePlatform [src: a:b.cs:1]";
     expect(executionClaim(claimText(leading, "[src: a:b.cs:1]"))).toBeNull();
     expect(confidenceOf(leading, "[src: a:b.cs:1]")).toBe("measured");
     // …including the qualified form the same file uses once.
@@ -359,7 +361,7 @@ describe("an expert speaks for its declared `## Domain` and nothing else", () =>
 
   /**
    * gh #94(f). The owner's `## Domain` bullets were WORKSPACE-relative
-   * (`Scavtopia.Workflows/src/…`) while citations arrive repo-relative, so all 13
+   * (`W2.Workflows/src/…`) while citations arrive repo-relative, so all 13
    * of a $2.10 training's code citations earned zero evidence — and the warning
    * pointed at a different EXPERT, which reads as exclusivity, instead of at the
    * one-segment spelling mistake that was actually there.

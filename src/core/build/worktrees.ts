@@ -556,7 +556,7 @@ export interface RescueParts {
  *
  * The invariant, and it has no exceptions in it: **the framework never deletes a
  * worktree holding changes that reached no ref.** Measured live 2026-09-02 on
- * run `260830-money-and-payments` (aparece-v2) — a story's DoD failed, the
+ * run `260830-money-and-payments` (workspace W1) — a story's DoD failed, the
  * executor settled it `blocked`, and `git worktree remove --force` took the
  * developer's uncommitted fix with it. The work was gone: no branch, no stash,
  * no reflog, nothing to `git show`. `blocked` is precisely the state a human is

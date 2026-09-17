@@ -11,7 +11,7 @@
  * **Order is a cost decision, not a layout one (wave N).** A prompt cache keys on
  * the longest PREFIX two calls share: a cache write is billed at 1.25x an input
  * token and a cache read at 0.1x, so whatever is stable belongs at the front and
- * whatever changes belongs at the back. Measured 2026-08-29 on `~/aparece-v2`,
+ * whatever changes belongs at the back. Measured 2026-08-29 on workspace W1,
  * the What prompt was 159,575 B of which 52% was expert bodies + trained
  * knowledge — the most stable material in the document — and it was emitted LAST,
  * behind 45% of declared inputs that change at every stage. So the order is now:

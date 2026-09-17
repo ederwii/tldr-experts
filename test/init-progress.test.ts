@@ -44,7 +44,7 @@ function recorder(): Recorder {
 
 function steps(out: Recorder, overrides: Partial<StepOptions> = {}) {
   return startSteps({
-    root: "/work/scavtopia",
+    root: "/work/meridian",
     isTty: false,
     cols: 100,
     rows: 40,
@@ -84,11 +84,11 @@ describe("the palette", () => {
 
 describe("the campus banner", () => {
   test("it is a schoolhouse, and without colour it is eight plain rows", () => {
-    const rows = renderCampus({ root: "/work/scavtopia", palette: palette(false), cols: 100 });
+    const rows = renderCampus({ root: "/work/meridian", palette: palette(false), cols: 100 });
     expect(rows).toHaveLength(8);
     expect(rows.join("\n")).not.toContain("\x1b");
     expect(rows[1]).toContain("t l d r x   i n i t");
-    expect(rows[5]).toContain("/work/scavtopia");
+    expect(rows[5]).toContain("/work/meridian");
     // The drawing itself, so a careless edit to the ASCII is a failing test.
     expect(rows.map((row) => stripAnsi(row).slice(0, 17))).toEqual([
       "       .-.",
@@ -103,16 +103,16 @@ describe("the campus banner", () => {
   });
 
   test("colour changes the escapes, never the drawing", () => {
-    const plain = renderCampus({ root: "/work/scavtopia", palette: palette(false), cols: 100 });
-    const colour = renderCampus({ root: "/work/scavtopia", palette: palette(true), cols: 100 });
+    const plain = renderCampus({ root: "/work/meridian", palette: palette(false), cols: 100 });
+    const colour = renderCampus({ root: "/work/meridian", palette: palette(true), cols: 100 });
     expect(colour.join("\n")).toContain("\x1b[");
     expect(colour.map((row) => stripAnsi(row).trimEnd())).toEqual(plain.map((row) => row.trimEnd()));
   });
 
   test("a long root is clipped from the left, so the tail stays readable", () => {
-    const rows = renderCampus({ root: `/very/long/${"x".repeat(200)}/scavtopia`, palette: palette(false), cols: 60 });
+    const rows = renderCampus({ root: `/very/long/${"x".repeat(200)}/meridian`, palette: palette(false), cols: 60 });
     expect(rows[5]?.length).toBeLessThanOrEqual(60);
-    expect(rows[5]).toContain("scavtopia");
+    expect(rows[5]).toContain("meridian");
   });
 });
 
@@ -155,10 +155,10 @@ describe("the step reporter", () => {
   test("a failed step is marked, and the list keeps going", () => {
     const out = recorder();
     const view = steps(out);
-    view.begin("detecting repos").fail("no git repo at /work/scavtopia");
+    view.begin("detecting repos").fail("no git repo at /work/meridian");
     view.begin("writing .tldrx/workspace.yml").done(".tldrx/workspace.yml");
     view.stop();
-    expect(out.lines[1]).toBe("  ✗ no git repo at /work/scavtopia");
+    expect(out.lines[1]).toBe("  ✗ no git repo at /work/meridian");
   });
 
   test("a step left open by a throwing caller is closed, not leaked into the next one", () => {
@@ -180,7 +180,7 @@ describe("the step reporter", () => {
     let beat: (() => void) | null = null;
     let clock = 0;
     const view = startSteps({
-      root: "/work/scavtopia", isTty: false, cols: 100, rows: 40, env: {},
+      root: "/work/meridian", isTty: false, cols: 100, rows: 40, env: {},
       write: out.write,
       now: () => clock,
       schedule: (fn) => { beat = fn; return null; },
@@ -216,7 +216,7 @@ describe("the step reporter", () => {
     let beat: (() => void) | null = null;
     let clock = 0;
     const view = startSteps({
-      root: "/work/scavtopia", isTty: false, cols: 100, rows: 40, env: {},
+      root: "/work/meridian", isTty: false, cols: 100, rows: 40, env: {},
       write: out.write,
       now: () => clock,
       schedule: (fn) => { beat = fn; return null; },
@@ -240,7 +240,7 @@ describe("the step reporter", () => {
     const view = steps(out, { isTty: true, flag: "compact" });
     expect(view.mode).toBe("compact");
     const step = view.begin("building the code map");
-    step.tick("scavtopia-workflows…");
+    step.tick("meridian-workflows…");
     step.done("31 map documents via graphify");
     view.stop();
 
@@ -301,7 +301,7 @@ describe("the step reporter", () => {
 
 describe("`--quiet` and `--ui` on the command line", () => {
   test("--quiet installs a reporter that renders nothing", () => {
-    const options = parseInitArgs(["--quiet", "--root", "/work/scavtopia"]);
+    const options = parseInitArgs(["--quiet", "--root", "/work/meridian"]);
     expect(options.quiet).toBe(true);
     expect(startInitSteps(options).active).toBe(false);
   });

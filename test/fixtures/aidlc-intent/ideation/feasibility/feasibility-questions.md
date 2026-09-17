@@ -2,10 +2,10 @@
 
 ## Sources
 
-- [desc] Initial description: "Build the Scavtopia Scoring & Leaderboard System. The product brief is at \"aidlc-seeds/Scavtopia Scoring & Leaderboard System.md\" in this workspace — read it first and treat it as the seed for this workflow."
+- [desc] Initial description: "Build the Trailquest Scoring & Leaderboard System. The product brief is at \"aidlc-seeds/Trailquest Scoring & Leaderboard System.md\" in this workspace — read it first and treat it as the seed for this workflow."
 - [scope] Workflow-selected scope: `feature`.
 
-> Grounded in the existing Scavtopia stack (per the repo's root CLAUDE.md): .NET 10 backend on Azure, PostgreSQL 16, Azure App Insights, mobile on Firebase auth, Lab on Auth0. This feature is built into that existing product. Consumed context: intent statement + market research (`../intent-capture/`, `../market-research/`).
+> Grounded in the existing Trailquest stack (per the repo's root CLAUDE.md): Node 22 backend on Fly.io, PostgreSQL 16, Fly Metrics, mobile on Supabase auth, Lab on Okta. This feature is built into that existing product. Consumed context: intent statement + market research (`../intent-capture/`, `../market-research/`).
 
 ## Q1. Which existing hunt events can the scoring engine draw from, and what's missing?
 
@@ -20,7 +20,7 @@ Scoring needs: target found, hint tier (highest hint revealed), share (per targe
 
 ## Q2. Confirm the technical approach: build into the existing backend?
 
-- A. Yes — add scoring as new domain entities + a score event table + leaderboard queries inside the existing .NET/Clean-Architecture backend and PostgreSQL; no new service or datastore. (Matches the build-in-house call.)
+- A. Yes — add scoring as new domain entities + a score event table + leaderboard queries inside the existing Node/Clean-Architecture backend and PostgreSQL; no new service or datastore. (Matches the build-in-house call.)
 - B. Yes to in-house, but leaderboard reads may need a cache (e.g. Redis/sorted sets) if query load is high — flag for NFR/design.
 - C. Not yet decided — evaluate in domain/NFR design.
 - X. Other (please specify)
@@ -29,10 +29,10 @@ Scoring needs: target found, hint tier (highest hint revealed), share (per targe
 
 ## Q3. How does the account-at-finish claim flow work, given existing auth?
 
-The brief specifies display name + email + magic link (passwordless), score held locally and posted on account creation within a window. Mobile currently uses Firebase (anonymous); Lab uses Auth0.
+The brief specifies display name + email + magic link (passwordless), score held locally and posted on account creation within a window. Mobile currently uses Supabase (anonymous); Lab uses Okta.
 
-- A. Reuse Firebase — upgrade the anonymous mobile user to an email/passwordless (magic-link) Firebase account at the finish line; score posts on link completion. No new auth system.
-- B. Introduce a dedicated magic-link flow separate from Firebase/Auth0.
+- A. Reuse Supabase — upgrade the anonymous mobile user to an email/passwordless (magic-link) Supabase account at the finish line; score posts on link completion. No new auth system.
+- B. Introduce a dedicated magic-link flow separate from Supabase/Okta.
 - C. Not sure — flag auth-integration approach for design; treat as a known feasibility risk.
 - X. Other (please specify)
 

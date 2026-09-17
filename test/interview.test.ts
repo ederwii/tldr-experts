@@ -319,7 +319,7 @@ describe("tldrx interview --init · process.yml", () => {
     const root = initWorkspace();
     for (const argv of [
       ["init", "-q"],
-      ["remote", "add", "origin", "git@github.com:ederwii/aparece-api.git"],
+      ["remote", "add", "origin", "git@github.com:acme/billing-api.git"],
     ]) {
       const git = Bun.spawn(["git", ...argv], { cwd: root, stdout: "pipe", stderr: "pipe" });
       expect(await git.exited).toBe(0);
@@ -329,10 +329,10 @@ describe("tldrx interview --init · process.yml", () => {
     const run = await tldrx(root, ["interview", "--init"], stdin);
     expect(run.stderr).toBe("");
     expect(run.code).toBe(EXIT_OK);
-    expect(run.stdout).toContain("process.yml: methodology=kanban, ticket_tool=github (ederwii/aparece-api)");
+    expect(run.stdout).toContain("process.yml: methodology=kanban, ticket_tool=github (acme/billing-api)");
 
     // The file the ticket mirror reads now says what the human said.
-    expect(readTicketToolConfig(root)).toMatchObject({ kind: "github", project: "ederwii/aparece-api" });
+    expect(readTicketToolConfig(root)).toMatchObject({ kind: "github", project: "acme/billing-api" });
     const text = readFileSync(join(root, ".tldrx", "process.yml"), "utf8");
     expect(text).toContain("methodology: kanban");
     expect(text.startsWith(PROCESS_HEADER)).toBe(true);

@@ -23,7 +23,7 @@
  * this, nothing committed them, so they sat dirty for the length of the run and
  * any commit of the same paths arriving from anywhere else met a dirty tree.
  *
- * Measured on aparece-v2 (run `260830-ordering-inventory`, 2026-09-02): the run
+ * Measured on workspace W1 (run `260830-ordering-inventory`, 2026-09-02): the run
  * closed at 14:14:00Z; ninety-two seconds later the operator's agent — filling a
  * gap the framework had left — committed a snapshot of the whole live tree onto
  * `epic/ordering-inventory`; PR #10 merged it; the operator's `git pull` was
@@ -252,7 +252,7 @@ export async function commitRunState(
     message(runId, reason),
     paths,
     // Belt as well as braces: `init` gitignores these, but a workspace whose
-    // managed block predates that (aparece-v2's did) would otherwise have the
+    // managed block predates that (workspace W1's did) would otherwise have the
     // close commit the backups of the very files it is committing. This is the
     // seam that reaches EXISTING workspaces, which get the widened ignore only on
     // their next `tldrx init`.

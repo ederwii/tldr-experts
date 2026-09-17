@@ -3,7 +3,7 @@
  *
  * ## What was measured, on a real repo
  *
- * `aparece-v2`, run `260830-ordering-inventory`, 2026-09-02. The run closed at
+ * workspace W1, run `260830-ordering-inventory`, 2026-09-02. The run closed at
  * `14:14:00Z` (`events.jsonl`, `type: run.closed`). Ninety-two seconds later,
  * commit `37e9736` — "tldrx: run 260830-ordering-inventory closed — 7/7 stories,
  * epic ready for review", authored by the operator's agent, NOT by tldrx — put a
@@ -131,7 +131,7 @@ function publish(ws: BuildWorkspace): string {
 /**
  * The commit the operator's agent made, faithfully: a checkout of the epic branch,
  * the LIVE state copied over it, committed there. Made AFTER the run closed, which
- * is when it happened on aparece-v2 (92 s after `run.closed`).
+ * is when it happened on workspace W1 (92 s after `run.closed`).
  */
 function snapshotStateOntoEpic(ws: BuildWorkspace, branch: string, message: string): void {
   const tree = mkdtempSync(join(tmpdir(), "tldrx-epic-"));
@@ -168,7 +168,7 @@ describe("1. a closed run's epic merges without breaking the operator's pull", (
    *
    * Every step is the real one: a real Build (the fake `claude` is the only stand-in),
    * a real `approve` that closes the run, the agent's snapshot commit made exactly
-   * where it was made on aparece-v2, a real merge on a real remote, and a real pull.
+   * where it was made on workspace W1, a real merge on a real remote, and a real pull.
    *
    * RED before the fix: the pull is refused, because the run's state sits modified
    * and untracked in the operator's tree while the same paths arrive in the merge.
@@ -199,7 +199,7 @@ describe("1. a closed run's epic merges without breaking the operator's pull", (
    * The state the run wrote is committed by the close, in the operator's checkout,
    * on the branch that checkout is on — not on the epic, and not left for the
    * operator to sweep up with `git add .` on a stale base (which is what turned the
-   * refused pull into a divergent-branches fork on aparece-v2).
+   * refused pull into a divergent-branches fork on workspace W1).
    */
   test("the close commits the run's own state in the operator's checkout, and nothing else", async () => {
     const ws = workspace(TWO_STORIES);
@@ -318,7 +318,7 @@ describe("2. `tldrx ship` will not open a PR for an epic carrying the framework'
 
 describe("3. every `*.bak` tldrx writes is gitignored", () => {
   /**
-   * Measured on aparece-v2, 2026-09-02: `run.yml.bak`, `budget.yml.bak`,
+   * Measured on workspace W1, 2026-09-02: `run.yml.bak`, `budget.yml.bak`,
    * `facts.yml.bak` and `preflight.yml.bak` sat untracked and were swept into the
    * operator's rescue commit. `preflight.yml.bak` is the one the shipped patterns
    * miss — it lives at `tldrx-work/<run>/04-build/preflight.yml.bak`, one level
@@ -352,7 +352,7 @@ describe("3. every `*.bak` tldrx writes is gitignored", () => {
    * The seam for workspaces that already exist.
    *
    * A widened `init` block only reaches a workspace that re-runs `tldrx init`, and
-   * aparece-v2's block predates it — so the close excludes `*.bak` in its own
+   * workspace W1's block predates it — so the close excludes `*.bak` in its own
    * pathspec, whatever the repo's `.gitignore` says. Asserted against a repo with
    * NO tldrx ignores at all, which is the case that would otherwise commit them.
    *
