@@ -136,6 +136,122 @@ describe("M1 · fact sources are looked up in facts.yml", () => {
   });
 });
 
+/**
+ * `was_id` (gh #338) — the owner's decision (2026-09-17) was an ADDITIVE alias,
+ * never a rewrite: a fact's `id` stays immutable, and a citation of the id it
+ * used to carry keeps resolving through the fact that now carries it.
+ */
+describe("M1 · was_id aliases an old id after a renumber (#338)", () => {
+  test("citing the old id resolves to the fact that carries it as was_id", () => {
+    write(probe.root, ".tldrx/memory/facts.yml", `version: 1
+facts:
+  - id: F021
+    was_id: F019
+    fact: "Backend deploys run via deploy.yml."
+    area: deploy
+    repos: [api]
+    kind: answer
+    confidence: measured
+    source: {who: alan, when: "2026-08-14T10:11:00Z", run: 260814-envs, q: Q1}
+    supersedes: null
+    superseded_by: null
+    retired: null
+`);
+    clearSrcCaches();
+    expect(resolve("F019")).toMatchObject({ ok: true, outcome: "ok" });
+  });
+
+  test("an id that is itself a live fact is NEVER silently shadowed by another fact's was_id alias — refused, naming both (pre-merge review finding)", () => {
+    // F019 here is its OWN live fact — not a renamed-away id. F021 is a
+    // DIFFERENT, unrelated fact that happens to carry `was_id: F019` (the
+    // exact state `validateFactsFile` refuses at write time: "was_id F019
+    // collides with a live fact id"). `readFacts` never validates, so a
+    // hand-edited or merged facts.yml can carry this invalid state anyway —
+    // the resolver must not pick a side. Citing F019 must REFUSE, naming both
+    // the live holder (F019 itself) and the was_id carrier (F021), never
+    // silently resolve to F021 as `ok`.
+    write(probe.root, ".tldrx/memory/facts.yml", `version: 1
+facts:
+  - id: F019
+    fact: "A brand new, unrelated fact that later reused the number 019."
+    area: deploy
+    repos: [api]
+    kind: answer
+    confidence: measured
+    source: {who: alan, when: "2026-09-01T00:00:00Z", run: 260901-x, q: Q9}
+    supersedes: null
+    superseded_by: null
+    retired: null
+  - id: F021
+    was_id: F019
+    fact: "Backend deploys run via deploy.yml."
+    area: deploy
+    repos: [api]
+    kind: answer
+    confidence: measured
+    source: {who: alan, when: "2026-08-14T10:11:00Z", run: 260814-envs, q: Q1}
+    supersedes: null
+    superseded_by: null
+    retired: null
+`);
+    clearSrcCaches();
+    expect(resolve("F019")).toMatchObject({
+      ok: false,
+      outcome: "refused",
+      message: expect.stringContaining("F019"),
+    });
+    expect(resolve("F019")).toMatchObject({
+      message: expect.stringContaining("F021"),
+    });
+  });
+
+  test("an id fully vacated by a renumber (no live row of its own) still resolves through its alias to a retired fact, and reports RETIRED", () => {
+    // Unlike the shadowing case above, F019 here has NO row of its own at
+    // all — the ordinary renumber shape. F021 (was_id: F019) is the fact it
+    // became, and it is now retired. Precedence is unchanged for this shape:
+    // no live holder of `id` means the alias still resolves, and the
+    // resolution reflects the ALIAS TARGET's own state.
+    write(probe.root, ".tldrx/memory/facts.yml", `version: 1
+facts:
+  - id: F021
+    was_id: F019
+    fact: "Backend deploys run via deploy.yml."
+    area: deploy
+    repos: [api]
+    kind: answer
+    confidence: measured
+    source: {who: alan, when: "2026-08-14T10:11:00Z", run: 260814-envs, q: Q1}
+    supersedes: null
+    superseded_by: null
+    retired: {at: "2026-09-10T00:00:00Z", by: alan, reason: "no longer applies"}
+`);
+    clearSrcCaches();
+    expect(resolve("F019")).toMatchObject({
+      ok: false,
+      outcome: "refused",
+      message: expect.stringContaining("RETIRED"),
+    });
+  });
+
+  test("a retired id with no was_id alias pointing at it is refused BY NAME, same as any unknown fact", () => {
+    // Default beforeEach fixture: no was_id anywhere, F999 was never anyone's
+    // own id and nothing aliases it.
+    expect(resolve("F999")).toMatchObject({
+      ok: false,
+      outcome: "refused",
+      message: expect.stringContaining("no such fact F999"),
+    });
+  });
+
+  test("a facts.yml with no was_id anywhere reads and resolves exactly as before", () => {
+    // Guard: the default fixture (F019 live, F020 retired) never uses was_id.
+    expect(resolve("F019")).toMatchObject({ ok: true, outcome: "ok" });
+    expect(resolve("F020")).toMatchObject({
+      ok: false, outcome: "refused", message: expect.stringContaining("RETIRED"),
+    });
+  });
+});
+
 describe("M1 · answer sources must be a question this run asked", () => {
   test("a declared question resolves, from any phase of the run", () => {
     expect(resolve("Q4")).toMatchObject({ ok: true, outcome: "ok" });

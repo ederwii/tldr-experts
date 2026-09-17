@@ -991,10 +991,30 @@ function resolveFact(id: string, ctx: SrcContext): SrcResolution {
   if (facts === null) {
     return unverified(`no ${PROJECT_FRAMEWORK_DIR}/memory/facts.yml to check ${id} against`);
   }
-  if (facts.retired.has(id)) {
-    return refused(`${id} is RETIRED in facts.yml — a retired fact is not evidence`);
+  // gh #338: an old id a fact's `was_id` claims as its alias resolves to THAT
+  // fact — but only when `id` has no live row of its own. `validateFactsFile`
+  // refuses a `was_id` that collides with a LIVE fact id at write time, but
+  // `readFacts` never validates (a hand-edited or merged facts.yml reaches
+  // this resolver unchecked), so the same collision can arrive here — and the
+  // fix for pre-review #338 (silently preferring the alias over `id`'s own
+  // live row) was itself the defect: it let a live fact be shadowed by
+  // whatever else claimed its id as a `was_id`, with no visible sign anything
+  // was wrong. A fact with no `was_id` field (every row on disk before this
+  // existed) has no entry in `aliases`, so a citation with no alias in play
+  // falls straight through to the checks below exactly as it always did.
+  const aliasTarget = facts.aliases.get(id);
+  if (aliasTarget !== undefined && facts.live.has(id)) {
+    return refused(
+      `${id} is ambiguous in facts.yml — it is a live fact AND the was_id alias ${aliasTarget} claims ` +
+        `(invalid: same as validateFactsFile's \`was_id ${id} collides with a live fact id\`)`,
+    );
   }
-  if (!facts.live.has(id)) {
+  const resolvedId = aliasTarget ?? id;
+  if (facts.retired.has(resolvedId)) {
+    const cite = aliasTarget !== undefined ? `${id} (now ${resolvedId})` : id;
+    return refused(`${cite} is RETIRED in facts.yml — a retired fact is not evidence`);
+  }
+  if (!facts.live.has(resolvedId)) {
     const known = facts.live.size === 0 ? "it has no live facts" : `it has ${String(facts.live.size)} live fact(s)`;
     return refused(`no such fact ${id} in ${PROJECT_FRAMEWORK_DIR}/memory/facts.yml — ${known}`);
   }
@@ -1537,6 +1557,12 @@ function epicRefLabels(ref: SrcRef & { readonly kind: "file" }, ctx: SrcContext)
 interface FactIndex {
   readonly live: ReadonlySet<string>;
   readonly retired: ReadonlySet<string>;
+  /**
+   * `was_id` alias -> the fact's own (current) id (gh #338). A citation of a
+   * renamed fact's OLD id resolves through here to the fact it is now, rather
+   * than through `live`/`retired` under the old name.
+   */
+  readonly aliases: ReadonlyMap<string, string>;
 }
 
 const factsCache = new Map<string, FactIndex | null>();
@@ -1562,10 +1588,11 @@ function readFacts(path: string): FactIndex | null {
   if (!existsSync(path)) return null;
   const live = new Set<string>();
   const retired = new Set<string>();
+  const aliases = new Map<string, string>();
   try {
     const doc = parseYaml(readFileSync(path, "utf8"));
     const rows = (doc as { facts?: unknown } | null)?.facts;
-    if (!Array.isArray(rows)) return { live, retired };
+    if (!Array.isArray(rows)) return { live, retired, aliases };
     for (const row of rows as Record<string, unknown>[]) {
       const id = typeof row?.id === "string" ? row.id : null;
       if (id === null) continue;
@@ -1575,12 +1602,19 @@ function readFacts(path: string): FactIndex | null {
         (gone as { at?: unknown }).at !== null && (gone as { at?: unknown }).at !== undefined;
       if (isGone) retired.add(id);
       else live.add(id);
+      // gh #338: additive and optional — a row written before `was_id` existed
+      // has none, and `readFacts` still returns the same `live`/`retired` it
+      // always did. On a collision (two facts claiming the same alias, which
+      // `validateFactsFile` refuses at write time) the LAST row wins; that is
+      // this index's own tie-break, not a promise about which fact is "right".
+      const wasId = typeof row.was_id === "string" ? row.was_id : null;
+      if (wasId !== null) aliases.set(wasId, id);
     }
   } catch {
     // An unreadable facts.yml is "cannot check", not "check failed".
     return null;
   }
-  return { live, retired };
+  return { live, retired, aliases };
 }
 
 /** Every `## Q<n>` heading in every `questions.md` under the run, any phase. */

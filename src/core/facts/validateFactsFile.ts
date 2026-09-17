@@ -153,6 +153,35 @@ export function validateFactsFile(input: unknown): ValidationResult {
     }
   });
 
+  // gh #338: `was_id` aliases an old id after a renumber (owner decision,
+  // 2026-09-17: additive alias, no rename event, no documentation-only rule).
+  // A `was_id` must be a citable shape, must not equal a LIVE id in this file
+  // (that would leave one bare id ambiguous between the fact that owns it and
+  // the fact claiming it as an alias), and must not be claimed by more than
+  // one fact (an alias with two owners could resolve either way).
+  const wasIdOwners = new Map<string, string>();
+  for (const [id, row] of byId) {
+    const wasId = row.was_id;
+    if (wasId === undefined) continue;
+    if (typeof wasId !== "string" || !ID_RE.test(wasId)) {
+      issues.push({ path: `facts.${id}.was_id`, message: `was_id must match ${readableSource(ID_RE)} or be absent` });
+      continue;
+    }
+    const owner = byId.get(wasId);
+    if (owner !== undefined) {
+      const ownerRetired = isRecord(owner.retired) && owner.retired.at !== null && owner.retired.at !== undefined;
+      if (!ownerRetired) {
+        issues.push({ path: `facts.${id}.was_id`, message: `was_id ${wasId} collides with a live fact id` });
+      }
+    }
+    const existingOwner = wasIdOwners.get(wasId);
+    if (existingOwner !== undefined) {
+      issues.push({ path: `facts.${id}.was_id`, message: `was_id ${wasId} is already claimed by ${existingOwner}` });
+    } else {
+      wasIdOwners.set(wasId, id);
+    }
+  }
+
   // Reciprocity: F007.superseded_by = F019 <=> F019.supersedes = F007.
   for (const [id, row] of byId) {
     const forward = row.superseded_by;

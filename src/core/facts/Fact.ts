@@ -55,6 +55,21 @@ export interface FactRetirement {
 
 export interface Fact {
   readonly id: string;
+  /**
+   * The id this fact was cited under before an id-change, if any (gh #338).
+   *
+   * ADDITIVE and optional, §7's "version-1 formats only grow": `id` stays
+   * IMMUTABLE — nothing ever rewrites a fact's own `id` — so when a fact's id
+   * must change, the OLD id becomes an alias on the row that replaces it rather
+   * than a value that silently stops meaning what it used to. There is no
+   * rename event on the ledger and no bare documentation-only rule: the alias
+   * IS the record (owner decision, 2026-09-17, gh #338). `[src: <was_id>]`
+   * keeps resolving through `resolveFact` (`src/core/text/srcToken.ts`) to
+   * exactly this fact, never silently to a different fact that later reuses
+   * the old id number as its own. Absent means "never renumbered", never
+   * "cannot have been".
+   */
+  readonly was_id?: string;
   readonly fact: string;
   readonly area: string;
   readonly repos: readonly string[];

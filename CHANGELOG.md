@@ -43,6 +43,22 @@
   caller still applying its own banned-character set (the gate's fifteen, spec §2.1's five)
   unchanged.
 
+### Added
+
+- **A fact can carry a `was_id` alias to the id it was cited under before an id-change (see
+  #338).** `id` stays immutable (§7: nothing ever rewrites a fact's own `id`), so an owner
+  decision (2026-09-17) settled how a fact's id is ever allowed to change: additively, never by
+  rewriting or a bare documentation-only rule. `[src: <was_id>]` now resolves through
+  `resolveFact` to the fact that carries the alias — but only when the cited id has no live row
+  of its own, so an old citation written before a renumber still resolves once its old id is
+  fully vacated. A cited id that is ITSELF a live fact is never silently shadowed by another
+  fact's `was_id`: `resolveFact` refuses, naming both the live holder and the `was_id` carrier,
+  because `readFacts` never validates and a hand-edited or merged facts.yml can carry exactly
+  the collision `validateFactsFile` refuses at write time. `validateFactsFile` itself refuses a
+  `was_id` that collides with another live fact id or is claimed by more than one fact. The
+  field is optional and additive: a facts.yml with no `was_id` anywhere reads and resolves
+  exactly as before.
+
 ## 0.34.0 — 2026-09-17
 
 ### Fixed
