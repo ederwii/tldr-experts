@@ -22,7 +22,7 @@ import {
   EFFORT_LEVELS, isEffortLevel, MAX_PRECONDITIONS, PRECONDITION_TIMEOUT_S, type EffortLevel,
 } from "../schemas/stage.ts";
 import { allowlistIssue } from "../schemas/commandAllowlist.ts";
-import { readStageTuning, STAGE_TUNING_DEFAULTS } from "../schemas/stageTuning.ts";
+import { readStageTuning, STAGE_TUNING_DEFAULTS, type StageTuning } from "../schemas/stageTuning.ts";
 import { loadWorkspace } from "../../hooks/lib/workspace.ts";
 
 /** The five phase folders of spec §1, in order. A numeric `phase:` indexes this. */
@@ -135,35 +135,44 @@ export interface WorkflowPreset {
 }
 
 /**
- * The BUILD stage's resolved `attempts` and `timeout_s` for one scope — the
- * answer to "how many turns does a story of this run get, and how long does each
- * one have", asked by everything that is not the facilitator.
+ * The BUILD stage's resolved tuning (`schemas/stageTuning.ts` — `attempts`,
+ * `fixlist_rounds`, `reviewer_share`, `gate_signer_share`, `story_cap_multiplier`,
+ * `story_cap_floor_usd`) and `timeout_s`, for one scope — the answer to "how many
+ * turns does a story of this run get, how is the money split, and how long does
+ * each turn have", asked by everything that is not the facilitator.
  *
- * ONE derivation, three readers with nothing else in common: the DoD-gate hook
- * (which re-runs a story's commands and must kill them on the same clock the turn
- * had), the dashboard model (which prints "attempt N of M" per story), and
- * `story reopen` (which says which attempt the fix runs as). Each of them used to
- * carry its own copy of the constant, which is how the hook ended up at 900 s
- * while every shipped stage said 7200.
+ * ONE derivation, readers with nothing else in common: the DoD-gate hook (which
+ * re-runs a story's commands and must kill them on the same clock the turn had),
+ * the dashboard model (which prints "attempt N of M" per story), `story reopen`
+ * (which says which attempt the fix runs as), and — since gh #333 — `budget
+ * show`, `run estimate` and the `budget-gate` hook, which price what a Build
+ * stage still has to pay for with the SAME four knobs `tldrx next`'s brake prices
+ * it with (`stageRemainingWork`, `runNext.ts`). Each of these used to carry its
+ * own copy of a constant, which is how the hook ended up at 900 s while every
+ * shipped stage said 7200 (`attempts`, `timeout_s`) — and how gh #214/#333 found
+ * three readers still defaulting `reviewer_share`, `story_cap_multiplier` and
+ * `story_cap_floor_usd` while the brake priced the stage's own.
  *
- * **TOLERANT — it never throws.** All three callers are places a throw would be a
- * disaster: a PreToolUse hook that fails closed, a page render, and a CLI verb's
+ * **TOLERANT — it never throws.** Every caller is a place a throw would be a
+ * disaster: a PreToolUse hook that fails closed, a page render, a CLI verb's
  * final sentence. A workflow that cannot be read, a scope with no Build stage, a
- * `stage.yml` that is not there: each gives the SHIPPED defaults, which is what
- * every one of these readers hard-coded before this function existed.
+ * `stage.yml` that is not there or fails to parse: each gives the SHIPPED
+ * defaults, which is what every one of these readers hard-coded before this
+ * function existed. The extra file read below (`stage.source`, resolved by
+ * `loadWorkflowPreset` already) is inside the same try/catch as everything else
+ * here, so an unreadable stage file still falls back exactly as it always has.
  *
  * `stageId` (gh #214) narrows it to the stage a cursor NAMES, which is the stage
  * `tldrx next`'s brake resolves (`loadStageSpec(root, scope, stageId)`): the
- * `budget show` page and the `budget-gate` hook price the remaining work with
- * that stage's `attempts:`, and asked with the shipped 2 they refused a `next`
- * the brake allowed on an `attempts: 1` stage. Absent, or naming no stage in the
- * preset ⇒ the BUILD phase's stage, as before.
+ * `budget show` page, `run estimate` and the `budget-gate` hook price the
+ * remaining work with that stage's own tuning, and asked with the shipped
+ * defaults they refused (or over-quoted) a `next` the brake priced differently.
+ * Absent, or naming no stage in the preset ⇒ the BUILD phase's stage, as before.
  */
-export function buildStageDefaults(root: string, scope: string, stageId?: string): {
-  readonly attempts: number;
+export function buildStageDefaults(root: string, scope: string, stageId?: string): StageTuning & {
   readonly timeoutS: number;
 } {
-  const fallback = { attempts: STAGE_TUNING_DEFAULTS.attempts, timeoutS: DEFAULT_TIMEOUT_S };
+  const fallback = { ...STAGE_TUNING_DEFAULTS, timeoutS: DEFAULT_TIMEOUT_S };
   try {
     const preset = loadWorkflowPreset(root, scope);
     // The BUILD phase's stage, by phase rather than by the id `build`: a scope may
@@ -171,7 +180,13 @@ export function buildStageDefaults(root: string, scope: string, stageId?: string
     const stage = (stageId === undefined ? undefined : preset.stages.find((s) => s.id === stageId))
       ?? preset.stages.find((s) => s.phase === PHASE_IDS[3]);
     if (stage === undefined) return fallback;
-    return { attempts: stage.attempts, timeoutS: stage.timeout_s };
+    // `loadStage` already parsed this doc once to read `attempts:` off it
+    // (`PlannedStage.attempts`) and discarded the rest. Re-reading it here, the
+    // same way `facilitator/stageSpec.ts overlay` does, is what lets this
+    // TOLERANT reader answer with the other three knobs too, rather than only
+    // the one `PlannedStage` happened to keep.
+    const doc = existsSync(stage.source) ? parseYaml(readFileSync(stage.source, "utf8")) : null;
+    return { ...readStageTuning(doc), timeoutS: stage.timeout_s };
   } catch {
     return fallback;
   }
