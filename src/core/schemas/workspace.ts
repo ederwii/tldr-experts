@@ -11,6 +11,11 @@ import { PROBE_STATUSES, type ProbeStatus } from "../detect/probeCommands.ts";
 // payload, never retyped here. A schema accepting a kind nothing can emit would let an
 // owner subscribe to a notification that never arrives and never says why.
 import { NOTIFY_KINDS, type NotifyKind } from "../notify/payload.ts";
+// Same rule again, same source: spec §2.1's "single argv, auditable" is enforced
+// at `tldrx init`'s own emitted-document check (`../init/validateEmitted.ts`) via
+// this exact function — reused here, not retyped, so the two enforcement points
+// can never drift on what counts as a metacharacter (gh #181).
+import { isSingleArgvCommand, singleArgvViolation } from "../detect/commands.ts";
 
 export const WORKSPACE_MODES = ["single", "multi"] as const;
 export type WorkspaceMode = (typeof WORKSPACE_MODES)[number];
@@ -209,6 +214,7 @@ export function validateWorkspace(input: unknown): ValidationResult {
       }
       requireKeys(repo, ["name", "path"], path, issues);
       requireCommandProbes(repo.command_probes, `${path}.command_probes`, issues);
+      requireCommands(repo.commands, `${path}.commands`, issues);
     });
   }
 
@@ -259,5 +265,41 @@ function requireCommandProbes(value: unknown, path: string, issues: ValidationIs
   }
   for (const [slot, probe] of Object.entries(value)) {
     issues.push(...commandProbeIssues(probe, `${path}.${slot}`));
+  }
+}
+
+/**
+ * spec §2.1: `commands` non-empty when non-null and free of `& ; | > `` — a
+ * single argv, auditable. Enforced once already, at `tldrx init`'s own emitted
+ * document (`../init/validateEmitted.ts:51`); this is the OTHER half spec §2.1
+ * names — a `.tldrx/workspace.yml` read back off disk, hand-edited or not
+ * (gh #181). `null` means "unavailable" (spec §2.1's own table) and carries
+ * nothing to check; absent is fine, the same as every workspace written before
+ * `commands` existed. `""` is the SAME sentinel, not a second one invented
+ * here: `templates/workspace.yml`'s own shipped skeleton says so verbatim
+ * ("An empty value means 'not found'") and production code already treats it
+ * that way (`../build/developerGrants.ts:85`, `../build/preflight.ts:296`) —
+ * so a blank slot is not-found here too, never a metacharacter refusal.
+ */
+function requireCommands(value: unknown, path: string, issues: ValidationIssue[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    issues.push({ path, message: "expected a mapping of command slot to string or null" });
+    return;
+  }
+  for (const [slot, command] of Object.entries(value)) {
+    if (command === null || command === "") continue;
+    const slotPath = `${path}.${slot}`;
+    if (typeof command !== "string") {
+      issues.push({ path: slotPath, message: "expected a string or null" });
+      continue;
+    }
+    if (isSingleArgvCommand(command)) continue;
+    const char = singleArgvViolation(command);
+    const why = char === null ? "is empty" : `contains \`${char}\``;
+    issues.push({
+      path: slotPath,
+      message: `\`${command}\` ${why} — must be a single argv (no & ; | > \`)`,
+    });
   }
 }

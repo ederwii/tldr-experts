@@ -163,6 +163,15 @@ describe("commands are auditable", () => {
     expect(isSingleArgvCommand("cat x | sh")).toBe(false);
     expect(isSingleArgvCommand("")).toBe(false);
   });
+
+  test("the rule is quote-aware, same as the DoD gate's own splitter (gh #181 follow-up)", () => {
+    // docs/guide/09-troubleshooting.md's own documented workaround: a metacharacter
+    // INSIDE a quoted token is an argument, not a shell operator — the DoD gate
+    // (src/hooks/lib/story.ts splitArgv) already accepts this verbatim.
+    expect(isSingleArgvCommand('sh -c "npm run test | tee out.txt"')).toBe(true);
+    // A BARE metacharacter is still refused, naming it.
+    expect(isSingleArgvCommand("npm run test | tee out.txt")).toBe(false);
+  });
 });
 
 describe("detectWorkspace", () => {

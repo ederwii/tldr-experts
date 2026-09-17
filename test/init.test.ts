@@ -14,6 +14,7 @@ import {
   competencyLevel, planExperts, planQuestions, renderQuestions, runInit, upsertBlock,
   validateProcessDocument, validateWorkspaceDocument, buildWorkspaceDocument,
   GITIGNORE_MARKERS, type CompetencyEvidence, type InitOptions, type InitReport,
+  type WorkspaceDocument,
 } from "../src/core/init/index.ts";
 import { describeStageLoads, stageIds, stagesLoadingExperts } from "../src/core/experts/index.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
@@ -256,6 +257,33 @@ describe("tldrx init — multi-repo workspace", () => {
     // The marked blocks are idempotent: a second run must not append a second copy.
     expect(await Bun.file(join(fixture.root, ".gitignore")).text()).toBe(gitignoreBefore);
     expect(second.written).toContain(".tldrx/workspace.yml");
+  });
+});
+
+describe("validateWorkspaceDocument: a `commands` metacharacter is reported ONCE (gh #181 follow-up)", () => {
+  // Minimal, hand-built — not `buildWorkspaceDocument` off a real detection report,
+  // so this stays a unit test with nothing to spawn.
+  function documentWithCommand(command: string): WorkspaceDocument {
+    return {
+      version: 1, mode: "single-repo", root_is_repo: true, root: ".",
+      detected_at: "2026-08-28T12:00:00Z", detected_by: "tldrx 0.0.1", provider: "static",
+      repos: [{
+        name: "app", path: ".", default_branch: "main", stack: [], package_manager: null,
+        commands: { build: null, test: command, lint: null, typecheck: null, run: null },
+        ci: [], overlays: [], skills: [], confidence: "high",
+      }],
+      contracts: [], mcp_servers: [],
+    };
+  }
+
+  test("a bare metacharacter is refused exactly once, not once per validator layer", () => {
+    const result = validateWorkspaceDocument(documentWithCommand("npm run test | tee out.txt"));
+    const forSlot = result.issues.filter((issue) => issue.path === "repos[0].commands.test");
+    expect(forSlot.length).toBe(1);
+  });
+
+  test("a clean command still passes with no issues", () => {
+    expect(validateWorkspaceDocument(documentWithCommand("npm run test")).issues).toEqual([]);
   });
 });
 

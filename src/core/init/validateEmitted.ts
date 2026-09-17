@@ -9,11 +9,15 @@
  *     projected: since 2026-08-29 the validators take `version: 1`, which is what
  *     these documents have always carried and what `init` has always written.
  *  2. the spec §2.1 / §2.12 rules the skeleton does not encode yet — the repo
- *     name pattern, path containment, and the "single argv, auditable" rule for
- *     commands — are checked here.
+ *     name pattern and path containment — are checked here. The "single argv,
+ *     auditable" rule for `commands` used to be a SECOND check here too, until
+ *     gh #181 made `validate("workspace", …)` above (`requireCommands`,
+ *     `src/core/schemas/workspace.ts`) run the identical `isSingleArgvCommand`
+ *     check on the same `repos[].commands` this function is handed — layer 1
+ *     already covers it, and a second copy only double-reported the same
+ *     violation under two different messages (AGENTS.md §7: one derivation).
  */
 import { validate, type ValidationIssue, type ValidationResult } from "../schemas/index.ts";
-import { isSingleArgvCommand } from "../detect/commands.ts";
 import { CONFIDENCE_LEVELS } from "../detect/types.ts";
 import type { WorkspaceDocument } from "./workspaceDocument.ts";
 import type { ProcessDocument } from "./processDocument.ts";
@@ -45,12 +49,6 @@ export function validateWorkspaceDocument(doc: WorkspaceDocument): ValidationRes
     }
     if (!(CONFIDENCE_LEVELS as readonly string[]).includes(repo.confidence)) {
       issues.push({ path: `${path}.confidence`, message: `expected one of ${CONFIDENCE_LEVELS.join(" | ")}` });
-    }
-    for (const [slot, command] of Object.entries(repo.commands)) {
-      if (command === null) continue;
-      if (!isSingleArgvCommand(command)) {
-        issues.push({ path: `${path}.commands.${slot}`, message: "must be a single argv (no & ; | > `)" });
-      }
     }
   });
   return { ok: issues.length === 0, issues };

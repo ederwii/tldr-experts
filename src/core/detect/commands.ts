@@ -21,6 +21,7 @@ import { walkFiles } from "./walk.ts";
 import { runtime } from "../runtime/index.ts";
 import { COMMAND_SLOTS, type CommandSlot, type Evidence, type RepoCommands } from "./types.ts";
 import type { StackDetection } from "./stack.ts";
+import { tokenizeArgv } from "./argvSplit.ts";
 
 /** Script names accepted for each slot, in preference order. */
 const SCRIPT_ALIASES: Readonly<Record<CommandSlot, readonly string[]>> = {
@@ -31,7 +32,18 @@ const SCRIPT_ALIASES: Readonly<Record<CommandSlot, readonly string[]>> = {
   run: ["dev", "start"],
 };
 
-/** Shell metacharacters banned by spec §2.1: a command must be a single argv. */
+/**
+ * Shell metacharacters banned by spec §2.1: a command must be a single argv.
+ *
+ * Applied to BARE tokens only (gh #181 follow-up) — the same `tokenizeArgv`
+ * `src/hooks/lib/story.ts`'s `splitArgv` reads a `commands:` line through, so
+ * the two can never disagree about which is which. Before this, a full-string
+ * scan flagged a metacharacter the DoD gate would have happily run because it
+ * sat inside quotes (`sh -c "npm run test | tee out.txt"`, the workaround
+ * `docs/guide/09-troubleshooting.md` documents) — load-time validation was
+ * stricter than the executor it exists to describe. The character SET is
+ * unchanged; only bare-vs-quoted is new.
+ */
 const SHELL_METACHARACTERS = /[&;|>`]/;
 
 export interface DetectedCommands {
@@ -48,7 +60,29 @@ export interface DetectedCommands {
 }
 
 export function isSingleArgvCommand(command: string): boolean {
-  return command.trim() !== "" && !SHELL_METACHARACTERS.test(command);
+  if (command.trim() === "") return false;
+  for (const token of tokenizeArgv(command)) {
+    if (!token.quoted && SHELL_METACHARACTERS.test(token.text)) return false;
+  }
+  return true;
+}
+
+/**
+ * The one banned BARE character `command` carries, or `null` if it carries none
+ * (spec §2.1 — a metacharacter inside a quoted token is not a violation; see
+ * `isSingleArgvCommand` above). Exists so a refusal can NAME what's wrong
+ * instead of a bare "no" — `isSingleArgvCommand` stays the boolean every call
+ * site actually branches on; this is the same `SHELL_METACHARACTERS` class,
+ * read once, never a second copy of it (AGENTS.md §7: one implementation per
+ * derivation).
+ */
+export function singleArgvViolation(command: string): string | null {
+  for (const token of tokenizeArgv(command)) {
+    if (token.quoted) continue;
+    const found = SHELL_METACHARACTERS.exec(token.text);
+    if (found !== null) return found[0];
+  }
+  return null;
 }
 
 export async function detectCommands(repoDir: string, stack: StackDetection): Promise<DetectedCommands> {
