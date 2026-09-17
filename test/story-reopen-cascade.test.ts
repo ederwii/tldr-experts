@@ -16,6 +16,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext } from "../src/core/facilitator/runNext.ts";
 import { reopenStory } from "../src/core/run/reopenStory.ts";
+import { approve } from "../src/core/run/gates.ts";
+import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { validateEvent } from "../src/core/events/Event.ts";
 import { dependencyHoldOfLog, dependencyHoldReason, releasedByReopen } from "../src/core/build/dependencyHold.ts";
@@ -140,6 +142,34 @@ describe("reopening a blocked dependency releases what it alone was holding (#31
     expect(status(ws, "S3")).toBe("blocked");
     expect(said).toContain("S2 stays `blocked`: its block is not a dependency hold");
     expect(reopened(ws).map((e) => e.payload.story)).toEqual(["S1"]);
+  });
+});
+
+/**
+ * #227: the cascade is prepared BEFORE anything is written (`prepareCascade`'s
+ * own docstring), but the run-level check in `reopenStory` runs before even
+ * that — so a done run refuses the WHOLE reopen, dependents included, rather
+ * than releasing them out from under a gate that has already signed over them.
+ */
+describe("the cascade refuses on a done run, releasing nothing (#227)", () => {
+  test("S1's own dependents stay `blocked`, no file moves, no event is appended", async () => {
+    const ws = await blockedChain();
+    const store = RunStore.open(ws.runDir);
+    const approved = await approve(store, { root: ws.root, actor: "alan", at: "2026-09-14T09:30:00Z", note: "shipping without S1" });
+    expect(approved.ok).toBe(true);
+    expect(RunStore.open(ws.runDir).run.status).toBe("done");
+
+    const before = new Map(["S0", "S1", "S2", "S3", "S4"].map((id) => [id, status(ws, id)]));
+    const beforeEvents = reopened(ws).length;
+
+    const outcome = reopenStory({ root: ws.root, storyId: "S1", note: WHY, actor: "alan", at: "2026-09-14T10:00:00Z", runId: ws.runId });
+    const said = outcome.lines.join("\n");
+
+    expect(outcome.code).toBe(1);
+    expect(said).toContain("S1 cannot be reopened");
+    expect(said).toContain("tldrx reject --stage 04-build/build");
+    for (const [id, s] of before) expect(status(ws, id)).toBe(s);
+    expect(reopened(ws)).toHaveLength(beforeEvents);
   });
 });
 

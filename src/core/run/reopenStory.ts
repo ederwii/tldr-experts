@@ -53,7 +53,7 @@ import { IMPLICIT_PLAN_FILE, updateImplicitPlan } from "../build/implicitPlan.ts
 import { StoryWriteError, updateStoryFront } from "../build/storyFile.ts";
 import { readReviewLedger } from "../facilitator/executors/build.ts";
 import { buildStageDefaults } from "./workflowPreset.ts";
-import type { RunStage } from "./RunFile.ts";
+import { isFinished, type RunStage } from "./RunFile.ts";
 import { validateEvent, type TldrxEvent } from "../events/Event.ts";
 import { dependencyHoldOfLog, releasedByReopen, type ReleaseCandidate } from "../build/dependencyHold.ts";
 import { LOG_DIR } from "../build/plan.ts";
@@ -108,7 +108,7 @@ export interface ReopenOutcome {
 
 import {
   /* Spec §3: `refused`. Every one of this verb's own refusals is a refusal to act. */
-  EXIT_OK, EXIT_GATE_REFUSED as EXIT_REFUSED, EXIT_NOT_FOUND,
+  EXIT_OK, EXIT_GATE_REFUSED as EXIT_REFUSED, EXIT_NOT_FOUND, EXIT_USAGE,
 } from "../../cli/exitCodes.ts";
 
 /**
@@ -188,6 +188,51 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
   // pure read of `events.jsonl`, and BOTH halves of this verb need it: the fix
   // round's bound is in it, and the plain verb's reset count is too.
   const ledger = readReviewLedger(store.runDir, id);
+
+  // #227: the RUN decides whether a reopen can ever be acted on, not the story.
+  // `rollUp` derives `done` from every stage being terminal — a story can sit
+  // `blocked` (never `done`) while the Build stage it belongs to has already
+  // closed, so the `row.status === "done"` check below never sees this case.
+  // Checked before every other branch (`forFix`, `asIs`, plain) because all
+  // three write the same status line, and all three would leave it stranded:
+  // `next` reads the RUN's own status, not the story's, so `tldrx next` answers
+  // "is done — nothing to advance" without ever looking at what this just
+  // wrote. A gate signed on a later phase is the same trap one phase over — the
+  // signature would go on covering Build work it never saw (see #144).
+  //
+  // `isFinished` (`RunFile.ts`), not a bare `=== "done"`: pre-merge review on
+  // #227 (2026-09-17) caught that the first cut of this check only asked about
+  // `done` and let a `cancelled` run through — `tldrx run cancel` never touches
+  // a story file either, so a `blocked` story on a cancelled run is the exact
+  // same trap, and `runNext.ts`'s own `advance()` already refuses to dispatch
+  // on `done` OR `cancelled` (RunStore.ts:189 reads the same predicate). One
+  // derivation of "is this run over", not a second one reinvented here.
+  //
+  // Owner's call (2026-09-17, #227): refuse before writing anything, in the
+  // usage family (`EXIT_USAGE`) — this is "nothing behind it", not a gate this
+  // verb can undo. Deliberately NOT this file's usual `EXIT_REFUSED` (2), the
+  // code its sibling refusals below use: the owner's decision names "the usage
+  // family" literally, so this one refusal stays on `EXIT_USAGE` even though
+  // every other refusal in `reopenStory` is `EXIT_REFUSED`.
+  const runFinished = isFinished(store.run.status);
+  const gateSigned = stage?.gate.status === "approved";
+  if (runFinished || gateSigned) {
+    const door = `${BUILD_PHASE}/${stage?.id ?? "build"}`;
+    const why = runFinished && gateSigned
+      ? `${store.runId} is \`${store.run.status}\` and ${door}'s gate is approved`
+      : runFinished
+        ? `${store.runId} is \`${store.run.status}\``
+        : `${door}'s gate is approved`;
+    return {
+      code: EXIT_USAGE,
+      lines: [
+        `${id} cannot be reopened — ${why}`,
+        "  writing it back to `todo` would leave it with nothing that will ever dispatch it: `next` reads",
+        "  the run's own status, not the story's, and a signed gate would go on covering work it never saw",
+        `  \`tldrx reject --stage ${door} --note "…"\` revokes the gate and reopens the stage — or start a new run`,
+      ],
+    };
+  }
 
   if (forFix) {
     // The bound the owner set: ONE open fix round per story (2026-09-01). Checked
