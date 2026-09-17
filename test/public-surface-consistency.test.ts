@@ -401,3 +401,112 @@ describe("the env.yml example in docs/spec.md", () => {
     ).toEqual([]);
   });
 });
+
+describe("no public surface newly names a private workspace (#191)", () => {
+  /**
+   * A 2026-09-17 audit (#191) found two grep patterns — private-workspace names, never
+   * this repo's business to publish — sprinkled across the tree: 37 are real evidence
+   * citations in `src/**` JSDoc (a measurement, run id or byte figure attributed to the
+   * actual workspace; rephrasing THOSE is a separate call the issue explicitly left
+   * open), and exactly one (`src/core/dashboard/render.ts`, fixed alongside this test)
+   * was a purely illustrative example that copied the name instead of inventing one.
+   *
+   * This guards the second kind going forward: `src/**`, `templates/**`, `docs-site/**`
+   * and the top (unreleased) `CHANGELOG.md` heading must carry neither pattern in any
+   * file that doesn't already have a citation reason on file. `SRC_CITATION_FILES` is
+   * that reason list — paths only, never the citation text itself, so this test doesn't
+   * grow the very footprint #191 is about — and growing it is a deliberate act, same as
+   * `HISTORICAL` above: a NEW file, or the two already-clean surfaces (`templates/**`,
+   * `docs-site/**`), picking up either pattern fails here instead of accumulating.
+   * `test/fixtures/**` is deliberately NOT scanned: #191 found the one synthetic fixture
+   * literal did not, in fact, exist — both fixture families that match are real data
+   * copied from a real workspace, a materially different problem left for the issue.
+   */
+  const PRIVATE_WORKSPACE_NAME: { re: RegExp; why: string }[] = [
+    { re: /aparece-v2/i, why: "a private workspace name (#191)" },
+    { re: /scavtopia/i, why: "a private workspace name (#191)" },
+  ];
+
+  /** `src/**` files already carrying a cited, real evidence occurrence — see the block comment above. */
+  const SRC_CITATION_FILES: ReadonlySet<string> = new Set([
+    "core/build/git.ts",
+    "core/build/preflight.ts",
+    "core/build/review.ts",
+    "core/build/worktrees.ts",
+    "core/dashboard/model.ts",
+    "core/drive/mandate.ts",
+    "core/experts/expertBundle.ts",
+    "core/experts/expertKnowledge.ts",
+    "core/experts/roleExperts.ts",
+    "core/experts/selectExperts.ts",
+    "core/experts/sharedCitations.ts",
+    "core/facilitator/prompt.ts",
+    "core/facilitator/seedInputs.ts",
+    "core/init/ambientFootprint.ts",
+    "core/init/planExperts.ts",
+    "core/run/closeRun.ts",
+    "core/run/operatorNote.ts",
+    "core/run/reopenStory.ts",
+    "core/run/ship.ts",
+    "core/schemas/validation.ts",
+    "core/seed/triageInventory.ts",
+    "core/training/claimCheck.ts",
+    "core/training/knowledgeFile.ts",
+    "core/training/knowledgeScope.ts",
+    "core/training/noEvidenceNote.ts",
+    "core/training/rescoreExperts.ts",
+    "core/training/selectFiles.ts",
+    "core/training/trainingPrompt.ts",
+  ]);
+
+  /** `path:line: the whole line`, for every line of `text` matching `re` — undecorated, unlike `hits()` above. */
+  function findHits(rel: string, text: string, re: RegExp): string[] {
+    return text
+      .split("\n")
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line }) => re.test(line))
+      .map(({ line, n }) => `${rel}:${n}: ${line.trim()}`);
+  }
+
+  /** Every file under `root` whose name passes `filter`, read as text. */
+  function walkTextFiles(root: string, filter: (name: string) => boolean): { rel: string; text: string }[] {
+    const out: { rel: string; text: string }[] = [];
+    const walk = (dir: string): void => {
+      for (const name of readdirSync(dir).sort()) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) {
+          walk(path);
+          continue;
+        }
+        if (!filter(name)) continue;
+        out.push({ rel: relative(root, path), text: readFileSync(path, "utf8") });
+      }
+    };
+    walk(root);
+    return out;
+  }
+
+  /** Only the top CHANGELOG heading, and only when it is the unreleased one — released sections are history. */
+  function unreleasedChangelogSection(): string {
+    const lines = CHANGELOG.split("\n");
+    const start = lines.findIndex((l) => /^## .+ — unreleased$/.test(l));
+    if (start === -1) return "";
+    const end = lines.findIndex((l, i) => i > start && /^## /.test(l));
+    return lines.slice(start, end === -1 ? lines.length : end).join("\n");
+  }
+
+  for (const { re, why } of PRIVATE_WORKSPACE_NAME) {
+    test(`no new occurrence of ${String(re)} in src/**, templates/**, docs-site/**, or the unreleased CHANGELOG`, () => {
+      const templateHits = walkTextFiles(join(FRAMEWORK_ROOT, "templates"), () => true).flatMap(({ rel, text }) =>
+        findHits(`templates/${rel}`, text, re),
+      );
+      const docsSiteHits = DOCS.flatMap(({ rel, text }) => findHits(`docs-site/${rel}`, text, re));
+      const srcHits = walkTextFiles(join(FRAMEWORK_ROOT, "src"), (name) => name.endsWith(".ts"))
+        .filter(({ rel }) => !SRC_CITATION_FILES.has(rel))
+        .flatMap(({ rel, text }) => findHits(`src/${rel}`, text, re));
+      const changelogHits = findHits("CHANGELOG.md (unreleased)", unreleasedChangelogSection(), re);
+      const offenders = [...templateHits, ...docsSiteHits, ...srcHits, ...changelogHits];
+      expect(offenders, `${why}\n${offenders.join("\n")}`).toEqual([]);
+    });
+  }
+});

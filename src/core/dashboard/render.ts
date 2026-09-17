@@ -1542,7 +1542,7 @@ export function dashRadar(expert: ExpertModel, max: number): string {
   const areas = expert.areas;
   const count = areas.length;
   // The box is wider than the chart on purpose: axis labels sit outside the
-  // outer ring, and an area id like `scavtopia-infrastructure` needs somewhere
+  // outer ring, and an area id like `gridworks-infrastructure` needs somewhere
   // to go. Anything longer than the gutter is clipped with an ellipsis — the
   // full name is in the `aria-label` and in the levels list directly below, so
   // nothing is only readable here.

@@ -98,6 +98,15 @@
   (2026-09-17) as deliberate — a person editing the artefact by hand is trusted the way the
   envelope's own reviewer is not — and `docs/spec.md` and a comment at `parseFixlistFile` now say
   so, naming exactly what a hand edit bypasses.
+- **A dashboard-layout comment no longer illustrates itself with a private workspace's name
+  (see #191).** An audit for private-workspace leakage across the public surface found one
+  purely illustrative example — an area-id string in `src/core/dashboard/render.ts` with no
+  measurement attached — that had copied a real workspace's name instead of inventing one; it
+  now uses a neutral placeholder. `test/public-surface-consistency.test.ts` gained a guard so a
+  new occurrence of either private-workspace pattern in `src/**`, `templates/**`, `docs-site/**`
+  or the unreleased CHANGELOG section fails the gate instead of accumulating; the source-comment
+  citations the same audit found — real measurements naming a real workspace, cited evidence
+  rather than decoration — are out of scope for this change and stay as they are.
 
 ## 0.34.0 — 2026-09-17
 
