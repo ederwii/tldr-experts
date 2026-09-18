@@ -20,8 +20,9 @@ import { join } from "node:path";
 import { validatePlan } from "../src/core/plan/validatePlan.ts";
 import {
   ENFORCEMENT_KEYWORDS, MAX_STORIES_PER_RUN, MAX_WAVES_PER_RUN, PLAN_SHAPE_HEADING, PLAN_SHAPE_RULES,
-  POPULATE_VERBS, WAVE_CAP_REASON_KEY,
-  invariantSequencingMessage, lateStoryMessage, unevenDodAdvisory, validatePlanShape, waveCapAdvisory, waveCapMessage,
+  POPULATE_VERBS, TOUCH_EDIT_VERBS, TOUCHED_PATH_PATTERN, WAVE_CAP_REASON_KEY,
+  invariantSequencingMessage, lateStoryMessage, unevenDodAdvisory, untouchedEditMessage, validatePlanShape,
+  waveCapAdvisory, waveCapMessage,
 } from "../src/core/plan/planShape.ts";
 import { renderPlanSchemaContract } from "../src/core/plan/schemaContract.ts";
 import { MAX_STORIES_PER_SEED, MAX_WAVES_PER_SEED } from "../src/core/seed/checkSeed.ts";
@@ -40,6 +41,9 @@ interface StorySpec {
   readonly dod?: readonly string[];
   readonly acceptance?: readonly string[];
   readonly testPlan?: readonly string[];
+  readonly touches?: readonly string[];
+  /** Free-text body lines (steps/prose) between the H1 and the ```dod fence — #376. */
+  readonly steps?: readonly string[];
 }
 
 function story(spec: StorySpec): string {
@@ -52,7 +56,7 @@ function story(spec: StorySpec): string {
     `repo: ${spec.repo ?? "lab"}`,
     "status: todo",
     `depends_on: [${(spec.deps ?? []).join(", ")}]`,
-    `touches: ["src/${spec.id.toLowerCase()}/"]`,
+    `touches: ${JSON.stringify(spec.touches ?? [`src/${spec.id.toLowerCase()}/`])}`,
     `acceptance: [${(spec.acceptance ?? ["it works"]).map((s) => JSON.stringify(s)).join(", ")}]`,
     `test_plan: [${(spec.testPlan ?? ["a test"]).map((s) => JSON.stringify(s)).join(", ")}]`,
     "evidence: []",
@@ -60,6 +64,8 @@ function story(spec: StorySpec): string {
     "",
     `# ${spec.id}`,
     "",
+    ...(spec.steps ?? []),
+    ...(spec.steps !== undefined ? [""] : []),
     "```dod",
     ...(spec.dod ?? ["true"]),
     "```",
@@ -374,6 +380,93 @@ describe("an invariant enforced before the story that populates it (#365)", () =
   });
 });
 
+describe("a story body step naming an edit of a path its own touches allowlist forbids (#376)", () => {
+  const S1_STEP = "5. Add a CHANGELOG bullet under a new `## 0.34.0 — unreleased` heading.";
+
+  test("the issue's own S1 shape: touches without CHANGELOG.md, a step naming the unreleased heading, is refused", () => {
+    const dir = writePlan(planFiles(
+      [{ id: "S1", touches: ["scripts/merge-wave.sh", "test/merge-wave.test.ts", "AGENTS.md"], steps: [S1_STEP] }],
+      [["S1"]],
+    ));
+    const issues = validatePlanShape(dir).issues;
+    expect(issues).toEqual([{
+      file: "stories/S1.md",
+      path: "body",
+      message: untouchedEditMessage("S1", "CHANGELOG.md", "Add a CHANGELOG bullet under a new `## 0.34.0 — unreleased` heading"),
+    }]);
+  });
+
+  test("positive control: the same story with CHANGELOG.md in touches is accepted", () => {
+    const dir = writePlan(planFiles(
+      [{ id: "S1", touches: ["scripts/merge-wave.sh", "test/merge-wave.test.ts", "AGENTS.md", "CHANGELOG.md"], steps: [S1_STEP] }],
+      [["S1"]],
+    ));
+    expect(messagesOf(dir)).toEqual([]);
+  });
+
+  test("false-positive control: steps that only READ or point at a file (no edit verb in the same sentence) are accepted, even though the paths are not in touches", () => {
+    const dir = writePlan(planFiles(
+      [{
+        id: "S1",
+        touches: ["src/s1/"],
+        steps: [
+          "1. Read `src/x.ts` for the shape.",
+          "2. See `docs/spec.md` for how the schema is documented.",
+        ],
+      }],
+      [["S1"]],
+    ));
+    expect(messagesOf(dir)).toEqual([]);
+  });
+
+  test("a genuine edit verb with a backtick path not in touches is refused, independent of the CHANGELOG special case", () => {
+    const dir = writePlan(planFiles(
+      [{ id: "S1", touches: ["test/merge-wave.test.ts"], steps: ["3. Edit `scripts/merge-wave.sh` to add the new guard."] }],
+      [["S1"]],
+    ));
+    expect(messagesOf(dir)).toEqual([
+      `stories/S1.md body: ${untouchedEditMessage("S1", "scripts/merge-wave.sh", "Edit `scripts/merge-wave.sh` to add the new guard")}`,
+    ]);
+  });
+
+  test("the same step's path IS in touches: accepted", () => {
+    const dir = writePlan(planFiles(
+      [{ id: "S1", touches: ["scripts/merge-wave.sh"], steps: ["3. Edit `scripts/merge-wave.sh` to add the new guard."] }],
+      [["S1"]],
+    ));
+    expect(messagesOf(dir)).toEqual([]);
+  });
+
+  test("an edit verb in one sentence and a read-only path in an EARLIER sentence do not combine — split on a sentence-ending `.`", () => {
+    const dir = writePlan(planFiles(
+      [{
+        id: "S1",
+        touches: ["src/s1/"],
+        steps: ["1. Read `docs/spec.md` for context. Then edit `AGENTS.md` to add the rule."],
+      }],
+      [["S1"]],
+    ));
+    const messages = messagesOf(dir).join(" ");
+    expect(messages).not.toContain("docs/spec.md");
+    expect(messages).toContain("AGENTS.md");
+  });
+
+  test("a `*` glob is never treated as a literal path", () => {
+    const dir = writePlan(planFiles(
+      [{ id: "S1", touches: ["src/s1/"], steps: ["1. Update `src/*.ts` broadly."] }],
+      [["S1"]],
+    ));
+    expect(messagesOf(dir)).toEqual([]);
+  });
+
+  test("TOUCH_EDIT_VERBS and TOUCHED_PATH_PATTERN are exported, short, and the pattern rejects a glob", () => {
+    expect(TOUCH_EDIT_VERBS.length).toBeGreaterThan(0);
+    expect(TOUCH_EDIT_VERBS.length).toBeLessThanOrEqual(15);
+    expect([..."`src/x.ts`".matchAll(TOUCHED_PATH_PATTERN)].length).toBe(1);
+    expect([..."`src/*.ts`".matchAll(TOUCHED_PATH_PATTERN)].length).toBe(0);
+  });
+});
+
 describe("the `plan` gate carries the shape", () => {
   const CHECK = { id: "plan", on: "post-write", repo: null, command: null, expect_exit: 0 } as const;
 
@@ -418,7 +511,7 @@ describe("one rule source: the prompt, the seed check and the skill read the sam
     const all = PLAN_SHAPE_RULES.map((r) => r.text).join("\n");
     expect(all).toContain(WAVE_CAP_REASON_KEY);
     expect(all).toContain(`${String(MAX_WAVES_PER_RUN)} waves`);
-    for (const issue of ["#316", "#317", "#318", "#319", "#365"]) {
+    for (const issue of ["#316", "#317", "#318", "#319", "#365", "#376"]) {
       expect(PLAN_SHAPE_RULES.some((r) => r.issue === issue), issue).toBe(true);
     }
   });

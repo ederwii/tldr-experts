@@ -19,6 +19,19 @@
   The field audit that opened #216 found this share reaching 57% of a bundle with nothing
   anywhere naming it; the number used to exist only as something you could `wc -c` a rendered
   prompt to discover by hand.
+- **The `plan` gate refuses a story whose own body names an edit of a path outside its own
+  `touches` allowlist (see #376).** Measured on a live autonomous run (#332): a story's step
+  asked for a CHANGELOG bullet under a new `## <v> — unreleased` heading while `CHANGELOG.md`
+  sat outside its `touches` — the Build developer correctly left the file untouched under the
+  write-allowlist rule, and the pre-merge reviewer had to send the branch back for AGENTS.md
+  §5's bullet, exactly the human intervention the autonomy north star measures. Same shape as
+  the #365 sequencing rule: a short, exported edit-verb set (`TOUCH_EDIT_VERBS`) and a
+  backtick-quoted path pattern (`TOUCHED_PATH_PATTERN`, never a `*` glob) in the SAME sentence
+  or bullet — a step that only reads or points at a path is unaffected. A `## <v> —
+  unreleased` heading named alongside an edit verb counts as an edit of `CHANGELOG.md` even
+  when the step never spells the filename. The issue's second half — a `touches_always:`
+  workspace-level allowlist addition — is not in scope here; it stays available as a
+  follow-up if this half proves insufficient in the field.
 
 ### Changed
 

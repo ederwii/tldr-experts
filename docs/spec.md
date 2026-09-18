@@ -2235,7 +2235,17 @@ depended on everything was never reached) — advisory because which stories sha
 the evidence is one epic. Measured by a planning audit of 9 runs (relayed): 25/54 build-gate rejections were
 dependency reopens and every multi-story plan in one workspace was a one-story-per-wave chain. Vertical slices (#317)
 and inventory files in `touches` (#318) are prompt rules only: no stack-independent name marks a route file, and no
-changed-file set exists at Plan time to compare against — `story.touches_widened` names the drift at Build. Like the
+changed-file set exists at Plan time to compare against — `story.touches_widened` names the drift at Build. It also
+REFUSES a story whose own body names an edit of a path outside its own `touches` (#376): a short, exported edit-verb
+set, `TOUCH_EDIT_VERBS` (edit, add, append, update, write, create, modify, rename, delete, remove, bump, move), and a
+backtick-quoted path — `TOUCHED_PATH_PATTERN`, a token containing `/` or ending in a recognised extension, never a
+`*` glob — in the SAME sentence or bullet (a period ends one only when followed by whitespace or end-of-line, so a
+version like `0.34.0` or an extension like `x.ts` never fragments). A `## <v> — unreleased` CHANGELOG heading named
+alongside an edit verb counts as an edit of `CHANGELOG.md` even when the step never spells the filename — the
+originating incident (#332's run) had a step that asked for a CHANGELOG bullet under a new unreleased heading while
+`CHANGELOG.md` sat outside the story's `touches`, so the Build developer correctly left it untouched under the
+write-allowlist rule and a reviewer had to send the branch back for AGENTS.md §5's bullet. A step that only reads or
+points at a path ("read `x` for the shape") is unaffected, since it names no edit verb in the same sentence. Like the
 budget check this is the gate's own and not a pass inside `validatePlan`, so a plan approved before it still loads at
 Build.
 
