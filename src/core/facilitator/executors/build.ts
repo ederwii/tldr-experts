@@ -3946,6 +3946,13 @@ class BuildSession {
       // The developer sub-agent's own span, measured around its process (#184).
       // Every task row of a parallel build otherwise shares one `started_at`.
       durationMs: agent.durationMs,
+      // gh #357: the ONE reason to touch this file — a named cause for a failed
+      // developer turn (gh #348) used to stop at `agent.error`, so a Build story
+      // row never carried `failure_kind` although Build is where #348's own
+      // field audit was measured. `ExecutorTask.failureKind` and its
+      // `recordExecutorTasks` mapping already existed; only this copy was
+      // missing.
+      failureKind: agent.failureKind,
     });
     // A turn refused at the permission layer is OK by every transport measure —
     // it exited 0, returned an envelope and was charged for — and it did none of
@@ -4261,6 +4268,7 @@ class BuildSession {
         costUsd: turn, sessionId: agent.sessionId, metered: agent.metered,
         usage: agent.usage,
         durationMs: agent.durationMs,
+        failureKind: agent.failureKind,
       });
       if (again !== null) {
         refusal = again;
@@ -4275,6 +4283,7 @@ class BuildSession {
         metered: agent.metered,
         usage: agent.usage,
         durationMs: agent.durationMs,
+        failureKind: agent.failureKind,
         source: "agent",
         // MEASURED: these are the arguments this loop handed the provider CLI a
         // few lines up, not a re-derivation of them.
@@ -4311,6 +4320,12 @@ class BuildSession {
       usage?: AgentUsage;
       /** The spawn's own wall clock, when this turn was spawned rather than hosted. */
       durationMs?: number;
+      /**
+       * A named cause for the transport that produced this UNPARSEABLE envelope
+       * (gh #357), when the caller spawned one. Absent for a HOST review turn —
+       * nothing here watched a process to classify.
+       */
+      failureKind?: string | null;
     },
   ): string | null {
     const id = story.planned.story.id;
@@ -4331,6 +4346,7 @@ class BuildSession {
       // Absent for a HOST review turn, which is the point: absence is "not
       // recorded", and only a span this process timed is written down.
       ...(task.durationMs === undefined ? {} : { durationMs: task.durationMs }),
+      ...(task.failureKind === undefined ? {} : { failureKind: task.failureKind }),
     });
     this.ctx.emit("story.review_retried", {
       phase: this.ctx.phaseId,
@@ -4466,6 +4482,13 @@ class BuildSession {
        * lying in the dangerous direction.
        */
       reviewer: ReviewerProvenance | null;
+      /**
+       * A named cause for a FAILED reviewer turn (gh #357), when the caller
+       * spawned one (`AgentOutcome.failureKind`, gh #348). Absent for a HOST
+       * review turn — nothing here watched a process to classify — and absent
+       * for a spawned turn that parsed cleanly, exactly like `error` above.
+       */
+      failureKind?: string | null;
     },
   ): void {
     this.tasks.push({
@@ -4481,6 +4504,7 @@ class BuildSession {
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
       usage: task.usage,
       ...(task.durationMs === undefined ? {} : { durationMs: task.durationMs }),
+      ...(task.failureKind === undefined ? {} : { failureKind: task.failureKind }),
     });
     const id = story.planned.story.id;
     // The requeue counter counts VERDICTS THAT COST AN ATTEMPT — two of the five

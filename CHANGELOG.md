@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.36.0 — unreleased
+
+### Fixed
+
+- **The Build executor's `ExecutorTask` rows never copied `AgentOutcome.failureKind` across, so a
+  Build developer or reviewer turn that died with a classifiable cause carried no
+  `failure_kind` on its `run.yml` row (see #357, see #348).** `ExecutorTask.failureKind` and
+  its `recordExecutorTasks` mapping already existed; the four `this.tasks.push` sites in
+  `executors/build.ts` were the only thing not copying it. The spawned-developer and
+  spawned-reviewer sites (and the format-retry row beside them) now do; the two HOST-turn
+  push sites, which have no `AgentOutcome` to read a kind off, are unchanged and continue to
+  leave the key absent rather than guess one. `test/build-golden.test.ts`'s `rounds-run-tasks.txt`
+  golden is regenerated ON PURPOSE — a failed developer's row in that fixture now carries
+  `failure_kind: "non_zero_exit"`, which it did not before; this is the change this commit
+  means, not a drift.
+
 ## 0.35.0 — 2026-09-17
 
 ### Fixed
