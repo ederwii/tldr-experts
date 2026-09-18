@@ -106,7 +106,8 @@ export const factsCommand: Command = {
       }
       const runStore = resolved.kind === "one" ? resolved.store : null;
 
-      const fact = FactsStore.update(factsPath(root), (store) => store.append({
+      const when = nowRfc3339();
+      const { fact, duplicate } = FactsStore.update(factsPath(root), (store) => store.append({
         fact: text,
         area,
         repos: [...scoped.repos],
@@ -114,12 +115,22 @@ export const factsCommand: Command = {
         confidence,
         source: {
           who: currentActor(),
-          when: nowRfc3339(),
+          when,
           run: runStore === null ? null : runStore.runId,
           q: null,
           decided_by: decidedBy as FactDecider,
         },
       }));
+
+      // gh #216 part A: the text this call gave, normalised, already matched a
+      // LIVE fact — nothing was written. Said plainly and exits 0: a driver that
+      // re-runs `facts add` on the same sentence (the measured cause of 27
+      // verbatim duplicates in one workspace) is not an error, it is the dedupe
+      // working.
+      if (duplicate) {
+        process.stdout.write(`${fact.id} is already on record: ${fact.fact}\n`);
+        return EXIT_OK;
+      }
 
       const lines = [`recorded ${fact.id} in ${area}: ${fact.fact}`];
       if (fact.truncated === true) {

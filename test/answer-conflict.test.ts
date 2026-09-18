@@ -107,7 +107,7 @@ function seedFact(ws: AnswerWorkspace, input: { area: string; fact: string }): F
     kind: "answer",
     confidence: "stated",
     source: { who: "alan", when: "2026-09-06T09:00:00Z", run: null, q: "Q9" },
-  }));
+  }).fact);
 }
 
 function questionsPathOf(ws: AnswerWorkspace, phase: string): string {
@@ -457,7 +457,7 @@ describe("conflicts_with survives the round trip — the one C2 exists for", () 
   test("append → emit → parse → validate keeps the field", () => {
     const ws = runWorkspace();                                   // the file's own fixture
     const store = FactsStore.loadOrEmpty(factsPath(ws.root));
-    const written = store.append({
+    const { fact: written } = store.append({
       fact: "A — B", area: "data-model", repos: [], kind: "answer", confidence: "stated",
       conflicts_with: ["F001"],
       source: { who: "t", when: "2026-09-07T00:00:00Z", run: null, q: null },

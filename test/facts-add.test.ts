@@ -629,3 +629,82 @@ describe("the declared-repo check has one implementation", () => {
     expect(carriers).toEqual(["cli/repoScope.ts"]);
   });
 });
+
+/**
+ * Part A of gh #216: `FactsStore.append` dedupes at write time — a fact whose
+ * NORMALISED text (trim, collapse whitespace, case-fold) equals a LIVE fact's
+ * returns that fact instead of minting a new row. Both writers (`captureAnswers`
+ * and `tldrx facts add`) go through `append`, so this is the one place the
+ * behaviour has to live.
+ */
+describe("FactsStore.append — dedupe at write time (gh #216 part A)", () => {
+  function newFact(text: string, overrides: Partial<Fact> = {}): Parameters<FactsStore["append"]>[0] {
+    return {
+      fact: text,
+      area: "billing",
+      repos: [],
+      kind: "observed",
+      confidence: "measured",
+      source: { who: "alan", when: "2026-09-18T09:00:00Z", run: null, q: null },
+      ...overrides,
+    };
+  }
+
+  test("a twin's normalised text returns the existing live fact and appends no row", () => {
+    const ws = makeWorkspace();
+    const path = factsFileOf(ws);
+    FactsStore.update(path, (store) => {
+      const first = store.append(newFact("The outbox lives in the billing repo."));
+      expect(first.duplicate).toBe(false);
+      expect(first.fact.id).toBe("F001");
+      // Whitespace-collapsed and case-folded, but the same assertion.
+      const second = store.append(newFact("  the outbox   LIVES in the billing repo.  "));
+      expect(second.duplicate).toBe(true);
+      expect(second.fact.id).toBe("F001");
+    });
+    expect(FactsStore.load(path).facts).toHaveLength(1);
+  });
+
+  test("different text always mints a new row", () => {
+    const ws = makeWorkspace();
+    const path = factsFileOf(ws);
+    FactsStore.update(path, (store) => {
+      store.append(newFact("The outbox lives in the billing repo."));
+      const second = store.append(newFact("Retries are capped at three."));
+      expect(second.duplicate).toBe(false);
+      expect(second.fact.id).toBe("F002");
+    });
+    expect(FactsStore.load(path).facts).toHaveLength(2);
+  });
+
+  test("a RETIRED twin does not block — a retired fact is not live", () => {
+    const ws = makeWorkspace();
+    const path = factsFileOf(ws);
+    FactsStore.update(path, (store) => {
+      const first = store.append(newFact("The outbox lives in the billing repo."));
+      store.retire(first.fact.id, { at: "2026-09-18T10:00:00Z", by: "alan", reason: "stale" });
+      const second = store.append(newFact("The outbox lives in the billing repo."));
+      expect(second.duplicate).toBe(false);
+      expect(second.fact.id).toBe("F002");
+    });
+    expect(FactsStore.load(path).facts).toHaveLength(2);
+  });
+
+  test("`tldrx facts add` prints the existing id and writes nothing new, exit 0", async () => {
+    const ws = makeWorkspace();
+    await factsCommand.run([
+      "add", "The outbox lives in the billing repo.",
+      "--area", "billing", "--decided-by", "owner", "--root", ws.root,
+    ]);
+    const printed = capture();
+    const code = await factsCommand.run([
+      "add", "  The outbox lives in the billing repo.  ",
+      "--area", "billing", "--decided-by", "owner", "--root", ws.root,
+    ]);
+    const out = printed();
+    expect(code).toBe(0);
+    expect(out).toContain("F001");
+    expect(out).toContain("already on record");
+    expect(FactsStore.load(factsFileOf(ws)).facts).toHaveLength(1);
+  });
+});

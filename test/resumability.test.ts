@@ -234,7 +234,7 @@ describe("facts.yml under two writers", () => {
 import { FactsStore } from ${JSON.stringify(join(FRAMEWORK_ROOT, "src/core/facts/FactsStore.ts"))};
 const [path, who, holdMs] = process.argv.slice(2) as [string, string, string];
 const id = FactsStore.update(path, (store) => {
-  const fact = store.append({
+  const { fact } = store.append({
     fact: "fact from " + who,
     area: "demo",
     repos: [],

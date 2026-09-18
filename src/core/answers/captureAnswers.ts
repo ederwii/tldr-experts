@@ -243,7 +243,14 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
       // answer that reproduces the recorded one lands on `conflictOf`'s
       // identical-text-is-agreement rule instead of raising against itself.
       const clash = conflictOf({ match: block.title, area, text }, store.active);
-      const fact = store.append({
+      // gh #216 part A: `store.append` returns the EXISTING live fact, with
+      // `duplicate: true`, when this answer's normalised text already matches
+      // one on record — the exact shape that produced 27 verbatim duplicates in
+      // one measured workspace (one import ran twice). Nothing is appended for
+      // that case, so `fact.added` — an audit record, §7 — must not claim a row
+      // that was not written; the question is still answered, against the fact
+      // that already carries the assertion.
+      const { fact, duplicate } = store.append({
         fact: text,
         ...(truncated ? { truncated: true as const } : {}),
         ...(clash === null ? {} : { conflicts_with: [clash.fact.id] }),
@@ -269,7 +276,7 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
         cost_usd: 0,
         payload: { q: block.id, answer: block.answer, fact: fact.id },
       });
-      log.tryAppend({
+      if (!duplicate) log.tryAppend({
         ts: ctx.at,
         run: ctx.run,
         stage: null,

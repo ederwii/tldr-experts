@@ -16,7 +16,20 @@ import { asFactsFile, validateFactsFile } from "./validateFactsFile.ts";
 import { noteDeprecations } from "../schemas/deprecationNotice.ts";
 import { emitFactsYaml } from "./emitFactsYaml.ts";
 import { findDuplicate, type DuplicateHit } from "./findDuplicate.ts";
+import { normaliseFactText } from "./normaliseFactText.ts";
 import { writeAtomic } from "../fs/writeAtomic.ts";
+
+/**
+ * `FactsStore.append`'s result (gh #216 part A). `duplicate: true` means `fact`
+ * is an EXISTING live row — nothing was appended — because its normalised text
+ * (`normaliseFactText`) matched one already on record. Additive over the plain
+ * `Fact` the method used to return: every internal caller that only reads
+ * `.id`/`.fact` off the old return still gets those, one level deeper.
+ */
+export interface AppendResult {
+  readonly fact: Fact;
+  readonly duplicate: boolean;
+}
 
 /** Header comment written above a facts.yml this store creates from nothing. */
 const NEW_FILE_HEADER =
@@ -79,8 +92,32 @@ export class FactsStore {
     return formatFactId(highest + 1);
   }
 
-  /** Append a new fact and return it, with the id the store assigned. */
-  append(input: NewFact): Fact {
+  /**
+   * Append a new fact, unless its NORMALISED text already matches a LIVE fact —
+   * then nothing is written and the existing fact comes back with
+   * `duplicate: true` (gh #216 part A). A retired or superseded twin does not
+   * block a new row: `isLive` is the one predicate every consumer filters on,
+   * and a fact the workspace no longer stands behind should not silently absorb
+   * a fresh assertion of the same text.
+   *
+   * Both writers — `captureAnswers` and `tldrx facts add` — call this directly,
+   * so the check lives here once rather than being re-run by each caller.
+   */
+  append(input: NewFact): AppendResult {
+    const target = normaliseFactText(input.fact);
+    const existing = this.rows.find((f) => isLive(f) && normaliseFactText(f.fact) === target);
+    if (existing !== undefined) return { fact: existing, duplicate: true };
+    return { fact: this.appendRaw(input), duplicate: false };
+  }
+
+  /**
+   * The unconditional write `append` used to be: always mints a new row. Kept
+   * as its own method for `supersede`, which must never dedupe — a reversed
+   * decision that happens to reuse an old sentence is still a NEW answer, not
+   * the same fact typed twice, and `append`'s dedupe check has no way to tell
+   * the two apart from the text alone.
+   */
+  private appendRaw(input: NewFact): Fact {
     const cut = input.fact.length > MAX_FACT_CHARS;
     const fact: Fact = {
       id: this.nextId(),
@@ -144,7 +181,10 @@ export class FactsStore {
       throw new Error(`${oldId} is already superseded by ${old.superseded_by}`);
     }
     if (isRetired(old)) throw new Error(`${oldId} is retired; a retired fact is not superseded`);
-    const replacement = this.append({ ...input, supersedes: oldId });
+    // `appendRaw`, never `append`: a reversed decision is a NEW answer even when
+    // its text happens to match an old sentence, and `supersede` must never
+    // silently absorb it into dedupe's "same fact, nothing written" branch.
+    const replacement = this.appendRaw({ ...input, supersedes: oldId });
     this.rows[index] = { ...old, superseded_by: replacement.id };
     return replacement;
   }
@@ -160,6 +200,42 @@ export class FactsStore {
     const retired: Fact = { ...fact, retired: retirement };
     this.rows[index] = retired;
     return retired;
+  }
+
+  /**
+   * Link an EXISTING fact as superseded by another EXISTING fact — `tldrx facts
+   * dedupe`'s write path (gh #216 part B). `supersede()` above cannot express
+   * this: it always mints a NEW row via `appendRaw`, and dedupe's whole point is
+   * that a duplicate already on the ledger gets no new row at all. Both halves
+   * of the reciprocal link are written here, the same shape `supersede()` writes
+   * for a freshly minted replacement (spec §2.5: the chain is single-link and
+   * reciprocal, enforced by `validateFactsFile`).
+   *
+   * MEASURED (from `validateFactsFile`'s reciprocity check, which requires
+   * `target.supersedes === id` exactly): the reciprocal link is one-to-one, so a
+   * duplicate GROUP of three or more cannot all point `superseded_by` at one
+   * earliest id — the second link would need `earliest.supersedes` to equal two
+   * different ids at once. `tldrx facts dedupe` therefore CHAINS a group larger
+   * than a pair (`by` is the previous twin, not always the earliest), and
+   * `headOf` still resolves every member of the chain to the one still live.
+   */
+  retireDuplicate(id: string, by: string): Fact {
+    const index = this.rows.findIndex((f) => f.id === id);
+    if (index === -1) throw new Error(`cannot supersede ${id}: no such fact`);
+    const old = this.rows[index] as Fact;
+    if (old.superseded_by !== null) {
+      throw new Error(`${id} is already superseded by ${old.superseded_by}`);
+    }
+    if (isRetired(old)) throw new Error(`${id} is retired; a retired fact is not superseded`);
+    const byIndex = this.rows.findIndex((f) => f.id === by);
+    if (byIndex === -1) throw new Error(`cannot supersede ${id} by ${by}: no such fact`);
+    const target = this.rows[byIndex] as Fact;
+    if (target.supersedes !== null) {
+      throw new Error(`${by} already supersedes ${target.supersedes}; the reciprocal link is one-to-one`);
+    }
+    this.rows[index] = { ...old, superseded_by: by };
+    this.rows[byIndex] = { ...target, supersedes: id };
+    return this.rows[index] as Fact;
   }
 
   findDuplicate(question: string, area: string, threshold?: number): DuplicateHit | null {

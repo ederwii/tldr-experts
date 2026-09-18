@@ -505,7 +505,7 @@ describe("facts.yml (spec §2.5)", () => {
     try {
       const path = join(ws.root, ".tldrx", "memory", "facts.yml");
       const store = FactsStore.load(path);
-      const fact = store.append({
+      const { fact } = store.append({
         fact: "Rankings are global, same as Places.",
         area: "multi-tenancy", repos: ["api"], kind: "answer", confidence: "stated",
         source: { who: "alan", when: "2026-08-29T09:00:00Z", run: FIXTURE_RUN, q: "Q5" },

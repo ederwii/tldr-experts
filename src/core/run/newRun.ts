@@ -434,7 +434,11 @@ function createRunLocked(options: NewRunOptions): NewRunOutcome {
           reusedFacts.push(already.fact.id);
           continue;
         }
-        const appended = factsStore.append(fact);
+        // gh #216 part A: `append` itself also dedupes on normalised text now,
+        // so this is belt-and-suspenders with the Jaccard check above (which
+        // catches near-duplicates the exact-text check does not) — never the
+        // only guard.
+        const { fact: appended } = factsStore.append(fact);
         appendedFacts.push(appended.id);
         events.append(event(at, runId, "fact.added", options.actor, {
           fact: appended.id,

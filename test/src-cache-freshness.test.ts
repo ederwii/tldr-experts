@@ -120,7 +120,7 @@ describe("#206 · a later stage's check sees what a later stage wrote", () => {
 
     // Between the stages: the owner answers, and the `how` stage raises its own
     // questions. Both go through the real writers, onto the same disk the check reads.
-    const added = FactsStore.update(factsPath(ws.root), (store) => store.append({
+    const { fact: added } = FactsStore.update(factsPath(ws.root), (store) => store.append({
       fact: "Ranking state lives in Redis.",
       area: "data-model",
       repos: ["api"],

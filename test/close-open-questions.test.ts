@@ -146,7 +146,7 @@ function seedFact(
       q: null,
       ...(input.decided_by === undefined ? {} : { decided_by: input.decided_by }),
     },
-  }));
+  }).fact);
 }
 
 describe("#141 — a run close names the questions nobody answered", () => {
