@@ -72,7 +72,7 @@ import {
   type PathContext,
 } from "./paths.ts";
 import {
-  fenceFor, renderConventions, renderFacts, renderParts, stackExpertNames,
+  fenceFor, renderConventions, renderFacts, renderFactsIndex, renderParts, stackExpertNames,
   MAX_PREVIOUS_ATTEMPT_BYTES, PREVIOUS_ATTEMPT_EDIT_HEADING,
 } from "./prompt.ts";
 import { applyCheckContracts } from "./checkContracts.ts";
@@ -3072,11 +3072,19 @@ export function assemblePrompt(
   });
   // Inputs are filled FIRST, out of their own shared ceiling; the experts share
   // what `knowledge_max_bytes` allows between them afterwards (spec §2.3, §5).
+  //
+  // gh #216 part E (owner decision "Index", 2026-09-18): when this stage
+  // declares the facts file, the raw YAML never reaches `inlineInputs` — an
+  // INDEX stands in for it, one line per live fact rather than the file's full
+  // bytes. Every other declared input is read from disk exactly as before.
   const inlined = inlineInputs(inputs, {
     ctx,
     seed,
     budgetBytes: spec.inputsMaxBytes,
     exempt: new Set(inputs.filter((path) => path.endsWith(`/${SEED_INDEX}`))),
+    ...(factsDeclaredPath === undefined
+      ? {}
+      : { substitute: new Map([[factsDeclaredPath, renderFactsIndex(facts.facts, { repos: store.run.repos })]]) }),
   });
   // The host's own context for this cycle (spec §5). Read here, with the rest of
   // the prompt's material, so every mode sees the same document: a note left for

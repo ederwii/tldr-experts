@@ -638,6 +638,19 @@ cap for free: `DEFAULT_FACTS_MAX_BYTES` (32 KB). Over it the list is cut on a WH
 and the cut is NAMED — `_…N facts omitted, M B over the 32,768-byte ceiling — read \`.tldrx/memory/facts.yml\` for
 the full text._` — never silent.
 
+**What and How stop receiving the raw file at all (gh #216, owner decision "Index", 2026-09-18).** Where a stage's
+declared-input path RESOLVES to `.tldrx/memory/facts.yml` — measured: only `what` and `how` actually route the file
+through `inlineInputs`; `build` and `watch` declare it in `stage.yml` too but read facts through their own
+executors and never reach `inlineInputs` for it, so the declaration there is unused — `renderFactsIndex`
+(`src/core/facilitator/prompt.ts`) substitutes an INDEX for the raw YAML: one line per LIVE fact in this run's
+repo scope, sorted by id, `- [F<n>] <area> · <first ~120 chars, cut at a word boundary>…`, followed by a fixed rule
+pointing at the file for the full text — the same `max_reads` (§2.3) already bounds that read. Detected by the
+RESOLVED path, never a filename pattern, so every OTHER declared input is unaffected. The index goes through
+`renderFacts`'s own ceiling (above), cut on whole lines and named the same way. The `## Inputs` preamble marks a
+summarised file with its own sentence ("The following is a SUMMARY, not the full file...") rather than the ordinary
+"there is nothing to open and nothing else to find", which would otherwise contradict `what`/`how`'s own `stage.md`
+prose telling the agent to grep the real file.
+
 ```yaml
 version: 1
 facts:

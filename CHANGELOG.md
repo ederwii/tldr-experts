@@ -27,6 +27,15 @@
   first time (see #216).** Previously unbounded: one measured section reached 123,938 B, 57% of
   a 218 KB bundle. Over the ceiling the list is cut on a WHOLE fact, never mid-word (#161), and
   the cut is named on the page rather than silently dropped.
+- **What and How stop receiving `.tldrx/memory/facts.yml` raw — an INDEX rides in its place
+  (owner decision "Index", 2026-09-18; see #216).** Measured on a 120-fact fixture ledger: a
+  48,150 B `## Inputs` entry became a 17,490 B index (63.7% smaller), one line per live fact —
+  `- [F<n>] <area> · <first ~120 chars>…` — with a closing pointer at the file for the full
+  text. Build and Watch declare the same input in their `stage.yml` too but read facts through
+  their own executors, never `inlineInputs`, so they are unaffected — measured, the declaration
+  there was already unused. The `## Inputs` preamble marks the summarised file with its own
+  sentence instead of the "nothing else to find" line that would otherwise contradict
+  what/how's own prose telling the agent to grep the real file.
 
 ### Changed
 
