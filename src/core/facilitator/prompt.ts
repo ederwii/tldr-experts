@@ -50,7 +50,8 @@ import { join } from "node:path";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
 import { DISPATCH_NOTES_HEADING } from "./dispatchNotes.ts";
 import { PROJECT_SKILLS_HEADING } from "../experts/stackPacks.ts";
-import { isLive, type Fact } from "../facts/Fact.ts";
+import { byteLength } from "../experts/expertKnowledge.ts";
+import { factNumber, isLive, type Fact } from "../facts/Fact.ts";
 import { stackExpertNames } from "../experts/stackExperts.ts";
 
 export { stackExpertNames };
@@ -76,6 +77,16 @@ export interface PromptInput {
    * matters to the agent: "read it at that path" is advice it cannot take.
    */
   readonly notInWorktree?: boolean;
+  /**
+   * True when `content` is a SUMMARY of the declared file, not the file itself
+   * (gh #216 part E: `.tldrx/memory/facts.yml` inlines an index, never the raw
+   * YAML, for a stage whose declared-input path resolves to it). Different from
+   * `isNotInlined`: the summary IS fully present in the prompt, so the
+   * truncation machinery must not fire for it — but the reader preamble's
+   * blanket "there is nothing else to find" would be exactly the gh #364 lie
+   * for this one file, so it earns its own sentence instead of a false one.
+   */
+  readonly summary?: boolean;
 }
 
 /**
@@ -483,6 +494,7 @@ export type PreambleRole = "reader" | "developer";
  */
 export function preamble(inputs: readonly PromptInput[], role: PreambleRole = "reader"): readonly string[] {
   const missing = inputs.filter(isNotInlined);
+  const summarised = inputs.filter((input) => input.summary === true && !isNotInlined(input));
   if (role === "developer") {
     const opening = missing.length === 0
       ? ["Every declared input is inlined below — there is nothing on disk you need to open for", "these paths specifically."]
@@ -501,6 +513,7 @@ export function preamble(inputs: readonly PromptInput[], role: PreambleRole = "r
       "These declared inputs are a WRITE allowlist, not a read allowlist. Read any other file in",
       "this repo you need — an interface it implements, a sibling test, a command's real fields —",
       "never guess when you can open it.",
+      ...summaryNote(summarised),
       "",
     ];
   }
@@ -508,6 +521,7 @@ export function preamble(inputs: readonly PromptInput[], role: PreambleRole = "r
     return [
       "These files are the ONLY ones you may read. Their full content is inlined below,",
       "so there is nothing to open and nothing else to find.",
+      ...summaryNote(summarised),
       "",
     ];
   }
@@ -518,8 +532,22 @@ export function preamble(inputs: readonly PromptInput[], role: PreambleRole = "r
     `Inlined below: ${String(inputs.length - missing.length)} of ${String(inputs.length)} declared inputs.`,
     "The rest exist on disk — READ them at the listed paths before relying on them; do not",
     `guess: ${listed}`,
+    ...summaryNote(summarised),
     "",
   ];
+}
+
+/**
+ * The one extra sentence a SUMMARISED input earns (gh #216 part E) — additive
+ * over every existing branch above, so a stage with no summarised input reads
+ * byte-identically to before this field existed. Named rather than folded into
+ * the "missing" sentence: a summary IS present in the prompt, so counting it as
+ * "not inlined" would undercount what actually reached the model.
+ */
+function summaryNote(summarised: readonly PromptInput[]): readonly string[] {
+  if (summarised.length === 0) return [];
+  const listed = summarised.map((input) => input.path).join(", ");
+  return [`The following is a SUMMARY, not the full file — read it at its declared path for the full text: ${listed}.`];
 }
 
 /** A fence long enough that the file's own backticks cannot close it. */
@@ -551,23 +579,121 @@ export function fenceFor(content: string): string {
  * detected" — never "checked and agreed" — because the detection is lexical
  * (`conflictOf`, Jaccard ≥ 0.6 inside one `area`) and cannot see two
  * differently-titled answers that contradict.
+ *
+ * `maxBytes` (gh #216 part C) caps the rendered list, cutting on a WHOLE fact
+ * (#161 — never mid-word) and NAMING the cut (§7 absent-with-reason) rather
+ * than dropping it silently. Measured on the issue's own field audit: Build's
+ * `### Facts already on record` (the only caller with no byte ceiling at all
+ * before this) reached 123,938 B, 57% of a 218 KB developer bundle — this
+ * default caps that section at roughly a quarter of the worst measured case,
+ * comfortably under `inputs_max_bytes`'s 256 KB default alongside everything
+ * else a stage declares. Every caller of `renderFacts` gets the cap for free:
+ * Build's developer prompt (`executors/build.ts:5610`) and the `{{facts}}`
+ * template value (`assemblePrompt`, used by Watch's `stage.md`) alike — one
+ * derivation, no call site needs to change.
  */
-export function renderFacts(facts: readonly Fact[], repos: readonly string[]): string {
+export const DEFAULT_FACTS_MAX_BYTES = 32 * 1024;
+
+export function renderFacts(
+  facts: readonly Fact[],
+  repos: readonly string[],
+  maxBytes: number = DEFAULT_FACTS_MAX_BYTES,
+): string {
   const relevant = facts.filter(
     (fact) => isLive(fact) && (fact.repos.length === 0 || fact.repos.some((r) => repos.includes(r))),
   );
   if (relevant.length === 0) return "_No recorded facts match this run's repos._";
-  return relevant
-    .map((fact) => {
-      const decidedBy = fact.source.decided_by === undefined ? "" : ` · decided by ${fact.source.decided_by}`;
-      // Detected contradictions, named — a prompt handed both facts is told they
-      // disagree instead of being left to pick one.
-      const conflicts = fact.conflicts_with === undefined || fact.conflicts_with.length === 0
-        ? ""
-        : ` · conflicts with ${fact.conflicts_with.join(", ")}`;
-      return `- [${fact.id}] ${fact.fact} (${fact.area} · ${fact.confidence})${decidedBy}${conflicts}`;
-    })
-    .join("\n");
+  const lines = relevant.map(renderFactLine);
+  return capFactLines(lines, maxBytes, "facts");
+}
+
+function renderFactLine(fact: Fact): string {
+  const decidedBy = fact.source.decided_by === undefined ? "" : ` · decided by ${fact.source.decided_by}`;
+  // Detected contradictions, named — a prompt handed both facts is told they
+  // disagree instead of being left to pick one.
+  const conflicts = fact.conflicts_with === undefined || fact.conflicts_with.length === 0
+    ? ""
+    : ` · conflicts with ${fact.conflicts_with.join(", ")}`;
+  return `- [${fact.id}] ${fact.fact} (${fact.area} · ${fact.confidence})${decidedBy}${conflicts}`;
+}
+
+/**
+ * Cut a rendered list of one-line-per-fact rows to `maxBytes`, on a WHOLE
+ * line — never a byte-sliced prefix of one (#161) — and name what was cut:
+ * the same discipline `inlineInputs` (`seedInputs.ts`) already follows for a
+ * declared input the shared budget could not fit. Shared by `renderFacts`
+ * (part C) and `renderFactsIndex` (part E) — one derivation of "what a
+ * ceiling on a list of fact lines does when it runs out."
+ */
+function capFactLines(lines: readonly string[], maxBytes: number, noun: string): string {
+  const whole = lines.join("\n");
+  if (byteLength(whole) <= maxBytes) return whole;
+  const kept: string[] = [];
+  let spent = 0;
+  for (const line of lines) {
+    const size = byteLength(line) + (kept.length === 0 ? 0 : 1); // +1 for the joining newline
+    if (spent + size > maxBytes) break;
+    kept.push(line);
+    spent += size;
+  }
+  const omittedCount = lines.length - kept.length;
+  const omittedBytes = byteLength(whole) - spent;
+  const note = `_…${omittedCount.toLocaleString("en-US")} ${noun} omitted, `
+    + `${omittedBytes.toLocaleString("en-US")} B over the ${maxBytes.toLocaleString("en-US")}-byte ceiling — `
+    + "read `.tldrx/memory/facts.yml` for the full text._";
+  return kept.length === 0 ? note : `${kept.join("\n")}\n${note}`;
+}
+
+/** `renderFactsIndex`'s snippet length — a pointer, not a copy (gh #216 part E). */
+const FACTS_INDEX_SNIPPET_CHARS = 120;
+
+export interface FactsIndexOptions {
+  readonly repos: readonly string[];
+  readonly maxBytes?: number;
+}
+
+/**
+ * `.tldrx/memory/facts.yml`, as an INDEX rather than the file itself (gh #216
+ * part E, owner decision "Index", 2026-09-18). Where a stage's declared-input
+ * path resolves to the workspace's facts file (`inlineInputs`, detected by
+ * resolved path — never a filename pattern), this replaces the raw YAML: one
+ * line per LIVE fact in scope, `- [F<n>] <area> · <first ~120 chars>…`, sorted
+ * by id, followed by a fixed rule pointing at the real file for the full text
+ * — the stages already spend `max_reads` (§2.3) on exploration, and reading
+ * `.tldrx/memory/facts.yml` when a fact matters counts against that same cap.
+ *
+ * Filtered by repo the same way `renderFacts` is (a LIVE fact scoped to one of
+ * `opts.repos`, or scoped to none at all) — an index of every fact in the
+ * workspace, most of them about repos this run never touches, would defeat the
+ * point of shrinking the bundle. `kind`/`confidence` are left off: no stage
+ * prompt in this repo's test suite depends on either at the index granularity
+ * (`grep`-measured — the only readers of `renderFacts`' `kind`/`confidence`
+ * text are Build's full one-liners and `{{facts}}`, neither of which this
+ * function feeds).
+ *
+ * Goes through the SAME ceiling `renderFacts` (part C) uses, cut on whole
+ * lines and named — one derivation of "what a ceiling on fact lines does",
+ * shared via `capFactLines`.
+ */
+export function renderFactsIndex(facts: readonly Fact[], opts: FactsIndexOptions): string {
+  const relevant = facts
+    .filter((fact) => isLive(fact) && (fact.repos.length === 0 || fact.repos.some((r) => opts.repos.includes(r))))
+    .slice()
+    .sort((a, b) => factNumber(a.id) - factNumber(b.id));
+  if (relevant.length === 0) return "_No recorded facts match this run's repos._";
+  const lines = relevant.map((fact) => `- [${fact.id}] ${fact.area} · ${indexSnippet(fact.fact)}`);
+  const body = capFactLines(lines, opts.maxBytes ?? DEFAULT_FACTS_MAX_BYTES, "facts");
+  return `${body}\n\nRead \`.tldrx/memory/facts.yml\` for the full text of any fact above — it counts toward `
+    + "this stage's `max_reads`.";
+}
+
+/** The first ~120 chars of `text`, cut at a word boundary, `…` when cut. */
+function indexSnippet(text: string): string {
+  if (text.length <= FACTS_INDEX_SNIPPET_CHARS) return text;
+  const cut = text.slice(0, FACTS_INDEX_SNIPPET_CHARS);
+  const lastSpace = cut.lastIndexOf(" ");
+  const boundary = lastSpace > 0 ? cut.slice(0, lastSpace) : cut;
+  return `${boundary}…`;
 }
 
 /**

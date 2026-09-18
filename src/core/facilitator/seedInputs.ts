@@ -36,6 +36,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { resolveDeclared, type PathContext } from "./paths.ts";
 import { MAX_STAGE_INPUTS } from "../run/workflowPreset.ts";
+import { byteLength } from "../experts/expertKnowledge.ts";
 import type { PromptInput } from "./prompt.ts";
 
 /**
@@ -92,6 +93,20 @@ export interface InlineOptions {
   readonly budgetBytes?: number;
   /** Exempt from the budget — the seed's own index. */
   readonly exempt?: ReadonlySet<string>;
+  /**
+   * Declared paths whose CONTENT is substituted before budgeting — the raw
+   * file is never read for these, and the size charged against the shared
+   * ceiling is the substitute's own byte length (gh #216 part E: an index
+   * standing in for `.tldrx/memory/facts.yml`). Keyed on the declared string
+   * exactly as it appears in `declared`. The substitute is built by the
+   * CALLER — which alone knows what a given file MEANS — so this stays one
+   * derivation of "how a declared input is budgeted", whether its bytes came
+   * off disk or not; every other declared path is read from disk exactly as
+   * before. `summary: true` marks the resulting `PromptInput` so the reader
+   * preamble does not claim "nothing else to find" for a file it just handed
+   * a SUMMARY of.
+   */
+  readonly substitute?: ReadonlyMap<string, string>;
 }
 
 export function inlineInputs(
@@ -111,18 +126,28 @@ export function inlineInputs(
       inputs.push({ path, content: readOrEmpty(abs) });
       continue;
     }
-    const size = sizeOf(abs);
+    const substitute = options.substitute?.get(path);
+    const isSubstituted = substitute !== undefined;
+    const size = isSubstituted ? byteLength(substitute) : sizeOf(abs);
     const room = budget - spent;
     if (size <= room) {
       spent += size;
-      inputs.push({ path, content: readOrEmpty(abs) });
+      inputs.push({
+        path,
+        content: isSubstituted ? substitute : readOrEmpty(abs),
+        ...(isSubstituted ? { summary: true as const } : {}),
+      });
       continue;
     }
     if (options.seed.has(path)) seedOverflowed = true;
     if (room >= MIN_SLICE_BYTES) {
       spent += room;
+      const content = isSubstituted ? sliceText(substitute, room) : slice(abs, room);
       truncated.push({ path, totalBytes: size, inlinedBytes: room });
-      inputs.push({ path, content: slice(abs, room), inlinedBytes: room, totalBytes: size });
+      inputs.push({
+        path, content, inlinedBytes: room, totalBytes: size,
+        ...(isSubstituted ? { summary: true as const } : {}),
+      });
       continue;
     }
     truncated.push({ path, totalBytes: size, inlinedBytes: 0 });
@@ -198,4 +223,9 @@ function readOrEmpty(abs: string): string {
   } catch {
     return "";
   }
+}
+
+/** `slice`'s counterpart for a substitute string rather than a file on disk. */
+function sliceText(text: string, bytes: number): string {
+  return Buffer.from(text, "utf8").subarray(0, bytes).toString("utf8");
 }

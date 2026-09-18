@@ -45,7 +45,7 @@ import { FactsStore } from "../src/core/facts/FactsStore.ts";
 import { MAX_FACT_CHARS, type Fact } from "../src/core/facts/Fact.ts";
 import { validateFactsFile } from "../src/core/facts/validateFactsFile.ts";
 import { renderMandate } from "../src/core/drive/mandate.ts";
-import { renderFacts } from "../src/core/facilitator/prompt.ts";
+import { DEFAULT_FACTS_MAX_BYTES, renderFacts } from "../src/core/facilitator/prompt.ts";
 import { createRun } from "../src/core/run/newRun.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
@@ -378,6 +378,57 @@ describe("renderFacts — {{facts}} carries decided_by attribution", () => {
   });
 });
 
+/**
+ * Part C of gh #216: `renderFacts`' output goes under a byte ceiling — the
+ * SAME function Build's `### Facts already on record` renders (executors/
+ * build.ts:5610) and the `{{facts}}` template value use, so both get the cap
+ * for free. Measured on the issue's own field audit: a single section reached
+ * 123,938 B, 57% of a 218 KB bundle. The cut lands on a WHOLE fact (#161 —
+ * never mid-word) and is NAMED (§7 absent-with-reason), never silent.
+ */
+describe("renderFacts — byte ceiling (gh #216 part C)", () => {
+  function manyFacts(n: number): Fact[] {
+    return Array.from({ length: n }, (_, i) =>
+      fact({
+        id: `F${String(i + 1).padStart(3, "0")}`,
+        fact: `Fact number ${String(i + 1)} is a long sentence padded out so the ceiling has something to cut against, repeated for length.`,
+      }));
+  }
+
+  test("under the ceiling, nothing is cut and no note is appended", () => {
+    const facts = manyFacts(3);
+    const rendered = renderFacts(facts, [], 4096);
+    expect(rendered).not.toContain("omitted");
+    expect(rendered.split("\n")).toHaveLength(3);
+  });
+
+  test("over the ceiling, the cut lands on a WHOLE fact and is named", () => {
+    const facts = manyFacts(50);
+    const whole = renderFacts(facts, [], 100_000);
+    const capped = renderFacts(facts, [], 800);
+
+    // The KEPT fact lines stay inside the ceiling; the note that explains the
+    // cut rides after it (the same shape `inlineInputs`'s own truncation note
+    // uses — metadata about the cut is not itself counted against it).
+    const keptLines = capped.split("\n").filter((line) => line.startsWith("- [F"));
+    expect(Buffer.byteLength(keptLines.join("\n"), "utf8")).toBeLessThanOrEqual(800);
+    expect(capped).toContain("omitted");
+    expect(capped).toContain(".tldrx/memory/facts.yml");
+    // Never mid-word (#161): every kept line is one COMPLETE rendered fact line
+    // from the uncapped render, never a byte-sliced prefix of one.
+    const wholeLines = whole.split("\n");
+    for (const line of keptLines) expect(wholeLines).toContain(line);
+    expect(keptLines.length).toBeLessThan(facts.length);
+  });
+
+  test("the default ceiling is DEFAULT_FACTS_MAX_BYTES, applied with no third argument", () => {
+    const facts = manyFacts(400);
+    const rendered = renderFacts(facts, []);
+    expect(Buffer.byteLength(rendered, "utf8")).toBeLessThanOrEqual(DEFAULT_FACTS_MAX_BYTES + 512);
+    expect(rendered).toContain("omitted");
+  });
+});
+
 /** `validateFactsFile` — the closed-set check on `source.decided_by` (task 5, fix round finding 4). */
 describe("validateFactsFile — decided_by is a closed set", () => {
   test("a value outside the closed set is rejected with a named issue", () => {
@@ -627,5 +678,84 @@ describe("the declared-repo check has one implementation", () => {
       .map((path) => path.slice(srcRoot.length + 1))
       .sort();
     expect(carriers).toEqual(["cli/repoScope.ts"]);
+  });
+});
+
+/**
+ * Part A of gh #216: `FactsStore.append` dedupes at write time — a fact whose
+ * NORMALISED text (trim, collapse whitespace, case-fold) equals a LIVE fact's
+ * returns that fact instead of minting a new row. Both writers (`captureAnswers`
+ * and `tldrx facts add`) go through `append`, so this is the one place the
+ * behaviour has to live.
+ */
+describe("FactsStore.append — dedupe at write time (gh #216 part A)", () => {
+  function newFact(text: string, overrides: Partial<Fact> = {}): Parameters<FactsStore["append"]>[0] {
+    return {
+      fact: text,
+      area: "billing",
+      repos: [],
+      kind: "observed",
+      confidence: "measured",
+      source: { who: "alan", when: "2026-09-18T09:00:00Z", run: null, q: null },
+      ...overrides,
+    };
+  }
+
+  test("a twin's normalised text returns the existing live fact and appends no row", () => {
+    const ws = makeWorkspace();
+    const path = factsFileOf(ws);
+    FactsStore.update(path, (store) => {
+      const first = store.append(newFact("The outbox lives in the billing repo."));
+      expect(first.duplicate).toBe(false);
+      expect(first.fact.id).toBe("F001");
+      // Whitespace-collapsed and case-folded, but the same assertion.
+      const second = store.append(newFact("  the outbox   LIVES in the billing repo.  "));
+      expect(second.duplicate).toBe(true);
+      expect(second.fact.id).toBe("F001");
+    });
+    expect(FactsStore.load(path).facts).toHaveLength(1);
+  });
+
+  test("different text always mints a new row", () => {
+    const ws = makeWorkspace();
+    const path = factsFileOf(ws);
+    FactsStore.update(path, (store) => {
+      store.append(newFact("The outbox lives in the billing repo."));
+      const second = store.append(newFact("Retries are capped at three."));
+      expect(second.duplicate).toBe(false);
+      expect(second.fact.id).toBe("F002");
+    });
+    expect(FactsStore.load(path).facts).toHaveLength(2);
+  });
+
+  test("a RETIRED twin does not block — a retired fact is not live", () => {
+    const ws = makeWorkspace();
+    const path = factsFileOf(ws);
+    FactsStore.update(path, (store) => {
+      const first = store.append(newFact("The outbox lives in the billing repo."));
+      store.retire(first.fact.id, { at: "2026-09-18T10:00:00Z", by: "alan", reason: "stale" });
+      const second = store.append(newFact("The outbox lives in the billing repo."));
+      expect(second.duplicate).toBe(false);
+      expect(second.fact.id).toBe("F002");
+    });
+    expect(FactsStore.load(path).facts).toHaveLength(2);
+  });
+
+  test("`tldrx facts add` prints the existing id and writes nothing new, exit 0", async () => {
+    const ws = makeWorkspace();
+    await factsCommand.run([
+      "add", "The outbox lives in the billing repo.",
+      "--area", "billing", "--decided-by", "owner", "--root", ws.root,
+    ]);
+    const printed = capture();
+    const code = await factsCommand.run([
+      "add", "  The outbox lives in the billing repo.  ",
+      "--area", "billing", "--decided-by", "owner", "--root", ws.root,
+    ]);
+    const out = printed();
+    expect(code).toBe(0);
+    expect(out).toContain("F001");
+    expect(out).toContain("already on record");
+    expect(FactsStore.load(factsFileOf(ws)).facts).toHaveLength(1);
   });
 });

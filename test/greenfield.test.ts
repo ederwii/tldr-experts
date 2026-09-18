@@ -27,7 +27,26 @@ import { seedClaims, allSeedHeadings } from "../src/core/seed/seedClaims.ts";
 import { uncoveredSections } from "../src/core/seed/seedCoverage.ts";
 import { inlineInputs } from "../src/core/facilitator/seedInputs.ts";
 import { parseYaml } from "../src/core/yaml.ts";
+import { emitFactsYaml } from "../src/core/facts/emitFactsYaml.ts";
+import { formatFactId, type Fact } from "../src/core/facts/Fact.ts";
 import { greenfieldFixture, REQUIREMENTS_MD, type Fixture } from "./init-fixture.ts";
+
+/** `n` LIVE facts, area `greenfield`, each well over the index's ~120-char cut. */
+function manyLiveFacts(n: number): Fact[] {
+  return Array.from({ length: n }, (_, i) => ({
+    id: formatFactId(i + 1),
+    fact: `Fact number ${String(i + 1)} is a long sentence padded out so the index has something `
+      + "to cut against, padded, padded, padded, padded, padded, padded, padded, padded, padded.",
+    area: "greenfield",
+    repos: [],
+    kind: "observed",
+    confidence: "measured",
+    source: { who: "alan", when: "2026-08-29T12:00:00Z", run: null, q: null },
+    supersedes: null,
+    superseded_by: null,
+    retired: null,
+  }));
+}
 
 const runner = new SpawnCommandRunner();
 const NOW = new Date("2026-08-29T12:00:00Z");
@@ -233,6 +252,69 @@ describe("tldrx run new --seed <file>", () => {
     expect(inputs).toContain("### `01-what/seed-index.md`");
     // The product expert exists now, so the stage is not handed an empty role.
     expect(prompt).toContain("<!-- expert: product -->");
+  });
+
+  /**
+   * gh #216 part E, owner decision "Index" (2026-09-18): what/how stop
+   * receiving `.tldrx/memory/facts.yml` raw. Where the declared-input path
+   * (`inlineInputs`) meets the workspace's memory facts file — the What stage's
+   * own `.tldrx/memory/facts.yml` entry — the raw YAML is replaced with a
+   * one-line-per-fact index. A REAL run through the real `what` stage.yml, so
+   * the measurement is of the actual bundle, not a synthetic fixture.
+   */
+  test("the What bundle carries a facts INDEX, not the raw YAML — measured before/after bytes", async () => {
+    const fixture = await greenfield();
+    await init(fixture.root);
+    const factsFile = join(fixture.root, ".tldrx", "memory", "facts.yml");
+    const rawFactsYaml = emitFactsYaml({ version: 1, facts: manyLiveFacts(120) });
+    writeFileSync(factsFile, rawFactsYaml, "utf8");
+    const rawBytes = Buffer.byteLength(rawFactsYaml, "utf8");
+
+    const outcome = seedRun(fixture.root, "requirements.md");
+    const prepared = await runNext({
+      root: fixture.root, dryRun: false, mode: "prepare", yolo: false,
+      actor: "alan", at: "2026-08-29T12:00:00Z",
+    });
+    expect(prepared.code).toBe(0);
+
+    const prompt = readFileSync(join(outcome.runDir, ".agent/what/prompt.md"), "utf8");
+    const inputs = prompt.split("## Inputs")[1] ?? "";
+    const factsSection = (inputs.split("### `.tldrx/memory/facts.yml`")[1] ?? "").split("### `")[0] ?? "";
+    const indexBytes = Buffer.byteLength(factsSection, "utf8");
+
+    // The raw per-fact YAML mapping keys are gone — this is an INDEX, not the file.
+    expect(factsSection).not.toContain("kind: observed");
+    expect(factsSection).not.toContain("confidence: measured");
+    expect(factsSection).not.toContain("source:");
+    // One line per live fact, sorted by id, the area named, the text cut with an
+    // ellipsis (each fact here is well over 120 chars).
+    expect(factsSection).toContain("- [F001] greenfield ·");
+    expect(factsSection).toContain("- [F120] greenfield ·");
+    expect(factsSection).toContain("…");
+    // The pointer back to the full file.
+    expect(factsSection).toContain("Read `.tldrx/memory/facts.yml`");
+    expect(factsSection).toContain("max_reads");
+
+    // MEASURED: the index is a small fraction of the raw file it replaces.
+    expect(indexBytes).toBeLessThan(rawBytes / 2);
+    expect(indexBytes).toBeGreaterThan(0);
+    // eslint-disable-next-line no-console
+    console.log(`gh #216 part E measured: raw facts.yml ${String(rawBytes)} B -> index ${String(indexBytes)} B `
+      + `in the What bundle (${((1 - indexBytes / rawBytes) * 100).toFixed(1)}% smaller)`);
+
+    // The ledger says so too (part D wiring): a non-zero, and much smaller,
+    // facts share than the raw file it replaced.
+    const pending = JSON.parse(
+      readFileSync(join(outcome.runDir, ".agent/what/pending.json"), "utf8"),
+    ) as { context?: { facts_bytes?: number } };
+    expect(pending.context?.facts_bytes).toBeGreaterThan(0);
+    expect(pending.context?.facts_bytes).toBeLessThan(rawBytes / 2);
+
+    // The reader preamble does not claim there is "nothing else to find" for a
+    // file it just told the agent (in stage.md's own prose) to grep — the
+    // summary note says to read the real file for the full text.
+    expect(prompt).toContain("SUMMARY");
+    expect(prompt).toContain(".tldrx/memory/facts.yml");
   });
 
   test("refuses a PDF, and refuses --from and --seed together", async () => {

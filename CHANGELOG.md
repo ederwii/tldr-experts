@@ -2,6 +2,50 @@
 
 ## 0.36.0 — unreleased
 
+### Added
+
+- **`tldrx facts dedupe [--dry-run]` retires the duplicate facts already on a ledger written
+  before the append-time check below existed (see #216).** A field audit measured 27 verbatim
+  duplicates in one workspace's `facts.yml` (F028-F054 == F001-F027, one import that ran
+  twice), inlined into every what/how/build prompt with no filter. The new subcommand groups
+  live facts by normalised text, keeps the earliest id per group, and marks every later member
+  `superseded_by` — chained rather than fanned onto the earliest id directly for a group of
+  three or more, since the reciprocal link `validateFactsFile` enforces is one-to-one; `headOf`
+  still resolves every chained member to the one still live. Nothing is deleted, `--dry-run`
+  writes nothing, and a ledger with no duplicates is byte-identical after.
+- **The context ledger carries the facts share as its own line, `facts_bytes` in `pending.json`
+  and `(facts N B)` in `--prepare`/`--dry-run` (see #216).** A subset of `inputs_bytes`, the same
+  shape `questions_bytes` already is of `stage_bytes` — never summed twice into `total_bytes`.
+  The field audit that opened #216 found this share reaching 57% of a bundle with nothing
+  anywhere naming it; the number used to exist only as something you could `wc -c` a rendered
+  prompt to discover by hand.
+
+### Changed
+
+- **A turn killed by the provider's rate limit with no attested `rate_limit_event` frame can
+  now be classified `rate_limit` from its raw text (part of #341).** `describeFailure`'s
+  residual `unclassified` bucket now checks stdout/stderr against a small exported regex
+  (`RATE_LIMIT_TEXT_RE`) for the REPORTED (not measured — no raw capture of a turn that
+  actually died against the wall exists in this repo) shape of a session-limit API error
+  before giving up; it never overrides a more specific cause (timeout, a kill signal, a
+  malformed envelope, a named error or subtype disagreement). The frame-attested capture
+  #341 actually asks for still does not exist — this narrows the "no reason named" bucket,
+  it does not close the issue.
+- **`renderFacts`'s rendered list — Build's `### Facts already on record` and the `{{facts}}`
+  template value alike — sits under a byte ceiling (`DEFAULT_FACTS_MAX_BYTES`, 32 KB) for the
+  first time (see #216).** Previously unbounded: one measured section reached 123,938 B, 57% of
+  a 218 KB bundle. Over the ceiling the list is cut on a WHOLE fact, never mid-word (#161), and
+  the cut is named on the page rather than silently dropped.
+- **What and How stop receiving `.tldrx/memory/facts.yml` raw — an INDEX rides in its place
+  (owner decision "Index", 2026-09-18; see #216).** Measured on a 120-fact fixture ledger: a
+  48,150 B `## Inputs` entry became a 17,490 B index (63.7% smaller), one line per live fact —
+  `- [F<n>] <area> · <first ~120 chars>…` — with a closing pointer at the file for the full
+  text. Build and Watch declare the same input in their `stage.yml` too but read facts through
+  their own executors, never `inlineInputs`, so they are unaffected — measured, the declaration
+  there was already unused. The `## Inputs` preamble marks the summarised file with its own
+  sentence instead of the "nothing else to find" line that would otherwise contradict
+  what/how's own prose telling the agent to grep the real file.
+
 ### Fixed
 
 - **The Build executor's `ExecutorTask` rows never copied `AgentOutcome.failureKind` across, so a
@@ -32,18 +76,13 @@
   per-story declared-outputs list to check existence against, so it is deliberately left
   out of this change — see the follow-up draft at
   `scratchpad/issue-draft-375-build-spawndeveloper-exit-disagreement.md`.
-
-### Changed
-
-- **A turn killed by the provider's rate limit with no attested `rate_limit_event` frame can
-  now be classified `rate_limit` from its raw text (part of #341).** `describeFailure`'s
-  residual `unclassified` bucket now checks stdout/stderr against a small exported regex
-  (`RATE_LIMIT_TEXT_RE`) for the REPORTED (not measured — no raw capture of a turn that
-  actually died against the wall exists in this repo) shape of a session-limit API error
-  before giving up; it never overrides a more specific cause (timeout, a kill signal, a
-  malformed envelope, a named error or subtype disagreement). The frame-attested capture
-  #341 actually asks for still does not exist — this narrows the "no reason named" bucket,
-  it does not close the issue.
+- **`FactsStore.append` dedupes on normalised text, so re-running a driver's import or
+  `tldrx facts add` on the same sentence no longer mints a second row (see #216).** Both
+  writers — `captureAnswers` and `tldrx facts add` — now get the existing live fact back
+  (`duplicate: true`) instead of a new one when the incoming text, trimmed/whitespace-
+  collapsed/case-folded, matches a LIVE fact's; a retired or superseded twin does not block a
+  fresh assertion of the same text. `facts add` prints "`<id>` is already on record" and exits
+  0 rather than writing a duplicate.
 
 ## 0.35.0 — 2026-09-17
 

@@ -83,6 +83,13 @@ export interface PendingContext {
    */
   readonly project_skills_bytes: number;
   readonly previous_attempt_bytes: number;
+  /**
+   * `.tldrx/memory/facts.yml`'s own share of `inputs_bytes` — gh #216 part D,
+   * additive. A SUBSET already counted inside `inputs_bytes` and `total_bytes`,
+   * the same shape `questions_bytes` already is of `stage_bytes`; 0 when this
+   * stage declares no facts input, never absent.
+   */
+  readonly facts_bytes: number;
   /** Declared inputs the shared inline budget could not fit whole. */
   readonly truncated_inputs: readonly string[];
 }

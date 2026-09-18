@@ -12,8 +12,9 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
-  buildPrompt, cutSection, renderParts, type PromptParts,
+  buildPrompt, cutSection, renderParts, type PromptParts, type PromptPart,
 } from "../src/core/facilitator/prompt.ts";
+import { buildLedger, renderLedger } from "../src/core/facilitator/contextLedger.ts";
 
 const VALUES = {
   run: "260830-demo",
@@ -301,6 +302,11 @@ describe("the context ledger and prompt_max_bytes (N2)", () => {
     expect(sum).toBe(context?.total_bytes ?? -1);
     // The ledger measures the file that was actually written, to the byte.
     expect(context?.total_bytes).toBe(Buffer.byteLength(bundle(ws).prompt, "utf8"));
+    // gh #216 part D: `facts_bytes` is a SUBSET of `inputs_bytes` (the same
+    // shape `questions_bytes` already is of `stage_bytes`) — it must not widen
+    // the sum above. This fixture's stage declares no `.tldrx/memory/facts.yml`
+    // input at all, so the share is 0, not absent.
+    expect(context?.facts_bytes).toBe(0);
   });
 
   test("over prompt_max_bytes the stage is REFUSED (exit 2), before anything spawns", async () => {
@@ -320,6 +326,73 @@ describe("the context ledger and prompt_max_bytes (N2)", () => {
 
     const other = seededWorkspace();
     expect((await prepare(other, { promptMaxBytes: 20_000 })).code).toBe(2);
+  });
+});
+
+/**
+ * gh #216 part D: the facts share gets its own line in the ledger, wherever the
+ * ledger prints — `renderLedger` (`--prepare`/`--dry-run`) and `pending.json`
+ * alike. A SUBSET of `inputs`, the same shape `questions` already is of `stage`
+ * (§7: an additive group carved out of an existing total, never counted twice):
+ * `LedgerInput.factsInputPath` names which declared-input row (by path) is the
+ * facts file, and `buildLedger` sums that one row's bytes into `groups.facts`
+ * without changing `groups.inputs` or `totalBytes`.
+ */
+describe("the facts ledger bucket (gh #216 part D)", () => {
+  function inputParts(inputBytes: readonly { path: string; bytes: number }[]): PromptPart[] {
+    return [{
+      kind: "inputs",
+      name: "Inputs",
+      text: inputBytes.map((i) => "x".repeat(i.bytes)).join(""),
+    }];
+  }
+
+  test("facts_bytes sums the one declared-input row named as the facts file", () => {
+    const inputBytes = [
+      { path: ".tldrx/memory/facts.yml", bytes: 500 },
+      { path: "01-what/other.md", bytes: 300 },
+    ];
+    const ledger = buildLedger({
+      parts: inputParts(inputBytes),
+      inputBytes,
+      truncatedInputs: [],
+      limitBytes: 400_000,
+      model: null,
+      factsInputPath: ".tldrx/memory/facts.yml",
+    });
+    expect(ledger.groups.facts).toBe(500);
+    // A SUBSET, never added twice: inputs still carries the whole "## Inputs"
+    // blob's bytes, and the total is unaffected by facts_bytes existing at all.
+    expect(ledger.groups.inputs).toBe(800);
+    expect(ledger.totalBytes).toBe(800);
+  });
+
+  test("no facts input declared — facts_bytes is 0, not absent", () => {
+    const inputBytes = [{ path: "01-what/other.md", bytes: 300 }];
+    const ledger = buildLedger({
+      parts: inputParts(inputBytes),
+      inputBytes,
+      truncatedInputs: [],
+      limitBytes: 400_000,
+      model: null,
+    });
+    expect(ledger.groups.facts).toBe(0);
+  });
+
+  test("renderLedger prints the facts share only when it is non-zero", () => {
+    const withFacts = buildLedger({
+      parts: inputParts([{ path: ".tldrx/memory/facts.yml", bytes: 500 }]),
+      inputBytes: [{ path: ".tldrx/memory/facts.yml", bytes: 500 }],
+      truncatedInputs: [], limitBytes: 400_000, model: null,
+      factsInputPath: ".tldrx/memory/facts.yml",
+    });
+    const without = buildLedger({
+      parts: inputParts([{ path: "01-what/other.md", bytes: 300 }]),
+      inputBytes: [{ path: "01-what/other.md", bytes: 300 }],
+      truncatedInputs: [], limitBytes: 400_000, model: null,
+    });
+    expect(renderLedger(withFacts).join("\n")).toContain("facts 500 B");
+    expect(renderLedger(without).join("\n")).not.toContain("facts ");
   });
 });
 

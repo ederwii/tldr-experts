@@ -23,14 +23,15 @@
  */
 import type { Command } from "../Command.ts";
 import { EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
-import { parseArgs, repeatedFlag, stringFlag } from "../argv.ts";
+import { boolFlag, parseArgs, repeatedFlag, stringFlag, type ParsedArgs } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { FactsStore } from "../../core/facts/FactsStore.ts";
 import {
-  FACT_CONFIDENCES, FACT_DECIDERS, FACT_KINDS, MAX_FACT_CHARS,
-  type FactConfidence, type FactDecider, type FactKind,
+  FACT_CONFIDENCES, FACT_DECIDERS, FACT_KINDS, MAX_FACT_CHARS, factNumber, isLive,
+  type Fact, type FactConfidence, type FactDecider, type FactKind,
 } from "../../core/facts/Fact.ts";
+import { normaliseFactText } from "../../core/facts/normaliseFactText.ts";
 import { factsPath, loadWorkspace } from "../../hooks/lib/workspace.ts";
 import { isScoped, scopeRepos } from "../repoScope.ts";
 import { PROJECT_WORK_DIR } from "../../core/paths.ts";
@@ -45,12 +46,14 @@ export const factsCommand: Command = {
   summary: "Record one durable, provenanced fact the later prompts will read",
   usage:
     'tldrx facts add "<text>" --area <id> --decided-by <owner|driver> [--kind <kind>] '
-    + "[--confidence <level>] [--repo <name>] [--run <id>] [--root <path>]",
+    + "[--confidence <level>] [--repo <name>] [--run <id>] [--root <path>]\n"
+    + "tldrx facts dedupe [--dry-run] [--root <path>]",
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {
       const args = parseArgs(argv, VALUE_FLAGS);
       const [sub, ...rest] = args.positionals;
+      if (sub === "dedupe") return runDedupe(args);
       if (sub !== "add") {
         process.stderr.write(`tldrx facts: ${factsCommand.usage}\n`);
         return EXIT_USAGE;
@@ -106,7 +109,8 @@ export const factsCommand: Command = {
       }
       const runStore = resolved.kind === "one" ? resolved.store : null;
 
-      const fact = FactsStore.update(factsPath(root), (store) => store.append({
+      const when = nowRfc3339();
+      const { fact, duplicate } = FactsStore.update(factsPath(root), (store) => store.append({
         fact: text,
         area,
         repos: [...scoped.repos],
@@ -114,12 +118,22 @@ export const factsCommand: Command = {
         confidence,
         source: {
           who: currentActor(),
-          when: nowRfc3339(),
+          when,
           run: runStore === null ? null : runStore.runId,
           q: null,
           decided_by: decidedBy as FactDecider,
         },
       }));
+
+      // gh #216 part A: the text this call gave, normalised, already matched a
+      // LIVE fact — nothing was written. Said plainly and exits 0: a driver that
+      // re-runs `facts add` on the same sentence (the measured cause of 27
+      // verbatim duplicates in one workspace) is not an error, it is the dedupe
+      // working.
+      if (duplicate) {
+        process.stdout.write(`${fact.id} is already on record: ${fact.fact}\n`);
+        return EXIT_OK;
+      }
 
       const lines = [`recorded ${fact.id} in ${area}: ${fact.fact}`];
       if (fact.truncated === true) {
@@ -177,4 +191,71 @@ function firstProblem(
     return `--decided-by must be one of ${FACT_DECIDERS.join(", ")}`;
   }
   return null;
+}
+
+/**
+ * `tldrx facts dedupe` (gh #216 part B) — retires facts already on the ledger
+ * whose text is the same sentence typed twice.
+ *
+ * Groups LIVE facts by `normaliseFactText` (the one derivation `append`'s own
+ * dedupe check in part A uses), keeps the EARLIEST id per group, and links
+ * every other member through `FactsStore.retireDuplicate` — chained rather than
+ * fanned onto the earliest directly when a group has three or more members,
+ * because the reciprocal `supersedes`/`superseded_by` link is one-to-one
+ * (`retireDuplicate`'s own doc comment measures this against
+ * `validateFactsFile`). `headOf` still resolves every member of a chain to the
+ * one still live. Nothing is deleted — §7: version 1 only grows.
+ */
+function runDedupe(args: ParsedArgs): number {
+  const root = workspaceRootFrom(args);
+  const dryRun = boolFlag(args, "dry-run");
+  const path = factsPath(root);
+  const store = FactsStore.loadOrEmpty(path);
+  const groups = groupLiveDuplicates(store.active);
+
+  if (groups.length === 0) {
+    process.stdout.write("tldrx facts dedupe: no duplicate live facts found\n");
+    return EXIT_OK;
+  }
+
+  const lines: string[] = [];
+  let retired = 0;
+  for (const group of groups) {
+    const [earliest, ...twins] = group as [Fact, ...Fact[]];
+    let previous = earliest;
+    for (const twin of twins) {
+      const verb = dryRun ? "would retire" : "retired";
+      const chainedNote = previous.id === earliest.id ? "" : ` (chained via ${previous.id})`;
+      lines.push(`${verb} ${twin.id} as a duplicate of ${earliest.id}${chainedNote}`);
+      if (!dryRun) store.retireDuplicate(twin.id, previous.id);
+      retired += 1;
+      previous = twin;
+    }
+  }
+  if (!dryRun) store.save(path);
+  lines.push(
+    `${String(retired)} fact(s) ${dryRun ? "would be retired" : "retired"} as duplicates`
+    + (dryRun ? " — dry run, nothing written" : ""),
+  );
+  process.stdout.write(`${lines.join("\n")}\n`);
+  return EXIT_OK;
+}
+
+/**
+ * Live facts grouped by normalised text, groups of size 1 dropped, each group
+ * sorted earliest-id first — the shape `runDedupe` walks to retire every
+ * member but the first.
+ */
+function groupLiveDuplicates(facts: readonly Fact[]): readonly (readonly Fact[])[] {
+  const groups = new Map<string, Fact[]>();
+  for (const f of facts) {
+    if (!isLive(f)) continue;
+    const key = normaliseFactText(f.fact);
+    const list = groups.get(key);
+    if (list === undefined) groups.set(key, [f]);
+    else list.push(f);
+  }
+  return [...groups.values()]
+    .filter((group) => group.length > 1)
+    .map((group) => [...group].sort((a, b) => factNumber(a.id) - factNumber(b.id)));
 }

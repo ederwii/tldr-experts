@@ -72,7 +72,7 @@ import {
   type PathContext,
 } from "./paths.ts";
 import {
-  fenceFor, renderConventions, renderFacts, renderParts, stackExpertNames,
+  fenceFor, renderConventions, renderFacts, renderFactsIndex, renderParts, stackExpertNames,
   MAX_PREVIOUS_ATTEMPT_BYTES, PREVIOUS_ATTEMPT_EDIT_HEADING,
 } from "./prompt.ts";
 import { applyCheckContracts } from "./checkContracts.ts";
@@ -882,6 +882,7 @@ async function runStage(
       dispatch_notes_bytes: ledger.groups.dispatchNotes,
       project_skills_bytes: ledger.groups.projectSkills,
       previous_attempt_bytes: ledger.groups.previousAttempt,
+      facts_bytes: ledger.groups.facts,
       truncated_inputs: ledger.truncatedInputs.map((entry) => entry.path),
     },
     ...dispatchNotesRecord(assembled.dispatchNotes),
@@ -3048,6 +3049,13 @@ export function assemblePrompt(
   });
   const facts = FactsStore.loadOrEmpty(factsPath(options.root));
   const workspace = loadWorkspace(options.root);
+  // gh #216 part D: which declared input (if any) IS the facts file, by its
+  // RESOLVED path — never a file-name pattern, so a workspace that renamed or
+  // relocated `.tldrx/memory/facts.yml` still gets the right row, and nothing
+  // that merely LOOKS like it (a per-repo copy some workspace keeps under a
+  // similar name) is mistaken for it.
+  const factsAbsPath = factsPath(options.root);
+  const factsDeclaredPath = inputs.find((path) => resolveDeclared(path, ctx) === factsAbsPath);
   // The declared inputs ARE the run's cited paths at this point: they are what the
   // seed put on the stage and what the stage file names, and nothing else has been
   // read yet. A domain expert whose folder holds one of them ranks first.
@@ -3064,11 +3072,19 @@ export function assemblePrompt(
   });
   // Inputs are filled FIRST, out of their own shared ceiling; the experts share
   // what `knowledge_max_bytes` allows between them afterwards (spec §2.3, §5).
+  //
+  // gh #216 part E (owner decision "Index", 2026-09-18): when this stage
+  // declares the facts file, the raw YAML never reaches `inlineInputs` — an
+  // INDEX stands in for it, one line per live fact rather than the file's full
+  // bytes. Every other declared input is read from disk exactly as before.
   const inlined = inlineInputs(inputs, {
     ctx,
     seed,
     budgetBytes: spec.inputsMaxBytes,
     exempt: new Set(inputs.filter((path) => path.endsWith(`/${SEED_INDEX}`))),
+    ...(factsDeclaredPath === undefined
+      ? {}
+      : { substitute: new Map([[factsDeclaredPath, renderFactsIndex(facts.facts, { repos: store.run.repos })]]) }),
   });
   // The host's own context for this cycle (spec §5). Read here, with the rest of
   // the prompt's material, so every mode sees the same document: a note left for
@@ -3118,6 +3134,7 @@ export function assemblePrompt(
     limitBytes: options.promptMaxBytes ?? spec.promptMaxBytes,
     model: options.model ?? stage.model ?? spec.planned.model,
     questionsBytes: questionsBytesOf(stageMd),
+    ...(factsDeclaredPath === undefined ? {} : { factsInputPath: factsDeclaredPath }),
   });
   return {
     prompt: parts.map((part) => part.text).join(""),

@@ -950,10 +950,10 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "facts",
-    subcommands: ["add"],
+    subcommands: ["add", "dedupe"],
     description: "Record one durable, provenanced fact the later prompts will read.",
     args: [
-      { name: '"<text>"', meaning: "The assertion, one sentence. Required." },
+      { name: '"<text>"', meaning: "The assertion, one sentence. Required for `add`." },
     ],
     flags: [
       { name: "area", arg: "<id>", meaning: "Which area the fact is about. Required — it is how every reader of facts.yml scopes a match.", sub: "add" },
@@ -962,11 +962,14 @@ const ENTRIES: readonly CommandHelp[] = [
       { name: "confidence", arg: "<level>", meaning: "How well it is known. `measured` means you ran the check.", values: FACT_CONFIDENCES, sub: "add" },
       { name: "repo", arg: "<name>", meaning: "Scope the fact to one repo. Repeatable. A name no repo in workspace.yml answers to is refused before anything is written.", repeatable: true, sub: "add" },
       { name: "run", arg: "<id>", meaning: "Attribute it to this run. An id no run in tldrx-work/ answers to is refused (exit 3) before anything is written — asking for provenance by name and getting `run: null` instead is worse than not asking. Without it, one open run is used; with several open, the fact is still recorded and its run is left absent with a named reason on stdout, because provenance nobody can establish is written as missing, never guessed.", sub: "add" },
+      { name: "dry-run", arg: null, meaning: "Print what would be retired without writing anything — the file is byte-identical after.", sub: "dedupe" },
       root(),
     ],
     examples: [
       'tldrx facts add "The outbox lives in the billing repo." --area billing --decided-by owner --kind observed --confidence measured',
       'tldrx facts add "Retries are capped at three." --area billing --decided-by driver',
+      "tldrx facts dedupe --dry-run",
+      "tldrx facts dedupe",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_NOT_FOUND],
     notes: [
@@ -974,6 +977,8 @@ const ENTRIES: readonly CommandHelp[] = [
       "It writes through `FactsStore`, under the workspace lock: load, mint the id, cap, validate, save. Editing `.tldrx/memory/facts.yml` by hand walks past all four.",
       "`--decided-by` is required, never defaulted: a fact gets cited later, and a row that cannot say which of the two decided it must not imply the stronger one (the owner's) by silence.",
       "`--run <id>` that names nothing is exit 3, not a silently unattributed fact: `RunStore.resolve` answers `none` both to 'no run is open' and to 'that id is not here', and writing the second one as the first printed a sentence that is false whenever a run IS open.",
+      "`add` dedupes at write time: a fact whose text NORMALISES (trim, collapse whitespace, case-fold) the same as a LIVE fact already on record writes nothing and prints that fact's id instead.",
+      "`dedupe` retires the duplicates already on the ledger from before that check existed: it groups LIVE facts by the same normalised text, keeps the earliest id per group, and marks every later one `superseded_by` — nothing is deleted, and a group of three or more chains rather than fanning onto one id (the reciprocal link is one-to-one).",
     ],
   },
   {

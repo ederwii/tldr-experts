@@ -823,6 +823,7 @@ Record one durable, provenanced fact — the thing later prompts actually read b
 tldrx facts add "<text>" --area <id> --decided-by <owner|driver>
                 [--kind <kind>] [--confidence <level>] [--repo <name>]
                 [--run <id>] [--root <path>]
+tldrx facts dedupe [--dry-run] [--root <path>]
 ```
 
 `tldrx answer` writes a fact the moment a question is answered. This is the other door: a
@@ -857,7 +858,16 @@ provenance, and provenance nobody can establish is written as missing, never gue
 
 It writes through `FactsStore`, under the workspace lock: load, mint the id, cap, validate,
 save. Editing `.tldrx/memory/facts.yml` by hand walks past all four, and a fact cut mid-word
-with no marker is a record that does not know it is incomplete. Exits: `0` `1` `3`.
+with no marker is a record that does not know it is incomplete.
+
+`add` also dedupes at write time: a fact whose text NORMALISES (trimmed, whitespace collapsed,
+case-folded) the same as a fact already on record writes nothing and prints that fact's id
+instead — a measured cause of 27 verbatim duplicates in one field-audited workspace was an
+import that ran twice. `tldrx facts dedupe [--dry-run]` retires the duplicates that were
+already on the ledger before that check existed: it groups live facts by the same normalised
+text, keeps the earliest id per group, and marks every later one `superseded_by` the one
+before it in the group — nothing is ever deleted, and `--dry-run` prints the same lines and
+writes nothing, leaving the file byte-identical. Exits: `0` `1` `3`.
 
 ## `tldrx story`
 
