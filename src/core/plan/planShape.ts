@@ -50,6 +50,7 @@ import { MAX_ITEM_CHARS } from "../schemas/planCommon.ts";
 import { DOD_FENCE_CLOSE_RE, DOD_FENCE_OPEN_RE, validateStoryFile } from "../schemas/story.ts";
 import { splitFrontMatter } from "../schemas/frontMatter.ts";
 import { asWavesFile, scheduleOf, validateWaves } from "../schemas/waves.ts";
+import { inSurface } from "../run/boundary.ts";
 import { STORIES_DIR, WAVES_FILE, type PlanIssue } from "./validatePlan.ts";
 
 /**
@@ -459,7 +460,6 @@ function untouchedEditIssues(
 ): readonly PlanIssue[] {
   const issues: PlanIssue[] = [];
   for (const story of stories.values()) {
-    const touches = new Set(story.touches);
     const reported = new Set<string>();
     for (const sentence of bodyUnitsOf(story.body)) {
       if (firstMatch(sentence, TOUCH_EDIT_VERBS) === null) continue;
@@ -470,7 +470,13 @@ function untouchedEditIssues(
       }
       if (UNRELEASED_HEADING_PATTERN.test(sentence)) paths.add(CHANGELOG_PATH);
       for (const path of paths) {
-        if (touches.has(path)) continue;
+        // `inSurface` (`../run/boundary.ts`), the ONE derivation every other touches-coverage
+        // check in the repo already reads (foreignWork.ts, reviewRound.ts, measuredTouches.ts,
+        // unownedFindings.ts) — a directory entry in `touches` covers its whole subtree, the
+        // same way Build's real write allowlist does. A second, exact-match-only prefix
+        // matcher here would refuse a story for editing a file under a directory it genuinely
+        // owns (review finding, #376).
+        if (inSurface(path, story.touches)) continue;
         const key = `${story.id}>${path}`;
         if (reported.has(key)) continue;
         reported.add(key);

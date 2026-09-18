@@ -437,6 +437,30 @@ describe("a story body step naming an edit of a path its own touches allowlist f
     expect(messagesOf(dir)).toEqual([]);
   });
 
+  // Review finding: every other touches-coverage check in the repo (boundary.ts's `inSurface`,
+  // read by foreignWork.ts/reviewRound.ts/measuredTouches.ts/unownedFindings.ts) treats a
+  // DIRECTORY entry as covering its whole subtree, `${entry}/` beneath it included. A story
+  // whose `touches` names a directory it genuinely owns must not be refused for a step editing
+  // a file under that directory — that is exactly what Build's real write allowlist accepts.
+  test("a directory entry in touches covers a file beneath it, the same way inSurface does everywhere else", () => {
+    const dir = writePlan(planFiles(
+      [{ id: "S1", touches: ["src/core/"], steps: ["3. Edit `src/core/foo.ts` to add the guard."] }],
+      [["S1"]],
+    ));
+    expect(messagesOf(dir)).toEqual([]);
+  });
+
+  test("a directory entry in touches does NOT cover an unrelated sibling with the same prefix (src/core-x/ is not under src/core/)", () => {
+    const step = "3. Edit `src/core-extra/foo.ts` to add the guard.";
+    const dir = writePlan(planFiles(
+      [{ id: "S1", touches: ["src/core/"], steps: [step] }],
+      [["S1"]],
+    ));
+    expect(messagesOf(dir)).toEqual([
+      `stories/S1.md body: ${untouchedEditMessage("S1", "src/core-extra/foo.ts", "Edit `src/core-extra/foo.ts` to add the guard")}`,
+    ]);
+  });
+
   test("an edit verb in one sentence and a read-only path in an EARLIER sentence do not combine — split on a sentence-ending `.`", () => {
     const dir = writePlan(planFiles(
       [{
