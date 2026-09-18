@@ -83,6 +83,14 @@
   collapsed/case-folded, matches a LIVE fact's; a retired or superseded twin does not block a
   fresh assertion of the same text. `facts add` prints "`<id>` is already on record" and exits
   0 rather than writing a duplicate.
+- **`merge-wave.sh`'s #336 immutability guard no longer prints `printf: write error: Broken
+  pipe` once per dated CHANGELOG section (see #380).** Its `changelog_section()` awk helper
+  `exit`ed as soon as it saw the NEXT `## ` heading, while the `printf | changelog_section`
+  pipe feeding it the pre-merge CHANGELOG was still writing the rest of the file — so the
+  writer could get EPIPE (measured live: 45-46 lines of noise per wave, once per dated
+  section that was not the last one in the file). `exit` is now `p = 0`: the awk process
+  keeps consuming to EOF instead of closing its end of the pipe early, so the writer always
+  finishes; the guard's own verdict (`$WAS`/`$NOW`) is unchanged.
 - **`emitFactsYaml` writes `facts: []` for an empty list instead of a bare `facts:` line (see
   #383).** Both YAML readers behind the runtime seam parse a key with nothing after it as
   `null`, not `[]`, so a facts.yml with zero facts never round-tripped — `FactsStore.save()`
