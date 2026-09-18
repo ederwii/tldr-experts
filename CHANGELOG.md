@@ -32,6 +32,57 @@
   when the step never spells the filename. The issue's second half — a `touches_always:`
   workspace-level allowlist addition — is not in scope here; it stays available as a
   follow-up if this half proves insufficient in the field.
+- **An over-cap `acceptance`/`test_plan` item is now split mechanically, for $0.00, before the
+  `plan` check ever judges it (see #352, part of #345 family).** `requireStringList`'s own
+  refusal already said "split it into several items"; `checkPlan` now tries exactly that,
+  reusing `[src:]`'s own trailing-token span finder (`trailingTokenSpan`, `srcToken.ts`,
+  exported for this — one derivation, AGENTS.md §7) so a split never cuts through, or drops, a
+  citation: the token is set aside before any sentence boundary is looked for, and copied
+  VERBATIM onto every resulting piece, not just the last. `splitOverCapItem`
+  (`src/core/text/listSplit.ts`) does the mechanical half; `repairOverCapItems`
+  (`src/core/plan/repairOverCapItems.ts`) does the file half — locating the field surgically in
+  the story's raw front-matter lines (both the flow-list and block-list shapes a story is seen
+  in) and rewriting only that one field, never a full YAML round-trip that would reflow
+  everything else's quoting. A split is written back to disk ONLY when every piece is under the
+  cap AND re-validates through the same checks the original item failed
+  (`requireStringList` + the `[src:]` grammar when the item carried a token) — an item with no
+  sentence boundary, or whose split still fails re-validation, is left byte-identical and
+  refused exactly as before, including by the existing `plan-fix` round (#288) when applicable.
+  Because the repair runs inside the SAME check pass, a formatting-only over-cap item never
+  even reaches that bounded, paid round. `CheckOutcome` grows an additive `repairs?` field
+  (`src/core/run/checks.ts`), surfaced on the stage's own report line and on the
+  `check.passed`/`check.failed` event — the same "an auto-repair must be visible" owner
+  decision (2026-09-15) #345's Watch repair already follows.
+- **A retry of a failed single-agent stage whose declared outputs are already complete and
+  valid on disk settles at $0.00 instead of buying a fresh turn to reproduce them (see #353,
+  part of #345 family).** MEASURED first: `runStage`'s headless path called `spawnAgent`
+  unconditionally on every re-entry — `validateOutputs` was only ever reached from
+  `finishStage`, AFTER a turn was dispatched and paid for, so a stage that failed for a reason
+  unrelated to its declared outputs (a `checks:` failure since fixed by hand, a timeout after
+  the last file was flushed) bought a full fresh turn to redo work already on disk. Now, on
+  re-entry to a stage whose `status` is already `"failed"` (never a first attempt, and headless
+  mode only — never `--prepare`/`--commit`, never `--dry-run`), `trySettleFromDisk` runs
+  `validateOutputs` against what is already there and, when the stage declares any `checks:`,
+  runs them for real too (they are local — free to run, and a checks failure there means the
+  "already finished" premise is false and a real turn is still owed, exactly as today). Only
+  when BOTH clear does the stage settle: one task row (`status: "done"`, `cost_usd: 0`,
+  `model: null`, `session_id: null`) carrying the additive `settled_from: "prior-attempt
+  outputs"` (`RunFile.ts`, and `emitRunYaml.ts`'s hand-written task emitter, which needed the
+  new key taught to it the same way #375's `exit_disagreement` did), and a matching
+  `agent.result` event — named on the stage's own report line too, never silently. Any problem
+  falls straight through to the ordinary spawn path, unchanged. **Pre-merge review
+  (2026-09-18): structurally valid files are not proof of finished work when the agent that
+  wrote them reported the failure itself.** `trySettleFromDisk` now refuses to settle before
+  even looking at disk when the prior attempt's own task row names an agent-reported
+  `failure_kind` (`AGENT_REPORTED_FAILURE_KINDS`, `spawnAgent.ts`: `result_error`,
+  `malformed_result`, `empty_result`, `asked_no_diff`), `unclassified`, an absent kind on a
+  `"failed"` row, or `non_zero_exit` whose own `error` text shows a result document that parsed
+  and disagreed with itself (`… with is_error=true: …`) — only a `checks:`-only failure or the
+  wall dying on it (`timeout`, `process_killed`, `rate_limit`, or a clean `non_zero_exit` with
+  nothing parseable) settles. Named on the report line as `prior attempt reported <kind>;
+  spawning`. A knob two `run auto` retry-counting test fixtures grew to work around the
+  original, too-permissive settle is removed along with it — the failure-kind gate alone keeps
+  their canned "fails then succeeds" spawns real, which is the smaller, more honest fix.
 
 ### Changed
 
@@ -112,6 +163,16 @@
   now (every shipped writer appends a fact before calling `save()`), but reachable from any
   fresh `FactsStore.loadOrEmpty(...).save()` with nothing appended; non-empty output is
   unchanged.
+- **Watch's kept-card pre-pass (#306) never got the `[src:]` mechanical repair the
+  validation loop a few lines below it already had, so a card left on disk with only a
+  punctuation slip — the marker missing its space, a token sitting mid-sentence, an ASCII
+  `->` in a `cmd` source — re-spawned a writer for text a script already knows how to fix
+  (see #351, part of #345).** `keptCard` now runs the same `repairSrcSyntax` before its
+  `parseWatcherCard` check: a repair that turns an invalid card valid is written back to
+  disk and the feature is kept, at $0.00, with the repair named on the stage's own report
+  line the same way the validation loop names its own. A card that stays invalid after
+  repair is still not kept (today's behaviour, byte-identical file); a card already valid
+  needs no repair and is never rewritten.
 
 ## 0.35.0 — 2026-09-17
 

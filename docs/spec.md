@@ -5059,6 +5059,14 @@ The per-feature ceiling is still the share over ALL features, so a retry hands a
 attempt did, and the floor check that refuses the stage is still over all of them. `--prepare`/`--commit` is unchanged:
 it writes a bundle per feature and `--commit` expects a `result.json` for each.
 
+**The kept-card snapshot gets the same mechanical repair step 3 does (gh #351).** A card left on disk by an earlier
+attempt that fails the snapshot's `parseWatcherCard` check ONLY on a `[src:]` punctuation slip is now run through the
+same `repairSrcSyntax` (gh #345, above) before being judged not-kept: if the repair turns it valid, the repaired text
+is written back to disk and the feature is kept — no writer spawned for a defect a script already knows how to fix.
+A card that stays invalid after repair is not kept, exactly as before #351, and nothing is written to it (the writer
+that gets spawned for it sees the file untouched). A card already valid with no repair needed is kept with no write at
+all. The repair is never silent: it is named on the stage's own report line the same way step 3's repairs are.
+
 `--prepare`/`--commit` is **per feature**: each gets its own `.agent/<stage>/<feature>/{prompt.md,pending.json,result.json}`,
 so the host session dispatches N sub-agents with the same isolation the headless path gives them. `[assumption]` — the
 agent ceiling is the stage share divided N ways with a **$0.25 floor**, because §7 measured a cold `claude -p` paying
@@ -5174,6 +5182,34 @@ overwritten (stages are idempotent by contract). A task that failed mid-stage ma
 operator's options are `next` (retry, re-spending), `reject --note` (send the stage back to `ready` with the note fed
 into the next prompt), or editing the stage inputs by hand and re-running.
 
+**A retry settles at $0.00 instead of re-spending when the prior attempt already finished the work AND said nothing
+against it (gh #353, part of the #345 family).** MEASURED before this existed: `runStage`'s single-agent path called
+`spawnAgent` unconditionally, on a retry exactly as on a first attempt — `validateOutputs` was only ever called from
+`finishStage`, AFTER a turn was dispatched and paid for, so a stage that failed for a reason EXTERNAL to the work
+itself (a `checks:` failure since corrected by hand, a `timeout`/`process_killed`/`rate_limit` death after the last
+file was flushed) bought a full fresh turn to reproduce output that was already correct. Now, on re-entry to a stage
+whose `status` is already `"failed"` — never on a first attempt, which never carries that status — `runStage` first
+asks whether the PRIOR attempt's own task row blocks settling at all: `priorAttemptReportedFailure` (`runNext.ts`)
+refuses when that row's `failure_kind` is one the agent itself reports —
+`AGENT_REPORTED_FAILURE_KINDS` (`spawnAgent.ts`: `result_error`, `malformed_result`, `empty_result`, `asked_no_diff`)
+— or `unclassified`, or absent on a `"failed"` row ("unknown is not safe"), or `non_zero_exit` whose own `error` text
+shows a result document parsed and disagreed with itself (`… with is_error=true: …`, `describeFailure`'s one
+rendering of that fact). Pre-merge review, 2026-09-18: structurally valid files are not proof of finished work when
+the agent that wrote them said the work was not done — a `checks:`-only failure (the TURN itself succeeded; only
+`finishStage`'s OWN checks loop failed the stage) is not blocked, nor is a row whose failure was the WALL dying
+(`timeout`, `process_killed`, `rate_limit`) or a `non_zero_exit` with no parseable result at all. Only past that gate
+does `runStage` run `validateOutputs` against what the prior attempt left on disk, headless mode only (never
+`--prepare`/`--commit`, never `--dry-run`). Every declared output present and non-empty is still not enough on its
+own: when the stage declares any `checks:`, they are run for real against the on-disk outputs too, because they cost
+nothing to run locally, and settling ahead of a check that would fail would spend nothing but also give the model no
+chance to fix it, which is worse than today. Only when ALL THREE clear does the stage settle: one task row,
+`status: "done"`, `cost_usd: 0`, `model: null`, `session_id: null` (a measured zero — no turn was bought, so nothing
+was billed elsewhere either), carrying the additive `settled_from: "prior-attempt outputs"` field (`RunFile.ts`,
+`emitRunYaml.ts`); one `agent.result` event carries the same field. Never silent: the stage's own report line says so
+in the same words the event does — `prior attempt reported <kind>; spawning` when the failure-kind gate is what
+refused. Any problem — the prior attempt's own reported failure, a missing/empty output, or a `checks:` failure —
+falls straight through to the ordinary spawn path, unchanged.
+
 **The `plan` check's one fix round (#288).** One exception to "a failed check fails the stage", and it is bounded on
 every side. When the `plan` check refuses and every issue it found names a file that EXISTS — a front matter that will
 not parse, a missing required key, a dod line the workspace does not declare, as against "the Plan wrote no stories",
@@ -5188,6 +5224,22 @@ ordinary `agent.result`; the additive `plan.fix_round` event beside them says WH
 that holds the dollars. Measured on a live `run auto --until-done`: the planner joined two front-matter keys with a
 comma in three of three stories and the only recovery was a $2.19 re-plan plus one of five relaunches, for a defect
 the checker had already localised to a file and a column.
+
+**A mechanical repair runs BEFORE any of the above, for $0.00 (gh #352, part of the #345
+family).** An over-cap `acceptance`/`test_plan` item — `requireStringList`'s own refusal already
+says "split it into several items" — is split MECHANICALLY at a sentence boundary
+(`. `/`; `/`? `/`! ` followed by an uppercase letter or a list marker), outside any trailing
+`[src: …]` citation, which is copied VERBATIM onto every resulting piece rather than kept on only
+the last one — a citation earlier pieces would otherwise lose. The split is accepted, and written
+back to the story file, ONLY when every piece is `<= MAX_ITEM_CHARS` and re-validates through the
+same checks the original item failed (`requireStringList`, plus the `[src:]` grammar when the
+original line carried a token); an item with no boundary, or whose split would still fail, is left
+byte-identical and the ordinary `plan` refusal (and the fix round above, when applicable) stands.
+Because this runs inside `checkPlan` itself, a formatting-only over-cap item never even reaches
+the bounded fix round, let alone a re-plan — the same "before spending" saving #345 shipped for
+Watch's `[src:]` punctuation repair, one call site earlier in the Plan phase's own pipeline. The
+repair is never silent: `CheckOutcome.repairs` names which item, how many characters, and how many
+pieces, surfaced on the stage's own report line and on the `check.passed`/`check.failed` event.
 
 ### 5.1 Ticket mirror (`tldrx tickets`)
 

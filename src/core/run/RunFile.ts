@@ -246,6 +246,22 @@ export interface RunTask {
    * carries the ordinary `failure_kind` it always did, never this key.
    */
   readonly exit_disagreement?: string | null;
+  /**
+   * This row is `status: "done"` at `cost_usd: 0` because NO turn was spawned
+   * for it — a RETRY re-entering `runStage` found every declared output
+   * already on disk, valid, and (when the stage declares any) every `checks:`
+   * already passing against them, so the previous attempt's work is what this
+   * row settles on (gh #353, part of the #345 family). `"prior-attempt
+   * outputs"` today; a second basis would get its own string rather than
+   * overload this one's meaning.
+   *
+   * ADDITIVE and optional: absent on every row written before this existed and
+   * on every ordinary spawned turn, `exit_disagreement`'s row included — that
+   * one settled a turn that WAS spawned; this settles one that never was.
+   * `model` and `session_id` are `null` on this row for the same reason
+   * `keptCard`'s Watch rows are (#306): no model ran.
+   */
+  readonly settled_from?: string | null;
   /** Tokens the host declared with `--tokens`, when it knew them. */
   readonly tokens?: number;
   /**

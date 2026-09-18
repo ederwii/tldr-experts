@@ -463,6 +463,82 @@ describe("the watch executor writes one card per shipped feature", () => {
     expect(outcome.ok).toBe(false);
     expect(outcome.error ?? "").toContain("was never written");
   });
+
+  /**
+   * gh #351: `keptCard` (the #306 pre-pass) used to read the file exactly as it
+   * sits on disk and refuse anything `parseWatcherCard` refused — even a card
+   * whose ONLY defect is a `[src:]` punctuation slip the validation loop a few
+   * lines below repairs for free. A card left over from an earlier attempt with
+   * only that slip should be repaired and KEPT here too, never re-spawned.
+   */
+  test("a kept-card pre-pass repairs a fixable [src:] trailing-position slip instead of re-spawning a writer", async () => {
+    const { ws, ctx } = fixture();
+    const clean = card("leaderboard", ["S1", "S2"], LIVE_SIGNAL);
+    const goodToken = "[src: api:src/Leaderboard.cs:3]";
+    // The token is well-formed but not the last thing on the line — `trailing-
+    // position`, one of the three mechanically repairable rules.
+    const brokenLine = `- Application Insights \`traces\` ${goodToken} recorded hourly`;
+    const broken = clean.replace(`- Application Insights \`traces\` ${goodToken}`, brokenLine);
+    expect(broken).not.toBe(clean); // sanity: the replace introduced the defect
+
+    // Simulate a card left on disk by an earlier attempt — never through
+    // `fakeClaude`/a spawn, so the pre-pass is the only thing that can see it.
+    const abs = join(ws.runDir, watcherRelPath("leaderboard"));
+    mkdirSync(join(abs, ".."), { recursive: true });
+    writeFileSync(abs, broken, "utf8");
+
+    // No fake agent on PATH at all: a spawn attempt here is a hard, visible
+    // failure, not a silent pass.
+    process.env.PATH = "";
+    const spawned: string[] = [];
+    const outcome = await watchExecutor({
+      ...ctx,
+      emit: (type, payload) => {
+        if (type === "agent.spawned") spawned.push(String((payload as { key?: unknown }).key ?? ""));
+      },
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(spawned).toEqual([]); // kept — never spawned
+    expect(outcome.costUsd).toBe(0);
+    const row = outcome.tasks.find((t) => t.key === "leaderboard");
+    expect(row?.costUsd).toBe(0);
+    expect(row?.sessionId).toBeNull();
+    expect(row?.model).toBeNull();
+    const written = read(ws, watcherRelPath("leaderboard"));
+    expect(written).toContain(goodToken);
+    expect(written).not.toBe(broken); // the repair was written back
+    expect(outcome.lines.join("\n")).toContain("auto-repaired");
+    expect(outcome.lines.join("\n")).toContain("trailing-position");
+    expect(outcome.lines.join("\n")).toContain("already validated on disk and were kept");
+  });
+
+  /**
+   * The negative half of #351: a card whose defect a mechanical repair cannot
+   * fix (no citation at all) stays refused — today's behaviour — and the file
+   * on disk is untouched by the pre-pass (no partial rewrite).
+   */
+  test("a kept-card pre-pass leaves an unrepairable card refused and byte-identical", async () => {
+    const { ws, ctx } = fixture();
+    const broken = card("leaderboard", ["S1", "S2"], "no source on this line at all");
+
+    const abs = join(ws.runDir, watcherRelPath("leaderboard"));
+    mkdirSync(join(abs, ".."), { recursive: true });
+    writeFileSync(abs, broken, "utf8");
+
+    fakeClaude(ws, { [watcherRelPath("leaderboard")]: card("leaderboard", ["S1", "S2"], LIVE_SIGNAL) });
+    const spawned: string[] = [];
+    const outcome = await watchExecutor({
+      ...ctx,
+      emit: (type, payload) => {
+        if (type === "agent.spawned") spawned.push(String((payload as { key?: unknown }).key ?? ""));
+      },
+    });
+
+    // Not kept: the writer was spawned, exactly as today.
+    expect(spawned).toEqual(["leaderboard"]);
+    expect(outcome.ok).toBe(true);
+  });
 });
 
 describe("no done stories", () => {

@@ -241,6 +241,37 @@ export type AgentFailureKind =
  */
 export const ASKED_NO_DIFF_FAILURE_KIND: AgentFailureKind = "asked_no_diff";
 
+/**
+ * The `AgentFailureKind` values that mean the AGENT ITSELF said the work was
+ * not finished — never grounds to settle a retry from disk without spending a
+ * new turn (gh #353's settle-from-disk, `runNext.ts`'s `trySettleFromDisk`),
+ * however complete and valid the files it left behind look.
+ *
+ * `"result_error"` and `"malformed_result"` are the envelope disagreeing with
+ * itself or unreadable; `"empty_result"` is a clean exit that said nothing at
+ * all; `"asked_no_diff"` — not derived by this file (`executors/build.ts` is)
+ * but reusing the SAME vocabulary rather than a second one (AGENTS.md §7) — is
+ * a developer who asked a question and left the worktree exactly as handed,
+ * which is the agent itself saying nothing changed.
+ *
+ * Deliberately NOT `"timeout"`, `"process_killed"` or `"rate_limit"`: each of
+ * those is the WALL dying, not the agent — the process never got to render a
+ * verdict on its own work, so files it already flushed before the kill are
+ * still worth trusting if they validate. `"non_zero_exit"` is ALSO absent
+ * here on purpose: it covers both "nothing parsed at all" (an external crash,
+ * safe) and "a document parsed and it also carries an `errors[]`/`is_error`
+ * verdict" (the agent spoke, unsafe) — `trySettleFromDisk` tells those two
+ * apart itself, off the task row's own `error` text, rather than this set
+ * trying to encode a condition it cannot express as a bare kind. `null`
+ * (never classified, or the row predates gh #348) and `"unclassified"` are
+ * ALSO refused by `trySettleFromDisk`, but as their own cases — "unknown is
+ * not safe" is not the same claim as "the agent reported it", so neither
+ * lives in this set either.
+ */
+export const AGENT_REPORTED_FAILURE_KINDS: ReadonlySet<AgentFailureKind> = new Set([
+  "result_error", "malformed_result", "empty_result", "asked_no_diff",
+]);
+
 export interface AgentOutcome {
   readonly ok: boolean;
   readonly exitCode: number;

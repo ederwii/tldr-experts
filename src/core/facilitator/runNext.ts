@@ -82,7 +82,10 @@ import {
 } from "../experts/expertBundle.ts";
 import { nearbyPathsFor } from "../experts/domainRank.ts";
 import { readStackPacks, renderProjectSkills, skillsFor } from "../experts/stackPacks.ts";
-import { agentProvider, describeSpawn, providerBudgetAdvisory, spawnAgent } from "./spawnAgent.ts";
+import {
+  agentProvider, AGENT_REPORTED_FAILURE_KINDS, describeSpawn, providerBudgetAdvisory, spawnAgent,
+  type AgentFailureKind,
+} from "./spawnAgent.ts";
 import { settleExitDisagreement } from "./exitDisagreement.ts";
 import {
   GATE_SIGNER_ROLE, GATE_SIGNER_TOOLS,
@@ -775,6 +778,20 @@ async function runStage(
   const stage = requireStage(store, phaseId, stageId);
   const ctx: PathContext = { root: options.root, runDir: store.runDir };
 
+  // gh #353 (part of #345 family): a RETRY re-entering a FAILED stage — never
+  // a first attempt, which never sees `status: "failed"` here — before a cent
+  // is committed to a fresh turn, ask whether the previous attempt already
+  // finished the real work. `stage.status === "failed"` is exactly `advance`'s
+  // own retry predicate a few hundred lines up (`entry.stage.status ===
+  // "failed"`), read off the SAME field rather than a second "is this a retry"
+  // signal. Headless only, and never on `--dry-run`: `--prepare`/`--commit` is
+  // a person's own cycle and a dry run reports what WOULD happen, neither of
+  // which this settle path may act ahead of.
+  if (stage.status === "failed" && options.mode === "headless" && !options.dryRun) {
+    const settled = await trySettleFromDisk(store, options, phaseId, stageId, spec, ctx, notes);
+    if (settled !== null) return settled;
+  }
+
   // --- budget gate (spec §5, §2.11) ---------------------------------------
   const refused = budgetRefusal(store, options, phaseId, stageId, spec, notes);
   if (refused !== null) return refused;
@@ -1054,6 +1071,147 @@ async function runStage(
     );
   }
   return withStderr(await finishStage(store, options, phaseId, stageId, spec, notes), advisories);
+}
+
+/**
+ * "The previous attempt already finished the real work and failed for an
+ * unrelated reason" (gh #353), checked BEFORE anything is spent, not asserted.
+ *
+ * The two things a spawned turn eventually gets judged on — `validateOutputs`
+ * and this stage's own `checks:` — are run here, over what a PRIOR attempt
+ * already left on disk, with no prompt assembled and no agent spawned. Both
+ * are local: neither one costs a cent to run, which is the whole of why this
+ * is safe to do BEFORE the budget gate even asks whether a turn is affordable.
+ *
+ * `null` means "not settled" — either signal found a problem, or the file
+ * shape said no. The caller falls straight through to the ordinary spawn path,
+ * unchanged, exactly as it would if this function did not exist. A `checks:`
+ * failure here is not skipped or deferred: it is exactly why this must NOT
+ * settle, because a check that fails on-disk means the "already finished"
+ * premise was false, and the stage needs a real turn — today's behaviour —
+ * not a strengthened return trip.
+ *
+ * On settlement: one task row, `status: "done"`, `cost_usd: 0`, `model: null`,
+ * `session_id: null` — a real measured zero, not `metered: false` (no turn was
+ * bought, so nothing was billed elsewhere either) — carrying the additive
+ * `settled_from` basis (`RunFile.ts`), and one `agent.result` event with the
+ * same field, the same shape `recordExecutorTasks` already gives a Watch kept
+ * card (#306) for the identical reason: no model ran. `finishStage` then runs
+ * — re-validating outputs and checks a second time, the same double-check the
+ * spawned path already tolerates between a plan-fix round's two passes — so
+ * the gate, the report and `stage.done` are computed by the ONE path every
+ * other settlement goes through, never a second "how a stage finishes" here.
+ */
+async function trySettleFromDisk(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  stageId: string,
+  spec: StageSpec,
+  ctx: PathContext,
+  notes: string[],
+): Promise<NextOutcome | null> {
+  const stage = requireStage(store, phaseId, stageId);
+
+  // Pre-merge review (2026-09-18): valid files are not proof of finished work
+  // when the agent that wrote them said otherwise. `validateOutputs`/`checks`
+  // below only ask "does this shape pass" — they cannot see WHY the prior
+  // attempt failed, and a turn that reported its own failure gets no benefit
+  // of the doubt just because the wreckage happens to validate.
+  const blockedBy = priorAttemptReportedFailure(stage);
+  if (blockedBy !== null) {
+    notes.push(`  ${phaseId}/${stageId}: prior attempt reported ${blockedBy}; spawning`);
+    return null;
+  }
+
+  const outputs = expandAll(spec.planned.outputs, store.run.repos);
+  const problems = validateOutputs(outputs, expandedSections(spec.planned, store.run.repos), ctx);
+  if (problems.length > 0) return null;
+
+  const checks = await runChecks(spec.planned.checks, {
+    root: options.root,
+    runDir: store.runDir,
+    stage: spec.planned,
+  });
+  if (checks.some((c) => c.status === "failed")) return null;
+
+  const settledFrom = "prior-attempt outputs";
+  markRunning(store, phaseId, stageId, options.at);
+  const taskId = nextTaskId(store, phaseId, stageId);
+  recordTask(store, phaseId, stageId, {
+    id: taskId,
+    status: "done",
+    expert: stage.expert ?? spec.planned.experts[0] ?? null,
+    model: null,
+    cost_usd: 0,
+    error: null,
+    session_id: null,
+    started_at: options.at,
+    ended_at: nowish(options),
+    outputs,
+    settled_from: settledFrom,
+  });
+  appendCappedEvent(store, options, phaseId, stageId, "agent.result", {
+    phase: phaseId,
+    task: taskId,
+    session_id: null,
+    model: null,
+    outputs,
+    settled_from: settledFrom,
+  }, 0, stage.expert);
+  store.save();
+
+  // Visible where every other repair/settlement is (owner decision
+  // 2026-09-15, applied here the same way #345/#351/#352 apply it): the
+  // stage's own report line, not only the event above.
+  notes.push(
+    `${phaseId}/${stageId}: the previous attempt's outputs already satisfy this stage — `
+      + `settled at $0.00, no turn spawned (settled_from: ${settledFrom})`,
+  );
+  return await finishStage(store, options, phaseId, stageId, spec, notes);
+}
+
+/**
+ * Whether the LAST recorded attempt at this stage was the AGENT saying its
+ * own work was not done — in which case `trySettleFromDisk` above must not
+ * settle, whatever validates on disk. Returns the reported kind (for the
+ * report line), or `null` when there is nothing here that blocks settling.
+ *
+ * `undefined`/absent `failure_kind` on a row that is not `"failed"` — a
+ * `"done"` row, most commonly a `checks:`-only failure (the TURN succeeded;
+ * `finishStage`'s own checks loop is what failed the STAGE, and it never
+ * rewrites the task row that already recorded `ok`) — is exactly the
+ * "unrelated reason" case #353 is FOR, so it is not blocked here.
+ *
+ * `failure_kind` absent on a `"failed"` row (a row from before gh #348, or
+ * one this process itself could not classify for some other reason) is
+ * treated the same as `"unclassified"`: "unknown is not safe" applies to "no
+ * reason recorded" exactly as it does to "a residual bucket recorded".
+ *
+ * `"non_zero_exit"` is the one kind that can go either way (see
+ * `AGENT_REPORTED_FAILURE_KINDS`'s own doc, `spawnAgent.ts`): it is blocked
+ * here too, but only when the row's own `error` text shows a result document
+ * actually parsed and disagreed with itself — `describeFailure`
+ * (`spawnAgent.ts`) always renders that as `… with is_error=true: …`, the
+ * ONE place this text is produced, so reading it back is reading the same
+ * derivation, not inventing a second one. A `"non_zero_exit"` with NO such
+ * text is a process that died before producing anything readable — external
+ * to the work, same as a timeout or a kill — and settles.
+ */
+function priorAttemptReportedFailure(stage: RunStage): string | null {
+  const last = stage.tasks[stage.tasks.length - 1];
+  if (last === undefined || last.status !== "failed") return null;
+  const kind = last.failure_kind;
+  if (kind === undefined || kind === null) return "unclassified";
+  // `RunTask.failure_kind` is a bare `string` (`RunFile.ts` does not import
+  // the facilitator's own type — a run-file reader outside `facilitator/`
+  // must stay readable without it), so the membership check is against the
+  // STRING VALUES `AGENT_REPORTED_FAILURE_KINDS` holds; the cast is the same
+  // narrowing a `switch` over a string literal union would do, not a second
+  // definition of the union (AGENTS.md §7 — see `spawnAgent.ts`).
+  if (AGENT_REPORTED_FAILURE_KINDS.has(kind as AgentFailureKind) || kind === "unclassified") return kind;
+  if (kind === "non_zero_exit" && (last.error ?? "").includes("is_error=true")) return kind;
+  return null;
 }
 
 // Payload-cap sidecar bookkeeping (spec §2.9, fix round 1; module-scoped since
@@ -2434,7 +2592,14 @@ async function finishStage(
         check: check.id,
         status: check.status,
         detail: check.detail,
+        ...(check.repairs === undefined || check.repairs.length === 0 ? {} : { repairs: check.repairs }),
       }));
+      // A check's own mechanical repair (gh #352, part of #345 family) is
+      // visible on the stage's own report, not only in the event above — the
+      // owner decision an auto-repair must never be silent (2026-09-15).
+      if (check.repairs !== undefined && check.repairs.length > 0) {
+        notes.push(...check.repairs.map((line) => `  ${line}`));
+      }
     }
     const failed = checks.find((c) => c.status === "failed");
     if (failed === undefined) break;

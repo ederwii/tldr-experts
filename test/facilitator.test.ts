@@ -32,6 +32,7 @@ const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
   "FAKE_CLAUDE_RUNDIR", "FAKE_CLAUDE_OUTPUTS", "FAKE_CLAUDE_COST", "FAKE_CLAUDE_IS_ERROR",
   "FAKE_CLAUDE_SESSION", "FAKE_CLAUDE_ARGV_LOG", "FAKE_CLAUDE_PROMPT_OUT",
+  "FAKE_CLAUDE_READS", "FAKE_CLAUDE_HANG_MS",
 ] as const;
 
 let open: FacilitatorWorkspace[] = [];
@@ -917,6 +918,153 @@ describe("after a failure", () => {
     // Two attempts at alpha, and beta was never started on a failed foundation.
     const started = events(ws).filter((e) => e.type === "stage.started");
     expect(started.filter((e) => e.stage === "alpha")).toHaveLength(2);
+  });
+
+  /**
+   * gh #353 (part of #345 family). MEASURED on `origin/main` before this existed
+   * (`runStage`, `runNext.ts`): `validateOutputs` is only ever called from
+   * `finishStage`, reached AFTER a sub-agent turn is dispatched and paid for —
+   * `runStage`'s headless spawn path calls `spawnAgent` unconditionally, on a
+   * retry exactly as on a first attempt, with no pre-dispatch check of what a
+   * prior FAILED attempt already left on disk. This is the RED this describe
+   * block proves and then closes: the fake agent WRITES valid, complete
+   * declared outputs on attempt 1 but is killed by the stage's OWN `timeout_s`
+   * before it can report anything — the wall dying, not the agent, so nothing
+   * here contradicts what it flushed before the kill (pre-merge review,
+   * 2026-09-18: an is_error-reported failure must NOT settle even with valid
+   * files on disk — that shape moved to the negative test below). `PATH` is
+   * emptied before the retry, so a spawn attempt there is a loud, distinct
+   * failure, never a silent pass.
+   */
+  test("a retry whose prior attempt's outputs already validate settles at $0 without spawning a second turn", async () => {
+    const ws = workspace([{ ...(TWO_STAGE[0] as StageOptions), timeoutS: 2 }, TWO_STAGE[1] as StageOptions]);
+    fakeClaude(ws, {
+      FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_COST: "0.42",
+      FAKE_CLAUDE_READS: "1", FAKE_CLAUDE_HANG_MS: "10000",
+    });
+    const first = await next(ws);
+    expect(first.code).toBe(5);
+    expect(first.lines.join("\n")).toContain("timed out");
+    expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.status).toBe("failed");
+    expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.tasks.at(-1)?.failure_kind).toBe("timeout");
+    expect(existsSync(join(ws.runDir, "01-what", "intent.md"))).toBe(true);
+    expect(existsSync(join(ws.runDir, "01-what", "handoff.md"))).toBe(true);
+
+    // No agent on PATH at all for the retry — a spawn attempt fails loudly.
+    process.env.PATH = "";
+    const retry = await next(ws);
+
+    expect(retry.code).toBe(0);
+    expect(retry.lines.join("\n")).toContain("settled at $0.00, no turn spawned");
+    expect(retry.lines.join("\n")).toContain("settled_from: prior-attempt outputs");
+    const store = RunStore.open(ws.runDir);
+    expect(store.run.phases[0]?.stages[0]?.status).toBe("done");
+    const rows = store.run.phases[0]?.stages[0]?.tasks ?? [];
+    const settledRow = rows[rows.length - 1];
+    expect(settledRow?.cost_usd).toBe(0);
+    expect(settledRow?.session_id).toBeNull();
+    expect(settledRow?.model).toBeNull();
+    expect(settledRow?.settled_from).toBe("prior-attempt outputs");
+    // The decisive count: only attempt 1's turn was ever dispatched.
+    const spawned = events(ws).filter((e) => e.type === "agent.spawned" && e.stage === "alpha");
+    expect(spawned).toHaveLength(1);
+    const settledEvent = events(ws).find((e) =>
+      e.type === "agent.result" && e.stage === "alpha" && e.payload.settled_from !== undefined);
+    expect(settledEvent?.payload.settled_from).toBe("prior-attempt outputs");
+    expect(settledEvent?.payload.session_id).toBeNull();
+  });
+
+  /**
+   * Pre-merge review (2026-09-18): structurally valid files are not proof of
+   * finished work when the agent that wrote them REPORTED failure. Probed
+   * against the test above's original fixture (`FAKE_CLAUDE_IS_ERROR: "1"`,
+   * still writing complete outputs): attempt 1's row carried
+   * `failure_kind: "non_zero_exit"` with `error` text showing
+   * `is_error=true` and a named `errors[]` entry — the agent itself said the
+   * work was not done — and attempt 2 settled at $0 anyway. RED (verbatim,
+   * against `trySettleFromDisk` before `priorAttemptReportedFailure` existed):
+   * `expect(retry.lines.join("\n")).not.toContain("settled at $0.00")` failed
+   * — `Received: "...settled at $0.00, no turn spawned (settled_from:
+   * prior-attempt outputs)..."`.
+   */
+  test("a retry whose prior attempt reported its OWN failure still spawns, even with valid files on disk", async () => {
+    const ws = workspace(TWO_STAGE);
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_IS_ERROR: "1", FAKE_CLAUDE_COST: "0.42" });
+    const first = await next(ws);
+    expect(first.code).toBe(5);
+    const firstRow = RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.tasks.at(-1);
+    expect(firstRow?.failure_kind).toBe("non_zero_exit");
+    expect(firstRow?.error ?? "").toContain("is_error=true");
+    expect(existsSync(join(ws.runDir, "01-what", "intent.md"))).toBe(true);
+    expect(existsSync(join(ws.runDir, "01-what", "handoff.md"))).toBe(true);
+
+    // Attempt 2 succeeds for real — proving a genuine second turn was
+    // dispatched, not silently settled from the files attempt 1 already left.
+    delete process.env.FAKE_CLAUDE_IS_ERROR;
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_COST: "0.42" });
+    const retry = await next(ws);
+
+    expect(retry.code).toBe(0);
+    expect(retry.lines.join("\n")).not.toContain("settled at $0.00");
+    expect(retry.lines.join("\n")).toContain("prior attempt reported non_zero_exit; spawning");
+    const spawned = events(ws).filter((e) => e.type === "agent.spawned" && e.stage === "alpha");
+    expect(spawned).toHaveLength(2);
+  });
+
+  /**
+   * The safety half of #353: a stage that declares a `checks:` (local, run for
+   * real — here a `cmd` check) must have it pass ON DISK before settling. A
+   * prior attempt's outputs existing and validating is not enough on its own —
+   * "checks failed" is exactly the unrelated-reason case a real turn is still
+   * owed for.
+   *
+   * Attempt 1 fails by a REAL `timeout_s` kill (the same
+   * `FAKE_CLAUDE_READS`/`HANG_MS` shape the positive-control test above uses),
+   * not `FAKE_CLAUDE_IS_ERROR` — the review (2026-09-18) measured that an
+   * `IS_ERROR` attempt 1 gives `priorAttemptReportedFailure` (`runNext.ts`)
+   * something to refuse on BEFORE `trySettleFromDisk` ever reaches the checks
+   * call, so the checks guard was never actually exercised: disabling it left
+   * this test green anyway (AGENTS.md §8 — an assertion must be able to
+   * fail). `"timeout"` is external to the work (the wall dying, not the
+   * agent), so it clears the failure-kind gate and the checks call is what
+   * has to refuse this retry.
+   */
+  test("a retry still spawns when the stage's own checks would fail against what is on disk", async () => {
+    const ws = workspace([
+      {
+        ...(TWO_STAGE[0] as StageOptions),
+        timeoutS: 2,
+        checks: `[{id: cmd, on: post-write, repo: api, command: "false", expect_exit: 0}]`,
+      },
+    ]);
+    fakeClaude(ws, {
+      FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_COST: "0.42",
+      FAKE_CLAUDE_READS: "1", FAKE_CLAUDE_HANG_MS: "10000",
+    });
+    const first = await next(ws);
+    expect(first.code).toBe(5);
+    expect(first.lines.join("\n")).toContain("timed out");
+    const firstRow = RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.tasks.at(-1);
+    expect(firstRow?.failure_kind).toBe("timeout");
+    expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.status).toBe("failed");
+    expect(existsSync(join(ws.runDir, "01-what", "intent.md"))).toBe(true);
+    expect(existsSync(join(ws.runDir, "01-what", "handoff.md"))).toBe(true);
+
+    // Attempt 2: the fake agent now succeeds (no more timeout — `READS`/
+    // `HANG_MS` are cleared, or this attempt would hang and time out too), so
+    // ANY failure from here on is the `cmd` check's own — which fires again
+    // because `command: "false"` never passes. The stage fails a second time,
+    // but via a REAL, dispatched turn, never a silent settle.
+    delete process.env.FAKE_CLAUDE_READS;
+    delete process.env.FAKE_CLAUDE_HANG_MS;
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_COST: "0.42" });
+    const retry = await next(ws);
+
+    expect(retry.code).toBe(5);
+    expect(retry.lines.join("\n")).not.toContain("settled at $0.00");
+    expect(retry.lines.join("\n")).not.toContain("prior attempt reported");
+    const spawned = events(ws).filter((e) => e.type === "agent.spawned" && e.stage === "alpha");
+    expect(spawned).toHaveLength(2);
   });
 
   test("a run holding a failed stage is still the run `next` finds without an id", async () => {
