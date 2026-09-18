@@ -50,6 +50,7 @@ import { join } from "node:path";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
 import { DISPATCH_NOTES_HEADING } from "./dispatchNotes.ts";
 import { PROJECT_SKILLS_HEADING } from "../experts/stackPacks.ts";
+import { byteLength } from "../experts/expertKnowledge.ts";
 import { isLive, type Fact } from "../facts/Fact.ts";
 import { stackExpertNames } from "../experts/stackExperts.ts";
 
@@ -551,23 +552,69 @@ export function fenceFor(content: string): string {
  * detected" — never "checked and agreed" — because the detection is lexical
  * (`conflictOf`, Jaccard ≥ 0.6 inside one `area`) and cannot see two
  * differently-titled answers that contradict.
+ *
+ * `maxBytes` (gh #216 part C) caps the rendered list, cutting on a WHOLE fact
+ * (#161 — never mid-word) and NAMING the cut (§7 absent-with-reason) rather
+ * than dropping it silently. Measured on the issue's own field audit: Build's
+ * `### Facts already on record` (the only caller with no byte ceiling at all
+ * before this) reached 123,938 B, 57% of a 218 KB developer bundle — this
+ * default caps that section at roughly a quarter of the worst measured case,
+ * comfortably under `inputs_max_bytes`'s 256 KB default alongside everything
+ * else a stage declares. Every caller of `renderFacts` gets the cap for free:
+ * Build's developer prompt (`executors/build.ts:5610`) and the `{{facts}}`
+ * template value (`assemblePrompt`, used by Watch's `stage.md`) alike — one
+ * derivation, no call site needs to change.
  */
-export function renderFacts(facts: readonly Fact[], repos: readonly string[]): string {
+export const DEFAULT_FACTS_MAX_BYTES = 32 * 1024;
+
+export function renderFacts(
+  facts: readonly Fact[],
+  repos: readonly string[],
+  maxBytes: number = DEFAULT_FACTS_MAX_BYTES,
+): string {
   const relevant = facts.filter(
     (fact) => isLive(fact) && (fact.repos.length === 0 || fact.repos.some((r) => repos.includes(r))),
   );
   if (relevant.length === 0) return "_No recorded facts match this run's repos._";
-  return relevant
-    .map((fact) => {
-      const decidedBy = fact.source.decided_by === undefined ? "" : ` · decided by ${fact.source.decided_by}`;
-      // Detected contradictions, named — a prompt handed both facts is told they
-      // disagree instead of being left to pick one.
-      const conflicts = fact.conflicts_with === undefined || fact.conflicts_with.length === 0
-        ? ""
-        : ` · conflicts with ${fact.conflicts_with.join(", ")}`;
-      return `- [${fact.id}] ${fact.fact} (${fact.area} · ${fact.confidence})${decidedBy}${conflicts}`;
-    })
-    .join("\n");
+  const lines = relevant.map(renderFactLine);
+  return capFactLines(lines, maxBytes, "facts");
+}
+
+function renderFactLine(fact: Fact): string {
+  const decidedBy = fact.source.decided_by === undefined ? "" : ` · decided by ${fact.source.decided_by}`;
+  // Detected contradictions, named — a prompt handed both facts is told they
+  // disagree instead of being left to pick one.
+  const conflicts = fact.conflicts_with === undefined || fact.conflicts_with.length === 0
+    ? ""
+    : ` · conflicts with ${fact.conflicts_with.join(", ")}`;
+  return `- [${fact.id}] ${fact.fact} (${fact.area} · ${fact.confidence})${decidedBy}${conflicts}`;
+}
+
+/**
+ * Cut a rendered list of one-line-per-fact rows to `maxBytes`, on a WHOLE
+ * line — never a byte-sliced prefix of one (#161) — and name what was cut:
+ * the same discipline `inlineInputs` (`seedInputs.ts`) already follows for a
+ * declared input the shared budget could not fit. Shared by `renderFacts`
+ * (part C) and `renderFactsIndex` (part E) — one derivation of "what a
+ * ceiling on a list of fact lines does when it runs out."
+ */
+function capFactLines(lines: readonly string[], maxBytes: number, noun: string): string {
+  const whole = lines.join("\n");
+  if (byteLength(whole) <= maxBytes) return whole;
+  const kept: string[] = [];
+  let spent = 0;
+  for (const line of lines) {
+    const size = byteLength(line) + (kept.length === 0 ? 0 : 1); // +1 for the joining newline
+    if (spent + size > maxBytes) break;
+    kept.push(line);
+    spent += size;
+  }
+  const omittedCount = lines.length - kept.length;
+  const omittedBytes = byteLength(whole) - spent;
+  const note = `_…${omittedCount.toLocaleString("en-US")} ${noun} omitted, `
+    + `${omittedBytes.toLocaleString("en-US")} B over the ${maxBytes.toLocaleString("en-US")}-byte ceiling — `
+    + "read `.tldrx/memory/facts.yml` for the full text._";
+  return kept.length === 0 ? note : `${kept.join("\n")}\n${note}`;
 }
 
 /**

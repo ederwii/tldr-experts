@@ -69,7 +69,12 @@ Everything in this section is written and tested on main; none of it is tagged.
   byte budget with declared inputs filled first; a context ledger and `prompt_max_bytes` as a
   refusal; experts ranked by relevance rather than by sharing a repo; `max_reads` as the brake
   `--max-budget-usd` is not; the refused draft handed to attempt 2; `tldrx cost` and
-  `tldrx run estimate`.
+  `tldrx run estimate`. **What rides IN the prompt is bounded, not just measured** (#216): a
+  field audit found `facts.yml` reaching 57% of a bundle with 27 verbatim duplicates and no
+  filter — `append` now dedupes on normalised text, `tldrx facts dedupe` retires what was
+  already on the ledger, what/how get a one-line-per-fact INDEX instead of the raw file,
+  Build's `renderFacts` sits under a named byte ceiling, and the share is its own line in the
+  context ledger.
 - **Prose sections are checked**: each of Findings / Decisions / Unknowns / Evidence ledger must
   hold at least one sourced list item, and prose alone is refused by `claim-sources`.
 

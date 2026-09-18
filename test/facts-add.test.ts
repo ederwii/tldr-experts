@@ -45,7 +45,7 @@ import { FactsStore } from "../src/core/facts/FactsStore.ts";
 import { MAX_FACT_CHARS, type Fact } from "../src/core/facts/Fact.ts";
 import { validateFactsFile } from "../src/core/facts/validateFactsFile.ts";
 import { renderMandate } from "../src/core/drive/mandate.ts";
-import { renderFacts } from "../src/core/facilitator/prompt.ts";
+import { DEFAULT_FACTS_MAX_BYTES, renderFacts } from "../src/core/facilitator/prompt.ts";
 import { createRun } from "../src/core/run/newRun.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
@@ -375,6 +375,57 @@ describe("renderFacts — {{facts}} carries decided_by attribution", () => {
     const f = fact({ id: "F002", fact: "State lives in Postgres.", confidence: "stated" });
     expect(renderFacts([{ ...f, conflicts_with: ["F001"] }], []))
       .toBe("- [F002] State lives in Postgres. (billing · stated) · conflicts with F001");
+  });
+});
+
+/**
+ * Part C of gh #216: `renderFacts`' output goes under a byte ceiling — the
+ * SAME function Build's `### Facts already on record` renders (executors/
+ * build.ts:5610) and the `{{facts}}` template value use, so both get the cap
+ * for free. Measured on the issue's own field audit: a single section reached
+ * 123,938 B, 57% of a 218 KB bundle. The cut lands on a WHOLE fact (#161 —
+ * never mid-word) and is NAMED (§7 absent-with-reason), never silent.
+ */
+describe("renderFacts — byte ceiling (gh #216 part C)", () => {
+  function manyFacts(n: number): Fact[] {
+    return Array.from({ length: n }, (_, i) =>
+      fact({
+        id: `F${String(i + 1).padStart(3, "0")}`,
+        fact: `Fact number ${String(i + 1)} is a long sentence padded out so the ceiling has something to cut against, repeated for length.`,
+      }));
+  }
+
+  test("under the ceiling, nothing is cut and no note is appended", () => {
+    const facts = manyFacts(3);
+    const rendered = renderFacts(facts, [], 4096);
+    expect(rendered).not.toContain("omitted");
+    expect(rendered.split("\n")).toHaveLength(3);
+  });
+
+  test("over the ceiling, the cut lands on a WHOLE fact and is named", () => {
+    const facts = manyFacts(50);
+    const whole = renderFacts(facts, [], 100_000);
+    const capped = renderFacts(facts, [], 800);
+
+    // The KEPT fact lines stay inside the ceiling; the note that explains the
+    // cut rides after it (the same shape `inlineInputs`'s own truncation note
+    // uses — metadata about the cut is not itself counted against it).
+    const keptLines = capped.split("\n").filter((line) => line.startsWith("- [F"));
+    expect(Buffer.byteLength(keptLines.join("\n"), "utf8")).toBeLessThanOrEqual(800);
+    expect(capped).toContain("omitted");
+    expect(capped).toContain(".tldrx/memory/facts.yml");
+    // Never mid-word (#161): every kept line is one COMPLETE rendered fact line
+    // from the uncapped render, never a byte-sliced prefix of one.
+    const wholeLines = whole.split("\n");
+    for (const line of keptLines) expect(wholeLines).toContain(line);
+    expect(keptLines.length).toBeLessThan(facts.length);
+  });
+
+  test("the default ceiling is DEFAULT_FACTS_MAX_BYTES, applied with no third argument", () => {
+    const facts = manyFacts(400);
+    const rendered = renderFacts(facts, []);
+    expect(Buffer.byteLength(rendered, "utf8")).toBeLessThanOrEqual(DEFAULT_FACTS_MAX_BYTES + 512);
+    expect(rendered).toContain("omitted");
   });
 });
 

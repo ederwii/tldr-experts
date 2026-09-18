@@ -70,6 +70,15 @@ export interface LedgerGroups {
   readonly previousAttempt: number;
   /** The `## Questions` section of `stage.md`, counted out of the stage total. */
   readonly questions: number;
+  /**
+   * `.tldrx/memory/facts.yml`'s own share, carved out of `inputs` — the same
+   * shape `questions` already is of `stage` (gh #216 part D): additive, and
+   * NOT summed a second time into `totalBytes`, which already counts it as
+   * part of `inputs`. 0 when this stage declares no facts input, never absent
+   * — the field audit that opened #216 found a facts share as high as 57% of a
+   * bundle with no line anywhere naming it.
+   */
+  readonly facts: number;
 }
 
 export interface ContextLedger {
@@ -106,6 +115,14 @@ export interface LedgerInput {
   readonly model: string | null;
   /** Bytes of the rendered `stage.md`'s `## Questions` section, when it has one. */
   readonly questionsBytes?: number;
+  /**
+   * Which row of `inputBytes` (by `path`, exactly as declared) is
+   * `.tldrx/memory/facts.yml` — gh #216 part D. Absent when this stage does not
+   * declare it, which is the normal case for a stage whose call site never
+   * computed the resolved-path match (`assemblePrompt` is the one caller that
+   * does; a fixture or a stage with no facts input passes nothing).
+   */
+  readonly factsInputPath?: string;
 }
 
 export function buildLedger(input: LedgerInput): ContextLedger {
@@ -117,6 +134,7 @@ export function buildLedger(input: LedgerInput): ContextLedger {
   let dispatchNotes = 0;
   let projectSkills = 0;
   let previousAttempt = 0;
+  let facts = 0;
 
   for (const part of input.parts) {
     const bytes = byteLength(part.text);
@@ -165,6 +183,7 @@ export function buildLedger(input: LedgerInput): ContextLedger {
         inputs += bytes;
         for (const file of input.inputBytes) {
           rows.push({ kind: "inputs", name: file.path, bytes: file.bytes });
+          if (file.path === input.factsInputPath) facts += file.bytes;
         }
         break;
     }
@@ -191,6 +210,7 @@ export function buildLedger(input: LedgerInput): ContextLedger {
       projectSkills,
       previousAttempt,
       questions: input.questionsBytes ?? 0,
+      facts,
     },
     truncatedInputs: input.truncatedInputs,
     limitBytes: input.limitBytes,
@@ -225,7 +245,8 @@ export function renderLedger(ledger: ContextLedger, maxRows = 8): readonly strin
     `context ${bytes(ledger.totalBytes)} of ${bytes(ledger.limitBytes)} `
       + `(~${tokens(ledger.estimatedTokens)} tok${windowClause(ledger)})`,
     `  stage ${bytes(g.stage)}${g.questions === 0 ? "" : ` (questions ${bytes(g.questions)})`}`
-      + ` · inputs ${bytes(g.inputs)} · experts ${bytes(g.experts)}`
+      + ` · inputs ${bytes(g.inputs)}${g.facts === 0 ? "" : ` (facts ${bytes(g.facts)})`}`
+      + ` · experts ${bytes(g.experts)}`
       + ` (bodies ${bytes(g.expertBodies)}, knowledge ${bytes(g.expertKnowledge)})`
       + (g.dispatchNotes === 0 ? "" : ` · dispatch notes ${bytes(g.dispatchNotes)}`)
       + (g.projectSkills === 0 ? "" : ` · project skills ${bytes(g.projectSkills)}`)

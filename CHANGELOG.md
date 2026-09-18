@@ -13,6 +13,20 @@
   three or more, since the reciprocal link `validateFactsFile` enforces is one-to-one; `headOf`
   still resolves every chained member to the one still live. Nothing is deleted, `--dry-run`
   writes nothing, and a ledger with no duplicates is byte-identical after.
+- **The context ledger carries the facts share as its own line, `facts_bytes` in `pending.json`
+  and `(facts N B)` in `--prepare`/`--dry-run` (see #216).** A subset of `inputs_bytes`, the same
+  shape `questions_bytes` already is of `stage_bytes` — never summed twice into `total_bytes`.
+  The field audit that opened #216 found this share reaching 57% of a bundle with nothing
+  anywhere naming it; the number used to exist only as something you could `wc -c` a rendered
+  prompt to discover by hand.
+
+### Changed
+
+- **`renderFacts`'s rendered list — Build's `### Facts already on record` and the `{{facts}}`
+  template value alike — sits under a byte ceiling (`DEFAULT_FACTS_MAX_BYTES`, 32 KB) for the
+  first time (see #216).** Previously unbounded: one measured section reached 123,938 B, 57% of
+  a 218 KB bundle. Over the ceiling the list is cut on a WHOLE fact, never mid-word (#161), and
+  the cut is named on the page rather than silently dropped.
 
 ### Changed
 

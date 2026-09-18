@@ -632,6 +632,12 @@ goes through `FactsStore.append`, which now compares the incoming text, trimmed/
 retired or superseded twin does not block a fresh assertion of the same text. `tldrx facts dedupe [--dry-run]` (§3)
 retires whatever duplicates already reached the ledger before this check existed.
 
+**`renderFacts`'s output is bounded, not just accumulated (gh #216).** The Build developer's
+`### Facts already on record` and the `{{facts}}` template value both go through the one function, so both get the
+cap for free: `DEFAULT_FACTS_MAX_BYTES` (32 KB). Over it the list is cut on a WHOLE fact line, never mid-word (#161),
+and the cut is NAMED — `_…N facts omitted, M B over the 32,768-byte ceiling — read \`.tldrx/memory/facts.yml\` for
+the full text._` — never silent.
+
 ```yaml
 version: 1
 facts:
@@ -3241,6 +3247,14 @@ source is not quoted at all** — the ledger line prints the token estimate and 
 figure. Until 2026-09-09 an unknown model fell through to the documented 200 000-token default and the line stated it
 as if it were that model's own window; on the 1M-window models these runs use it understated the window by 5x, and
 it did so inside a refusal, which is how a ceiling ends up arguing against itself.
+
+**The facts share (gh #216).** `groups.facts` (`pending.json`'s `facts_bytes`) is a SUBSET of `inputs_bytes`, the
+same shape `questions_bytes` already is of `stage_bytes` — an existing group carved into its own line, never summed
+twice into `total_bytes`. It is `.tldrx/memory/facts.yml`'s own byte share of whichever declared-input row resolves
+to it, detected by the RESOLVED PATH, never a filename pattern; 0 when a stage declares no facts input, never absent.
+`--prepare`/`--dry-run` print it as `inputs 12.3 KB (facts 8.1 KB)` when non-zero. A field audit on a live workspace
+found this share reaching 57% of a 218 KB bundle with no line anywhere naming it — the number existed only as
+something you could `wc -c` an inlined section to discover by hand.
 
 **The read cap.** `--max-budget-usd` STOPS a sub-agent after the turn it is already in (measured: $5.15 against a
 $1.50 ceiling); `--effort` changes what a turn costs but not how many there are. Neither bounds EXPLORATION, and the
