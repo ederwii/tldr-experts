@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.36.0 — unreleased
+
+### Fixed
+
+- **The Build executor's `ExecutorTask` rows never copied `AgentOutcome.failureKind` across, so a
+  Build developer or reviewer turn that died with a classifiable cause carried no
+  `failure_kind` on its `run.yml` row (see #357, see #348).** `ExecutorTask.failureKind` and
+  its `recordExecutorTasks` mapping already existed; the four `this.tasks.push` sites in
+  `executors/build.ts` were the only thing not copying it. The spawned-developer and
+  spawned-reviewer sites (and the format-retry row beside them) now do; the two HOST-turn
+  push sites, which have no `AgentOutcome` to read a kind off, are unchanged and continue to
+  leave the key absent rather than guess one. `test/build-golden.test.ts`'s `rounds-run-tasks.txt`
+  golden is regenerated ON PURPOSE — a failed developer's row in that fixture now carries
+  `failure_kind: "non_zero_exit"`, which it did not before; this is the change this commit
+  means, not a drift.
+- **A spawned turn whose result document said `subtype: "success"` but whose process exit
+  code disagreed settled as a stage failure — costing a full `run auto` relaunch for work
+  that was already done (see #375, see #348).** Measured on a live autonomous run: a watch
+  developer wrote its declared output, `claude` exited 1 with `is_error: true`, and the
+  result document's own `subtype` said `"success"`; the facilitator classified this as
+  `unclassified` ("no reason named (the provider's own subtype said "success")") and `run
+  auto` spent one of five relaunches re-running work attempt 1 had already finished. The
+  three headless spawn sites in `runNext.ts` now settle the turn as `done` — recording the
+  disagreement as an additive `exit_disagreement` note on the row and the `agent.result`
+  event — whenever every output the stage declared is on disk and non-empty at the moment
+  the verdict is taken (`exitDisagreement.ts`'s `settleExitDisagreement`, one derivation,
+  called from all three rather than pasted three times); a turn missing even one declared
+  output stays `failed` under its ordinary `failure_kind`, exactly as before. The Build
+  executor's `spawnDeveloper` path has the same exit/subtype disagreement shape but no
+  per-story declared-outputs list to check existence against, so it is deliberately left
+  out of this change — see the follow-up draft at
+  `scratchpad/issue-draft-375-build-spawndeveloper-exit-disagreement.md`.
+
+### Changed
+
+- **A turn killed by the provider's rate limit with no attested `rate_limit_event` frame can
+  now be classified `rate_limit` from its raw text (part of #341).** `describeFailure`'s
+  residual `unclassified` bucket now checks stdout/stderr against a small exported regex
+  (`RATE_LIMIT_TEXT_RE`) for the REPORTED (not measured — no raw capture of a turn that
+  actually died against the wall exists in this repo) shape of a session-limit API error
+  before giving up; it never overrides a more specific cause (timeout, a kill signal, a
+  malformed envelope, a named error or subtype disagreement). The frame-attested capture
+  #341 actually asks for still does not exist — this narrows the "no reason named" bucket,
+  it does not close the issue.
+
 ## 0.35.0 — 2026-09-17
 
 ### Fixed
