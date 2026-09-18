@@ -5197,6 +5197,22 @@ that holds the dollars. Measured on a live `run auto --until-done`: the planner 
 comma in three of three stories and the only recovery was a $2.19 re-plan plus one of five relaunches, for a defect
 the checker had already localised to a file and a column.
 
+**A mechanical repair runs BEFORE any of the above, for $0.00 (gh #352, part of the #345
+family).** An over-cap `acceptance`/`test_plan` item — `requireStringList`'s own refusal already
+says "split it into several items" — is split MECHANICALLY at a sentence boundary
+(`. `/`; `/`? `/`! ` followed by an uppercase letter or a list marker), outside any trailing
+`[src: …]` citation, which is copied VERBATIM onto every resulting piece rather than kept on only
+the last one — a citation earlier pieces would otherwise lose. The split is accepted, and written
+back to the story file, ONLY when every piece is `<= MAX_ITEM_CHARS` and re-validates through the
+same checks the original item failed (`requireStringList`, plus the `[src:]` grammar when the
+original line carried a token); an item with no boundary, or whose split would still fail, is left
+byte-identical and the ordinary `plan` refusal (and the fix round above, when applicable) stands.
+Because this runs inside `checkPlan` itself, a formatting-only over-cap item never even reaches
+the bounded fix round, let alone a re-plan — the same "before spending" saving #345 shipped for
+Watch's `[src:]` punctuation repair, one call site earlier in the Plan phase's own pipeline. The
+repair is never silent: `CheckOutcome.repairs` names which item, how many characters, and how many
+pieces, surfaced on the stage's own report line and on the `check.passed`/`check.failed` event.
+
 ### 5.1 Ticket mirror (`tldrx tickets`)
 
 The optional adapter from the concept's v0.2 addendum. It is **not part of the facilitator loop** — it is a separate

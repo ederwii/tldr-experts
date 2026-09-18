@@ -2434,7 +2434,14 @@ async function finishStage(
         check: check.id,
         status: check.status,
         detail: check.detail,
+        ...(check.repairs === undefined || check.repairs.length === 0 ? {} : { repairs: check.repairs }),
       }));
+      // A check's own mechanical repair (gh #352, part of #345 family) is
+      // visible on the stage's own report, not only in the event above — the
+      // owner decision an auto-repair must never be silent (2026-09-15).
+      if (check.repairs !== undefined && check.repairs.length > 0) {
+        notes.push(...check.repairs.map((line) => `  ${line}`));
+      }
     }
     const failed = checks.find((c) => c.status === "failed");
     if (failed === undefined) break;

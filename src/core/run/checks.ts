@@ -30,6 +30,7 @@ import { buildProgress, BUILD_PHASE } from "./buildProgress.ts";
 import { loadStageSpec } from "../facilitator/stageSpec.ts";
 import { loadWorkspace, repoPath, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { describePlanIssues, validatePlan, writesPlanArtefacts, validatePlanBudget } from "../plan/validatePlan.ts";
+import { describeOverCapRepairs, repairOverCapItems } from "../plan/repairOverCapItems.ts";
 import { planFixFiles, planIssuesAreRepairable } from "../plan/planFixRound.ts";
 import { validatePlanShape } from "../plan/planShape.ts";
 import { branchModelFor, describeBranchModel } from "../plan/branchModel.ts";
@@ -68,6 +69,18 @@ export interface CheckOutcome {
    * Empty or absent whenever `repairable` is not `true`.
    */
   readonly repairFiles?: readonly string[];
+  /**
+   * A MECHANICAL, local repair this check applied to the files on disk before
+   * judging them — never a paid turn (gh #352, part of the #345 family). One
+   * line per repair, human-readable, so it can be surfaced on the stage's own
+   * report line and in `check.passed`/`check.failed`'s event payload — the
+   * owner decision an auto-repair must be VISIBLE (2026-09-15) applies here
+   * exactly as it does to Watch's `[src:]` punctuation repair.
+   *
+   * ADDITIVE and set today only by `plan`. Absent or empty means no repair was
+   * applied this pass — never "not asked", since every `plan` pass asks.
+   */
+  readonly repairs?: readonly string[];
 }
 
 export interface CheckContext {
@@ -400,6 +413,15 @@ function checkPlan(ctx: CheckContext): CheckOutcome {
     return { id: "plan", status: "skipped", detail: "the stage declares no waves.yml output" };
   }
   const planDir = join(ctx.runDir, ctx.stage.phase);
+  // gh #352 (part of #345 family): a mechanical, local repair for an over-cap
+  // `acceptance`/`test_plan` item — split at a sentence boundary, never
+  // invented — runs BEFORE `validatePlan` judges the plan, the same
+  // "before spending" pass #345 shipped for Watch's `[src:]` punctuation. A
+  // repair is written to disk only when every resulting piece re-validates;
+  // an item this cannot safely split is left untouched and refused exactly as
+  // before, including by the plan-fix round below.
+  const overCapRepairs = repairOverCapItems(planDir);
+  const repairLines = describeOverCapRepairs(overCapRepairs);
   const workspace = loadWorkspace(ctx.root);
   const report = validatePlan(
     planDir, workspace.commands, workspace.iterationCommands, workspace.scopedTemplates,
@@ -423,6 +445,7 @@ function checkPlan(ctx: CheckContext): CheckOutcome {
       status: "failed",
       detail: describePlanIssues(issues),
       ...(repairable ? { repairable, repairFiles: planFixFiles(issues) } : {}),
+      ...(repairLines === null ? {} : { repairs: repairLines }),
     };
   }
   const model = branchModelFor(basename(ctx.runDir), report.epicChain);
@@ -433,6 +456,7 @@ function checkPlan(ctx: CheckContext): CheckOutcome {
     status: "passed",
     detail: `${report.epicCount} epic(s), ${report.storyCount} story(ies), ${report.waveCount} wave(s)`
       + ` — ${describeBranchModel(model)}${over === null ? "" : ` — ${over}`}${advisories}`,
+    ...(repairLines === null ? {} : { repairs: repairLines }),
   };
 }
 

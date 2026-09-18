@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseYaml, readYamlFile } from "../src/core/yaml.ts";
@@ -533,6 +533,111 @@ describe("the `plan` gate check (spec §2.15)", () => {
     const { root, runDir } = setUp({ "waves.yml": WAVES });
     const outcome = await runCheck(CHECK, { root, runDir, stage: stageSpec(root, "what") });
     expect(outcome).toMatchObject({ id: "plan", status: "skipped" });
+  });
+
+  /**
+   * gh #352 (part of #345 family): the same "before spending" saving #345
+   * shipped for Watch's `[src:]` punctuation, here for an over-cap
+   * `acceptance`/`test_plan` item. A story with a prose item over
+   * `MAX_ITEM_CHARS` — but split-able at a sentence boundary, each piece under
+   * the cap — is repaired MECHANICALLY, written back to disk, and the check
+   * passes on the SAME attempt rather than failing and waiting on a paid
+   * `plan-fix` round.
+   */
+  function longSentence(lead: string, min: number): string {
+    let s = lead;
+    while (s.length < min) s += " word";
+    return s.endsWith(".") ? s : `${s}.`;
+  }
+  const OVER_CAP_TOKEN = "[src: api:src/Leaderboard.cs:3]";
+
+  test("an over-cap acceptance item with two sentences and a trailing [src:] token is split and the check passes", async () => {
+    const first = longSentence("Top-50 ranks render from the materialised view with newest hunt first", 300);
+    const second = longSentence("Ties are broken by submission time and the view refreshes within a minute", 300);
+    const bigItem = `${first} ${second} ${OVER_CAP_TOKEN}`;
+    expect(bigItem.length).toBeGreaterThan(512);
+
+    const { root, runDir } = setUp({
+      "stories/S1.md": STORY
+        .replace("repo: lab", "repo: api")
+        .replace("npm run test", "true")
+        .replace(`acceptance: ["Top-50 ranks render from the view"]`, `acceptance: ["${bigItem}"]`),
+      "epics/E1.md": EPIC.replace("repos: [lab]", "repos: [api]"),
+      "waves.yml": WAVES,
+    });
+
+    const outcome = await runCheck(CHECK, { root, runDir, stage: stageSpec(root, "plan") });
+
+    expect(outcome.status).toBe("passed");
+    expect((outcome.repairs ?? []).join("\n")).toContain("acceptance[0]");
+    expect((outcome.repairs ?? []).join("\n")).toContain("mechanically split into 2 pieces");
+
+    const written = readFileSync(join(runDir, "03-plan", "stories", "S1.md"), "utf8");
+    expect(written).not.toContain(bigItem);
+    const doc = parseYaml(splitFrontMatter(written).raw) as { acceptance: readonly string[] };
+    expect(doc.acceptance).toHaveLength(2);
+    for (const item of doc.acceptance) {
+      expect(item.length).toBeLessThanOrEqual(512);
+      expect(item.endsWith(OVER_CAP_TOKEN)).toBe(true);
+    }
+  });
+
+  /**
+   * The re-validate guard (`repairOverCapItems.ts`'s `pieceValidates`): a split
+   * `splitOverCapItem` itself is willing to offer (a real sentence boundary
+   * exists, every piece fits under the cap) is still REJECTED when a piece
+   * carries a `[src:]` marker that does not parse — the guard `requireStringList`
+   * + `parseSrcToken` (`diagnoseSrcToken`) checks every piece against, exactly
+   * as the original item would have been. Nothing is written; the check fails
+   * exactly as it would have with no repair mechanism at all.
+   */
+  test("a split whose piece carries a malformed [src:] token is rejected by the re-validate guard — no repair, no write", async () => {
+    const badToken = "[src: not-a-valid-source-with-no-line-number]";
+    const first = longSentence("First real sentence before the malformed token", 300);
+    const second = longSentence("Second real sentence before the malformed token", 300);
+    const bigItem = `${first} ${second} ${badToken}`;
+    expect(bigItem.length).toBeGreaterThan(512);
+    const storyText = STORY
+      .replace("repo: lab", "repo: api")
+      .replace("npm run test", "true")
+      .replace(`acceptance: ["Top-50 ranks render from the view"]`, `acceptance: ["${bigItem}"]`);
+
+    const { root, runDir } = setUp({
+      "stories/S1.md": storyText,
+      "epics/E1.md": EPIC.replace("repos: [lab]", "repos: [api]"),
+      "waves.yml": WAVES,
+    });
+
+    const outcome = await runCheck(CHECK, { root, runDir, stage: stageSpec(root, "plan") });
+
+    expect(outcome.status).toBe("failed");
+    expect(outcome.detail).toContain("characters (cap 512)");
+    expect(outcome.repairs).toBeUndefined();
+    const written = readFileSync(join(runDir, "03-plan", "stories", "S1.md"), "utf8");
+    expect(written).toBe(storyText);
+  });
+
+  test("an over-cap acceptance item with no sentence boundary still fails, byte-identical, exactly as before #352", async () => {
+    const runOn = `${longSentence("One single run-on claim with no internal sentence break at all just words", 600)} ${OVER_CAP_TOKEN}`;
+    expect(runOn.length).toBeGreaterThan(512);
+    const storyText = STORY
+      .replace("repo: lab", "repo: api")
+      .replace("npm run test", "true")
+      .replace(`acceptance: ["Top-50 ranks render from the view"]`, `acceptance: ["${runOn}"]`);
+
+    const { root, runDir } = setUp({
+      "stories/S1.md": storyText,
+      "epics/E1.md": EPIC.replace("repos: [lab]", "repos: [api]"),
+      "waves.yml": WAVES,
+    });
+
+    const outcome = await runCheck(CHECK, { root, runDir, stage: stageSpec(root, "plan") });
+
+    expect(outcome.status).toBe("failed");
+    expect(outcome.detail).toContain("characters (cap 512)");
+    expect(outcome.repairs).toBeUndefined();
+    const written = readFileSync(join(runDir, "03-plan", "stories", "S1.md"), "utf8");
+    expect(written).toBe(storyText); // byte-identical — nothing touched it
   });
 });
 

@@ -32,6 +32,27 @@
   when the step never spells the filename. The issue's second half — a `touches_always:`
   workspace-level allowlist addition — is not in scope here; it stays available as a
   follow-up if this half proves insufficient in the field.
+- **An over-cap `acceptance`/`test_plan` item is now split mechanically, for $0.00, before the
+  `plan` check ever judges it (see #352, part of #345 family).** `requireStringList`'s own
+  refusal already said "split it into several items"; `checkPlan` now tries exactly that,
+  reusing `[src:]`'s own trailing-token span finder (`trailingTokenSpan`, `srcToken.ts`,
+  exported for this — one derivation, AGENTS.md §7) so a split never cuts through, or drops, a
+  citation: the token is set aside before any sentence boundary is looked for, and copied
+  VERBATIM onto every resulting piece, not just the last. `splitOverCapItem`
+  (`src/core/text/listSplit.ts`) does the mechanical half; `repairOverCapItems`
+  (`src/core/plan/repairOverCapItems.ts`) does the file half — locating the field surgically in
+  the story's raw front-matter lines (both the flow-list and block-list shapes a story is seen
+  in) and rewriting only that one field, never a full YAML round-trip that would reflow
+  everything else's quoting. A split is written back to disk ONLY when every piece is under the
+  cap AND re-validates through the same checks the original item failed
+  (`requireStringList` + the `[src:]` grammar when the item carried a token) — an item with no
+  sentence boundary, or whose split still fails re-validation, is left byte-identical and
+  refused exactly as before, including by the existing `plan-fix` round (#288) when applicable.
+  Because the repair runs inside the SAME check pass, a formatting-only over-cap item never
+  even reaches that bounded, paid round. `CheckOutcome` grows an additive `repairs?` field
+  (`src/core/run/checks.ts`), surfaced on the stage's own report line and on the
+  `check.passed`/`check.failed` event — the same "an auto-repair must be visible" owner
+  decision (2026-09-15) #345's Watch repair already follows.
 
 ### Changed
 

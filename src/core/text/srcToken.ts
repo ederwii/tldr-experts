@@ -551,30 +551,43 @@ function insertMarkerSpace(line: string): string | null {
 }
 
 /**
- * A well-formed `[src: …]` sitting mid-sentence is moved to the true end of the
- * line, exactly as `SRC_RULES`'s own `trailing-position` pair does it by hand.
+ * The span of the LAST `[src: …]` token on `line` — `start` at `[`, `end` just
+ * past the closing `]` — or `null` when there is none.
  *
- * Anchored on `line.lastIndexOf(SRC_MARKER)` — the SAME position
- * `diagnoseSrcToken` reads to decide this is `trailing-position` in the first
- * place (line 466 above). Reviewer-found (2026-09-15): an earlier cut used an
- * unanchored FIRST-match regex here, so a line quoting a decorative example
- * token before the real, mid-sentence one relocated the wrong (decorative)
- * span — it re-verified clean and was written to disk citing the wrong file.
- * There can be only one span at `lastIndexOf`, so "first vs. last" cannot
- * recur here the way it can with a substring `.replace` (`straightenCmdArrow`,
- * below).
+ * Anchored on `line.lastIndexOf(SRC_MARKER)`, the SAME position
+ * `diagnoseSrcToken` reads to decide a line is `trailing-position` in the first
+ * place (line 466 above). Reviewer-found (2026-09-15): an earlier cut of
+ * `relocateTrailingToken` used an unanchored FIRST-match regex here, so a line
+ * quoting a decorative example token before the real, mid-sentence one
+ * relocated the wrong (decorative) span — it re-verified clean and was written
+ * to disk citing the wrong file. There can be only one span at `lastIndexOf`,
+ * so "first vs. last" cannot recur here the way it can with a substring
+ * `.replace` (`straightenCmdArrow`, below). Exported so a caller that needs to
+ * split TEXT without ever cutting through a citation (gh #352,
+ * `text/listSplit.ts`) reads the same span this file already computes, rather
+ * than writing a second one (AGENTS.md §7).
  */
-function relocateTrailingToken(line: string): string | null {
+export function trailingTokenSpan(line: string): { readonly start: number; readonly end: number } | null {
   const at = line.lastIndexOf(SRC_MARKER);
   if (at === -1) return null;
   const close = line.indexOf("]", at);
   if (close === -1) return null;
-  const token = line.slice(at, close + 1);
+  return { start: at, end: close + 1 };
+}
+
+/**
+ * A well-formed `[src: …]` sitting mid-sentence is moved to the true end of the
+ * line, exactly as `SRC_RULES`'s own `trailing-position` pair does it by hand.
+ */
+function relocateTrailingToken(line: string): string | null {
+  const span = trailingTokenSpan(line);
+  if (span === null) return null;
+  const token = line.slice(span.start, span.end);
   // The span (token plus whatever whitespace hugs it on either side) is
   // collapsed to ONE space rather than dropped outright — dropping both sides
   // would fuse the words either side of the token into one.
   const withoutToken = (
-    line.slice(0, at) + " " + line.slice(close + 1)
+    line.slice(0, span.start) + " " + line.slice(span.end)
   ).replace(/\s+/g, " ").trim();
   return `${withoutToken} ${token}`;
 }
