@@ -32,6 +32,7 @@ const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
   "FAKE_CLAUDE_RUNDIR", "FAKE_CLAUDE_OUTPUTS", "FAKE_CLAUDE_COST", "FAKE_CLAUDE_IS_ERROR",
   "FAKE_CLAUDE_SESSION", "FAKE_CLAUDE_ARGV_LOG", "FAKE_CLAUDE_PROMPT_OUT",
+  "FAKE_CLAUDE_READS", "FAKE_CLAUDE_HANG_MS",
 ] as const;
 
 let open: FacilitatorWorkspace[] = [];
@@ -927,17 +928,25 @@ describe("after a failure", () => {
    * retry exactly as on a first attempt, with no pre-dispatch check of what a
    * prior FAILED attempt already left on disk. This is the RED this describe
    * block proves and then closes: the fake agent WRITES valid, complete
-   * declared outputs on attempt 1 but still reports failure (the "already
-   * finished the real work, failed for an unrelated reason" shape #353 names) —
-   * `PATH` is emptied before the retry, so a spawn attempt there is a loud,
-   * distinct failure, never a silent pass.
+   * declared outputs on attempt 1 but is killed by the stage's OWN `timeout_s`
+   * before it can report anything — the wall dying, not the agent, so nothing
+   * here contradicts what it flushed before the kill (pre-merge review,
+   * 2026-09-18: an is_error-reported failure must NOT settle even with valid
+   * files on disk — that shape moved to the negative test below). `PATH` is
+   * emptied before the retry, so a spawn attempt there is a loud, distinct
+   * failure, never a silent pass.
    */
   test("a retry whose prior attempt's outputs already validate settles at $0 without spawning a second turn", async () => {
-    const ws = workspace(TWO_STAGE);
-    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_IS_ERROR: "1", FAKE_CLAUDE_COST: "0.42" });
+    const ws = workspace([{ ...(TWO_STAGE[0] as StageOptions), timeoutS: 2 }, TWO_STAGE[1] as StageOptions]);
+    fakeClaude(ws, {
+      FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_COST: "0.42",
+      FAKE_CLAUDE_READS: "1", FAKE_CLAUDE_HANG_MS: "10000",
+    });
     const first = await next(ws);
     expect(first.code).toBe(5);
+    expect(first.lines.join("\n")).toContain("timed out");
     expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.status).toBe("failed");
+    expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.tasks.at(-1)?.failure_kind).toBe("timeout");
     expect(existsSync(join(ws.runDir, "01-what", "intent.md"))).toBe(true);
     expect(existsSync(join(ws.runDir, "01-what", "handoff.md"))).toBe(true);
 
@@ -963,6 +972,43 @@ describe("after a failure", () => {
       e.type === "agent.result" && e.stage === "alpha" && e.payload.settled_from !== undefined);
     expect(settledEvent?.payload.settled_from).toBe("prior-attempt outputs");
     expect(settledEvent?.payload.session_id).toBeNull();
+  });
+
+  /**
+   * Pre-merge review (2026-09-18): structurally valid files are not proof of
+   * finished work when the agent that wrote them REPORTED failure. Probed
+   * against the test above's original fixture (`FAKE_CLAUDE_IS_ERROR: "1"`,
+   * still writing complete outputs): attempt 1's row carried
+   * `failure_kind: "non_zero_exit"` with `error` text showing
+   * `is_error=true` and a named `errors[]` entry — the agent itself said the
+   * work was not done — and attempt 2 settled at $0 anyway. RED (verbatim,
+   * against `trySettleFromDisk` before `priorAttemptReportedFailure` existed):
+   * `expect(retry.lines.join("\n")).not.toContain("settled at $0.00")` failed
+   * — `Received: "...settled at $0.00, no turn spawned (settled_from:
+   * prior-attempt outputs)..."`.
+   */
+  test("a retry whose prior attempt reported its OWN failure still spawns, even with valid files on disk", async () => {
+    const ws = workspace(TWO_STAGE);
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_IS_ERROR: "1", FAKE_CLAUDE_COST: "0.42" });
+    const first = await next(ws);
+    expect(first.code).toBe(5);
+    const firstRow = RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.tasks.at(-1);
+    expect(firstRow?.failure_kind).toBe("non_zero_exit");
+    expect(firstRow?.error ?? "").toContain("is_error=true");
+    expect(existsSync(join(ws.runDir, "01-what", "intent.md"))).toBe(true);
+    expect(existsSync(join(ws.runDir, "01-what", "handoff.md"))).toBe(true);
+
+    // Attempt 2 succeeds for real — proving a genuine second turn was
+    // dispatched, not silently settled from the files attempt 1 already left.
+    delete process.env.FAKE_CLAUDE_IS_ERROR;
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_COST: "0.42" });
+    const retry = await next(ws);
+
+    expect(retry.code).toBe(0);
+    expect(retry.lines.join("\n")).not.toContain("settled at $0.00");
+    expect(retry.lines.join("\n")).toContain("prior attempt reported non_zero_exit; spawning");
+    const spawned = events(ws).filter((e) => e.type === "agent.spawned" && e.stage === "alpha");
+    expect(spawned).toHaveLength(2);
   });
 
   /**

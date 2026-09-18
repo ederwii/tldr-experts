@@ -36,7 +36,6 @@ const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
   "FAKE_CLAUDE_RUNDIR", "FAKE_CLAUDE_OUTPUTS", "FAKE_CLAUDE_COST", "FAKE_CLAUDE_IS_ERROR",
   "FAKE_CLAUDE_FAIL_SEQ", "FAKE_CLAUDE_FAIL_COUNTER", "FAKE_CLAUDE_ARGV_LOG",
-  "FAKE_CLAUDE_SKIP_OUTPUTS_ON_ERROR", "FAKE_CLAUDE_ALT_MATCH", "FAKE_CLAUDE_ALT_OUTPUTS",
 ] as const;
 let open: FacilitatorWorkspace[] = [];
 
@@ -83,28 +82,6 @@ function workspace(failures: readonly number[] = []): Made {
   if (failures.length > 0) {
     process.env.FAKE_CLAUDE_FAIL_SEQ = failures.join(",");
     process.env.FAKE_CLAUDE_FAIL_COUNTER = join(made.root, "spawn-count");
-    // This file tests RETRY COUNTING, not content completeness — a "failing" spawn
-    // here must not leave the same complete, valid outputs a passing one would,
-    // or gh #353's settle-from-disk (`runNext.ts`) reads them back on the very
-    // next attempt and settles at $0 rather than spawning again, which is exactly
-    // what these fixtures are simulating did NOT happen.
-    process.env.FAKE_CLAUDE_SKIP_OUTPUTS_ON_ERROR = "1";
-    // Scoped per stage (rather than the one shared blob above, which every spawn
-    // writes ALL of, alpha's turn included): a passing ALPHA spawn used to also
-    // write BETA's declared `02-how/handoff.md` early, so when beta's own first
-    // attempt later "failed" (and correctly wrote nothing, per the knob above),
-    // gh #353's settle-from-disk still found beta's output already on disk from
-    // alpha's turn and settled beta's RETRY without spawning it — one real spawn
-    // short of what this fixture means to simulate. `FAKE_CLAUDE_ALT_MATCH`
-    // switches on beta's own declared-output path, which only ITS OWN prompt's
-    // preamble lists (`prompt.ts`'s `outputs:` section) — alpha's prompt never
-    // contains it.
-    process.env.FAKE_CLAUDE_OUTPUTS = JSON.stringify({
-      "01-what/intent.md": cannedIntent(),
-      "01-what/handoff.md": cannedHandoff(),
-    });
-    process.env.FAKE_CLAUDE_ALT_MATCH = "02-how/handoff.md";
-    process.env.FAKE_CLAUDE_ALT_OUTPUTS = JSON.stringify({ "02-how/handoff.md": cannedHandoff() });
   }
   return { ...made, argvLog };
 }

@@ -82,7 +82,10 @@ import {
 } from "../experts/expertBundle.ts";
 import { nearbyPathsFor } from "../experts/domainRank.ts";
 import { readStackPacks, renderProjectSkills, skillsFor } from "../experts/stackPacks.ts";
-import { agentProvider, describeSpawn, providerBudgetAdvisory, spawnAgent } from "./spawnAgent.ts";
+import {
+  agentProvider, AGENT_REPORTED_FAILURE_KINDS, describeSpawn, providerBudgetAdvisory, spawnAgent,
+  type AgentFailureKind,
+} from "./spawnAgent.ts";
 import { settleExitDisagreement } from "./exitDisagreement.ts";
 import {
   GATE_SIGNER_ROLE, GATE_SIGNER_TOOLS,
@@ -1108,6 +1111,19 @@ async function trySettleFromDisk(
   ctx: PathContext,
   notes: string[],
 ): Promise<NextOutcome | null> {
+  const stage = requireStage(store, phaseId, stageId);
+
+  // Pre-merge review (2026-09-18): valid files are not proof of finished work
+  // when the agent that wrote them said otherwise. `validateOutputs`/`checks`
+  // below only ask "does this shape pass" — they cannot see WHY the prior
+  // attempt failed, and a turn that reported its own failure gets no benefit
+  // of the doubt just because the wreckage happens to validate.
+  const blockedBy = priorAttemptReportedFailure(stage);
+  if (blockedBy !== null) {
+    notes.push(`  ${phaseId}/${stageId}: prior attempt reported ${blockedBy}; spawning`);
+    return null;
+  }
+
   const outputs = expandAll(spec.planned.outputs, store.run.repos);
   const problems = validateOutputs(outputs, expandedSections(spec.planned, store.run.repos), ctx);
   if (problems.length > 0) return null;
@@ -1120,7 +1136,6 @@ async function trySettleFromDisk(
   if (checks.some((c) => c.status === "failed")) return null;
 
   const settledFrom = "prior-attempt outputs";
-  const stage = requireStage(store, phaseId, stageId);
   markRunning(store, phaseId, stageId, options.at);
   const taskId = nextTaskId(store, phaseId, stageId);
   recordTask(store, phaseId, stageId, {
@@ -1154,6 +1169,49 @@ async function trySettleFromDisk(
       + `settled at $0.00, no turn spawned (settled_from: ${settledFrom})`,
   );
   return await finishStage(store, options, phaseId, stageId, spec, notes);
+}
+
+/**
+ * Whether the LAST recorded attempt at this stage was the AGENT saying its
+ * own work was not done — in which case `trySettleFromDisk` above must not
+ * settle, whatever validates on disk. Returns the reported kind (for the
+ * report line), or `null` when there is nothing here that blocks settling.
+ *
+ * `undefined`/absent `failure_kind` on a row that is not `"failed"` — a
+ * `"done"` row, most commonly a `checks:`-only failure (the TURN succeeded;
+ * `finishStage`'s own checks loop is what failed the STAGE, and it never
+ * rewrites the task row that already recorded `ok`) — is exactly the
+ * "unrelated reason" case #353 is FOR, so it is not blocked here.
+ *
+ * `failure_kind` absent on a `"failed"` row (a row from before gh #348, or
+ * one this process itself could not classify for some other reason) is
+ * treated the same as `"unclassified"`: "unknown is not safe" applies to "no
+ * reason recorded" exactly as it does to "a residual bucket recorded".
+ *
+ * `"non_zero_exit"` is the one kind that can go either way (see
+ * `AGENT_REPORTED_FAILURE_KINDS`'s own doc, `spawnAgent.ts`): it is blocked
+ * here too, but only when the row's own `error` text shows a result document
+ * actually parsed and disagreed with itself — `describeFailure`
+ * (`spawnAgent.ts`) always renders that as `… with is_error=true: …`, the
+ * ONE place this text is produced, so reading it back is reading the same
+ * derivation, not inventing a second one. A `"non_zero_exit"` with NO such
+ * text is a process that died before producing anything readable — external
+ * to the work, same as a timeout or a kill — and settles.
+ */
+function priorAttemptReportedFailure(stage: RunStage): string | null {
+  const last = stage.tasks[stage.tasks.length - 1];
+  if (last === undefined || last.status !== "failed") return null;
+  const kind = last.failure_kind;
+  if (kind === undefined || kind === null) return "unclassified";
+  // `RunTask.failure_kind` is a bare `string` (`RunFile.ts` does not import
+  // the facilitator's own type — a run-file reader outside `facilitator/`
+  // must stay readable without it), so the membership check is against the
+  // STRING VALUES `AGENT_REPORTED_FAILURE_KINDS` holds; the cast is the same
+  // narrowing a `switch` over a string literal union would do, not a second
+  // definition of the union (AGENTS.md §7 — see `spawnAgent.ts`).
+  if (AGENT_REPORTED_FAILURE_KINDS.has(kind as AgentFailureKind) || kind === "unclassified") return kind;
+  if (kind === "non_zero_exit" && (last.error ?? "").includes("is_error=true")) return kind;
+  return null;
 }
 
 // Payload-cap sidecar bookkeeping (spec §2.9, fix round 1; module-scoped since

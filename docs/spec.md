@@ -5182,23 +5182,33 @@ overwritten (stages are idempotent by contract). A task that failed mid-stage ma
 operator's options are `next` (retry, re-spending), `reject --note` (send the stage back to `ready` with the note fed
 into the next prompt), or editing the stage inputs by hand and re-running.
 
-**A retry settles at $0.00 instead of re-spending when the prior attempt already finished the work (gh #353, part of
-the #345 family).** MEASURED before this existed: `runStage`'s single-agent path called `spawnAgent` unconditionally,
-on a retry exactly as on a first attempt — `validateOutputs` was only ever called from `finishStage`, AFTER a turn
-was dispatched and paid for, so a stage that failed for a reason unrelated to its declared outputs (a `checks:`
-failure since corrected by hand, a timeout after the last file was flushed) bought a full fresh turn to reproduce
-output that was already correct. Now, on re-entry to a stage whose `status` is already `"failed"` — never on a first
-attempt, which never carries that status — `runStage` runs `validateOutputs` against what a prior attempt left on
-disk, headless mode only (never `--prepare`/`--commit`, never `--dry-run`). Every declared output present and
-non-empty is not enough on its own: when the stage declares any `checks:`, they are run for real against the on-disk
-outputs too, because they cost nothing to run locally and a `checks:` failure there is exactly the "unrelated reason"
-case that still needs a real turn — settling ahead of a check that would fail would spend nothing but also give the
-model no chance to fix it, which is worse than today. Only when BOTH validate does the stage settle: one task row,
+**A retry settles at $0.00 instead of re-spending when the prior attempt already finished the work AND said nothing
+against it (gh #353, part of the #345 family).** MEASURED before this existed: `runStage`'s single-agent path called
+`spawnAgent` unconditionally, on a retry exactly as on a first attempt — `validateOutputs` was only ever called from
+`finishStage`, AFTER a turn was dispatched and paid for, so a stage that failed for a reason EXTERNAL to the work
+itself (a `checks:` failure since corrected by hand, a `timeout`/`process_killed`/`rate_limit` death after the last
+file was flushed) bought a full fresh turn to reproduce output that was already correct. Now, on re-entry to a stage
+whose `status` is already `"failed"` — never on a first attempt, which never carries that status — `runStage` first
+asks whether the PRIOR attempt's own task row blocks settling at all: `priorAttemptReportedFailure` (`runNext.ts`)
+refuses when that row's `failure_kind` is one the agent itself reports —
+`AGENT_REPORTED_FAILURE_KINDS` (`spawnAgent.ts`: `result_error`, `malformed_result`, `empty_result`, `asked_no_diff`)
+— or `unclassified`, or absent on a `"failed"` row ("unknown is not safe"), or `non_zero_exit` whose own `error` text
+shows a result document parsed and disagreed with itself (`… with is_error=true: …`, `describeFailure`'s one
+rendering of that fact). Pre-merge review, 2026-09-18: structurally valid files are not proof of finished work when
+the agent that wrote them said the work was not done — a `checks:`-only failure (the TURN itself succeeded; only
+`finishStage`'s OWN checks loop failed the stage) is not blocked, nor is a row whose failure was the WALL dying
+(`timeout`, `process_killed`, `rate_limit`) or a `non_zero_exit` with no parseable result at all. Only past that gate
+does `runStage` run `validateOutputs` against what the prior attempt left on disk, headless mode only (never
+`--prepare`/`--commit`, never `--dry-run`). Every declared output present and non-empty is still not enough on its
+own: when the stage declares any `checks:`, they are run for real against the on-disk outputs too, because they cost
+nothing to run locally, and settling ahead of a check that would fail would spend nothing but also give the model no
+chance to fix it, which is worse than today. Only when ALL THREE clear does the stage settle: one task row,
 `status: "done"`, `cost_usd: 0`, `model: null`, `session_id: null` (a measured zero — no turn was bought, so nothing
 was billed elsewhere either), carrying the additive `settled_from: "prior-attempt outputs"` field (`RunFile.ts`,
 `emitRunYaml.ts`); one `agent.result` event carries the same field. Never silent: the stage's own report line says so
-in the same words the event does. Any problem — a missing/empty output, or a `checks:` failure — falls straight
-through to the ordinary spawn path, unchanged.
+in the same words the event does — `prior attempt reported <kind>; spawning` when the failure-kind gate is what
+refused. Any problem — the prior attempt's own reported failure, a missing/empty output, or a `checks:` failure —
+falls straight through to the ordinary spawn path, unchanged.
 
 **The `plan` check's one fix round (#288).** One exception to "a failed check fails the stage", and it is bounded on
 every side. When the `plan` check refuses and every issue it found names a file that EXISTS — a front matter that will

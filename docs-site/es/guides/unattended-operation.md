@@ -690,17 +690,24 @@ Tres cosas lo acotan, y las tres importan:
 - **Solo cuentan las fallas consecutivas.** Una etapa que sale bien vuelve la cuenta a cero,
   así que un run largo con una falla recuperable por fase nunca agota una cota pequeña. Lo que
   se acota es "este run está trabado", no "este run falló alguna vez".
-- **Un reintento gasta — salvo que el intento anterior ya haya terminado el trabajo.** Por lo
-  general es una etapa medida más, bajo el mismo techo de fase y el mismo `--max-usd`. Cuando la
-  cota se agota el bucle se detiene con la salida `5` de la falla misma, y la última línea dice
-  la cuenta — `3 consecutive stage failures at 03-plan/plan …` — para que la carga `run.failed`
-  en tu teléfono diga que el bucle lo intentó, en vez de un `5` pelado. Pero un reintento de
-  CUALQUIER etapa cuyas salidas declaradas ya estén completas y válidas en disco — el intento
-  anterior hizo el trabajo real y falló por una razón no relacionada, un `checks:` fallido ya
-  corregido a mano o un timeout después de que el último archivo se escribiera — se resuelve a
-  `$0.00` sin lanzar ningún turno, en vez de pagar por reproducir una salida que ya es correcta;
-  un `checks:` que todavía fallaría contra lo que hay en disco NO se salta por esto — sigue
-  comprando un turno real, exactamente como antes. La fila lleva `cost_usd: 0.0`, sin
+- **Un reintento gasta — salvo que el intento anterior ya haya terminado el trabajo Y no haya
+  dicho nada en contra.** Por lo general es una etapa medida más, bajo el mismo techo de fase y
+  el mismo `--max-usd`. Cuando la cota se agota el bucle se detiene con la salida `5` de la falla
+  misma, y la última línea dice la cuenta — `3 consecutive stage failures at 03-plan/plan …` —
+  para que la carga `run.failed` en tu teléfono diga que el bucle lo intentó, en vez de un `5`
+  pelado. Pero un reintento de CUALQUIER etapa cuyas salidas declaradas ya estén completas y
+  válidas en disco se resuelve a `$0.00` sin lanzar ningún turno, en vez de pagar por reproducir
+  una salida que ya es correcta — SOLO cuando la falla del intento anterior fue externa al
+  trabajo mismo: un `checks:` fallido ya corregido a mano (el turno en sí tuvo éxito), o la pared
+  matándolo (`timeout`, `process_killed`, `rate_limit`), o una muerte del proceso sin nada
+  parseable en absoluto. Un `checks:` que todavía fallaría contra lo que hay en disco NO se salta
+  por esto — sigue comprando un turno real, exactamente como antes. Tampoco lo salta una falla
+  que el AGENTE MISMO reportó: un resultado ilegible o que se contradice a sí mismo, un resultado
+  vacío, un developer que preguntó algo y dejó el worktree intacto, o cualquier muerte que este
+  repo no pudo clasificar — archivos estructuralmente válidos que quedaron atrás no son prueba de
+  que el trabajo esté terminado cuando el agente que los escribió dijo que no lo estaba; ese
+  reintento también sigue comprando un turno real, nombrado en la línea de reporte como
+  `prior attempt reported <kind>; spawning`. La fila resuelta lleva `cost_usd: 0.0`, sin
   `session_id`, y un `settled_from: "prior-attempt outputs"` aditivo, nombrado en la línea de
   reporte de la etapa y en su evento, nunca en silencio.
   Watch es la única etapa que gasta MENOS en un reintento que en el primer intento: escribe una

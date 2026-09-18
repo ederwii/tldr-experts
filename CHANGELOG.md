@@ -70,7 +70,19 @@
   outputs"` (`RunFile.ts`, and `emitRunYaml.ts`'s hand-written task emitter, which needed the
   new key taught to it the same way #375's `exit_disagreement` did), and a matching
   `agent.result` event — named on the stage's own report line too, never silently. Any problem
-  falls straight through to the ordinary spawn path, unchanged.
+  falls straight through to the ordinary spawn path, unchanged. **Pre-merge review
+  (2026-09-18): structurally valid files are not proof of finished work when the agent that
+  wrote them reported the failure itself.** `trySettleFromDisk` now refuses to settle before
+  even looking at disk when the prior attempt's own task row names an agent-reported
+  `failure_kind` (`AGENT_REPORTED_FAILURE_KINDS`, `spawnAgent.ts`: `result_error`,
+  `malformed_result`, `empty_result`, `asked_no_diff`), `unclassified`, an absent kind on a
+  `"failed"` row, or `non_zero_exit` whose own `error` text shows a result document that parsed
+  and disagreed with itself (`… with is_error=true: …`) — only a `checks:`-only failure or the
+  wall dying on it (`timeout`, `process_killed`, `rate_limit`, or a clean `non_zero_exit` with
+  nothing parseable) settles. Named on the report line as `prior attempt reported <kind>;
+  spawning`. A knob two `run auto` retry-counting test fixtures grew to work around the
+  original, too-permissive settle is removed along with it — the failure-kind gate alone keeps
+  their canned "fails then succeeds" spawns real, which is the smaller, more honest fix.
 
 ### Changed
 
