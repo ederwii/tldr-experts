@@ -22,6 +22,15 @@
 
 ### Changed
 
+- **A turn killed by the provider's rate limit with no attested `rate_limit_event` frame can
+  now be classified `rate_limit` from its raw text (part of #341).** `describeFailure`'s
+  residual `unclassified` bucket now checks stdout/stderr against a small exported regex
+  (`RATE_LIMIT_TEXT_RE`) for the REPORTED (not measured — no raw capture of a turn that
+  actually died against the wall exists in this repo) shape of a session-limit API error
+  before giving up; it never overrides a more specific cause (timeout, a kill signal, a
+  malformed envelope, a named error or subtype disagreement). The frame-attested capture
+  #341 actually asks for still does not exist — this narrows the "no reason named" bucket,
+  it does not close the issue.
 - **`renderFacts`'s rendered list — Build's `### Facts already on record` and the `{{facts}}`
   template value alike — sits under a byte ceiling (`DEFAULT_FACTS_MAX_BYTES`, 32 KB) for the
   first time (see #216).** Previously unbounded: one measured section reached 123,938 B, 57% of
@@ -36,18 +45,6 @@
   there was already unused. The `## Inputs` preamble marks the summarised file with its own
   sentence instead of the "nothing else to find" line that would otherwise contradict
   what/how's own prose telling the agent to grep the real file.
-
-### Changed
-
-- **A turn killed by the provider's rate limit with no attested `rate_limit_event` frame can
-  now be classified `rate_limit` from its raw text (part of #341).** `describeFailure`'s
-  residual `unclassified` bucket now checks stdout/stderr against a small exported regex
-  (`RATE_LIMIT_TEXT_RE`) for the REPORTED (not measured — no raw capture of a turn that
-  actually died against the wall exists in this repo) shape of a session-limit API error
-  before giving up; it never overrides a more specific cause (timeout, a kill signal, a
-  malformed envelope, a named error or subtype disagreement). The frame-attested capture
-  #341 actually asks for still does not exist — this narrows the "no reason named" bucket,
-  it does not close the issue.
 
 ### Fixed
 
