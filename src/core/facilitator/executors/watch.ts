@@ -148,6 +148,12 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
   const tasks: ExecutorTask[] = [];
   /** Features whose card was already on disk and already valid (#306), in order. */
   const keptIds: string[] = [];
+  /**
+   * A repair the #306 pre-pass itself made (gh #351), named the same way the
+   * validation loop below names its own — pushed to BEFORE that loop declares
+   * its own list so both land in one report, in kept-then-validated order.
+   */
+  const repairNotes: string[] = [];
   if (ctx.mode === "commit") {
     const collected = collectResults(ctx, features);
     if (collected.error !== null) return failed(ctx, collected.error, collected.tasks);
@@ -160,8 +166,9 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
     // sub-agent decide whether feature 2 gets written at all. What this skip is
     // allowed to mean is "the PREVIOUS attempt already produced this", nothing
     // else.
+    const keptResults = new Map(features.map((feature) => [feature.id, keptCard(ctx, feature, srcCtx)]));
     const kept = new Set(
-      features.filter((feature) => keptCard(ctx, feature, srcCtx)).map((feature) => feature.id),
+      features.filter((feature) => keptResults.get(feature.id)?.kept === true).map((feature) => feature.id),
     );
     for (const [i, feature] of features.entries()) {
       // A card already on disk that validates under THIS stage's `srcCtx` is
@@ -188,6 +195,8 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
       // report names every kept card so a $0.00 row is never read as a lost one.
       if (kept.has(feature.id)) {
         keptIds.push(feature.id);
+        const repairSummary = keptResults.get(feature.id)?.repairSummary ?? null;
+        if (repairSummary !== null) repairNotes.push(`\`${feature.id}\`: ${repairSummary} (kept)`);
         tasks.push({
           key: feature.id,
           model: null,
@@ -274,7 +283,6 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
   // named, on the stage's own report when it clears the card and in the failure
   // reason when it does not (owner decision 2026-09-15).
   const written: WrittenCard[] = [];
-  const repairNotes: string[] = [];
   for (const feature of features) {
     const rel = watcherRelPath(feature.id);
     const abs = join(ctx.runDir, rel);
@@ -672,6 +680,14 @@ function writeHandoff(ctx: ExecutorContext, cards: readonly WrittenCard[], costU
   );
 }
 
+/** Whether `keptCard` kept a feature's file, and the mechanical repair (if any) that got it there. */
+interface KeptCardResult {
+  readonly kept: boolean;
+  readonly repairSummary: string | null;
+}
+
+const NOT_KEPT: KeptCardResult = { kept: false, repairSummary: null };
+
 /**
  * Is this feature's card already written AND already valid (#306)?
  *
@@ -680,17 +696,34 @@ function writeHandoff(ctx: ExecutorContext, cards: readonly WrittenCard[], costU
  * be refused below is not kept here, so the skip can never hide a bad card — the
  * worst it can do is decline to save money.
  *
+ * gh #351: a card refused ONLY on a `[src:]` punctuation slip — the exact thing
+ * the validation loop a few lines below repairs for free — used to be judged
+ * "not kept" here and re-spawn a writer for text a script already knows how to
+ * fix. The SAME `repairSrcSyntax` runs here first: if it turns an invalid card
+ * into a valid one, the fix is written back to disk (so a retry's prompt and any
+ * later read see the repaired text, same as the validation loop's own repair)
+ * and the card is kept. A card that stays invalid after repair is not kept —
+ * today's behaviour — and nothing is written, so its file stays byte-identical
+ * for the writer that gets spawned to correct it. A card already valid without
+ * any repair is kept with no write at all, exactly as before #351.
+ *
  * A read that throws (a card deleted between `existsSync` and here, a permission
- * fault) returns false: the writer is spawned, which is what would have happened
- * before any of this existed.
+ * fault) returns not-kept: the writer is spawned, which is what would have
+ * happened before any of this existed.
  */
-function keptCard(ctx: ExecutorContext, feature: Feature, srcCtx: SrcContext): boolean {
+function keptCard(ctx: ExecutorContext, feature: Feature, srcCtx: SrcContext): KeptCardResult {
   const abs = join(ctx.runDir, watcherRelPath(feature.id));
-  if (!existsSync(abs)) return false;
+  if (!existsSync(abs)) return NOT_KEPT;
   try {
-    return parseWatcherCard(readFileSync(abs, "utf8"), srcCtx, feature.id).ok;
+    const original = readFileSync(abs, "utf8");
+    if (parseWatcherCard(original, srcCtx, feature.id).ok) return { kept: true, repairSummary: null };
+    const repair = repairSrcSyntax(original);
+    if (repair.repairs.length === 0) return NOT_KEPT;
+    if (!parseWatcherCard(repair.text, srcCtx, feature.id).ok) return NOT_KEPT;
+    writeFileSync(abs, repair.text, "utf8");
+    return { kept: true, repairSummary: describeRepairs(repair.repairs) };
   } catch {
-    return false;
+    return NOT_KEPT;
   }
 }
 

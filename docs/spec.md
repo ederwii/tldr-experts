@@ -5059,6 +5059,14 @@ The per-feature ceiling is still the share over ALL features, so a retry hands a
 attempt did, and the floor check that refuses the stage is still over all of them. `--prepare`/`--commit` is unchanged:
 it writes a bundle per feature and `--commit` expects a `result.json` for each.
 
+**The kept-card snapshot gets the same mechanical repair step 3 does (gh #351).** A card left on disk by an earlier
+attempt that fails the snapshot's `parseWatcherCard` check ONLY on a `[src:]` punctuation slip is now run through the
+same `repairSrcSyntax` (gh #345, above) before being judged not-kept: if the repair turns it valid, the repaired text
+is written back to disk and the feature is kept — no writer spawned for a defect a script already knows how to fix.
+A card that stays invalid after repair is not kept, exactly as before #351, and nothing is written to it (the writer
+that gets spawned for it sees the file untouched). A card already valid with no repair needed is kept with no write at
+all. The repair is never silent: it is named on the stage's own report line the same way step 3's repairs are.
+
 `--prepare`/`--commit` is **per feature**: each gets its own `.agent/<stage>/<feature>/{prompt.md,pending.json,result.json}`,
 so the host session dispatches N sub-agents with the same isolation the headless path gives them. `[assumption]` — the
 agent ceiling is the stage share divided N ways with a **$0.25 floor**, because §7 measured a cold `claude -p` paying

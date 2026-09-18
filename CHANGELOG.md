@@ -112,6 +112,16 @@
   now (every shipped writer appends a fact before calling `save()`), but reachable from any
   fresh `FactsStore.loadOrEmpty(...).save()` with nothing appended; non-empty output is
   unchanged.
+- **Watch's kept-card pre-pass (#306) never got the `[src:]` mechanical repair the
+  validation loop a few lines below it already had, so a card left on disk with only a
+  punctuation slip — the marker missing its space, a token sitting mid-sentence, an ASCII
+  `->` in a `cmd` source — re-spawned a writer for text a script already knows how to fix
+  (see #351, part of #345).** `keptCard` now runs the same `repairSrcSyntax` before its
+  `parseWatcherCard` check: a repair that turns an invalid card valid is written back to
+  disk and the feature is kept, at $0.00, with the repair named on the stage's own report
+  line the same way the validation loop names its own. A card that stays invalid after
+  repair is still not kept (today's behaviour, byte-identical file); a card already valid
+  needs no repair and is never rewritten.
 
 ## 0.35.0 — 2026-09-17
 

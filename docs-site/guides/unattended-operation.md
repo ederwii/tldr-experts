@@ -675,8 +675,10 @@ Three things bound it, and all three matter:
   Watch is the one stage that spends LESS on a retry than on the first attempt: it writes one
   card per shipped feature and fails on the first card that does not validate, so the next
   attempt keeps every card that already validated — no writer is spawned for those, and only
-  the refused features are bought again. Their rows in `run.yml` are a real `cost_usd: 0.0`
-  with no `session_id`, and the stage's report names them.
+  the refused features are bought again. A card whose only defect was a `[src:]` punctuation
+  slip is mechanically repaired and kept too, for $0.00, before any writer would be spawned for
+  it. Their rows in `run.yml` are a real `cost_usd: 0.0` with no `session_id`, and the stage's
+  report names them, repair included.
 
 The maximum is `3`; anything higher is refused by name with exit `1`.
 

@@ -698,8 +698,10 @@ Tres cosas lo acotan, y las tres importan:
   Watch es la única etapa que gasta MENOS en un reintento que en el primer intento: escribe una
   ficha por feature entregada y falla en la primera ficha que no valida, así que el intento
   siguiente conserva cada ficha que ya validaba — no se lanza ningún escritor para ésas, y sólo
-  se vuelven a comprar los features rechazados. Sus filas en `run.yml` son un `cost_usd: 0.0`
-  real y sin `session_id`, y el reporte de la etapa las nombra.
+  se vuelven a comprar los features rechazados. Una ficha cuyo único defecto era un desliz de
+  puntuación en `[src:]` también se repara mecánicamente y se conserva, por $0.00, antes de que
+  se lanzara ningún escritor para ella. Sus filas en `run.yml` son un `cost_usd: 0.0` real y sin
+  `session_id`, y el reporte de la etapa las nombra, reparación incluida.
 
 El máximo es `3`; cualquier valor mayor se rechaza por nombre con salida `1`.
 
