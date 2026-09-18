@@ -743,8 +743,17 @@ function killSignal(exitCode: number): "SIGKILL" | "SIGTERM" | null {
  * `SIGTERM`, a malformed envelope, a named `errors[]` entry, a disagreeing
  * subtype — only the residual "no reason named" bucket #348's own field
  * audit exists to shrink.
+ *
+ * `\b`-anchored on purpose (pre-merge review, 2026-09-18): the un-anchored
+ * form matched "rate limit"/"session limit" as bare SUBSTRINGS, so ordinary
+ * developer prose about a workspace or corporate quota — "we need to raise
+ * the sepaRATE LIMIT for this workspace", "please increase the corpoRATE
+ * LIMIT before retrying" — misclassified as a provider rate-limit death.
+ * Word boundaries keep the fixture's own reported text ("You've hit your
+ * session limit", "rate_limit" as the JSON error TYPE) matching while
+ * refusing both false positives.
  */
-export const RATE_LIMIT_TEXT_RE = /rate[_ ]limit|HTTP 429|session limit/i;
+export const RATE_LIMIT_TEXT_RE = /\brate[_ ]limit\b|HTTP 429|\bsession limit\b/i;
 
 /**
  * `AgentOutcome.error`'s text and `AgentOutcome.failureKind`'s value (gh #348),

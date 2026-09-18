@@ -69,3 +69,20 @@ test("a genuine TIMEOUT is never relabeled rate_limit even if the text is presen
   const outcome = interpret(1, "", RATE_LIMIT_STDERR, true);
   expect(outcome.failureKind).toBe("timeout");
 });
+
+/**
+ * False-positive control (pre-merge review, 2026-09-18): the un-anchored
+ * regex matched "rate limit" and "session limit" as bare SUBSTRINGS, so
+ * ordinary developer prose that happens to contain those two words in
+ * sequence — talking about a workspace or corporate LIMIT that should be
+ * RAISED, nothing to do with the provider's own wall — was misclassified
+ * `rate_limit`. Neither sample below carries the provider's reported shape
+ * (no "HTTP 429", no possessive "your/its … limit"); both must stay
+ * `unclassified`.
+ */
+test("ordinary prose mentioning a workspace/corporate limit is NOT misread as a rate-limit death", () => {
+  const a = interpret(1, successStdout(), "we need to raise the separate limit for this workspace\n", false);
+  expect(a.failureKind).toBe("unclassified");
+  const b = interpret(1, successStdout(), "please increase the corporate limit before retrying\n", false);
+  expect(b.failureKind).toBe("unclassified");
+});
