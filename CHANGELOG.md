@@ -19,6 +19,19 @@
   The field audit that opened #216 found this share reaching 57% of a bundle with nothing
   anywhere naming it; the number used to exist only as something you could `wc -c` a rendered
   prompt to discover by hand.
+- **The `plan` gate refuses a story whose own body names an edit of a path outside its own
+  `touches` allowlist (see #376).** Measured on a live autonomous run (#332): a story's step
+  asked for a CHANGELOG bullet under a new `## <v> — unreleased` heading while `CHANGELOG.md`
+  sat outside its `touches` — the Build developer correctly left the file untouched under the
+  write-allowlist rule, and the pre-merge reviewer had to send the branch back for AGENTS.md
+  §5's bullet, exactly the human intervention the autonomy north star measures. Same shape as
+  the #365 sequencing rule: a short, exported edit-verb set (`TOUCH_EDIT_VERBS`) and a
+  backtick-quoted path pattern (`TOUCHED_PATH_PATTERN`, never a `*` glob) in the SAME sentence
+  or bullet — a step that only reads or points at a path is unaffected. A `## <v> —
+  unreleased` heading named alongside an edit verb counts as an edit of `CHANGELOG.md` even
+  when the step never spells the filename. The issue's second half — a `touches_always:`
+  workspace-level allowlist addition — is not in scope here; it stays available as a
+  follow-up if this half proves insufficient in the field.
 
 ### Changed
 
@@ -83,6 +96,22 @@
   collapsed/case-folded, matches a LIVE fact's; a retired or superseded twin does not block a
   fresh assertion of the same text. `facts add` prints "`<id>` is already on record" and exits
   0 rather than writing a duplicate.
+- **`merge-wave.sh`'s #336 immutability guard no longer prints `printf: write error: Broken
+  pipe` once per dated CHANGELOG section (see #380).** Its `changelog_section()` awk helper
+  `exit`ed as soon as it saw the NEXT `## ` heading, while the `printf | changelog_section`
+  pipe feeding it the pre-merge CHANGELOG was still writing the rest of the file — so the
+  writer could get EPIPE (measured live: 45-46 lines of noise per wave, once per dated
+  section that was not the last one in the file). `exit` is now `p = 0`: the awk process
+  keeps consuming to EOF instead of closing its end of the pipe early, so the writer always
+  finishes; the guard's own verdict (`$WAS`/`$NOW`) is unchanged.
+- **`emitFactsYaml` writes `facts: []` for an empty list instead of a bare `facts:` line (see
+  #383).** Both YAML readers behind the runtime seam parse a key with nothing after it as
+  `null`, not `[]`, so a facts.yml with zero facts never round-tripped — `FactsStore.save()`
+  re-validates its own serialized output before writing and threw on exactly this file,
+  `refusing to write an invalid facts.yml: facts expected an array, got null`. Latent until
+  now (every shipped writer appends a fact before calling `save()`), but reachable from any
+  fresh `FactsStore.loadOrEmpty(...).save()` with nothing appended; non-empty output is
+  unchanged.
 
 ## 0.35.0 — 2026-09-17
 

@@ -47,8 +47,10 @@ import { join } from "node:path";
 import { parseYaml } from "../yaml.ts";
 import { isRecord } from "../schemas/validation.ts";
 import { MAX_ITEM_CHARS } from "../schemas/planCommon.ts";
-import { validateStoryFile } from "../schemas/story.ts";
+import { DOD_FENCE_CLOSE_RE, DOD_FENCE_OPEN_RE, validateStoryFile } from "../schemas/story.ts";
+import { splitFrontMatter } from "../schemas/frontMatter.ts";
 import { asWavesFile, scheduleOf, validateWaves } from "../schemas/waves.ts";
+import { inSurface } from "../run/boundary.ts";
 import { STORIES_DIR, WAVES_FILE, type PlanIssue } from "./validatePlan.ts";
 
 /**
@@ -121,6 +123,16 @@ export const PLAN_SHAPE_RULES: readonly PlanShapeRule[] = [
       + "first, write it NON-ENFORCING — nullable, consistency-only, no constraint — and let the later story "
       + "tighten it once the data exists. The `plan` check refuses a story whose acceptance or test plan names an "
       + "enforcement over a field a later story's acceptance or test plan names populating.",
+  },
+  {
+    issue: "#376",
+    text: "**A story's own body never names an edit of a file its own `touches` forbids.** A step that tells the "
+      + "developer to edit, add, write, create, rename, delete or otherwise change a backtick-quoted path — or to "
+      + "add a bullet under a `## <v> — unreleased` CHANGELOG heading, which is an edit of `CHANGELOG.md` even when "
+      + "the step never spells the filename — is a plan contradicting its own write allowlist: the developer who "
+      + "obeys `touches` correctly leaves the file untouched, and a reviewer has to send the branch back for it. "
+      + "The `plan` check refuses a story whose body names such an edit outside its own `touches`; a step that "
+      + "only reads or points at a path (\"read `x` for the shape\") is unaffected.",
   },
 ];
 
@@ -359,6 +371,126 @@ function invariantSequencingIssues(
   return issues;
 }
 
+// --- a step naming an edit outside `touches` (#376) -------------------------
+
+/**
+ * The edit-verb half of #376's mechanical check: a story body step that names a path (backtick-
+ * quoted, `TOUCHED_PATH_PATTERN` below) in the SAME sentence/bullet as one of these verbs is
+ * claiming to EDIT that path — refused unless the path is in the story's own `touches`
+ * allowlist. Same shape as #365's `ENFORCEMENT_KEYWORDS`/`POPULATE_VERBS` above: deliberately
+ * narrow, so "read `x` for the shape" or "see `y`" never trips it — the cost of a false
+ * positive here is a refused plan, not a warning.
+ */
+export const TOUCH_EDIT_VERBS = [
+  "edit", "add", "append", "update", "write", "create", "modify", "rename", "delete", "remove", "bump", "move",
+] as const;
+
+/**
+ * A path named in backticks: contains a `/`, or ends in a recognised extension — never a `*`
+ * glob, which is not a literal path any `touches` entry could ever equal. ONE grammar (§7), the
+ * path half of #376's check.
+ */
+export const TOUCHED_PATH_PATTERN = /`([^`\s*]*\/[^`\s*]*|[^`\s*]*\.(?:md|ts|tsx|js|jsx|yml|yaml|json|sh))`/g;
+
+/**
+ * The `## <v> — unreleased` heading shape AGENTS.md §5 requires a CHANGELOG bullet under: a
+ * step that names the heading, with an edit verb in the same sentence, is naming an edit of
+ * `CHANGELOG.md` even when the sentence never spells the filename — the issue's own S1 shape
+ * ("add a CHANGELOG bullet under a new `## 0.34.0 — unreleased` heading" named no file at all).
+ */
+const UNRELEASED_HEADING_PATTERN = /##\s*\d+\.\d+\.\d+\s*(?:—|--)\s*unreleased/i;
+
+/** The path a `## <v> — unreleased` heading instruction (above) counts as an edit of — named
+ *  once so the special case and the refusal message never spell it two different ways. */
+const CHANGELOG_PATH = "CHANGELOG.md";
+
+/**
+ * Splits a story body into sentence/bullet units — "in the SAME sentence/bullet" (#376) means
+ * within one of these. A newline always starts a new unit; a `- ` bullet marker starts a new
+ * one within a line; a period ends one only when followed by whitespace or end-of-line — never
+ * mid-token, so a version (`0.34.0`) or a file extension (`x.ts`) never fragments the very
+ * tokens this check is looking for.
+ */
+function bodyUnitsOf(text: string): readonly string[] {
+  const units: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    for (const part of line.split(/(?:^|\s)-\s+(?=\S)/)) {
+      for (const sentence of part.split(/\.(?=\s|$)/)) {
+        const trimmed = sentence.trim();
+        if (trimmed !== "") units.push(trimmed);
+      }
+    }
+  }
+  return units;
+}
+
+/**
+ * The gate's refusal for a story body step naming an edit of a path its own `touches`
+ * allowlist forbids (#376) — names the story, the path, the sentence it came from, and what
+ * to do, the same shape every other refusal in this file uses.
+ */
+export function untouchedEditMessage(storyId: string, path: string, sentence: string): string {
+  return `${storyId} edits \`${path}\` ("${sentence}") but \`${path}\` is not in its touches allowlist — `
+    + "add it to touches or drop the step";
+}
+
+/**
+ * The fenced ```dod block is shell commands, not prose steps, and is stripped before scanning:
+ * a dod command naming a test file it merely RUNS is not a claim about editing anything.
+ */
+function proseOf(body: string): string {
+  const lines: string[] = [];
+  let inside = false;
+  for (const line of body.split("\n")) {
+    if (inside) {
+      if (DOD_FENCE_CLOSE_RE.test(line)) inside = false;
+      continue;
+    }
+    if (DOD_FENCE_OPEN_RE.test(line)) {
+      inside = true;
+      continue;
+    }
+    lines.push(line);
+  }
+  return lines.join("\n");
+}
+
+function untouchedEditIssues(
+  stories: ReadonlyMap<string, { readonly id: string; readonly touches: readonly string[]; readonly body: string }>,
+): readonly PlanIssue[] {
+  const issues: PlanIssue[] = [];
+  for (const story of stories.values()) {
+    const reported = new Set<string>();
+    for (const sentence of bodyUnitsOf(story.body)) {
+      if (firstMatch(sentence, TOUCH_EDIT_VERBS) === null) continue;
+      const paths = new Set<string>();
+      for (const match of sentence.matchAll(TOUCHED_PATH_PATTERN)) {
+        const path = match[1];
+        if (path !== undefined) paths.add(path);
+      }
+      if (UNRELEASED_HEADING_PATTERN.test(sentence)) paths.add(CHANGELOG_PATH);
+      for (const path of paths) {
+        // `inSurface` (`../run/boundary.ts`), the ONE derivation every other touches-coverage
+        // check in the repo already reads (foreignWork.ts, reviewRound.ts, measuredTouches.ts,
+        // unownedFindings.ts) — a directory entry in `touches` covers its whole subtree, the
+        // same way Build's real write allowlist does. A second, exact-match-only prefix
+        // matcher here would refuse a story for editing a file under a directory it genuinely
+        // owns (review finding, #376).
+        if (inSurface(path, story.touches)) continue;
+        const key = `${story.id}>${path}`;
+        if (reported.has(key)) continue;
+        reported.add(key);
+        issues.push({
+          file: `${STORIES_DIR}/${story.id}.md`,
+          path: "body",
+          message: untouchedEditMessage(story.id, path, sentence),
+        });
+      }
+    }
+  }
+  return issues;
+}
+
 /** `tldrx seed check`'s size advisory. */
 export function storyCountAdvisory(stories: number): string {
   return `${String(stories)} stories — today the framework carries ${String(MAX_STORIES_PER_RUN)} per run alone `
@@ -390,19 +522,23 @@ export function validatePlanShape(planDir: string): PlanShapeReport {
   interface Read {
     readonly id: string; readonly epic: string; readonly repo: string; readonly deps: readonly string[];
     readonly dod: readonly string[]; readonly acceptance: readonly string[]; readonly testPlan: readonly string[];
+    readonly touches: readonly string[]; readonly body: string;
   }
   const stories = new Map<string, Read>();
   const dir = join(planDir, STORIES_DIR);
   const names = existsSync(dir) ? readdirSync(dir).filter((n) => n.endsWith(".md")).sort() : [];
   for (const name of names) {
-    const parsed = validateStoryFile(readFileSync(join(dir, name), "utf8"));
+    const raw = readFileSync(join(dir, name), "utf8");
+    const parsed = validateStoryFile(raw);
     const story = parsed.story;
     if (story === null || stories.has(story.id)) continue;
     stories.set(story.id, {
       id: story.id, epic: story.epic, repo: story.repo, deps: story.depends_on, dod: parsed.dod.commands,
-      acceptance: story.acceptance, testPlan: story.test_plan,
+      acceptance: story.acceptance, testPlan: story.test_plan, touches: story.touches,
+      body: proseOf(splitFrontMatter(raw).body),
     });
   }
+  issues.push(...untouchedEditIssues(stories));
 
   const wavesPath = join(planDir, WAVES_FILE);
   let doc: unknown = null;

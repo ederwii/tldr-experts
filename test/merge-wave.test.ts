@@ -1813,6 +1813,130 @@ describe("a dated CHANGELOG section changed by the merge refuses — it is suppo
   });
 });
 
+/** A CHANGELOG with THREE dated sections above the usual one (#380). */
+const CHANGELOG_THREE_DATED = "# Changelog\n\n"
+  + "## 0.1.3 — unreleased\n\n- work in flight\n\n"
+  + "## 0.1.2 — 2026-01-03\n\n- shipped three\n\n"
+  + "## 0.1.1 — 2026-01-02\n\n- shipped two\n\n"
+  + "## 0.1.0 — 2026-01-01\n\n- shipped\n";
+
+/** Overwrites CHANGELOG.md on `main` itself (not a branch) and pushes — the #336 guard reads
+ *  `$PRE` from `main`'s own HEAD, so this is how a test grows the dated-section count it loops
+ *  over. */
+function expandMainChangelog(sb: Sandbox, text: string): void {
+  writeFileSync(join(sb.main, "CHANGELOG.md"), text);
+  sb.git("add", "-A");
+  sb.git("commit", "-q", "-m", "expand CHANGELOG.md to three dated sections (test fixture, #380)");
+  sb.git("push", "-q", "origin", "main");
+}
+
+/**
+ * #380 — the #336 guard's `changelog_section()` awk helper `exit`s as soon as it sees the NEXT
+ * `## ` heading after the one it wants, while the `printf | changelog_section` pipe feeding it
+ * `$PRE_CHANGELOG` is still writing the rest of the file — so `printf` can get EPIPE and bash
+ * reports `write error: Broken pipe` on stderr, once per dated section that is not the LAST one
+ * in the file (measured live: 45-46 times per wave against this repo's real CHANGELOG.md). The
+ * guard's verdict is unaffected (`$WAS` already holds the right section by the time awk exits),
+ * so every wave before this fix still merged correctly — the only thing wrong is 45+ noise lines
+ * ahead of the one line that matters, and a real `write error` from anything else hiding in it.
+ *
+ * MEASURED locally (macOS, the only `bash` on this machine's PATH is the system 3.2.57): a
+ * single `printf '%s\n' "$VAR"` — ONE big `write()` for the whole string — does not race here
+ * even at 50 MB against a reader that closes its stdin immediately (`awk 'BEGIN{exit}'`,
+ * `head -c 1`, this repo's own real 889 KB / 54-dated-section CHANGELOG.md): the write always
+ * completes before the reader can exit early, so no EPIPE and nothing on stderr, regardless of
+ * whether the code has the bug or the fix. The classic case DOES reproduce here — `for i in
+ * $(seq 1 5000000); do echo; done | head -1` reliably yields SIGPIPE (`PIPESTATUS[0]=141`) —
+ * which is what the mechanism-level test below uses: many SEPARATE small writes over time,
+ * which is the shape that actually races on this machine, not the single-shot one the sandbox
+ * below exercises. The sandbox test IS the shape #380 was measured in (a real wave's stderr, on
+ * whatever machine produced wave-355.log/wave-225.log/wave-144.log) and is kept here as CI
+ * regression coverage, but it could not be forced RED on this machine — see the mechanism test
+ * below for the one that reddens here, deterministically, via `PIPESTATUS` rather than a stderr
+ * text match.
+ */
+describe("merge-wave's #336 guard consumes its whole pipe instead of exiting early on it (#380)", () => {
+  test("a wave over a CHANGELOG with 3 dated sections leaves no Broken pipe line on stderr (could not be forced RED on this machine — see the mechanism test below)", async () => {
+    const sb = sandbox();
+    expandMainChangelog(sb, CHANGELOG_THREE_DATED);
+    const run = invoke(sb, "wave-a");
+    const r = await run.done;
+    expectExit(run, r, 0);
+    expect(r.stdout).toContain("pushed");
+    expect(r.stderr).not.toContain("Broken pipe");
+  });
+
+  test("guard: the extracted section text ($WAS/the guard's verdict) is unchanged by the fix — a real content change over a dated section still refuses", async () => {
+    const sb = sandbox();
+    expandMainChangelog(sb, CHANGELOG_THREE_DATED);
+    const before = sb.git("rev-parse", "HEAD");
+    const published = originLog(sb);
+    changelogBranch(sb, "wave-dated-bullet-380", CHANGELOG_THREE_DATED.replace(
+      "## 0.1.1 — 2026-01-02\n\n- shipped two\n",
+      "## 0.1.1 — 2026-01-02\n\n- shipped two\n- silently added after release\n",
+    ));
+    const run = invoke(sb, "wave-dated-bullet-380");
+    const r = await run.done;
+    expectExit(run, r, 16);
+    expect(r.stdout).toContain("FAIL changelog");
+    expect(r.stdout).toContain("## 0.1.1 — 2026-01-02");
+    expect(r.stdout).toContain("silently added after release");
+    expect(originLog(sb)).toEqual(published);
+    expect(sb.git("rev-parse", "HEAD")).toBe(before);
+  });
+});
+
+/** The literal `changelog_section() { ... }` line from the real script — read, never
+ *  hand-copied (AGENTS.md §7's one-derivation rule) — so this test can never silently drift
+ *  from what merge-wave.sh actually runs. */
+function extractChangelogSection(): string {
+  const src = readFileSync(join(REPO, "scripts", "merge-wave.sh"), "utf8");
+  const line = src.split("\n").find((l) => l.includes("changelog_section() {"));
+  if (line === undefined) {
+    throw new Error("changelog_section() not found in scripts/merge-wave.sh — this test is out of sync with the source");
+  }
+  return line.trim();
+}
+
+/** ~500 dated sections between the one queried and EOF: enough that a many-small-writes writer
+ *  (below) is still mid-stream well after `changelog_section` would exit early on the pre-fix
+ *  `exit`. */
+function manySectionsChangelog(): string {
+  const lines = ["## 0.1.0 — 2026-01-01", "", "- shipped first", ""];
+  for (let i = 2; i < 500; i++) lines.push(`## 0.${String(i)}.0 — 2026-01-01`, "", `- filler ${String(i)}`, "");
+  return lines.join("\n");
+}
+
+/**
+ * #380, mechanism-level: proves the fix RED/GREEN deterministically, on this machine, where the
+ * sandbox test above cannot (see its doc comment) — by feeding `changelog_section` through MANY
+ * separate small writes over time (a bash `while read` + per-line `printf` loop) instead of one
+ * big `printf '%s' "$VAR"`. That shape reliably reproduces a real SIGPIPE here (measured: the
+ * classic `for i in $(seq 1 5000000); do echo; done | head -1` yields `PIPESTATUS[0]=141` on
+ * this same bash), and the writer's own exit status — read via `PIPESTATUS`, never grepped off
+ * stderr text whose exact wording is a bash-version detail (AGENTS.md's own rule: exit codes
+ * are never read through a pipe or inferred from a message) — is the deterministic pass/fail
+ * signal: 141 (killed by SIGPIPE) with today's `exit`, 0 after the fix, on every one of 5
+ * repeated local runs each direction before this was trusted as non-flaky.
+ */
+describe("changelog_section (#380): does not exit before its writer is done — mechanism-level, deterministic", () => {
+  test("the writer feeding changelog_section is never killed by SIGPIPE, even mid-stream on a non-last section", () => {
+    const section = extractChangelogSection();
+    const script = `set -o pipefail
+${section}
+PRE_CHANGELOG="$(cat <<'DATA'
+${manySectionsChangelog()}
+DATA
+)"
+{ while IFS= read -r line; do printf '%s\\n' "$line"; done <<< "$PRE_CHANGELOG"; } | changelog_section "0.1.0" >/dev/null
+echo "WRITER_EXIT=\${PIPESTATUS[0]}"
+`;
+    const r = spawnSync("bash", ["-c", script], { encoding: "utf8" });
+    const match = /WRITER_EXIT=(\d+)/.exec(r.stdout);
+    expect(match?.[1], `stdout: ${r.stdout}\nstderr: ${r.stderr}`).toBe("0");
+  });
+});
+
 const releaseMarkerPath = (sb: Sandbox) => join(sb.main, ".RELEASE-IN-PROGRESS");
 
 /** What `scripts/release.sh` leaves at the shared root for its whole span (#299). */

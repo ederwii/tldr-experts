@@ -453,7 +453,14 @@ if [ -f CHANGELOG.md ]; then
   # just became dated by an earlier wave in this same session has no tag yet. Same
   # section-extraction technique `release-check.sh:36`'s `changelog_section` already uses,
   # ported rather than shared because that script keys off tags and this one off `$PRE`.
-  changelog_section() { awk -v v="$1" '/^## /{ if ($2 == v) { p = 1; print; next } else if (p) { exit } } p { print }'; }
+  # `p = 0` rather than `exit` (#380): the old `exit` stopped reading as soon as the NEXT
+  # heading was seen, while `printf | changelog_section` below still had the rest of the file to
+  # write — bash's `printf` builtin then got EPIPE and reported `write error: Broken pipe` on
+  # stderr, once per dated section that was not the LAST one in the file (measured live, 45-46
+  # times per wave). `p = 0` keeps the awk process reading to EOF instead — nothing else ever
+  # matches once `p` drops back to 0 — so the pipe is fully drained and the guard's own verdict
+  # ($WAS/$NOW) is unchanged.
+  changelog_section() { awk -v v="$1" '/^## /{ if ($2 == v) { p = 1; print; next } else if (p) { p = 0 } } p { print }'; }
   PRE_CHANGELOG="$(git show "$PRE:CHANGELOG.md" 2>/dev/null || true)"
   for ver in $(printf '%s\n' "$PRE_CHANGELOG" | grep -oE '^## [0-9]+\.[0-9]+\.[0-9]+ — [0-9]{4}-[0-9]{2}-[0-9]{2}$' | awk '{print $2}'); do
     WAS="$(printf '%s\n' "$PRE_CHANGELOG" | changelog_section "$ver")"
