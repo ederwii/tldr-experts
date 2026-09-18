@@ -62,7 +62,7 @@ const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
   "FAKE_CLAUDE_RUNDIR", "FAKE_CLAUDE_OUTPUTS", "FAKE_CLAUDE_COST", "FAKE_CLAUDE_IS_ERROR",
   "FAKE_CLAUDE_FAIL_SEQ", "FAKE_CLAUDE_FAIL_COUNTER", "FAKE_CLAUDE_ARGV_LOG", "TLDRX_AGENT_PROVIDER",
-  "FAKE_CLAUDE_ALT_MATCH", "FAKE_CLAUDE_ALT_OUTPUTS",
+  "FAKE_CLAUDE_ALT_MATCH", "FAKE_CLAUDE_ALT_OUTPUTS", "FAKE_CLAUDE_SKIP_OUTPUTS_ON_ERROR",
 ] as const;
 let open: FacilitatorWorkspace[] = [];
 
@@ -128,6 +128,13 @@ function workspace(
   if (failures.length > 0) {
     process.env.FAKE_CLAUDE_FAIL_SEQ = failures.join(",");
     process.env.FAKE_CLAUDE_FAIL_COUNTER = join(made.root, "spawn-count");
+    // This file tests the SUPERVISED LOOP — relaunch counts, budget spans, attempt
+    // counting — not content completeness. A "failing" spawn here must not leave
+    // the same complete, valid outputs a passing one would, or gh #353's own
+    // settle-from-disk (`runNext.ts`) reads them back on the very next attempt and
+    // settles at $0 rather than spawning again, which these fixtures are not
+    // simulating.
+    process.env.FAKE_CLAUDE_SKIP_OUTPUTS_ON_ERROR = "1";
   }
   return { ...made, argvLog, outbox };
 }

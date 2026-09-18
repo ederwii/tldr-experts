@@ -42,30 +42,6 @@ const promptOut = process.env.FAKE_CLAUDE_PROMPT_OUT;
 if (promptOut !== undefined && promptOut !== "") writeFileSync(promptOut, prompt, "utf8");
 
 const base = process.env.FAKE_CLAUDE_RUNDIR ?? process.cwd();
-// `FAKE_CLAUDE_ALT_MATCH` + `FAKE_CLAUDE_ALT_OUTPUTS`: a SECOND canned set, written
-// instead of the first when the prompt on stdin contains the match string.
-//
-// One invocation of `tldrx next` can now spawn two different KINDS of sub-agent —
-// the stage turn, and the gate signer that writes the evidence note after it (gh
-// #198) — and both reach this one script through the same environment. Without a
-// discriminator the stage turn would write the signer's note before the signer was
-// ever asked for, which is precisely the condition the engine uses to decide
-// whether to spawn one. The prompt is the only thing that differs between the two,
-// so the prompt is what this switches on; the transcript emitter
-// (`fakeTranscript.ts`) is untouched, as AGENTS.md §8 requires.
-const altMatch = process.env.FAKE_CLAUDE_ALT_MATCH ?? "";
-const files = JSON.parse(
-  (altMatch !== "" && prompt.includes(altMatch)
-    ? process.env.FAKE_CLAUDE_ALT_OUTPUTS
-    : process.env.FAKE_CLAUDE_OUTPUTS) ?? "{}",
-) as Record<string, string>;
-const written: string[] = [];
-for (const [rel, content] of Object.entries(files)) {
-  const path = join(base, rel);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, content, "utf8");
-  written.push(rel);
-}
 
 // `FAKE_CLAUDE_FAIL_SEQ=1,0,1` + `FAKE_CLAUDE_FAIL_COUNTER=<path>`: whether THIS spawn
 // fails, read off its position in a fixed sequence rather than off a flag that cannot
@@ -73,6 +49,9 @@ for (const [rel, content] of Object.entries(files)) {
 // fake that can fail and then succeed (gh #233); the counter lives in a file because every
 // spawn is its own process. Past the end of the sequence, and with no sequence at all,
 // `FAKE_CLAUDE_IS_ERROR` decides exactly as it always has.
+//
+// Computed BEFORE the write below (moved up from its original spot, after the outputs) so
+// the write can read it — see `FAKE_CLAUDE_SKIP_OUTPUTS_ON_ERROR` just below.
 const failSeq = (process.env.FAKE_CLAUDE_FAIL_SEQ ?? "").split(",").filter((s) => s !== "");
 const counterPath = process.env.FAKE_CLAUDE_FAIL_COUNTER;
 let seqFailure: boolean | null = null;
@@ -87,6 +66,44 @@ if (failSeq.length > 0 && counterPath !== undefined && counterPath !== "") {
 }
 
 const isError = seqFailure ?? process.env.FAKE_CLAUDE_IS_ERROR === "1";
+
+// `FAKE_CLAUDE_ALT_MATCH` + `FAKE_CLAUDE_ALT_OUTPUTS`: a SECOND canned set, written
+// instead of the first when the prompt on stdin contains the match string.
+//
+// One invocation of `tldrx next` can now spawn two different KINDS of sub-agent —
+// the stage turn, and the gate signer that writes the evidence note after it (gh
+// #198) — and both reach this one script through the same environment. Without a
+// discriminator the stage turn would write the signer's note before the signer was
+// ever asked for, which is precisely the condition the engine uses to decide
+// whether to spawn one. The prompt is the only thing that differs between the two,
+// so the prompt is what this switches on; the transcript emitter
+// (`fakeTranscript.ts`) is untouched, as AGENTS.md §8 requires.
+const altMatch = process.env.FAKE_CLAUDE_ALT_MATCH ?? "";
+// `FAKE_CLAUDE_SKIP_OUTPUTS_ON_ERROR=1`: an ERRORING spawn writes NOTHING, rather than
+// the same canned files a passing one would. ADDITIVE — default is the original
+// behaviour (every file the env named is written whether or not this spawn errors) —
+// and opt-in only, for a retry-COUNTING test whose canned outputs are complete and
+// valid on purpose: without this knob, gh #353's own settle-from-disk (`runNext.ts`)
+// reads that already-valid file back on the very next attempt and settles at $0
+// instead of spawning again, which breaks what a "the stage keeps failing" fixture is
+// FOR. Never on by default: plenty of other tests deliberately assert a partial write
+// survives a failed attempt (#301-style "the repair is on disk even though the stage
+// still failed"), and this must not change what they see.
+const skipOutputsOnError = process.env.FAKE_CLAUDE_SKIP_OUTPUTS_ON_ERROR === "1";
+const files = (isError && skipOutputsOnError)
+  ? {}
+  : JSON.parse(
+    (altMatch !== "" && prompt.includes(altMatch)
+      ? process.env.FAKE_CLAUDE_ALT_OUTPUTS
+      : process.env.FAKE_CLAUDE_OUTPUTS) ?? "{}",
+  ) as Record<string, string>;
+const written: string[] = [];
+for (const [rel, content] of Object.entries(files)) {
+  const path = join(base, rel);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, content, "utf8");
+  written.push(rel);
+}
 const cost = Number(process.env.FAKE_CLAUDE_COST ?? "0.42");
 const sessionId = process.env.FAKE_CLAUDE_SESSION ?? "5b354e40-8e99-4e0c-927f-dba7d1bdc0fc";
 
