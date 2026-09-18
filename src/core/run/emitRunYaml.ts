@@ -153,6 +153,13 @@ function task(t: RunTask, indent: string): string {
     ...(t.failure_kind === undefined || t.failure_kind === null
       ? []
       : [`${inner}failure_kind: ${yamlScalar(t.failure_kind)},`]),
+    // gh #375: written only on a row settled DESPITE an exit-code disagreement —
+    // same absence rule as `failure_kind` right above, so a row from before this
+    // key existed, and every row that never disagreed with itself, round-trip
+    // byte-for-byte.
+    ...(t.exit_disagreement === undefined || t.exit_disagreement === null
+      ? []
+      : [`${inner}exit_disagreement: ${yamlScalar(t.exit_disagreement)},`]),
     // Both additive, both written only when present — a row from before either
     // existed, or one that never earned either, round-trips byte-for-byte.
     ...(t.banked_before_refusal === undefined ? [] : [`${inner}banked_before_refusal: true,`]),

@@ -235,6 +235,17 @@ export interface RunTask {
    * often a stage is retried.
    */
   readonly failure_kind?: string | null;
+  /**
+   * A process exit code that disagreed with the provider's own result document
+   * (gh #375): `"exit <n>, subtype success"`, written ONLY on a row whose
+   * `status` is `"done"` despite that exit code, because every output the stage
+   * declared was found on disk, non-empty, at the moment the verdict was taken.
+   * ADDITIVE and optional: absent on every row written before this existed, on
+   * every row that finished agreeing with its own exit code, and on a row that
+   * stayed `"failed"` because a declared output was missing — that row still
+   * carries the ordinary `failure_kind` it always did, never this key.
+   */
+  readonly exit_disagreement?: string | null;
   /** Tokens the host declared with `--tokens`, when it knew them. */
   readonly tokens?: number;
   /**

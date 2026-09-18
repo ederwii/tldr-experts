@@ -15,6 +15,23 @@
   golden is regenerated ON PURPOSE — a failed developer's row in that fixture now carries
   `failure_kind: "non_zero_exit"`, which it did not before; this is the change this commit
   means, not a drift.
+- **A spawned turn whose result document said `subtype: "success"` but whose process exit
+  code disagreed settled as a stage failure — costing a full `run auto` relaunch for work
+  that was already done (see #375, see #348).** Measured on a live autonomous run: a watch
+  developer wrote its declared output, `claude` exited 1 with `is_error: true`, and the
+  result document's own `subtype` said `"success"`; the facilitator classified this as
+  `unclassified` ("no reason named (the provider's own subtype said "success")") and `run
+  auto` spent one of five relaunches re-running work attempt 1 had already finished. The
+  three headless spawn sites in `runNext.ts` now settle the turn as `done` — recording the
+  disagreement as an additive `exit_disagreement` note on the row and the `agent.result`
+  event — whenever every output the stage declared is on disk and non-empty at the moment
+  the verdict is taken (`exitDisagreement.ts`'s `settleExitDisagreement`, one derivation,
+  called from all three rather than pasted three times); a turn missing even one declared
+  output stays `failed` under its ordinary `failure_kind`, exactly as before. The Build
+  executor's `spawnDeveloper` path has the same exit/subtype disagreement shape but no
+  per-story declared-outputs list to check existence against, so it is deliberately left
+  out of this change — see the follow-up draft at
+  `scratchpad/issue-draft-375-build-spawndeveloper-exit-disagreement.md`.
 
 ### Changed
 

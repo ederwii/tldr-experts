@@ -322,6 +322,17 @@ export interface AgentOutcome {
    */
   readonly failureKind: AgentFailureKind | null;
   /**
+   * The result document's own `subtype` field, verbatim, or `null` when no
+   * document parsed (gh #375). Populated on EVERY outcome, `ok` or not — unlike
+   * `failureKind`, which `describeFailure` only computes for a failed turn —
+   * because the exit-disagreement check (`exitDisagreement.ts`) needs to read
+   * the provider's verdict independently of what the process exit code said,
+   * and a second, narrower copy of this read is exactly the "two accounts that
+   * could drift apart" AGENTS.md §7 forbids. See `SUCCESS_SUBTYPES` for which
+   * values assert the turn succeeded.
+   */
+  readonly resultSubtype: string | null;
+  /**
    * The sub-agent's turn, in milliseconds: the clock wraps `runtime.spawn` plus
    * its immediate setup and teardown — the schema temp dir, the argv, and the
    * reap (#184). Not a pure process time to the microsecond, and it is not
@@ -679,6 +690,7 @@ export function interpret(
   const usage = toUsage(doc?.usage);
   const envelope = toEnvelope(doc?.structured_output);
   const result = typeof doc?.result === "string" ? doc.result : "";
+  const resultSubtype = typeof doc?.subtype === "string" ? doc.subtype : null;
   const ok = exitCode === 0 && !isError && !timedOut && doc !== null;
   const failure = ok ? null : describeFailure(exitCode, doc, stderr, timedOut, stdout, provider);
 
@@ -691,6 +703,7 @@ export function interpret(
     unmeteredReason: null,
     envelope,
     structured: doc?.structured_output ?? null, result,
+    resultSubtype,
     error: failure?.error ?? null,
     raw: stdout,
     permissionRefusal: permissionRefusal(stdout, provider),
@@ -829,7 +842,7 @@ function describeFailure(
  * unmeasured and this function does not guess at it; it refuses to borrow a word
  * that means the opposite.
  */
-const SUCCESS_SUBTYPES: ReadonlySet<string> = new Set(["success"]);
+export const SUCCESS_SUBTYPES: ReadonlySet<string> = new Set(["success"]);
 
 function firstLine(text: string): string {
   const line = text.split("\n").map((l) => l.trim()).find((l) => l !== "");

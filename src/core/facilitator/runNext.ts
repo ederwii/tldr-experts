@@ -83,6 +83,7 @@ import {
 import { nearbyPathsFor } from "../experts/domainRank.ts";
 import { readStackPacks, renderProjectSkills, skillsFor } from "../experts/stackPacks.ts";
 import { agentProvider, describeSpawn, providerBudgetAdvisory, spawnAgent } from "./spawnAgent.ts";
+import { settleExitDisagreement } from "./exitDisagreement.ts";
 import {
   GATE_SIGNER_ROLE, GATE_SIGNER_TOOLS,
   gateSignerSkeleton, renderGateSignerPrompt,
@@ -971,14 +972,26 @@ async function runStage(
   });
   if (agent.raw !== "") writeRaw(store.runDir, stageId, agent.raw);
 
+  // gh #375: a process exit code that disagrees with the provider's own
+  // `subtype: "success"` settles as DONE when every declared output is on
+  // disk and non-empty — `pending.outputs` is this stage's declared list,
+  // already `{repo}`-expanded (line ~867 above). `null` on every ordinary
+  // turn (`agent.ok` true, or a real failure), so a row from before this
+  // existed is unaffected.
+  const exitDisagreement = settleExitDisagreement(agent, pending.outputs, ctx);
+  const settled = agent.ok || exitDisagreement !== null;
+
   recordTask(store, phaseId, stageId, {
     id: taskId,
-    status: agent.ok ? "done" : "failed",
+    status: settled ? "done" : "failed",
     expert: stage.expert ?? spec.planned.experts[0] ?? null,
     model,
     cost_usd: agent.metered ? round2(agent.costUsd) : null,
     ...(agent.metered ? {} : { metered: false }),
-    error: agent.error,
+    // Null once settled, matching every other "done" row (AGENTS.md §7's own
+    // invariant — a settled row must not be findable by `describePreviousAttempt`'s
+    // `task.error !== null` scan as if this attempt had failed).
+    error: settled ? null : agent.error,
     session_id: agent.sessionId,
     started_at: options.at,
     ended_at: nowish(options),
@@ -988,7 +1001,12 @@ async function runStage(
     // different stories and the file has to be able to tell them apart.
     stopped_by: agent.stoppedBy,
     // A named cause for a failed turn (gh #348), same absence rule as `stopped_by`.
-    failure_kind: agent.failureKind,
+    // Absent once settled: the row is done, and a failure_kind beside `status:
+    // "done"` would be the second, contradicting account gh #375 exists to stop.
+    failure_kind: settled ? null : agent.failureKind,
+    // Additive (gh #375): present only when the exit code and the provider's
+    // subtype disagreed and the turn settled anyway.
+    ...(exitDisagreement === null ? {} : { exit_disagreement: exitDisagreement }),
     ...tokenSplit(agent.usage.input_tokens, agent.usage.output_tokens),
     // The other two counters the same `usage` reported (#222). Separately gated:
     // see `cacheSplit` for why a cache read is not half of anything.
@@ -1010,7 +1028,8 @@ async function runStage(
     reads: agent.reads,
     max_reads: maxReads,
     stopped_by: agent.stoppedBy,
-    ...(agent.failureKind === null ? {} : { failure_kind: agent.failureKind }),
+    ...(settled ? {} : (agent.failureKind === null ? {} : { failure_kind: agent.failureKind })),
+    ...(exitDisagreement === null ? {} : { exit_disagreement: exitDisagreement }),
     tldrx_version: version,
     duration_ms: agent.durationMs,
     duration_basis: "spawned",
@@ -1027,7 +1046,7 @@ async function runStage(
   }, agent.metered ? round2(agent.costUsd) : 0, stage.expert);
   store.save();
 
-  if (!agent.ok) {
+  if (!settled) {
     return withStderr(
       failStage(store, options, phaseId, stageId, spec, agent.error ?? "the sub-agent failed", notes),
       advisories,
@@ -3481,22 +3500,31 @@ async function planFixRound(
     maxReads,
   });
 
+  // gh #375, same rule as the stage spawn above — one derivation
+  // (`exitDisagreement.ts`), called here too so a repair turn that wrote its
+  // declared outputs but exited non-zero is not recorded as a failed row.
+  const ctx: PathContext = { root: options.root, runDir: store.runDir };
+  const declaredOutputs = expandAll(spec.planned.outputs, store.run.repos);
+  const exitDisagreement = settleExitDisagreement(agent, declaredOutputs, ctx);
+  const settled = agent.ok || exitDisagreement !== null;
+
   recordTask(store, phaseId, stageId, {
     id: taskId,
-    status: agent.ok ? "done" : "failed",
+    status: settled ? "done" : "failed",
     expert: stage.expert ?? spec.planned.experts[0] ?? null,
     role: PLAN_FIX_ROLE,
     model,
     cost_usd: agent.metered ? round2(agent.costUsd) : null,
     ...(agent.metered ? {} : { metered: false }),
-    error: agent.error,
+    error: settled ? null : agent.error,
     session_id: agent.sessionId,
     started_at: nowish(options),
     ended_at: nowish(options),
     outputs: agent.envelope?.outputs ?? [],
     stopped_by: agent.stoppedBy,
     // A named cause for a failed turn (gh #348), same absence rule as `stopped_by`.
-    failure_kind: agent.failureKind,
+    failure_kind: settled ? null : agent.failureKind,
+    ...(exitDisagreement === null ? {} : { exit_disagreement: exitDisagreement }),
     ...tokenSplit(agent.usage.input_tokens, agent.usage.output_tokens),
     ...cacheSplit(agent.usage.cache_creation_input_tokens, agent.usage.cache_read_input_tokens),
     duration_ms: agent.durationMs,
@@ -3517,8 +3545,9 @@ async function planFixRound(
     duration_basis: "spawned",
     ...(agent.metered ? {} : { metered: false }),
     usage: usagePayload(agent.usage),
-    ...(agent.error === null ? {} : { error: agent.error }),
-    ...(agent.failureKind === null ? {} : { failure_kind: agent.failureKind }),
+    ...(settled ? {} : (agent.error === null ? {} : { error: agent.error })),
+    ...(settled ? {} : (agent.failureKind === null ? {} : { failure_kind: agent.failureKind })),
+    ...(exitDisagreement === null ? {} : { exit_disagreement: exitDisagreement }),
   }, agent.metered ? round2(agent.costUsd) : 0, PLAN_FIX_ROLE);
   // WHY that turn happened, beside the rows that hold what it cost. `cost_usd: 0`
   // on this envelope is not a claim that the round was free — `task` names the row
@@ -3644,21 +3673,30 @@ async function signGate(
     timeoutMs: spec.planned.timeout_s * 1000,
   });
 
+  // gh #375, same rule and same helper as the other two spawn sites. The
+  // signer's own declared output is the evidence note it is asked to write
+  // (`notePath`) — not the stage's `outputs` param above, which it only READS
+  // for citations and never writes.
+  const declaredOutputs = [relative(store.runDir, notePath)];
+  const exitDisagreement = settleExitDisagreement(agent, declaredOutputs, ctx);
+  const settled = agent.ok || exitDisagreement !== null;
+
   recordTask(store, phaseId, stageId, {
     id: taskId,
-    status: agent.ok ? "done" : "failed",
+    status: settled ? "done" : "failed",
     expert: null,
     model,
     cost_usd: agent.metered ? round2(agent.costUsd) : null,
     ...(agent.metered ? {} : { metered: false }),
-    error: agent.error,
+    error: settled ? null : agent.error,
     session_id: agent.sessionId,
     started_at: nowish(options),
     ended_at: nowish(options),
     outputs: agent.envelope?.outputs ?? [],
     stopped_by: agent.stoppedBy,
     // A named cause for a failed turn (gh #348), same absence rule as `stopped_by`.
-    failure_kind: agent.failureKind,
+    failure_kind: settled ? null : agent.failureKind,
+    ...(exitDisagreement === null ? {} : { exit_disagreement: exitDisagreement }),
     ...tokenSplit(agent.usage.input_tokens, agent.usage.output_tokens),
     // The other two counters the same `usage` reported (#222). Separately gated:
     // see `cacheSplit` for why a cache read is not half of anything.
@@ -3688,8 +3726,9 @@ async function signGate(
     duration_basis: "spawned",
     ...(agent.metered ? {} : { metered: false }),
     usage: usagePayload(agent.usage),
-    ...(agent.error === null ? {} : { error: agent.error }),
-    ...(agent.failureKind === null ? {} : { failure_kind: agent.failureKind }),
+    ...(settled ? {} : (agent.error === null ? {} : { error: agent.error })),
+    ...(settled ? {} : (agent.failureKind === null ? {} : { failure_kind: agent.failureKind })),
+    ...(exitDisagreement === null ? {} : { exit_disagreement: exitDisagreement }),
   }, agent.metered ? round2(agent.costUsd) : 0, GATE_SIGNER_ROLE);
   store.save();
   return after;
