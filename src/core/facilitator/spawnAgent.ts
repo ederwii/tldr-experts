@@ -176,6 +176,10 @@ export type AgentRateLimit = Omit<Extract<AgentEvent, { kind: "rate-limit" }>, "
  *    than `"allowed"`. What that status reads when the wall is actually HIT is
  *    still unattested (gh #341) — this never invents that string, it only
  *    trusts the one the provider already sent and this repo already parses.
+ *    A NARROWER fallback (gh #341, `describeFailure`'s `RATE_LIMIT_TEXT_RE`)
+ *    also lands here: a turn with no non-`"allowed"` frame at all, that would
+ *    otherwise fall to `"unclassified"`, whose raw text still carries the
+ *    REPORTED (not measured) shape of a session-limit death.
  *  - `"process_killed"` — the exit code is the `128 + signal` shape
  *    `nodeRuntime.ts`'s `exitCodeOf` writes for SIGKILL/SIGTERM, and the death
  *    was not the stage's own timeout and not the read cap (which already names
@@ -711,6 +715,25 @@ function killSignal(exitCode: number): "SIGKILL" | "SIGTERM" | null {
 }
 
 /**
+ * The one text shape a turn killed by the provider's session/rate limit is
+ * REPORTED to leave (gh #341, part of the #348 family): an API error reading
+ * `"… API error: You've hit your session limit · resets …" (error type
+ * rate_limit, HTTP 429)`, second-hand from a consumer session on 2026-09-17.
+ *
+ * `reported`, not `measured` — nobody in this repository holds a raw capture
+ * of a turn that actually died against the wall (#341's own "what is still
+ * unmeasured" section), so this is a FALLBACK, consulted only when
+ * `classifyRateLimit`'s own detection (the last `rate_limit_event` frame
+ * naming a non-`"allowed"` status) found nothing to say and every other
+ * shape `describeFailure` knows has already been ruled out. It never
+ * upgrades a death this file can already explain — timeout, `SIGKILL`/
+ * `SIGTERM`, a malformed envelope, a named `errors[]` entry, a disagreeing
+ * subtype — only the residual "no reason named" bucket #348's own field
+ * audit exists to shrink.
+ */
+export const RATE_LIMIT_TEXT_RE = /rate[_ ]limit|HTTP 429|session limit/i;
+
+/**
  * `AgentOutcome.error`'s text and `AgentOutcome.failureKind`'s value (gh #348),
  * from the SAME branches — one derivation, not two accounts that could drift
  * apart (AGENTS.md §7). Called only when `ok` is false.
@@ -779,6 +802,14 @@ function describeFailure(
   // Nothing here can name WHY. Say that, and — when the provider's own subtype is
   // the thing that disagrees — say that too, rather than dropping either half.
   const contradiction = subtype === "" ? "" : ` (the provider's own subtype said "${subtype}")`;
+  // gh #341: the one thing left to check before giving up and calling this
+  // `"unclassified"` — does the raw transcript carry the reported shape of a
+  // rate-limit death? `.error`'s TEXT is unchanged either way (it already
+  // carries the raw signal this file saw, per `AgentFailureKind`'s own doc);
+  // only the KIND this residual bucket earns changes, on the same evidence.
+  if (!malformed && RATE_LIMIT_TEXT_RE.test(`${stdout}\n${stderr}`)) {
+    return { error: `${verdict}: no reason named${contradiction}`, kind: "rate_limit" };
+  }
   return {
     error: `${verdict}: no reason named${contradiction}`,
     kind: malformed ? "malformed_result" : "unclassified",

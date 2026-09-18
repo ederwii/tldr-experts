@@ -16,6 +16,18 @@
   `failure_kind: "non_zero_exit"`, which it did not before; this is the change this commit
   means, not a drift.
 
+### Changed
+
+- **A turn killed by the provider's rate limit with no attested `rate_limit_event` frame can
+  now be classified `rate_limit` from its raw text (part of #341).** `describeFailure`'s
+  residual `unclassified` bucket now checks stdout/stderr against a small exported regex
+  (`RATE_LIMIT_TEXT_RE`) for the REPORTED (not measured — no raw capture of a turn that
+  actually died against the wall exists in this repo) shape of a session-limit API error
+  before giving up; it never overrides a more specific cause (timeout, a kill signal, a
+  malformed envelope, a named error or subtype disagreement). The frame-attested capture
+  #341 actually asks for still does not exist — this narrows the "no reason named" bucket,
+  it does not close the issue.
+
 ## 0.35.0 — 2026-09-17
 
 ### Fixed
