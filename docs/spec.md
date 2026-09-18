@@ -5182,6 +5182,24 @@ overwritten (stages are idempotent by contract). A task that failed mid-stage ma
 operator's options are `next` (retry, re-spending), `reject --note` (send the stage back to `ready` with the note fed
 into the next prompt), or editing the stage inputs by hand and re-running.
 
+**A retry settles at $0.00 instead of re-spending when the prior attempt already finished the work (gh #353, part of
+the #345 family).** MEASURED before this existed: `runStage`'s single-agent path called `spawnAgent` unconditionally,
+on a retry exactly as on a first attempt — `validateOutputs` was only ever called from `finishStage`, AFTER a turn
+was dispatched and paid for, so a stage that failed for a reason unrelated to its declared outputs (a `checks:`
+failure since corrected by hand, a timeout after the last file was flushed) bought a full fresh turn to reproduce
+output that was already correct. Now, on re-entry to a stage whose `status` is already `"failed"` — never on a first
+attempt, which never carries that status — `runStage` runs `validateOutputs` against what a prior attempt left on
+disk, headless mode only (never `--prepare`/`--commit`, never `--dry-run`). Every declared output present and
+non-empty is not enough on its own: when the stage declares any `checks:`, they are run for real against the on-disk
+outputs too, because they cost nothing to run locally and a `checks:` failure there is exactly the "unrelated reason"
+case that still needs a real turn — settling ahead of a check that would fail would spend nothing but also give the
+model no chance to fix it, which is worse than today. Only when BOTH validate does the stage settle: one task row,
+`status: "done"`, `cost_usd: 0`, `model: null`, `session_id: null` (a measured zero — no turn was bought, so nothing
+was billed elsewhere either), carrying the additive `settled_from: "prior-attempt outputs"` field (`RunFile.ts`,
+`emitRunYaml.ts`); one `agent.result` event carries the same field. Never silent: the stage's own report line says so
+in the same words the event does. Any problem — a missing/empty output, or a `checks:` failure — falls straight
+through to the ordinary spawn path, unchanged.
+
 **The `plan` check's one fix round (#288).** One exception to "a failed check fails the stage", and it is bounded on
 every side. When the `plan` check refuses and every issue it found names a file that EXISTS — a front matter that will
 not parse, a missing required key, a dod line the workspace does not declare, as against "the Plan wrote no stories",

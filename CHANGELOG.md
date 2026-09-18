@@ -53,6 +53,24 @@
   (`src/core/run/checks.ts`), surfaced on the stage's own report line and on the
   `check.passed`/`check.failed` event — the same "an auto-repair must be visible" owner
   decision (2026-09-15) #345's Watch repair already follows.
+- **A retry of a failed single-agent stage whose declared outputs are already complete and
+  valid on disk settles at $0.00 instead of buying a fresh turn to reproduce them (see #353,
+  part of #345 family).** MEASURED first: `runStage`'s headless path called `spawnAgent`
+  unconditionally on every re-entry — `validateOutputs` was only ever reached from
+  `finishStage`, AFTER a turn was dispatched and paid for, so a stage that failed for a reason
+  unrelated to its declared outputs (a `checks:` failure since fixed by hand, a timeout after
+  the last file was flushed) bought a full fresh turn to redo work already on disk. Now, on
+  re-entry to a stage whose `status` is already `"failed"` (never a first attempt, and headless
+  mode only — never `--prepare`/`--commit`, never `--dry-run`), `trySettleFromDisk` runs
+  `validateOutputs` against what is already there and, when the stage declares any `checks:`,
+  runs them for real too (they are local — free to run, and a checks failure there means the
+  "already finished" premise is false and a real turn is still owed, exactly as today). Only
+  when BOTH clear does the stage settle: one task row (`status: "done"`, `cost_usd: 0`,
+  `model: null`, `session_id: null`) carrying the additive `settled_from: "prior-attempt
+  outputs"` (`RunFile.ts`, and `emitRunYaml.ts`'s hand-written task emitter, which needed the
+  new key taught to it the same way #375's `exit_disagreement` did), and a matching
+  `agent.result` event — named on the stage's own report line too, never silently. Any problem
+  falls straight through to the ordinary spawn path, unchanged.
 
 ### Changed
 

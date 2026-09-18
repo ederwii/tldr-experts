@@ -668,10 +668,18 @@ Three things bound it, and all three matter:
 - **Only consecutive failures count.** A stage that succeeds puts the count back to zero, so
   a long run with one recoverable failure per phase never exhausts a small bound. What is
   being bounded is "this run is stuck", not "this run has ever failed".
-- **A retry spends.** It is a fresh metered stage under the same phase ceiling and the same
-  `--max-usd`. When the bound is spent the loop stops on the failure's own exit `5`, and the
-  last line says the count — `3 consecutive stage failures at 03-plan/plan …` — so the
-  `run.failed` payload on your phone says the loop tried, rather than a bare `5`.
+- **A retry spends — unless the previous attempt already finished the work.** Ordinarily it is a
+  fresh metered stage under the same phase ceiling and the same `--max-usd`. When the bound is
+  spent the loop stops on the failure's own exit `5`, and the last line says the count —
+  `3 consecutive stage failures at 03-plan/plan …` — so the `run.failed` payload on your phone
+  says the loop tried, rather than a bare `5`. But a retry of ANY stage whose declared outputs
+  are already complete and valid on disk — the previous attempt did the real work and failed for
+  an unrelated reason, a `checks:` failure since corrected by hand or a timeout after the last
+  file was flushed — settles at `$0.00` with no turn spawned at all, rather than paying to
+  reproduce output that is already correct; a `checks:` failure that would still fail against
+  what is on disk is NOT skipped by this — it still buys a real turn, exactly as before. The row
+  carries `cost_usd: 0.0`, no `session_id`, and an additive `settled_from: "prior-attempt
+  outputs"`, named on the stage's own report line and its event, never silently.
   Watch is the one stage that spends LESS on a retry than on the first attempt: it writes one
   card per shipped feature and fails on the first card that does not validate, so the next
   attempt keeps every card that already validated — no writer is spawned for those, and only

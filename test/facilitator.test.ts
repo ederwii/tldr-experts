@@ -919,6 +919,84 @@ describe("after a failure", () => {
     expect(started.filter((e) => e.stage === "alpha")).toHaveLength(2);
   });
 
+  /**
+   * gh #353 (part of #345 family). MEASURED on `origin/main` before this existed
+   * (`runStage`, `runNext.ts`): `validateOutputs` is only ever called from
+   * `finishStage`, reached AFTER a sub-agent turn is dispatched and paid for —
+   * `runStage`'s headless spawn path calls `spawnAgent` unconditionally, on a
+   * retry exactly as on a first attempt, with no pre-dispatch check of what a
+   * prior FAILED attempt already left on disk. This is the RED this describe
+   * block proves and then closes: the fake agent WRITES valid, complete
+   * declared outputs on attempt 1 but still reports failure (the "already
+   * finished the real work, failed for an unrelated reason" shape #353 names) —
+   * `PATH` is emptied before the retry, so a spawn attempt there is a loud,
+   * distinct failure, never a silent pass.
+   */
+  test("a retry whose prior attempt's outputs already validate settles at $0 without spawning a second turn", async () => {
+    const ws = workspace(TWO_STAGE);
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_IS_ERROR: "1", FAKE_CLAUDE_COST: "0.42" });
+    const first = await next(ws);
+    expect(first.code).toBe(5);
+    expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.status).toBe("failed");
+    expect(existsSync(join(ws.runDir, "01-what", "intent.md"))).toBe(true);
+    expect(existsSync(join(ws.runDir, "01-what", "handoff.md"))).toBe(true);
+
+    // No agent on PATH at all for the retry — a spawn attempt fails loudly.
+    process.env.PATH = "";
+    const retry = await next(ws);
+
+    expect(retry.code).toBe(0);
+    expect(retry.lines.join("\n")).toContain("settled at $0.00, no turn spawned");
+    expect(retry.lines.join("\n")).toContain("settled_from: prior-attempt outputs");
+    const store = RunStore.open(ws.runDir);
+    expect(store.run.phases[0]?.stages[0]?.status).toBe("done");
+    const rows = store.run.phases[0]?.stages[0]?.tasks ?? [];
+    const settledRow = rows[rows.length - 1];
+    expect(settledRow?.cost_usd).toBe(0);
+    expect(settledRow?.session_id).toBeNull();
+    expect(settledRow?.model).toBeNull();
+    expect(settledRow?.settled_from).toBe("prior-attempt outputs");
+    // The decisive count: only attempt 1's turn was ever dispatched.
+    const spawned = events(ws).filter((e) => e.type === "agent.spawned" && e.stage === "alpha");
+    expect(spawned).toHaveLength(1);
+    const settledEvent = events(ws).find((e) =>
+      e.type === "agent.result" && e.stage === "alpha" && e.payload.settled_from !== undefined);
+    expect(settledEvent?.payload.settled_from).toBe("prior-attempt outputs");
+    expect(settledEvent?.payload.session_id).toBeNull();
+  });
+
+  /**
+   * The safety half of #353: a stage that declares a `checks:` (local, run for
+   * real — here a `cmd` check) must have it pass ON DISK before settling. A
+   * prior attempt's outputs existing and validating is not enough on its own —
+   * "checks failed" is exactly the unrelated-reason case a real turn is still
+   * owed for.
+   */
+  test("a retry still spawns when the stage's own checks would fail against what is on disk", async () => {
+    const ws = workspace([
+      {
+        ...(TWO_STAGE[0] as StageOptions),
+        checks: `[{id: cmd, on: post-write, repo: api, command: "false", expect_exit: 0}]`,
+      },
+    ]);
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_IS_ERROR: "1", FAKE_CLAUDE_COST: "0.42" });
+    const first = await next(ws);
+    expect(first.code).toBe(5);
+    expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.status).toBe("failed");
+
+    // Attempt 2: the fake agent now succeeds (no more `IS_ERROR`), so ANY
+    // failure from here on is the `cmd` check's own — which fires again
+    // because `command: "false"` never passes. The stage fails a second time,
+    // but via a REAL, dispatched turn, never a silent settle.
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_COST: "0.42" });
+    const retry = await next(ws);
+
+    expect(retry.code).toBe(5);
+    expect(retry.lines.join("\n")).not.toContain("settled at $0.00");
+    const spawned = events(ws).filter((e) => e.type === "agent.spawned" && e.stage === "alpha");
+    expect(spawned).toHaveLength(2);
+  });
+
   test("a run holding a failed stage is still the run `next` finds without an id", async () => {
     const ws = workspace(TWO_STAGE);
     await failAlpha(ws);

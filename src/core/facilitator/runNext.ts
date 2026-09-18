@@ -775,6 +775,20 @@ async function runStage(
   const stage = requireStage(store, phaseId, stageId);
   const ctx: PathContext = { root: options.root, runDir: store.runDir };
 
+  // gh #353 (part of #345 family): a RETRY re-entering a FAILED stage — never
+  // a first attempt, which never sees `status: "failed"` here — before a cent
+  // is committed to a fresh turn, ask whether the previous attempt already
+  // finished the real work. `stage.status === "failed"` is exactly `advance`'s
+  // own retry predicate a few hundred lines up (`entry.stage.status ===
+  // "failed"`), read off the SAME field rather than a second "is this a retry"
+  // signal. Headless only, and never on `--dry-run`: `--prepare`/`--commit` is
+  // a person's own cycle and a dry run reports what WOULD happen, neither of
+  // which this settle path may act ahead of.
+  if (stage.status === "failed" && options.mode === "headless" && !options.dryRun) {
+    const settled = await trySettleFromDisk(store, options, phaseId, stageId, spec, ctx, notes);
+    if (settled !== null) return settled;
+  }
+
   // --- budget gate (spec §5, §2.11) ---------------------------------------
   const refused = budgetRefusal(store, options, phaseId, stageId, spec, notes);
   if (refused !== null) return refused;
@@ -1054,6 +1068,92 @@ async function runStage(
     );
   }
   return withStderr(await finishStage(store, options, phaseId, stageId, spec, notes), advisories);
+}
+
+/**
+ * "The previous attempt already finished the real work and failed for an
+ * unrelated reason" (gh #353), checked BEFORE anything is spent, not asserted.
+ *
+ * The two things a spawned turn eventually gets judged on — `validateOutputs`
+ * and this stage's own `checks:` — are run here, over what a PRIOR attempt
+ * already left on disk, with no prompt assembled and no agent spawned. Both
+ * are local: neither one costs a cent to run, which is the whole of why this
+ * is safe to do BEFORE the budget gate even asks whether a turn is affordable.
+ *
+ * `null` means "not settled" — either signal found a problem, or the file
+ * shape said no. The caller falls straight through to the ordinary spawn path,
+ * unchanged, exactly as it would if this function did not exist. A `checks:`
+ * failure here is not skipped or deferred: it is exactly why this must NOT
+ * settle, because a check that fails on-disk means the "already finished"
+ * premise was false, and the stage needs a real turn — today's behaviour —
+ * not a strengthened return trip.
+ *
+ * On settlement: one task row, `status: "done"`, `cost_usd: 0`, `model: null`,
+ * `session_id: null` — a real measured zero, not `metered: false` (no turn was
+ * bought, so nothing was billed elsewhere either) — carrying the additive
+ * `settled_from` basis (`RunFile.ts`), and one `agent.result` event with the
+ * same field, the same shape `recordExecutorTasks` already gives a Watch kept
+ * card (#306) for the identical reason: no model ran. `finishStage` then runs
+ * — re-validating outputs and checks a second time, the same double-check the
+ * spawned path already tolerates between a plan-fix round's two passes — so
+ * the gate, the report and `stage.done` are computed by the ONE path every
+ * other settlement goes through, never a second "how a stage finishes" here.
+ */
+async function trySettleFromDisk(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  stageId: string,
+  spec: StageSpec,
+  ctx: PathContext,
+  notes: string[],
+): Promise<NextOutcome | null> {
+  const outputs = expandAll(spec.planned.outputs, store.run.repos);
+  const problems = validateOutputs(outputs, expandedSections(spec.planned, store.run.repos), ctx);
+  if (problems.length > 0) return null;
+
+  const checks = await runChecks(spec.planned.checks, {
+    root: options.root,
+    runDir: store.runDir,
+    stage: spec.planned,
+  });
+  if (checks.some((c) => c.status === "failed")) return null;
+
+  const settledFrom = "prior-attempt outputs";
+  const stage = requireStage(store, phaseId, stageId);
+  markRunning(store, phaseId, stageId, options.at);
+  const taskId = nextTaskId(store, phaseId, stageId);
+  recordTask(store, phaseId, stageId, {
+    id: taskId,
+    status: "done",
+    expert: stage.expert ?? spec.planned.experts[0] ?? null,
+    model: null,
+    cost_usd: 0,
+    error: null,
+    session_id: null,
+    started_at: options.at,
+    ended_at: nowish(options),
+    outputs,
+    settled_from: settledFrom,
+  });
+  appendCappedEvent(store, options, phaseId, stageId, "agent.result", {
+    phase: phaseId,
+    task: taskId,
+    session_id: null,
+    model: null,
+    outputs,
+    settled_from: settledFrom,
+  }, 0, stage.expert);
+  store.save();
+
+  // Visible where every other repair/settlement is (owner decision
+  // 2026-09-15, applied here the same way #345/#351/#352 apply it): the
+  // stage's own report line, not only the event above.
+  notes.push(
+    `${phaseId}/${stageId}: the previous attempt's outputs already satisfy this stage — `
+      + `settled at $0.00, no turn spawned (settled_from: ${settledFrom})`,
+  );
+  return await finishStage(store, options, phaseId, stageId, spec, notes);
 }
 
 // Payload-cap sidecar bookkeeping (spec §2.9, fix round 1; module-scoped since
