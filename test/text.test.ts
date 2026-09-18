@@ -574,6 +574,28 @@ describe("facts.yml (spec §2.5)", () => {
     expect(validateFactsFile(parseYaml(text)).ok).toBe(true);
     expect((parseYaml(text) as { facts: { fact: string }[] }).facts[0]?.fact).toBe(store.facts[0]?.fact);
   });
+
+  // gh #383: a bare `facts:` line (nothing after the colon) is what
+  // `emitFactsYaml` wrote for an empty list, and both YAML readers behind the
+  // runtime seam parse a key with nothing under it as `null`, not `[]` — so a
+  // facts.yml written with zero facts did not round-trip: `facts: []` in,
+  // `facts: null` out.
+  test("emitFactsYaml writes `facts: []` for an empty list, round-tripping as an empty array, not null (#383)", () => {
+    const text = emitFactsYaml({ version: 1, facts: [] });
+    expect(text).toBe("version: 1\nfacts: []\n");
+    expect((parseYaml(text) as { facts: unknown }).facts).toEqual([]);
+  });
+
+  // Same fixture as "emitted YAML is block style and round-trips" above: the
+  // non-empty path is untouched by the #383 fix (`file.facts.length === 0` is
+  // the only branch that changes), asserted byte-identical here rather than
+  // merely "still valid".
+  test("emitFactsYaml's non-empty output is byte-identical to before the #383 fix", () => {
+    const store = FactsStore.load(join(FIXTURE_WORKSPACE, ".tldrx", "memory", "facts.yml"));
+    const text = store.toYaml();
+    expect(text.includes("\nfacts:\n")).toBe(true);
+    expect(text.includes("facts: []")).toBe(false);
+  });
 });
 
 describe("findDuplicate (Jaccard ≥ 0.6 on ≥4-char tokens)", () => {

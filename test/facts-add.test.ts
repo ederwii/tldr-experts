@@ -524,16 +524,29 @@ describe("validateFactsFile — was_id aliases an old id after a renumber (#338)
     expect(outcome.ok).toBe(true);
   });
 
+  test("a facts.yml with zero facts round-trips through load/save instead of throwing (#383)", () => {
+    // The fixture's own facts.yml IS the empty case (`makeRunWorkspace` writes
+    // `EMPTY_FACTS`, "version: 1\nfacts: []\n") — no seeding needed. Before the
+    // #383 fix, `emitFactsYaml` wrote a bare `facts:` line for `file.facts ===
+    // []`, every YAML parser round-tripped that as `facts: null`, and
+    // `save()`'s own re-validation of its serialized output then refused to
+    // write at all: "refusing to write an invalid facts.yml: facts expected an
+    // array, got null" — so `save()` (direct, or through `update`'s no-op fn)
+    // on a store with zero facts always threw.
+    const ws = makeWorkspace();
+    const path = factsFileOf(ws);
+    expect(() => FactsStore.loadOrEmpty(path).save(path)).not.toThrow();
+    expect(readFileSync(path, "utf8")).toBe("version: 1\nfacts: []\n");
+    // Same via the read-modify-write path every real writer uses, with a no-op
+    // mutation — `FactsStore.update` is what `tldrx facts add` calls.
+    expect(() => FactsStore.update(path, () => null)).not.toThrow();
+  });
+
   test("a facts.yml with no was_id anywhere is byte-stable through a load/save round trip", () => {
     const ws = makeWorkspace();
     const path = factsFileOf(ws);
-    // NOT the fixture's own (empty) facts.yml: `FactsStore.save()` on a store
-    // with ZERO facts is a pre-existing, out-of-scope defect measured while
-    // writing this test — `emitFactsYaml` writes a bare `facts:` line for `[]`,
-    // which every YAML parser round-trips as `facts: null`, and `save()`'s own
-    // re-validation then refuses to write at all (see #383), not fixed here.
-    // One row sidesteps it and is the real-world shape anyway — `save()` is
-    // only ever called after `append()`.
+    // One row, the real-world shape: `save()` is only ever called after
+    // `append()` in every shipped writer.
     writeFileSync(path, `version: 1
 facts:
   - id: F001

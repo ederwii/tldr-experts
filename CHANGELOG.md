@@ -83,6 +83,14 @@
   collapsed/case-folded, matches a LIVE fact's; a retired or superseded twin does not block a
   fresh assertion of the same text. `facts add` prints "`<id>` is already on record" and exits
   0 rather than writing a duplicate.
+- **`emitFactsYaml` writes `facts: []` for an empty list instead of a bare `facts:` line (see
+  #383).** Both YAML readers behind the runtime seam parse a key with nothing after it as
+  `null`, not `[]`, so a facts.yml with zero facts never round-tripped — `FactsStore.save()`
+  re-validates its own serialized output before writing and threw on exactly this file,
+  `refusing to write an invalid facts.yml: facts expected an array, got null`. Latent until
+  now (every shipped writer appends a fact before calling `save()`), but reachable from any
+  fresh `FactsStore.loadOrEmpty(...).save()` with nothing appended; non-empty output is
+  unchanged.
 
 ## 0.35.0 — 2026-09-17
 

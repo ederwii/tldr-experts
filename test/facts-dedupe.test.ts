@@ -167,6 +167,17 @@ describe("tldrx facts dedupe (gh #216 part B)", () => {
     expect(code).toBe(0);
     expect(readFileSync(factsFileOf(ws), "utf8")).toBe(before);
   });
+
+  // Guard, not a proof of the #383 fix: `runDedupe` never calls `store.save()`
+  // when there is nothing to retire (early return on `groups.length === 0`),
+  // so this path was never reachable from the throw #383 describes — asserted
+  // here so a future change to that early return does not reopen it silently.
+  test("an empty ledger (zero facts, seeded via emitFactsYaml) does not throw — see #383", async () => {
+    const ws = makeWorkspace();
+    seed(ws, []);
+    const code = await factsCommand.run(["dedupe", "--root", ws.root]);
+    expect(code).toBe(0);
+  });
 });
 
 describe("FactsStore.retireDuplicate", () => {

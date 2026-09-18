@@ -130,7 +130,18 @@ export function emitFactsYaml(file: FactsFile, header?: string): string {
   const out: string[] = [];
   if (header !== undefined && header !== "") out.push(header.replace(/\n$/, ""));
   out.push(`version: ${file.version}`);
-  out.push("facts:");
-  for (const fact of file.facts) out.push(emitFact(fact));
+  // `facts:` with nothing after it is a YAML key with an empty value, and both
+  // readers behind the runtime seam (Bun's native parser and the `yaml`
+  // package) parse that as `null`, not `[]` — so a facts.yml written with zero
+  // facts did not round-trip: `FactsStore.save()` re-validates its own
+  // serialized output before writing and threw on exactly this file (#383).
+  // Flow-empty `facts: []` round-trips as an empty array on both readers, and
+  // changes nothing for a non-empty list — the loop below is unaffected.
+  if (file.facts.length === 0) {
+    out.push("facts: []");
+  } else {
+    out.push("facts:");
+    for (const fact of file.facts) out.push(emitFact(fact));
+  }
   return `${out.join("\n")}\n`;
 }
